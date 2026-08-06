@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """
-NILM 수신기 (노트북 쪽) - 프로토콜 v3
+NILM 수신기 (노트북 쪽) - 프로토콜 v4
 =====================================
 STM32 -> ESP-01S 가 TCP 클라이언트로 접속해 오는 것을 받아 CSV로 저장한다.
 펌웨어 NILM_ECE_IF/Core/Inc/nilm_link.h 의 프레임 형식과 1:1로 맞춰져 있다.
 
 프레임 (전부 리틀엔디언, 총 3213바이트):
 
-    [A5 5A] [ver=03] [len=3206]   공통부 86B   주기별 104B x 30 = 3120B  [CRC16]
+    [A5 5A] [ver=04] [len=3206]   공통부 86B   주기별 104B x 30 = 3120B  [CRC16]
     └─ 헤더 5B ─────────────────┘              └─ cycles[0] .. cycles[29] ┘  2B
 
     CRC16-CCITT(다항식 0x1021, init 0xFFFF), ver 바이트부터 페이로드 끝까지.
+
+ACK (수신기 -> 보드, 5바이트): [06] [seq u32 LE]
+    페이로드 첫 필드인 seq를 그대로 되돌려 준다. v3의 ACK는 0x06 한
+    바이트여서 어느 프레임에 대한 응답인지 알 수 없었다 - 자세한 사정은
+    frame_stream() 과 ack_for() 의 주석에 있다.
+    v3 펌웨어와는 호환되지 않는다. 양쪽을 같이 올려야 한다.
 
   - 공통부(SLOW) : 0.5초 평균. 주파수 / Vrms / 전압 THD·고조파 / 품질 플래그.
                    over_cycle_map 은 측정범위 초과(두 전류 경로 모두 클리핑)가
@@ -51,8 +57,20 @@ import time
 
 # ── 프로토콜 상수 (펌웨어 nilm_link.h 와 반드시 일치) ────────────────────────
 MAGIC = b"\xa5\x5a"
-PROTO_VER = 3
-ACK = b"\x06"          # 프레임 정상 수신 시 보드로 되돌리는 생존 신호
+PROTO_VER = 4
+ACK_BYTE = b"\x06"     # ACK 첫 바이트. 뒤에 그 프레임의 seq(u32 LE)가 붙는다
+
+
+def ack_for(seq: int) -> bytes:
+    """ACK 5바이트: 0x06 + seq(u32 LE).
+
+    seq를 실어 보내야 보드가 "어느 프레임에 대한 응답인지" 알 수 있다.
+    v3에서는 0x06 한 바이트뿐이라 구분이 안 됐고, 그래서 중복 프레임에는
+    ACK를 아예 못 줬다(주면 보드가 다음 프레임의 ACK로 오해했다).
+    그 결과 ACK 한 장만 유실돼도 보드는 오지 않을 응답을 기다리며 재전송
+    한도 12.5초를 태웠고, 그동안 큐가 넘쳐 프레임이 사라졌다.
+    """
+    return ACK_BYTE + struct.pack("<I", seq)
 HARMONICS = 15
 CYCLES = 30
 CYCLE_HZ = 60.0        # 주기별 데이터의 시간 해상도
@@ -148,10 +166,18 @@ def frame_stream(conn: socket.socket, stats: dict, seen: set):
 
     seen 은 이미 받은 seq 집합이다. 펌웨어는 ACK가 제때 안 오면 같은
     프레임을 다시 보내는데, 첫 장이 무사히 갔고 ACK만 늦었던 경우엔 같은
-    seq가 두 번 도착한다. 그때 ACK를 두 번 돌려주면 펌웨어가 그 두 번째를
-    "다음 프레임에 대한 ACK"로 오해해서, 아직 도착 확인도 안 된 프레임을
-    큐에서 빼 버린다(그 장이 조용히 사라진다).
-    그래서 중복은 ACK 없이 버린다 - 유일한 프레임마다 ACK 하나가 된다.  """
+    seq가 두 번 도착한다.
+
+    v4부터 ACK에 seq가 실리므로 중복에도 그대로 ACK를 돌려준다. 보드는
+    seq를 보고 "지금 기다리는 장"일 때만 큐를 전진시키고, 이미 뺀 장에
+    대한 ACK는 생존 신호로만 쓴다 - v3에서 중복에 ACK를 못 주던 이유였던
+    오해가 구조적으로 불가능해졌다.
+
+    중복에 ACK를 주는 것이 오히려 중요하다. 원본은 도착했는데 ACK만
+    유실된 경우, v3에서는 보드가 영영 오지 않을 응답을 기다리며 재전송
+    한도(2.5초 x 5 = 12.5초)를 전부 태웠고 그 사이 큐가 넘쳐 프레임이
+    사라졌다. 이제는 재전송 한 번으로 즉시 복구된다.
+    중복 프레임 자체는 CSV에 두 번 쓰지 않도록 yield 하지 않는다.       """
     buf = b""
     conn.settimeout(1.0)
     t_last = time.time()
@@ -200,26 +226,50 @@ def frame_stream(conn: socket.socket, stats: dict, seen: set):
             if len(buf) < total:
                 break                       # 본문이 아직 다 안 옴
 
-            frame, buf = buf[:total], buf[total:]
-            crc_rx = frame[-2] | (frame[-1] << 8)
-            if crc16_ccitt(frame[2:-2]) != crc_rx:
+            crc_rx = buf[total - 2] | (buf[total - 1] << 8)
+            if crc16_ccitt(buf[2:total - 2]) != crc_rx:
+                # CRC 실패. 여기서 total(3213)바이트를 통째로 버리면 안 된다.
+                #
+                # 손상의 실제 형태는 "프레임 중간에서 바이트가 사라짐"이다
+                # (STM32->ESP UART에는 무결성 보호가 없다. TCP는 깨진 바이트를
+                #  올려보내지 않으므로, 여기서 CRC가 틀린다는 것 자체가 손상이
+                #  ESP의 TCP 스택에 들어가기 전에 났다는 뜻이다).
+                # 바이트가 빠지면 헤더는 멀쩡해 LEN 검증을 통과하지만 프레임
+                # 끝이 total보다 앞으로 당겨진다. 그대로 total을 소비하면
+                # **다음 프레임의 머리까지 먹어 들어가** 멀쩡한 장까지 죽는다.
+                # 실측 74분에서 CRC오류 37 + 재동기 24프레임분 = 유실 87의 79%가
+                # 이 증폭으로 설명됐다.
+                #
+                # 그래서 매직 2바이트만 넘기고 다시 찾는다. 빠진 바이트만큼
+                # 앞으로 당겨진 다음 프레임의 매직을 이 안에서 되찾을 수 있다.
+                # 손상이 단순 비트 반전이어서 프레임 길이가 멀쩡한 경우엔 본문을
+                # 훑고 지나가며 재동기로 버려지므로 결과가 전과 같다 - 즉 이
+                # 변경은 최악의 경우에도 손해가 없다.
                 stats["crc_err"] += 1
-                continue                    # 조용히 버리고 다음 매직부터
+                stats["resync"] += 2
+                buf = buf[2:]
+                continue
+
+            frame, buf = buf[:total], buf[total:]
 
             seq = struct.unpack_from("<I", frame, 5)[0]
-            if seq in seen:                 # 재전송된 중복 - ACK 없이 버린다
+            dup = seq in seen
+            if dup:
                 stats["dup"] += 1
-                continue
-            seen.add(seq)
-            if len(seen) > 4096:            # 오래된 것부터 정리
-                seen.difference_update({s for s in seen if s < seq - 2048})
+            else:
+                seen.add(seq)
+                if len(seen) > 4096:        # 오래된 것부터 정리
+                    seen.difference_update({s for s in seen if s < seq - 2048})
 
             # ACK 회신: 펌웨어가 이걸 흐름제어로 쓴다. 이 응답을 받아야
             # 다음 프레임을 내보내므로 절대 빼면 안 된다.
+            # 중복에도 반드시 보낸다 - 그래야 유실된 ACK가 복구된다.
             try:
-                conn.sendall(ACK)
+                conn.sendall(ack_for(seq))
             except OSError:
                 return
+            if dup:
+                continue                    # 데이터는 이미 기록했다
             yield frame[5:-2]
 
 
