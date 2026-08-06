@@ -349,6 +349,64 @@ def print_summary(frames: int, lost: int, stats: dict, dur: float, csv_path):
         print(f"저장됨: {csv_path}")
 
 
+def disable_console_quickedit():
+    """Windows 콘솔의 '빠른 편집 모드'를 끈다. 되돌리기용 정보를 반환.
+
+    빠른 편집이 켜져 있으면 콘솔 창을 클릭하는 순간 선택 모드로 들어가면서
+    프로세스의 출력이 블로킹된다. 즉 측정 중에 창을 실수로 한 번 누르면
+    수신이 통째로 멈춘다 - 실측에서 20초짜리 정지가 이것으로 보였다.
+    (그때 데이터는 TCP 버퍼에 쌓였다가 회복 후 3ms 간격으로 몰려 들어왔다)
+
+    끄려면 ENABLE_QUICK_EDIT_MODE 를 내리는 것만으로는 안 되고
+    ENABLE_EXTENDED_FLAGS 를 같이 올려야 한다 - 이 플래그가 있어야
+    SetConsoleMode 가 빠른편집/삽입 비트를 실제로 반영한다.
+
+    콘솔이 아닌 곳(파일·파이프 리다이렉트, IDE 실행 등)에서는 GetConsoleMode
+    가 실패하므로 조용히 아무것도 안 한다.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except ImportError:
+        return None
+
+    STD_INPUT_HANDLE = -10
+    ENABLE_QUICK_EDIT_MODE = 0x0040
+    ENABLE_EXTENDED_FLAGS = 0x0080
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    # 핸들은 64비트다. restype 을 안 정하면 ctypes 가 32비트 int 로 잘라
+    # 받는다(값이 작아 대개 표는 안 나지만 옳지 않다).
+    k.GetStdHandle.restype = wintypes.HANDLE
+    k.GetStdHandle.argtypes = [wintypes.DWORD]
+    k.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    k.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+
+    h = k.GetStdHandle(STD_INPUT_HANDLE)
+    mode = wintypes.DWORD()
+    if not k.GetConsoleMode(h, ctypes.byref(mode)):
+        return None                      # 콘솔이 아니다
+    new = (mode.value & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS
+    if not k.SetConsoleMode(h, new):
+        return None
+    return (k, h, mode.value)
+
+
+def restore_console_mode(saved):
+    """빠른 편집 설정을 원래대로.
+
+    콘솔 모드는 프로세스가 아니라 '콘솔 창'의 속성이라 스크립트가 끝나도
+    남는다. 되돌려 주지 않으면 그 창에서 마우스로 텍스트 선택을 못 하게
+    된다 - 남의 창을 조용히 바꿔 놓는 셈이라 반드시 복구한다.
+    """
+    if not saved:
+        return
+    k, h, mode = saved
+    k.SetConsoleMode(h, mode)
+
+
 def local_ips():
     try:
         infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
@@ -368,6 +426,10 @@ def main():
     ap.add_argument("--no-csv", action="store_true", help="CSV 저장 안 함")
     ap.add_argument("--quiet", action="store_true", help="콘솔 요약 끄기")
     args = ap.parse_args()
+
+    # 콘솔 클릭 한 번에 수신이 멈추는 것을 막는다(위 함수 주석 참조).
+    # 종료할 때 finally 에서 원래대로 되돌린다.
+    console_mode = disable_console_quickedit()
 
     fcsv = writer = None
     csv_path = None
@@ -456,6 +518,7 @@ def main():
         pass
     finally:
         srv.close()
+        restore_console_mode(console_mode)
         if fcsv is not None:
             fcsv.close()
         print_summary(frames, lost, stats, time.time() - t_wall0, csv_path)
