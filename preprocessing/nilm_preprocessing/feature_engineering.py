@@ -39,12 +39,35 @@ class FeatureEngineer:
             vh_cols = [f"vh{i}" for i in range(1, 16)]
             df = df.drop(columns=[c for c in vh_cols if c in df.columns], errors="ignore")
 
-        # 2. Delta features
+        # 2. Reactive Power (Q), Apparent Power (S), Power Factor (PF), and Phase Shift Angle
+        if self.power_col in df.columns and self.irms_col in df.columns and "vrms" in df.columns:
+            p_val = np.maximum(df[self.power_col].values, 0.0)
+            v_val = df["vrms"].values
+            i_val = df[self.irms_col].values
+            
+            s_val = v_val * i_val  # Apparent Power (VA)
+            q_sq = np.maximum(s_val**2 - p_val**2, 0.0)
+            q_val = np.sqrt(q_sq)  # Reactive Power (var)
+            
+            pf_val = np.where(s_val > 1e-4, p_val / s_val, 1.0)
+            pf_val = np.clip(pf_val, 0.0, 1.0)  # Power Factor [0, 1]
+            
+            phase_rad = np.arccos(pf_val)  # Phase angle shift in radians
+            
+            df["s_va"] = s_val
+            df["q_var"] = q_val
+            df["power_factor"] = pf_val
+            df["phase_rad"] = phase_rad
+
+        # 3. Delta features
         if self.calculate_deltas:
             if self.power_col in df.columns:
                 df["d_pw"] = df[self.power_col].diff().fillna(0.0)
             if self.irms_col in df.columns:
                 df["d_irms"] = df[self.irms_col].diff().fillna(0.0)
+            if "q_var" in df.columns:
+                df["d_qvar"] = df["q_var"].diff().fillna(0.0)
+
 
         # 3. Moving average smoothing
         if self.smooth_window > 1:

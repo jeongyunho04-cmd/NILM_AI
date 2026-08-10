@@ -122,10 +122,23 @@ class NILMSynthesizer:
             appliance_stats[app_name] = stats
 
         # 5. Calculate Final Aggregate Features
+        v_nominal = 220.0  # Nominal grid voltage
+        s_agg = v_nominal * np.sqrt(i_sq_agg)
+        q_sq_agg = np.maximum(s_agg**2 - p_agg**2, 0.0)
+        q_agg = np.sqrt(q_sq_agg)
+        pf_agg = np.where(s_agg > 1e-4, np.clip(p_agg / s_agg, 0.0, 1.0), 1.0)
+        phase_agg = np.arccos(pf_agg)
+
         timeline_df["p_w_agg"] = p_agg
         timeline_df["irms_agg"] = np.sqrt(i_sq_agg)
+        timeline_df["s_va_agg"] = s_agg
+        timeline_df["q_var_agg"] = q_agg
+        timeline_df["power_factor_agg"] = pf_agg
+        timeline_df["phase_rad_agg"] = phase_agg
+
         timeline_df["d_pw_agg"] = timeline_df["p_w_agg"].diff().fillna(0.0)
         timeline_df["d_irms_agg"] = timeline_df["irms_agg"].diff().fillna(0.0)
+        timeline_df["d_qvar_agg"] = timeline_df["q_var_agg"].diff().fillna(0.0)
         
         # Smooth aggregate features
         timeline_df["p_w_agg_smooth"] = (
@@ -133,6 +146,12 @@ class NILMSynthesizer:
             .rolling(window=5, min_periods=1, center=True)
             .mean()
         )
+        timeline_df["q_var_agg_smooth"] = (
+            timeline_df["q_var_agg"]
+            .rolling(window=5, min_periods=1, center=True)
+            .mean()
+        )
+
         timeline_df["irms_agg_smooth"] = (
             timeline_df["irms_agg"]
             .rolling(window=5, min_periods=1, center=True)

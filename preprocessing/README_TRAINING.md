@@ -50,11 +50,17 @@ python train_unet.py -data "./output/synthetic_nilm_12h.csv" -b 256 -e 20
 
 ---
 
-## 📊 학습 결과 및 결과물 안내
+## 🧪 1D-UNet 모델 성능 평가 & 분해 테스트 실행 방법
 
-학습이 시작되면 진행률 바(`tqdm`)와 함께 RTX 5070 GPU 가속으로 **약 1~3분 내로 20 에폭 학습이 완료**됩니다.
+학습이 정상적으로 완료된 후, 데스크톱 PC에서 아래 명령어를 실행하여 **모델의 실제 분해 정확도(MAE, RMSE, R², F1-Score)를 평가하고 결과 그래프를 생성**합니다:
 
-학습 완료 후 `./checkpoint_unet/` 폴더에 아래 파일들이 자동 생성됩니다:
-1. `best_unet_nilm.pth`: **최고 정확도를 기록한 1D-UNet 가중치 모델 파일**
-2. `scaler.pkl`: **입력 피처 정규화 스케일러** (실전 추론/분해 시 필수)
-3. `loss_curve.png`: **학습 및 검증 손실 그래프**
+```cmd
+python test_unet.py -data "./output/synthetic_nilm_12h.csv" -ckpt "./checkpoint_unet"
+```
+
+### 📊 출력되는 평가 지표 리포트 예시
+* **MAE (Mean Absolute Error, 평균 절대 오차 W)**: 실제 전력과 AI 추정 전력 간의 평균 차이 ($W$)
+* **R² Score (결정계수 %)**: AI가 각 가전제품의 전력 변화를 얼마나 정확히 설명했는지 (%)
+* **F1-Score (%)**: 가전제품의 **켜짐/꺼짐(ON/OFF) 상태를 얼마나 정확히 판별**했는지 (%)
+* **`disaggregation_result.png`**: 실제 전력 파형(파란색) vs 1D-UNet AI 추정 파형(빨간색 점선) 비교 시각화 그래프
+
