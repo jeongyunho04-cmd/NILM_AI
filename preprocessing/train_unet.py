@@ -306,10 +306,12 @@ def main():
 
     model = AttentionMultiTaskUNet1D(in_channels=len(input_cols), out_channels=len(target_cols)).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
     criterion_power_none = nn.SmoothL1Loss(reduction="none") # Huber Loss without reduction for weighting
     criterion_power_log = nn.SmoothL1Loss()                  # Log-scale loss log1p(y) for micro load scale sensitivity
     criterion_state = nn.BCEWithLogitsLoss()                  # Safe for Mixed Precision FP16 autocast!
     scaler_amp = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+
 
     # 4. Training Loop
     print("[3/4] Starting Attention Multi-Task 1D-UNet Model Training...")
@@ -385,6 +387,8 @@ def main():
 
         epoch_val_loss = running_val_loss / len(val_dataset)
         val_losses.append(epoch_val_loss)
+        scheduler.step(epoch_val_loss)
+
 
         print(f"  --> Epoch {epoch:02d} - Train Loss: {epoch_train_loss:.4f} | Val Loss: {epoch_val_loss:.4f}")
 
