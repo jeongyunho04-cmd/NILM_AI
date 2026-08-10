@@ -250,7 +250,7 @@ def main():
     # 1. Load Dataset
     print("[1/4] Loading CSV dataset into memory...")
     t0 = time.time()
-    df = pd.read_csv(args.dataset)
+    df = pd.read_csv(args.dataset).fillna(0.0)
     print(f"  - Loaded {len(df):,} cycles ({round(len(df)/60/60, 2)} hours) in {round(time.time()-t0, 2)}s")
 
     # Separate Input Features (X) and Ground Truth Targets (y)
@@ -261,8 +261,9 @@ def main():
     print(f"  - Input Features ({len(input_cols)}): {input_cols[:4]}...")
     print(f"  - Target Appliances ({len(target_cols)}): {target_cols}")
 
-    X_raw = df[input_cols].values
-    y_power_raw = df[target_cols].values
+    X_raw = np.nan_to_num(df[input_cols].values, nan=0.0, posinf=0.0, neginf=0.0)
+    y_power_raw = np.nan_to_num(df[target_cols].values, nan=0.0, posinf=0.0, neginf=0.0)
+
     
     # Extract state targets if present
     state_cols = [c.replace("p_w_", "state_") for c in target_cols]
@@ -334,9 +335,11 @@ def main():
                 raw_power_err = criterion_power_none(pred_p, y_p_b)
                 loss_p_weighted = (raw_power_err * app_weights).mean()
 
-                # 2. Log-Scale Power Loss log(1 + y) for micro load resolution
-                pred_p_log = torch.log1p(pred_p)
-                y_p_log = torch.log1p(y_p_b)
+                # 2. Log-Scale Power Loss log(1 + y) with clamp safety for micro load resolution
+                pred_p_clamped = torch.clamp(pred_p, min=0.0)
+                y_p_clamped = torch.clamp(y_p_b, min=0.0)
+                pred_p_log = torch.log1p(pred_p_clamped)
+                y_p_log = torch.log1p(y_p_clamped)
                 loss_p_log = criterion_power_log(pred_p_log, y_p_log)
 
                 loss_p = loss_p_weighted + 2.0 * loss_p_log
@@ -366,13 +369,16 @@ def main():
                     raw_power_err = criterion_power_none(pred_p, y_p_b)
                     loss_p_weighted = (raw_power_err * app_weights).mean()
 
-                    pred_p_log = torch.log1p(pred_p)
-                    y_p_log = torch.log1p(y_p_b)
+                    pred_p_clamped = torch.clamp(pred_p, min=0.0)
+                    y_p_clamped = torch.clamp(y_p_b, min=0.0)
+                    pred_p_log = torch.log1p(pred_p_clamped)
+                    y_p_log = torch.log1p(y_p_clamped)
                     loss_p_log = criterion_power_log(pred_p_log, y_p_log)
 
                     loss_p = loss_p_weighted + 2.0 * loss_p_log
                     loss_s = criterion_state(pred_s, y_s_b)
                     loss = loss_p + 0.5 * loss_s
+
 
                 running_val_loss += loss.item() * len(x_b)
 

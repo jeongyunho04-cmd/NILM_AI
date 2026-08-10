@@ -126,8 +126,10 @@ class NILMSynthesizer:
         s_agg = v_nominal * np.sqrt(i_sq_agg)
         q_sq_agg = np.maximum(s_agg**2 - p_agg**2, 0.0)
         q_agg = np.sqrt(q_sq_agg)
-        pf_agg = np.where(s_agg > 1e-4, np.clip(p_agg / s_agg, 0.0, 1.0), 1.0)
+        pf_agg = np.divide(p_agg, s_agg, out=np.ones_like(p_agg), where=(s_agg > 1e-4))
+        pf_agg = np.clip(pf_agg, 0.0, 1.0)
         phase_agg = np.arccos(pf_agg)
+
 
         timeline_df["p_w_agg"] = p_agg
         timeline_df["irms_agg"] = np.sqrt(i_sq_agg)

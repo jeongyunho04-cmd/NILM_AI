@@ -49,10 +49,11 @@ class FeatureEngineer:
             q_sq = np.maximum(s_val**2 - p_val**2, 0.0)
             q_val = np.sqrt(q_sq)  # Reactive Power (var)
             
-            pf_val = np.where(s_val > 1e-4, p_val / s_val, 1.0)
+            pf_val = np.divide(p_val, s_val, out=np.ones_like(p_val), where=(s_val > 1e-4))
             pf_val = np.clip(pf_val, 0.0, 1.0)  # Power Factor [0, 1]
             
             phase_rad = np.arccos(pf_val)  # Phase angle shift in radians
+
             
             df["s_va"] = s_val
             df["q_var"] = q_val
