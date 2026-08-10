@@ -7,9 +7,11 @@ Supports GPU acceleration (NVIDIA RTX 5070 / CUDA) with Mixed Precision FP16.
 import argparse
 import os
 import sys
+from typing import Dict, List, Optional, Tuple, Union
 
 # Fix Windows Intel OpenMP library duplication error (OMP: Error #15)
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 
 import time
 
@@ -124,11 +126,9 @@ class AttentionMultiTaskUNet1D(nn.Module):
         # Multi-Task Output Heads
         # Head 1: Active Power Regression (W)
         self.power_head = nn.Conv1d(64, out_channels, kernel_size=1)
-        # Head 2: Appliance ON/OFF State Classification (Probability [0, 1])
-        self.state_head = nn.Sequential(
-            nn.Conv1d(64, out_channels, kernel_size=1),
-            nn.Sigmoid()
-        )
+        # Head 2: Appliance ON/OFF State Classification (Raw Logits for BCEWithLogitsLoss)
+        self.state_head = nn.Conv1d(64, out_channels, kernel_size=1)
+
 
     def forward(self, x):
         # Encoder
@@ -221,9 +221,10 @@ def main():
     parser.add_argument("-w", "--window-len", type=int, default=320, help="Sliding window length in cycles (default: 320 ~5.33s)")
     parser.add_argument("-stride", "--stride", type=int, default=32, help="Sliding window stride (default: 32 ~0.53s)")
     parser.add_argument("-b", "--batch-size", type=int, default=256, help="Batch size (optimized for RTX 5070: 256)")
-    parser.add_argument("-e", "--epochs", type=int, default=20, help="Number of training epochs")
+    parser.add_argument("-e", "--epochs", type=int, default=35, help="Number of training epochs (default: 35 for high-precision micro load scaling)")
     parser.add_argument("-lr", "--learning-rate", type=float, default=0.001, help="Adam optimizer learning rate")
     args = parser.parse_args()
+
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -294,10 +295,19 @@ def main():
     print(f"  - Val Window Samples   : {len(val_dataset):,}")
 
     # 3. Model Initialization
+    # Pre-compute appliance weights to boost small loads (10W~50W) like minipc/chargers
+    max_powers = np.max(y_power_raw, axis=0)  # Max power per appliance
+    # Small load weighting: min power appliances get up to 3.0x weight factor!
+    weights_np = np.where(max_powers < 50.0, 3.0, np.where(max_powers < 100.0, 2.0, 1.0))
+    app_weights = torch.tensor(weights_np, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(2)
+
+    print(f"  - Appliance Loss Weighting Factors: {dict(zip([c.replace('p_w_', '') for c in target_cols], weights_np.tolist()))}")
+
     model = AttentionMultiTaskUNet1D(in_channels=len(input_cols), out_channels=len(target_cols)).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    criterion_power = nn.SmoothL1Loss()  # Huber Loss for Power Regression
-    criterion_state = nn.BCELoss()        # Binary Cross Entropy for State Classification
+    criterion_power_none = nn.SmoothL1Loss(reduction="none") # Huber Loss without reduction for weighting
+    criterion_power_log = nn.SmoothL1Loss()                  # Log-scale loss log1p(y) for micro load scale sensitivity
+    criterion_state = nn.BCEWithLogitsLoss()                  # Safe for Mixed Precision FP16 autocast!
     scaler_amp = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
 
     # 4. Training Loop
@@ -319,9 +329,21 @@ def main():
 
             with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
                 pred_p, pred_s = model(x_b)
-                loss_p = criterion_power(pred_p, y_p_b)
+
+                # 1. Weighted Linear Power Loss
+                raw_power_err = criterion_power_none(pred_p, y_p_b)
+                loss_p_weighted = (raw_power_err * app_weights).mean()
+
+                # 2. Log-Scale Power Loss log(1 + y) for micro load resolution
+                pred_p_log = torch.log1p(pred_p)
+                y_p_log = torch.log1p(y_p_b)
+                loss_p_log = criterion_power_log(pred_p_log, y_p_log)
+
+                loss_p = loss_p_weighted + 2.0 * loss_p_log
                 loss_s = criterion_state(pred_s, y_s_b)
-                loss = loss_p + 0.5 * loss_s  # Multi-Task Joint Loss
+
+                # Combined Multi-Task Joint Loss
+                loss = loss_p + 0.5 * loss_s
 
             scaler_amp.scale(loss).backward()
             scaler_amp.step(optimizer)
@@ -341,10 +363,19 @@ def main():
                 x_b, y_p_b, y_s_b = x_b.to(device), y_p_b.to(device), y_s_b.to(device)
                 with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
                     pred_p, pred_s = model(x_b)
-                    loss_p = criterion_power(pred_p, y_p_b)
+                    raw_power_err = criterion_power_none(pred_p, y_p_b)
+                    loss_p_weighted = (raw_power_err * app_weights).mean()
+
+                    pred_p_log = torch.log1p(pred_p)
+                    y_p_log = torch.log1p(y_p_b)
+                    loss_p_log = criterion_power_log(pred_p_log, y_p_log)
+
+                    loss_p = loss_p_weighted + 2.0 * loss_p_log
                     loss_s = criterion_state(pred_s, y_s_b)
                     loss = loss_p + 0.5 * loss_s
+
                 running_val_loss += loss.item() * len(x_b)
+
 
         epoch_val_loss = running_val_loss / len(val_dataset)
         val_losses.append(epoch_val_loss)
