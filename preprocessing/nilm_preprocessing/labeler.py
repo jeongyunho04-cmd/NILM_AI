@@ -40,6 +40,7 @@ class ApplianceStateLabeler:
         self.off_power_threshold = labeling_cfg.get("off_power_threshold", 2.0)
         self.disconnected_power_threshold = labeling_cfg.get("disconnected_power_threshold", 1.8)
         self.irms_threshold = labeling_cfg.get("irms_threshold", 0.02)
+        self.min_off_gap_cycles = labeling_cfg.get("min_off_gap_cycles", 180)
         self.transient_window_cycles = labeling_cfg.get("transient_window_cycles", 30)
         self.use_dynamic_transient = labeling_cfg.get("use_dynamic_transient", True)
         self.min_delta_p_transient = labeling_cfg.get("min_delta_p_transient", 1.5)
@@ -76,6 +77,21 @@ class ApplianceStateLabeler:
                     current_state = False
 
             raw_on[i] = current_state
+
+        # Morphological Closing: Merge micro OFF gaps (< min_off_gap_cycles ~3.0s) into continuous ON events & macro power envelope
+        if self.min_off_gap_cycles > 1 and n > self.min_off_gap_cycles:
+            s_on = pd.Series(raw_on.astype(int))
+            raw_on = s_on.rolling(window=self.min_off_gap_cycles, center=True, min_periods=1).max().rolling(window=self.min_off_gap_cycles, center=True, min_periods=1).min().values.astype(bool)
+
+            # Smooth power and irms within ON segments to form continuous Macro Envelope Power
+            s_p = pd.Series(power)
+            p_closed = s_p.rolling(window=self.min_off_gap_cycles, center=True, min_periods=1).max().rolling(window=self.min_off_gap_cycles, center=True, min_periods=1).min().values
+            df[self.power_col] = np.where(raw_on, p_closed, power)
+
+            if self.irms_col in df.columns:
+                s_i = pd.Series(irms)
+                i_closed = s_i.rolling(window=self.min_off_gap_cycles, center=True, min_periods=1).max().rolling(window=self.min_off_gap_cycles, center=True, min_periods=1).min().values
+                df[self.irms_col] = np.where(raw_on, i_closed, irms)
 
         # 2. Identify transitions
         state = np.zeros(n, dtype=int)  # Default 0: STEADY_OFF (Board online, standby)

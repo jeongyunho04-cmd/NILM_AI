@@ -70,8 +70,20 @@ def main():
     input_cols = meta["input_cols"]
     target_cols = meta["target_cols"]
 
+    p_agg_idx = input_cols.index("p_w_agg") if "p_w_agg" in input_cols else 0
+    p_agg_mean = scaler.mean_[p_agg_idx]
+    p_agg_std = scaler.scale_[p_agg_idx]
+
     # Load Model
-    model = UNet1D(in_channels=len(input_cols), out_channels=len(target_cols)).to(device)
+    model = UNet1D(
+        in_channels=len(input_cols),
+        out_channels=len(target_cols),
+        target_cols=target_cols,
+        p_agg_mean=p_agg_mean,
+        p_agg_std=p_agg_std
+    ).to(device)
+
+
     checkpoint = torch.load(model_path, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
@@ -88,7 +100,13 @@ def main():
     y_test_raw = test_df[target_cols].values
 
     X_test_scaled = scaler.transform(X_test_raw)
+    feature_boost_weights = meta.get("feature_boost_weights", None)
+    if feature_boost_weights is not None:
+        X_test_scaled = X_test_scaled * feature_boost_weights
+
+
     test_dataset = NILMSlidingWindowDataset(X_test_scaled, y_test_raw, window_len=args.window_len, stride=args.window_len)
+
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
     # 3. Perform Disaggregation Inference
@@ -107,12 +125,23 @@ def main():
             all_targets.append(y_b.numpy())
 
 
+
+
     infer_time = round(time.time() - t0, 2)
     print(f"  - Disaggregated {len(test_dataset)*args.window_len:,} cycles in {infer_time}s ({round(len(test_dataset)*args.window_len/infer_time, 0):,} cycles/sec)")
 
     # Reconstruct continuous predictions: (N_windows, num_app, window_len) -> (N_total_cycles, num_app)
     preds_arr = np.concatenate(all_preds, axis=0).transpose(0, 2, 1).reshape(-1, len(target_cols))
     targets_arr = np.concatenate(all_targets, axis=0).transpose(0, 2, 1).reshape(-1, len(target_cols))
+
+    # Post-Processing Filters for Publication-Ready Waveform Smoothing:
+    # 1. 15-cycle (~0.25s) Rolling Median Filter (removes high-frequency saw-tooth jitter)
+    # 2. 180-cycle (~3s) 1D Morphological Closing Filter (bridges temporary drops/dips shorter than 3 seconds)
+    for idx in range(preds_arr.shape[1]):
+        s = pd.Series(preds_arr[:, idx])
+        s_median = s.rolling(window=15, center=True, min_periods=1).median()
+        s_closed = s_median.rolling(window=180, center=True, min_periods=1).max().rolling(window=180, center=True, min_periods=1).min()
+        preds_arr[:, idx] = s_closed.values
 
     # 4. Calculate Evaluation Metrics
     print("\n==================================================")

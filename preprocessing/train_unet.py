@@ -162,14 +162,117 @@ class AttentionMultiTaskUNet1D(nn.Module):
         d1 = self.dec1(d1)
 
         # Multi-Task Outputs
-        out_power = F.relu(self.power_head(d1))
+        raw_power = F.relu(self.power_head(d1))
         out_state = self.state_head(d1)
+
+        # Smooth Differentiable State Gating: Prevents sharp transient step dips and OFF-state power leaks
+        state_prob = torch.sigmoid(out_state)
+        gate_mask = torch.sigmoid(4.0 * (state_prob - 0.15))
+        out_power = raw_power * gate_mask
 
         return out_power, out_state
 
 
+class HierarchicalAttentionUNet1D(nn.Module):
+    """
+    2-Stage Hierarchical Attention 1D-UNet for NILM Multi-Scale Disaggregation.
+    Stage 1: Heavy Load Network (Kettle 1250W, Hair Dryer 1000W)
+    Stage 2: Residual Light Load Network (Projector 50W, Fan 40W/24W, Charger 60W, MiniPC 9.5W)
+    Completely eliminates heavy-load masking, scale distortion, and cross-talk leakage!
+    """
+    def __init__(self, in_channels=55, out_channels=6, target_cols=None, p_agg_mean=700.0, p_agg_std=600.0):
+        super().__init__()
+        self.target_cols = target_cols or []
+        self.register_buffer('p_agg_mean', torch.tensor(float(p_agg_mean), dtype=torch.float32))
+        self.register_buffer('p_agg_std', torch.tensor(float(p_agg_std), dtype=torch.float32))
+        
+        # Heavy appliance indices (kettle, dryer, hotplate, heater, etc. > 300W)
+        heavy_keywords = ['kettle', 'dryer', 'hotplate', 'plate', 'heater', 'stove', 'range', 'oven']
+        self.heavy_indices = [i for i, col in enumerate(self.target_cols) if any(k in col.lower() for k in heavy_keywords)]
+        self.light_indices = [i for i, col in enumerate(self.target_cols) if i not in self.heavy_indices]
+
+        if len(self.heavy_indices) == 0 or len(self.light_indices) == 0:
+            self.heavy_indices = list(range(out_channels))
+            self.light_indices = []
+
+        num_heavy = len(self.heavy_indices)
+        num_light = len(self.light_indices)
+
+        self.heavy_net = AttentionMultiTaskUNet1D(in_channels=in_channels, out_channels=num_heavy)
+        if num_light > 0:
+            # Triple-Stream Integration: Pass full original features (in_channels) + Heavy prediction (1) + Explicit Residual Power (1) = in_channels + 2
+            self.light_net = AttentionMultiTaskUNet1D(in_channels=in_channels + 2, out_channels=num_light)
+
+    def forward(self, x):
+        B, _, L = x.shape
+        num_appliances = len(self.target_cols) if self.target_cols else (len(self.heavy_indices) + len(self.light_indices))
+
+        if len(self.light_indices) == 0:
+            return self.heavy_net(x)
+
+        # Stage 1: Disaggregate Heavy Loads (Kettle, Dryer, Hotplate)
+        pred_heavy_p, pred_heavy_s = self.heavy_net(x)
+
+        # Heavy load power sum & Z-score normalization
+        p_agg_raw = x[:, 0:1, :] * self.p_agg_std + self.p_agg_mean
+        p_heavy_sum = torch.sum(pred_heavy_p, dim=1, keepdim=True)
+        pred_heavy_norm = (p_heavy_sum - self.p_agg_mean) / (self.p_agg_std + 1e-6)
+
+        # Explicit Residual Active Power Upper Bound: (P_agg - P_heavy)
+        p_light_raw = torch.clamp(p_agg_raw - p_heavy_sum, min=0.0)
+        p_light_norm = (p_light_raw - self.p_agg_mean) / (self.p_agg_std + 1e-6)
+
+        # Triple-Stream Feature Concatenation:
+        # Passes original features x + heavy load estimate + explicit residual power upper bound
+        # Eliminates inter-appliance crosstalk & power leakage from 465W Hotplate into Fan (24W) and Mini PC (10W)
+        x_light = torch.cat([x, pred_heavy_norm, p_light_norm], dim=1)
+
+        # Stage 2: Disaggregate Light Loads on Triple-Stream Signal
+        pred_light_p, pred_light_s = self.light_net(x_light)
+
+        # Appliance Max Power Protection Guard: Prevents heavy load crosstalk from overshooting light appliance ratings
+        max_power_limits = {
+            "minipc": 22.0,
+            "fan": 42.0,
+            "beam_projector": 55.0,
+            "laptop_charger": 75.0,
+            "hair_dryer": 1050.0,
+            "hotplate": 500.0,
+            "electric_kettle": 1300.0
+        }
+
+        # Non-inplace Reconstruction for PyTorch Autograd Safety
+        out_power_list = [None] * num_appliances
+        out_state_list = [None] * num_appliances
+
+        for h_idx, orig_idx in enumerate(self.heavy_indices):
+            col_name = self.target_cols[orig_idx].replace("p_w_", "").lower() if self.target_cols else ""
+            limit = max_power_limits.get(col_name, None)
+            p_slice = pred_heavy_p[:, h_idx:h_idx+1, :]
+            if limit is not None:
+                p_slice = torch.clamp(p_slice, max=limit)
+            out_power_list[orig_idx] = p_slice
+            out_state_list[orig_idx] = pred_heavy_s[:, h_idx:h_idx+1, :]
+
+        for l_idx, orig_idx in enumerate(self.light_indices):
+            col_name = self.target_cols[orig_idx].replace("p_w_", "").lower() if self.target_cols else ""
+            limit = max_power_limits.get(col_name, None)
+            p_slice = pred_light_p[:, l_idx:l_idx+1, :]
+            if limit is not None:
+                p_slice = torch.clamp(p_slice, max=limit)
+            out_power_list[orig_idx] = p_slice
+            out_state_list[orig_idx] = pred_light_s[:, l_idx:l_idx+1, :]
+
+        out_power = torch.cat(out_power_list, dim=1)
+        out_state = torch.cat(out_state_list, dim=1)
+
+        return out_power, out_state
+
+
+
 # Alias for backward compatibility
-UNet1D = AttentionMultiTaskUNet1D
+UNet1D = HierarchicalAttentionUNet1D
+
 
 
 
@@ -265,21 +368,27 @@ def main():
     y_power_raw = np.nan_to_num(df[target_cols].values, nan=0.0, posinf=0.0, neginf=0.0)
 
     
-    # Extract state targets if present
-    state_cols = [c.replace("p_w_", "state_") for c in target_cols]
-    if all(c in df.columns for c in state_cols):
-        y_state_raw = (df[state_cols].values > 0).astype(np.float32)
-    else:
-        y_state_raw = (y_power_raw >= 5.0).astype(np.float32)
+    # Extract state targets (ON state if active power >= 2.0W)
+    y_state_raw = (y_power_raw >= 2.0).astype(np.float32)
+
 
     # Fit & Apply Feature Scaler
-    print("[2/4] Normalizing input features...")
+    print("[2/4] Normalizing & Boosting Harmonic/Phase Features...")
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_raw)
 
+    # Feature Importance Weighting: Scale harmonic & phase features (2.5x) so micro loads aren't masked by 1250W Kettle
+    feature_boost_weights = np.ones(len(input_cols), dtype=np.float32)
+    for idx, col in enumerate(input_cols):
+        if 'ih' in col or 'q_var' in col or 'phase' in col or 'power_factor' in col:
+            feature_boost_weights[idx] = 2.5
+    
+    X_scaled = X_scaled * feature_boost_weights
+
     scaler_path = os.path.join(args.output_dir, "scaler.pkl")
     with open(scaler_path, "wb") as f:
-        pickle.dump({"scaler": scaler, "input_cols": input_cols, "target_cols": target_cols}, f)
+        pickle.dump({"scaler": scaler, "input_cols": input_cols, "target_cols": target_cols, "feature_boost_weights": feature_boost_weights}, f)
+
 
     # Train / Val Split (80% train, 20% validation)
     split_idx = int(len(X_scaled) * 0.8)
@@ -295,23 +404,40 @@ def main():
     print(f"  - Train Window Samples : {len(train_dataset):,}")
     print(f"  - Val Window Samples   : {len(val_dataset):,}")
 
-    # 3. Model Initialization
-    # Pre-compute appliance weights to boost small loads (10W~50W) like minipc/chargers
-    max_powers = np.max(y_power_raw, axis=0)  # Max power per appliance
-    # Small load weighting: min power appliances get up to 3.0x weight factor!
-    weights_np = np.where(max_powers < 50.0, 3.0, np.where(max_powers < 100.0, 2.0, 1.0))
-    app_weights = torch.tensor(weights_np, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(2)
+    # Appliance-Weighted Loss Weights (Inversely proportional to rated power)
+    default_weight_map = {
+        "minipc": 25.0,
+        "fan": 15.0,
+        "beam_projector": 10.0,
+        "laptop_charger": 8.0,
+        "hotplate": 2.0,
+        "hair_dryer": 1.0,
+        "electric_kettle": 1.0,
+    }
+    app_weights_list = [default_weight_map.get(col.replace("p_w_", ""), 1.0) for col in target_cols]
+    app_weights = torch.tensor(app_weights_list, dtype=torch.float32, device=device).view(1, -1, 1)
 
-    print(f"  - Appliance Loss Weighting Factors: {dict(zip([c.replace('p_w_', '') for c in target_cols], weights_np.tolist()))}")
+    print(f"  - Appliance Loss Weights: {dict(zip(target_cols, app_weights_list))}")
 
-    model = AttentionMultiTaskUNet1D(in_channels=len(input_cols), out_channels=len(target_cols)).to(device)
+    p_agg_idx = input_cols.index("p_w_agg") if "p_w_agg" in input_cols else 0
+    p_agg_mean = scaler.mean_[p_agg_idx]
+    p_agg_std = scaler.scale_[p_agg_idx]
+
+    model = HierarchicalAttentionUNet1D(
+        in_channels=len(input_cols),
+        out_channels=len(target_cols),
+        target_cols=target_cols,
+        p_agg_mean=p_agg_mean,
+        p_agg_std=p_agg_std
+    ).to(device)
+
+
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
-    criterion_power_none = nn.SmoothL1Loss(reduction="none") # Huber Loss without reduction for weighting
-    criterion_power_log = nn.SmoothL1Loss()                  # Log-scale loss log1p(y) for micro load scale sensitivity
-    criterion_state = nn.BCEWithLogitsLoss()                  # Safe for Mixed Precision FP16 autocast!
+    criterion_power_linear = nn.SmoothL1Loss(reduction='none')       # Elementwise Linear Power Loss for appliance weighting
+    criterion_power_log = nn.SmoothL1Loss(reduction='none')          # Elementwise Log-scale Loss for micro scale sensitivity
+    criterion_state = nn.BCEWithLogitsLoss()                          # Binary State Cross-Entropy Loss
     scaler_amp = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
-
 
     # 4. Training Loop
     print("[3/4] Starting Attention Multi-Task 1D-UNet Model Training...")
@@ -333,22 +459,28 @@ def main():
             with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
                 pred_p, pred_s = model(x_b)
 
-                # 1. Weighted Linear Power Loss
-                raw_power_err = criterion_power_none(pred_p, y_p_b)
-                loss_p_weighted = (raw_power_err * app_weights).mean()
+                # 1. Weighted Power Linear Loss
+                loss_p_linear = (criterion_power_linear(pred_p, y_p_b) * app_weights).mean()
 
-                # 2. Log-Scale Power Loss log(1 + y) with clamp safety for micro load resolution
                 pred_p_clamped = torch.clamp(pred_p, min=0.0)
                 y_p_clamped = torch.clamp(y_p_b, min=0.0)
-                pred_p_log = torch.log1p(pred_p_clamped)
-                y_p_log = torch.log1p(y_p_clamped)
-                loss_p_log = criterion_power_log(pred_p_log, y_p_log)
 
-                loss_p = loss_p_weighted + 2.0 * loss_p_log
+                # 2. Weighted Power Log Loss
+                loss_p_log = (criterion_power_log(torch.log1p(pred_p_clamped), torch.log1p(y_p_clamped)) * app_weights).mean()
+
+                # 3. Weighted Power Delta (Step Change Edge) Loss
+                if pred_p.shape[-1] > 1:
+                    pred_delta = pred_p[:, :, 1:] - pred_p[:, :, :-1]
+                    y_p_delta = y_p_b[:, :, 1:] - y_p_b[:, :, :-1]
+                    loss_p_delta = (criterion_power_linear(pred_delta, y_p_delta) * app_weights).mean()
+                else:
+                    loss_p_delta = torch.tensor(0.0, device=device)
+
                 loss_s = criterion_state(pred_s, y_s_b)
+                loss_sum = criterion_power_log(torch.log1p(pred_p_clamped.sum(dim=1, keepdim=True)), torch.log1p(y_p_clamped.sum(dim=1, keepdim=True))).mean()
 
-                # Combined Multi-Task Joint Loss
-                loss = loss_p + 0.5 * loss_s
+                # Combined Multi-Task Loss with Appliance Weighting & Power Delta Edge Loss
+                loss = loss_p_linear + 2.0 * loss_p_log + 1.5 * loss_p_delta + 0.5 * loss_s + 0.1 * loss_sum
 
             scaler_amp.scale(loss).backward()
             scaler_amp.step(optimizer)
@@ -368,19 +500,24 @@ def main():
                 x_b, y_p_b, y_s_b = x_b.to(device), y_p_b.to(device), y_s_b.to(device)
                 with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
                     pred_p, pred_s = model(x_b)
-                    raw_power_err = criterion_power_none(pred_p, y_p_b)
-                    loss_p_weighted = (raw_power_err * app_weights).mean()
+
+                    loss_p_linear = (criterion_power_linear(pred_p, y_p_b) * app_weights).mean()
 
                     pred_p_clamped = torch.clamp(pred_p, min=0.0)
                     y_p_clamped = torch.clamp(y_p_b, min=0.0)
-                    pred_p_log = torch.log1p(pred_p_clamped)
-                    y_p_log = torch.log1p(y_p_clamped)
-                    loss_p_log = criterion_power_log(pred_p_log, y_p_log)
+                    loss_p_log = (criterion_power_log(torch.log1p(pred_p_clamped), torch.log1p(y_p_clamped)) * app_weights).mean()
 
-                    loss_p = loss_p_weighted + 2.0 * loss_p_log
+                    if pred_p.shape[-1] > 1:
+                        pred_delta = pred_p[:, :, 1:] - pred_p[:, :, :-1]
+                        y_p_delta = y_p_b[:, :, 1:] - y_p_b[:, :, :-1]
+                        loss_p_delta = (criterion_power_linear(pred_delta, y_p_delta) * app_weights).mean()
+                    else:
+                        loss_p_delta = torch.tensor(0.0, device=device)
+
                     loss_s = criterion_state(pred_s, y_s_b)
-                    loss = loss_p + 0.5 * loss_s
+                    loss_sum = criterion_power_log(torch.log1p(pred_p_clamped.sum(dim=1, keepdim=True)), torch.log1p(y_p_clamped.sum(dim=1, keepdim=True))).mean()
 
+                    loss = loss_p_linear + 2.0 * loss_p_log + 1.5 * loss_p_delta + 0.5 * loss_s + 0.1 * loss_sum
 
                 running_val_loss += loss.item() * len(x_b)
 

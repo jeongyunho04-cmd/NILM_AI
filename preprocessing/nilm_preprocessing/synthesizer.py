@@ -92,8 +92,11 @@ class NILMSynthesizer:
         timeline_df["global_cycle"] = np.arange(N)
         timeline_df["t_s"] = timeline_df["global_cycle"] * 0.016667
         
+        v_nominal = 220.0  # Nominal grid voltage
+        
         p_agg = p_noise.copy()
-        i_sq_agg = i_noise ** 2
+        i_active_agg = p_noise / v_nominal  # In-phase active current (A)
+        i_reactive_agg = np.zeros(N, dtype=np.float32)  # Quadrature reactive current (A)
 
         appliance_stats = {}
 
@@ -103,9 +106,14 @@ class NILMSynthesizer:
                 app_df, N
             )
 
-            # Superimpose Power & Current RMS
+            # Active current adds linearly (in-phase with voltage)
+            app_i_p = app_p / v_nominal
+            # Quadrature reactive current
+            app_i_q = np.sqrt(np.maximum(app_i**2 - app_i_p**2, 0.0))
+
             p_agg += app_p
-            i_sq_agg += app_i ** 2
+            i_active_agg += app_i_p
+            i_reactive_agg += app_i_q
             
             # Superimpose Harmonics
             for h in range(1, 16):
@@ -121,22 +129,28 @@ class NILMSynthesizer:
 
             appliance_stats[app_name] = stats
 
-        # 5. Calculate Final Aggregate Features
-        v_nominal = 220.0  # Nominal grid voltage
-        s_agg = v_nominal * np.sqrt(i_sq_agg)
-        q_sq_agg = np.maximum(s_agg**2 - p_agg**2, 0.0)
-        q_agg = np.sqrt(q_sq_agg)
+        # 5. Calculate Final Aggregate Features (Physically Accurate AC Parallel Superposition)
+        i_harmonics_sq = np.zeros(N, dtype=np.float32)
+        for h in range(2, 16):
+            h_col = f"ih{h}"
+            if h_col in harmonics_agg:
+                i_harmonics_sq += harmonics_agg[h_col] ** 2
+
+        i_rms_agg = np.sqrt(i_active_agg**2 + i_reactive_agg**2 + i_harmonics_sq)
+        s_agg = v_nominal * i_rms_agg
+        q_agg = v_nominal * i_reactive_agg
+        
         pf_agg = np.divide(p_agg, s_agg, out=np.ones_like(p_agg), where=(s_agg > 1e-4))
         pf_agg = np.clip(pf_agg, 0.0, 1.0)
         phase_agg = np.arccos(pf_agg)
 
-
         timeline_df["p_w_agg"] = p_agg
-        timeline_df["irms_agg"] = np.sqrt(i_sq_agg)
+        timeline_df["irms_agg"] = i_rms_agg
         timeline_df["s_va_agg"] = s_agg
         timeline_df["q_var_agg"] = q_agg
         timeline_df["power_factor_agg"] = pf_agg
         timeline_df["phase_rad_agg"] = phase_agg
+
 
         timeline_df["d_pw_agg"] = timeline_df["p_w_agg"].diff().fillna(0.0)
         timeline_df["d_irms_agg"] = timeline_df["irms_agg"].diff().fillna(0.0)

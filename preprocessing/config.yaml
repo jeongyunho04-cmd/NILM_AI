@@ -22,6 +22,7 @@ labeling:
   off_power_threshold: 2.0       # Hysteresis lower threshold (W) for OFF state
   disconnected_power_threshold: 1.8 # Power (W) below which device is considered DISCONNECTED (-1)
   irms_threshold: 0.02           # RMS Current (A) minimum threshold for ON
+  min_off_gap_cycles: 180        # Morphological Closing: Merge micro OFF gaps (< 3.0s ~ 180 cycles) into clean macro envelope power
   transient_window_cycles: 30    # Default duration of transient phase in cycles (approx 0.5s at 60Hz)
   use_dynamic_transient: true    # Adjust transient window based on power derivative stabilization
   min_delta_p_transient: 1.5     # Minimum dP/dt (W/cycle) to trigger dynamic transient start

@@ -44,7 +44,7 @@ python run_preprocessing.py -i "..\data\*.csv" -o "output"
 python run_synthesis.py -i "output" -o "output\synthetic_nilm_12h.csv" -n 2592000
 
 [Step 3] 어텐션 멀티태스크 1D-UNet AI 모델 학습 (GPU 가속, 35 에폭)
-python train_unet.py -data "output\synthetic_nilm_12h.csv" -b 256 -e 35
+python train_unet.py -data "output\파일 이름.csv" -b 256 -e 35
 
 [Step 4] 분해 성능 평가 & 결과 그래프 생성 (MAE/F1 수치 표 및 PNG 그래프 생성)
 python test_unet.py -data "output\synthetic_nilm_12h.csv" -ckpt "checkpoint_unet"
