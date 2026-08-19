@@ -1,0 +1,580 @@
+{
+  "processed_files_count": 17,
+  "sampling_hz": 60.0,
+  "devices": {
+    "air_conditioner": {
+      "appliance_type": "air_conditioner",
+      "korean_name": "에어컨",
+      "rows": 226770,
+      "duration_min": 62.99,
+      "p_mean": 422.53,
+      "p_max": 1022.07,
+      "on_percentage": 88.7,
+      "events_count": 40,
+      "npz_file": "processed_data\\npz\\air_conditioner.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "대기 상태 또는 전원 꺼짐",
+          "count": 25619,
+          "percentage": 11.3,
+          "duration_min": 7.12
+        },
+        "FAN_ONLY": {
+          "state_id": 1,
+          "description": "송풍/팬 단독 동작 모드",
+          "count": 34401,
+          "percentage": 15.17,
+          "duration_min": 9.56
+        },
+        "COOLING_LOW": {
+          "state_id": 2,
+          "description": "인버터 컴프레서 저부하 냉방",
+          "count": 22236,
+          "percentage": 9.81,
+          "duration_min": 6.18
+        },
+        "COOLING_MID": {
+          "state_id": 3,
+          "description": "인버터 컴프레서 중부하 냉방",
+          "count": 59035,
+          "percentage": 26.03,
+          "duration_min": 16.4
+        },
+        "COOLING_HIGH": {
+          "state_id": 4,
+          "description": "인버터 컴프레서 고부하/터보 냉방",
+          "count": 85479,
+          "percentage": 37.69,
+          "duration_min": 23.74
+        }
+      }
+    },
+    "beam_projector": {
+      "appliance_type": "beam_projector",
+      "korean_name": "빔프로젝터",
+      "rows": 42720,
+      "duration_min": 11.87,
+      "p_mean": 42.04,
+      "p_max": 252.38,
+      "on_percentage": 89.03,
+      "events_count": 23,
+      "npz_file": "processed_data\\npz\\beam_projector.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "대기 전원 상태",
+          "count": 4688,
+          "percentage": 10.97,
+          "duration_min": 1.3
+        },
+        "WARMUP_COOLDOWN": {
+          "state_id": 1,
+          "description": "부팅 예열 또는 전원 끈 후 팬 냉각",
+          "count": 1560,
+          "percentage": 3.65,
+          "duration_min": 0.43
+        },
+        "LAMP_ON": {
+          "state_id": 2,
+          "description": "램프 점등 및 정상 화면 투사",
+          "count": 36472,
+          "percentage": 85.37,
+          "duration_min": 10.13
+        }
+      }
+    },
+    "electiric_kettle": {
+      "appliance_type": "electiric_kettle",
+      "korean_name": "전기포트",
+      "rows": 29370,
+      "duration_min": 8.16,
+      "p_mean": 896.54,
+      "p_max": 1289.26,
+      "on_percentage": 71.12,
+      "events_count": 26,
+      "npz_file": "processed_data\\npz\\electiric_kettle.npz",
+      "state_distribution": {
+        "OFF": {
+          "state_id": 0,
+          "description": "전원 꺼짐 / 대기 상태",
+          "count": 8481,
+          "percentage": 28.88,
+          "duration_min": 2.36
+        },
+        "BOILING_HEATING": {
+          "state_id": 1,
+          "description": "히터 발열 및 물 끓임 동작",
+          "count": 20889,
+          "percentage": 71.12,
+          "duration_min": 5.8
+        }
+      }
+    },
+    "fan_1": {
+      "appliance_type": "fan",
+      "korean_name": "선풍기",
+      "rows": 79140,
+      "duration_min": 21.98,
+      "p_mean": 25.56,
+      "p_max": 47.58,
+      "on_percentage": 94.52,
+      "events_count": 58,
+      "npz_file": "processed_data\\npz\\fan_1.npz",
+      "state_distribution": {
+        "OFF": {
+          "state_id": 0,
+          "description": "전원 꺼짐",
+          "count": 4339,
+          "percentage": 5.48,
+          "duration_min": 1.21
+        },
+        "SPEED_LOW": {
+          "state_id": 1,
+          "description": "1단 미풍 운전",
+          "count": 54662,
+          "percentage": 69.07,
+          "duration_min": 15.18
+        },
+        "SPEED_MID": {
+          "state_id": 2,
+          "description": "2단 약풍 운전",
+          "count": 10055,
+          "percentage": 12.71,
+          "duration_min": 2.79
+        },
+        "SPEED_HIGH": {
+          "state_id": 3,
+          "description": "3단 강풍 운전",
+          "count": 10084,
+          "percentage": 12.74,
+          "duration_min": 2.8
+        }
+      }
+    },
+    "fan_2": {
+      "appliance_type": "fan",
+      "korean_name": "선풍기",
+      "rows": 35490,
+      "duration_min": 9.86,
+      "p_mean": 29.72,
+      "p_max": 45.29,
+      "on_percentage": 96.89,
+      "events_count": 10,
+      "npz_file": "processed_data\\npz\\fan_2.npz",
+      "state_distribution": {
+        "OFF": {
+          "state_id": 0,
+          "description": "전원 꺼짐",
+          "count": 1102,
+          "percentage": 3.11,
+          "duration_min": 0.31
+        },
+        "SPEED_LOW": {
+          "state_id": 1,
+          "description": "1단 미풍 운전",
+          "count": 1704,
+          "percentage": 4.8,
+          "duration_min": 0.47
+        },
+        "SPEED_MID": {
+          "state_id": 2,
+          "description": "2단 약풍 운전",
+          "count": 32520,
+          "percentage": 91.63,
+          "duration_min": 9.03
+        },
+        "SPEED_HIGH": {
+          "state_id": 3,
+          "description": "3단 강풍 운전",
+          "count": 164,
+          "percentage": 0.46,
+          "duration_min": 0.05
+        }
+      }
+    },
+    "fan_3": {
+      "appliance_type": "fan",
+      "korean_name": "선풍기",
+      "rows": 52980,
+      "duration_min": 14.72,
+      "p_mean": 37.81,
+      "p_max": 56.02,
+      "on_percentage": 95.81,
+      "events_count": 17,
+      "npz_file": "processed_data\\npz\\fan_3.npz",
+      "state_distribution": {
+        "OFF": {
+          "state_id": 0,
+          "description": "전원 꺼짐",
+          "count": 2221,
+          "percentage": 4.19,
+          "duration_min": 0.62
+        },
+        "SPEED_LOW": {
+          "state_id": 1,
+          "description": "1단 미풍 운전",
+          "count": 884,
+          "percentage": 1.67,
+          "duration_min": 0.25
+        },
+        "SPEED_MID": {
+          "state_id": 2,
+          "description": "2단 약풍 운전",
+          "count": 886,
+          "percentage": 1.67,
+          "duration_min": 0.25
+        },
+        "SPEED_HIGH": {
+          "state_id": 3,
+          "description": "3단 강풍 운전",
+          "count": 48989,
+          "percentage": 92.47,
+          "duration_min": 13.61
+        }
+      }
+    },
+    "hair_dryer_1": {
+      "appliance_type": "hair_dryer",
+      "korean_name": "헤어드라이기",
+      "rows": 7470,
+      "duration_min": 2.08,
+      "p_mean": 764.47,
+      "p_max": 1070.3,
+      "on_percentage": 78.13,
+      "events_count": 8,
+      "npz_file": "processed_data\\npz\\hair_dryer_1.npz",
+      "state_distribution": {
+        "OFF": {
+          "state_id": 0,
+          "description": "전원 꺼짐",
+          "count": 1634,
+          "percentage": 21.87,
+          "duration_min": 0.45
+        },
+        "LOW_HEAT_COOL": {
+          "state_id": 1,
+          "description": "냉풍 또는 1단 온풍/저열 모드",
+          "count": 308,
+          "percentage": 4.12,
+          "duration_min": 0.09
+        },
+        "HIGH_HEAT_TURBO": {
+          "state_id": 2,
+          "description": "2단 열풍/터보 고열 모드",
+          "count": 5528,
+          "percentage": 74.0,
+          "duration_min": 1.54
+        }
+      }
+    },
+    "hair_dryer_2": {
+      "appliance_type": "hair_dryer",
+      "korean_name": "헤어드라이기",
+      "rows": 11190,
+      "duration_min": 3.11,
+      "p_mean": 592.16,
+      "p_max": 1084.4,
+      "on_percentage": 72.78,
+      "events_count": 22,
+      "npz_file": "processed_data\\npz\\hair_dryer_2.npz",
+      "state_distribution": {
+        "OFF": {
+          "state_id": 0,
+          "description": "전원 꺼짐",
+          "count": 3046,
+          "percentage": 27.22,
+          "duration_min": 0.85
+        },
+        "LOW_HEAT_COOL": {
+          "state_id": 1,
+          "description": "냉풍 또는 1단 온풍/저열 모드",
+          "count": 3195,
+          "percentage": 28.55,
+          "duration_min": 0.89
+        },
+        "HIGH_HEAT_TURBO": {
+          "state_id": 2,
+          "description": "2단 열풍/터보 고열 모드",
+          "count": 4949,
+          "percentage": 44.23,
+          "duration_min": 1.37
+        }
+      }
+    },
+    "hotplate_1": {
+      "appliance_type": "hotplate",
+      "korean_name": "핫플레이트",
+      "rows": 49350,
+      "duration_min": 13.71,
+      "p_mean": 195.23,
+      "p_max": 475.1,
+      "on_percentage": 45.28,
+      "events_count": 544,
+      "npz_file": "processed_data\\npz\\hotplate_1.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "대기 상태 또는 서모스탯 OFF 주기",
+          "count": 27005,
+          "percentage": 54.72,
+          "duration_min": 7.5
+        },
+        "HEATING_ACTIVE": {
+          "state_id": 1,
+          "description": "히터 통전 발열 주기",
+          "count": 22345,
+          "percentage": 45.28,
+          "duration_min": 6.21
+        }
+      }
+    },
+    "hotplate_2": {
+      "appliance_type": "hotplate",
+      "korean_name": "핫플레이트",
+      "rows": 35490,
+      "duration_min": 9.86,
+      "p_mean": 148.08,
+      "p_max": 479.4,
+      "on_percentage": 30.41,
+      "events_count": 420,
+      "npz_file": "processed_data\\npz\\hotplate_2.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "대기 상태 또는 서모스탯 OFF 주기",
+          "count": 24697,
+          "percentage": 69.59,
+          "duration_min": 6.86
+        },
+        "HEATING_ACTIVE": {
+          "state_id": 1,
+          "description": "히터 통전 발열 주기",
+          "count": 10793,
+          "percentage": 30.41,
+          "duration_min": 3.0
+        }
+      }
+    },
+    "laptop_charger_1": {
+      "appliance_type": "laptop_charger",
+      "korean_name": "노트북충전기",
+      "rows": 174750,
+      "duration_min": 48.54,
+      "p_mean": 47.42,
+      "p_max": 332.45,
+      "on_percentage": 98.59,
+      "events_count": 204,
+      "npz_file": "processed_data\\npz\\laptop_charger_1.npz",
+      "state_distribution": {
+        "IDLE_UNPLUGGED": {
+          "state_id": 0,
+          "description": "미연결 무부하 또는 완충 대기",
+          "count": 2472,
+          "percentage": 1.41,
+          "duration_min": 0.69
+        },
+        "TRICKLE_IDLE_CHARGE": {
+          "state_id": 1,
+          "description": "저속 트리클 충전 / 유휴 상태 충전",
+          "count": 35105,
+          "percentage": 20.09,
+          "duration_min": 9.75
+        },
+        "FAST_ACTIVE_CHARGE": {
+          "state_id": 2,
+          "description": "고속 충전 / CPU 부하 동작 중 충전",
+          "count": 137173,
+          "percentage": 78.5,
+          "duration_min": 38.1
+        }
+      }
+    },
+    "laptop_charger_2": {
+      "appliance_type": "laptop_charger",
+      "korean_name": "노트북충전기",
+      "rows": 13470,
+      "duration_min": 3.74,
+      "p_mean": 20.3,
+      "p_max": 339.65,
+      "on_percentage": 46.21,
+      "events_count": 33,
+      "npz_file": "processed_data\\npz\\laptop_charger_2.npz",
+      "state_distribution": {
+        "IDLE_UNPLUGGED": {
+          "state_id": 0,
+          "description": "미연결 무부하 또는 완충 대기",
+          "count": 7245,
+          "percentage": 53.79,
+          "duration_min": 2.01
+        },
+        "TRICKLE_IDLE_CHARGE": {
+          "state_id": 1,
+          "description": "저속 트리클 충전 / 유휴 상태 충전",
+          "count": 3129,
+          "percentage": 23.23,
+          "duration_min": 0.87
+        },
+        "FAST_ACTIVE_CHARGE": {
+          "state_id": 2,
+          "description": "고속 충전 / CPU 부하 동작 중 충전",
+          "count": 3096,
+          "percentage": 22.98,
+          "duration_min": 0.86
+        }
+      }
+    },
+    "minipc_1": {
+      "appliance_type": "minipc",
+      "korean_name": "미니PC",
+      "rows": 48540,
+      "duration_min": 13.48,
+      "p_mean": 10.6,
+      "p_max": 217.63,
+      "on_percentage": 85.02,
+      "events_count": 51,
+      "npz_file": "processed_data\\npz\\minipc_1.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "전원 꺼짐 또는 절전 모드",
+          "count": 7271,
+          "percentage": 14.98,
+          "duration_min": 2.02
+        },
+        "IDLE": {
+          "state_id": 1,
+          "description": "바탕화면 대기 및 경부하 상태",
+          "count": 26122,
+          "percentage": 53.82,
+          "duration_min": 7.26
+        },
+        "ACTIVE_LOAD": {
+          "state_id": 2,
+          "description": "프로그램 실행 및 CPU 연산 부하",
+          "count": 15147,
+          "percentage": 31.21,
+          "duration_min": 4.21
+        }
+      }
+    },
+    "minipc_2": {
+      "appliance_type": "minipc",
+      "korean_name": "미니PC",
+      "rows": 152400,
+      "duration_min": 42.33,
+      "p_mean": 14.28,
+      "p_max": 31.19,
+      "on_percentage": 98.43,
+      "events_count": 275,
+      "npz_file": "processed_data\\npz\\minipc_2.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "전원 꺼짐 또는 절전 모드",
+          "count": 2395,
+          "percentage": 1.57,
+          "duration_min": 0.67
+        },
+        "IDLE": {
+          "state_id": 1,
+          "description": "바탕화면 대기 및 경부하 상태",
+          "count": 80838,
+          "percentage": 53.04,
+          "duration_min": 22.45
+        },
+        "ACTIVE_LOAD": {
+          "state_id": 2,
+          "description": "프로그램 실행 및 CPU 연산 부하",
+          "count": 69167,
+          "percentage": 45.39,
+          "duration_min": 19.21
+        }
+      }
+    },
+    "noise_noselfpower": {
+      "appliance_type": "noise_noselfpower",
+      "korean_name": "무부하노이즈(외부전원)",
+      "rows": 61440,
+      "duration_min": 17.07,
+      "p_mean": 1.4,
+      "p_max": 1.71,
+      "on_percentage": 0.0,
+      "events_count": 0,
+      "npz_file": "processed_data\\npz\\noise_noselfpower.npz",
+      "state_distribution": {
+        "BASELINE_NOISE": {
+          "state_id": 0,
+          "description": "무부하 센서 노이즈 바닥",
+          "count": 61440,
+          "percentage": 100.0,
+          "duration_min": 17.07
+        }
+      }
+    },
+    "noise_selfpower": {
+      "appliance_type": "noise_selfpower",
+      "korean_name": "무부하노이즈(자체전원)",
+      "rows": 40140,
+      "duration_min": 11.15,
+      "p_mean": 2.37,
+      "p_max": 3.06,
+      "on_percentage": 0.0,
+      "events_count": 0,
+      "npz_file": "processed_data\\npz\\noise_selfpower.npz",
+      "state_distribution": {
+        "BASELINE_NOISE": {
+          "state_id": 0,
+          "description": "보드 자체 소비전력 노이즈 바닥",
+          "count": 40140,
+          "percentage": 100.0,
+          "duration_min": 11.15
+        }
+      }
+    },
+    "oven": {
+      "appliance_type": "oven",
+      "korean_name": "오븐",
+      "rows": 129000,
+      "duration_min": 35.83,
+      "p_mean": 297.02,
+      "p_max": 1195.36,
+      "on_percentage": 97.59,
+      "events_count": 105,
+      "npz_file": "processed_data\\npz\\oven.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "대기 전원 상태",
+          "count": 3111,
+          "percentage": 2.41,
+          "duration_min": 0.86
+        },
+        "FAN_LIGHT": {
+          "state_id": 1,
+          "description": "조명등 및 컨벡션 팬 단독 동작",
+          "count": 93903,
+          "percentage": 72.79,
+          "duration_min": 26.08
+        },
+        "MEDIUM_HEAT": {
+          "state_id": 2,
+          "description": "단일 히터 가열 모드",
+          "count": 0,
+          "percentage": 0.0,
+          "duration_min": 0.0
+        },
+        "HIGH_HEAT_CONVECTION": {
+          "state_id": 3,
+          "description": "양면 히터 및 고열 컨벡션 조리",
+          "count": 31986,
+          "percentage": 24.8,
+          "duration_min": 8.88
+        }
+      }
+    }
+  },
+  "total_cleaned_samples": 1189710,
+  "total_duration_hours": 5.51,
+  "total_events_detected": 1836
+}

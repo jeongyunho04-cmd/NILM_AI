@@ -1,0 +1,52 @@
+{
+  "raw_rows": 11190,
+  "cleaned_rows": 11190,
+  "duration_s": 186.5,
+  "duplicates_removed": 0,
+  "interpolated_cycles": 0,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 5,
+  "noise_floor_applied_w": 1.4,
+  "source_file": "hair_dryer_2.csv",
+  "appliance_type": "hair_dryer",
+  "output_file": null,
+  "feature_columns_count": 117,
+  "p_mean": 592.16,
+  "p_max": 1084.4,
+  "irms_mean": 2.5761,
+  "korean_name": "헤어드라이기",
+  "total_samples": 11190,
+  "on_percentage": 72.78,
+  "state_distribution": {
+    "OFF": {
+      "state_id": 0,
+      "description": "전원 꺼짐",
+      "count": 3046,
+      "percentage": 27.22,
+      "duration_min": 0.85
+    },
+    "LOW_HEAT_COOL": {
+      "state_id": 1,
+      "description": "냉풍 또는 1단 온풍/저열 모드",
+      "count": 3195,
+      "percentage": 28.55,
+      "duration_min": 0.89
+    },
+    "HIGH_HEAT_TURBO": {
+      "state_id": 2,
+      "description": "2단 열풍/터보 고열 모드",
+      "count": 4949,
+      "percentage": 44.23,
+      "duration_min": 1.37
+    }
+  },
+  "events_summary": {
+    "total_events": 22,
+    "on_events": 9,
+    "off_events": 9,
+    "mode_change_events": 4
+  },
+  "annotated_csv": "processed_data\\clean_devices\\hair_dryer_2_annotated.csv",
+  "npz_file": "processed_data\\npz\\hair_dryer_2.npz",
+  "events_json": "processed_data\\labels\\hair_dryer_2_events.json"
+}

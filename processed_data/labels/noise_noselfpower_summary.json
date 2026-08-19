@@ -1,0 +1,38 @@
+{
+  "raw_rows": 61200,
+  "cleaned_rows": 61440,
+  "duration_s": 1024.0,
+  "duplicates_removed": 0,
+  "interpolated_cycles": 240,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "noise_floor_applied_w": 1.4,
+  "source_file": "noise_noselfpower.csv",
+  "appliance_type": "noise_noselfpower",
+  "output_file": null,
+  "feature_columns_count": 117,
+  "p_mean": 1.4,
+  "p_max": 1.71,
+  "irms_mean": 0.0068,
+  "korean_name": "무부하노이즈(외부전원)",
+  "total_samples": 61440,
+  "on_percentage": 0.0,
+  "state_distribution": {
+    "BASELINE_NOISE": {
+      "state_id": 0,
+      "description": "무부하 센서 노이즈 바닥",
+      "count": 61440,
+      "percentage": 100.0,
+      "duration_min": 17.07
+    }
+  },
+  "events_summary": {
+    "total_events": 0,
+    "on_events": 0,
+    "off_events": 0,
+    "mode_change_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\noise_noselfpower_annotated.csv",
+  "npz_file": "processed_data\\npz\\noise_noselfpower.npz",
+  "events_json": "processed_data\\labels\\noise_noselfpower_events.json"
+}

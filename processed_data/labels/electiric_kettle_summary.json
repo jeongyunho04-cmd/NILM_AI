@@ -1,0 +1,45 @@
+{
+  "raw_rows": 29280,
+  "cleaned_rows": 29370,
+  "duration_s": 489.5,
+  "duplicates_removed": 0,
+  "interpolated_cycles": 90,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "noise_floor_applied_w": 1.4,
+  "source_file": "electiric_kettle.csv",
+  "appliance_type": "electiric_kettle",
+  "output_file": null,
+  "feature_columns_count": 117,
+  "p_mean": 896.54,
+  "p_max": 1289.26,
+  "irms_mean": 4.227,
+  "korean_name": "전기포트",
+  "total_samples": 29370,
+  "on_percentage": 71.12,
+  "state_distribution": {
+    "OFF": {
+      "state_id": 0,
+      "description": "전원 꺼짐 / 대기 상태",
+      "count": 8481,
+      "percentage": 28.88,
+      "duration_min": 2.36
+    },
+    "BOILING_HEATING": {
+      "state_id": 1,
+      "description": "히터 발열 및 물 끓임 동작",
+      "count": 20889,
+      "percentage": 71.12,
+      "duration_min": 5.8
+    }
+  },
+  "events_summary": {
+    "total_events": 26,
+    "on_events": 13,
+    "off_events": 13,
+    "mode_change_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\electiric_kettle_annotated.csv",
+  "npz_file": "processed_data\\npz\\electiric_kettle.npz",
+  "events_json": "processed_data\\labels\\electiric_kettle_events.json"
+}

@@ -658,6 +658,31 @@ def restore_console_mode(saved):
     k.SetConsoleMode(h, mode)
 
 
+def prevent_windows_sleep():
+    """Windows가 USB 및 무선랜 어댑터를 절전/저전력 상태로 낮추지 않도록 방지."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ES_CONTINUOUS = 0x80000000
+        ES_SYSTEM_REQUIRED = 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+    except Exception:
+        pass
+
+
+def restore_windows_sleep():
+    """절전 설정을 원래대로 복구."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ES_CONTINUOUS = 0x80000000
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+    except Exception:
+        pass
+
+
 def local_ips():
     try:
         infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
@@ -681,6 +706,7 @@ def main():
     # 콘솔 클릭 한 번에 수신이 멈추는 것을 막는다(위 함수 주석 참조).
     # 종료할 때 finally 에서 원래대로 되돌린다.
     console_mode = disable_console_quickedit()
+    prevent_windows_sleep()
 
     fcsv = writer = None
     csv_path = None
@@ -769,7 +795,11 @@ def main():
                                   f"  -> 보드 큐가 넘쳤습니다"
                                   f" (펌웨어 로그의 drop 과 맞춰 보세요)")
                         elif d["seq"] <= seq_global:
-                            print("[!] seq 가 되돌아감 - 보드가 리셋된 것 같습니다.")
+                            if (seq_global - d["seq"]) <= REORDER_MAX * 2:
+                                print(f"[+] 재접속 후 미확인 큐 재전송 수신 "
+                                      f"(seq {d['seq']} <= 직전 세션 {seq_global})")
+                            else:
+                                print("[!] seq 가 큰 폭으로 되돌아감 - 보드가 리셋된 것 같습니다.")
 
                     # --- 순서 뒤바뀜을 전제로 한 유실 집계 -----------------
                     #
@@ -878,6 +908,7 @@ def main():
     finally:
         srv.close()
         restore_console_mode(console_mode)
+        restore_windows_sleep()
         if fcsv is not None:
             fcsv.close()
         print_summary(frames, lost, stats, time.time() - t_wall0, csv_path,

@@ -1,0 +1,38 @@
+{
+  "raw_rows": 39750,
+  "cleaned_rows": 40140,
+  "duration_s": 669.0,
+  "duplicates_removed": 0,
+  "interpolated_cycles": 390,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "noise_floor_applied_w": 2.37,
+  "source_file": "noise_selfpower.csv",
+  "appliance_type": "noise_selfpower",
+  "output_file": null,
+  "feature_columns_count": 117,
+  "p_mean": 2.37,
+  "p_max": 3.06,
+  "irms_mean": 0.0152,
+  "korean_name": "무부하노이즈(자체전원)",
+  "total_samples": 40140,
+  "on_percentage": 0.0,
+  "state_distribution": {
+    "BASELINE_NOISE": {
+      "state_id": 0,
+      "description": "보드 자체 소비전력 노이즈 바닥",
+      "count": 40140,
+      "percentage": 100.0,
+      "duration_min": 11.15
+    }
+  },
+  "events_summary": {
+    "total_events": 0,
+    "on_events": 0,
+    "off_events": 0,
+    "mode_change_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\noise_selfpower_annotated.csv",
+  "npz_file": "processed_data\\npz\\noise_selfpower.npz",
+  "events_json": "processed_data\\labels\\noise_selfpower_events.json"
+}

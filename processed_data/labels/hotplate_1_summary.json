@@ -1,0 +1,45 @@
+{
+  "raw_rows": 49338,
+  "cleaned_rows": 49350,
+  "duration_s": 822.5,
+  "duplicates_removed": 0,
+  "interpolated_cycles": 12,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "noise_floor_applied_w": 1.4,
+  "source_file": "hotplate_1.csv",
+  "appliance_type": "hotplate",
+  "output_file": null,
+  "feature_columns_count": 117,
+  "p_mean": 195.23,
+  "p_max": 475.1,
+  "irms_mean": 0.9052,
+  "korean_name": "핫플레이트",
+  "total_samples": 49350,
+  "on_percentage": 45.28,
+  "state_distribution": {
+    "OFF_STANDBY": {
+      "state_id": 0,
+      "description": "대기 상태 또는 서모스탯 OFF 주기",
+      "count": 27005,
+      "percentage": 54.72,
+      "duration_min": 7.5
+    },
+    "HEATING_ACTIVE": {
+      "state_id": 1,
+      "description": "히터 통전 발열 주기",
+      "count": 22345,
+      "percentage": 45.28,
+      "duration_min": 6.21
+    }
+  },
+  "events_summary": {
+    "total_events": 544,
+    "on_events": 272,
+    "off_events": 272,
+    "mode_change_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\hotplate_1_annotated.csv",
+  "npz_file": "processed_data\\npz\\hotplate_1.npz",
+  "events_json": "processed_data\\labels\\hotplate_1_events.json"
+}

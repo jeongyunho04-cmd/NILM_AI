@@ -1,0 +1,106 @@
+{
+  "generated_scenarios": {
+    "morning_routine": {
+      "description": "Morning Routine (Kettle, Dryer, Charger, Fan)",
+      "duration_s": 900.0,
+      "duration_cycles": 54000,
+      "active_appliances": [
+        "electiric_kettle",
+        "fan",
+        "hair_dryer",
+        "laptop_charger"
+      ],
+      "mean_p_w": 512.34,
+      "max_p_w": 1263.09,
+      "min_v_bus": 215.4,
+      "max_v_drop": 4.63,
+      "npz_file": "synthetic_data\\scenarios\\morning_routine.npz",
+      "plot_file": "synthetic_data\\plots\\morning_routine_profile.png"
+    },
+    "evening_cooking": {
+      "description": "Evening Cooking Routine (AC, Oven, Hotplate, Projector)",
+      "duration_s": 1200.0,
+      "duration_cycles": 72000,
+      "active_appliances": [
+        "air_conditioner",
+        "beam_projector",
+        "hotplate",
+        "oven"
+      ],
+      "mean_p_w": 1127.84,
+      "max_p_w": 2346.0,
+      "min_v_bus": 214.3,
+      "max_v_drop": 5.67,
+      "npz_file": "synthetic_data\\scenarios\\evening_cooking.npz",
+      "plot_file": "synthetic_data\\plots\\evening_cooking_profile.png"
+    },
+    "work_office": {
+      "description": "Work Office Routine (MiniPC, Charger, Fan, Kettle Breaks)",
+      "duration_s": 1500.0,
+      "duration_cycles": 90000,
+      "active_appliances": [
+        "electiric_kettle",
+        "fan",
+        "laptop_charger",
+        "minipc"
+      ],
+      "mean_p_w": 423.18,
+      "max_p_w": 1504.85,
+      "min_v_bus": 215.2,
+      "max_v_drop": 4.78,
+      "npz_file": "synthetic_data\\scenarios\\work_office.npz",
+      "plot_file": "synthetic_data\\plots\\work_office_profile.png"
+    },
+    "random_scenario_1": {
+      "description": "Random Multi-Load Scenario #1",
+      "duration_s": 900.0,
+      "duration_cycles": 54000,
+      "active_appliances": [
+        "air_conditioner",
+        "beam_projector",
+        "laptop_charger",
+        "minipc",
+        "oven"
+      ],
+      "mean_p_w": 539.4,
+      "max_p_w": 1299.0,
+      "min_v_bus": 216.2,
+      "max_v_drop": 3.82,
+      "npz_file": "synthetic_data\\scenarios\\random_scenario_1.npz",
+      "plot_file": "synthetic_data\\plots\\random_scenario_1_profile.png"
+    },
+    "random_scenario_2": {
+      "description": "Random Multi-Load Scenario #2",
+      "duration_s": 1200.0,
+      "duration_cycles": 72000,
+      "active_appliances": [
+        "air_conditioner",
+        "beam_projector",
+        "electiric_kettle",
+        "fan",
+        "laptop_charger",
+        "minipc"
+      ],
+      "mean_p_w": 580.55,
+      "max_p_w": 1850.91,
+      "min_v_bus": 217.4,
+      "max_v_drop": 2.57,
+      "npz_file": "synthetic_data\\scenarios\\random_scenario_2.npz",
+      "plot_file": "synthetic_data\\plots\\random_scenario_2_profile.png"
+    }
+  },
+  "batch_benchmark": {
+    "batch_size": 32,
+    "window_size_cycles": 600,
+    "samples_per_second": 172.6,
+    "x_shape": [
+      32,
+      33,
+      600
+    ],
+    "y_power_shape": [
+      32,
+      9
+    ]
+  }
+}

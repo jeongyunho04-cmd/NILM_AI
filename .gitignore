@@ -2,3 +2,21 @@
 data/
 nilm_*.csv
 preprocessing/output/
+__pycache__/
+*.pyc
+*.vsidx
+.vs/
+scratch/
+
+# 파이프라인 산출물 중 대용량 바이너리 (약 2.3GB)
+# 전부 data/ 에서 아래 두 명령으로 재생성되므로 깃헙에 올리지 않는다.
+#   python -m src.run_preprocess_and_label
+#   python -m src.run_synthesis
+# GitHub 은 파일당 100MB 를 넘으면 푸시를 거부하는데,
+# clean_devices 의 CSV 는 최대 339MB 에 달한다.
+processed_data/clean_devices/
+processed_data/npz/
+processed_data/composite_eval/
+synthetic_data/scenarios/
+
+# 리뷰에 필요한 작은 산출물(라벨 JSON, 진단 차트, 리포트)은 계속 추적한다.

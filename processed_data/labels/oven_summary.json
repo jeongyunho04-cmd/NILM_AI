@@ -1,0 +1,59 @@
+{
+  "raw_rows": 128868,
+  "cleaned_rows": 129000,
+  "duration_s": 2150.0,
+  "duplicates_removed": 0,
+  "interpolated_cycles": 132,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "noise_floor_applied_w": 1.4,
+  "source_file": "oven.csv",
+  "appliance_type": "oven",
+  "output_file": null,
+  "feature_columns_count": 117,
+  "p_mean": 297.02,
+  "p_max": 1195.36,
+  "irms_mean": 1.3781,
+  "korean_name": "오븐",
+  "total_samples": 129000,
+  "on_percentage": 97.59,
+  "state_distribution": {
+    "OFF_STANDBY": {
+      "state_id": 0,
+      "description": "대기 전원 상태",
+      "count": 3111,
+      "percentage": 2.41,
+      "duration_min": 0.86
+    },
+    "FAN_LIGHT": {
+      "state_id": 1,
+      "description": "조명등 및 컨벡션 팬 단독 동작",
+      "count": 93903,
+      "percentage": 72.79,
+      "duration_min": 26.08
+    },
+    "MEDIUM_HEAT": {
+      "state_id": 2,
+      "description": "단일 히터 가열 모드",
+      "count": 0,
+      "percentage": 0.0,
+      "duration_min": 0.0
+    },
+    "HIGH_HEAT_CONVECTION": {
+      "state_id": 3,
+      "description": "양면 히터 및 고열 컨벡션 조리",
+      "count": 31986,
+      "percentage": 24.8,
+      "duration_min": 8.88
+    }
+  },
+  "events_summary": {
+    "total_events": 105,
+    "on_events": 2,
+    "off_events": 1,
+    "mode_change_events": 102
+  },
+  "annotated_csv": "processed_data\\clean_devices\\oven_annotated.csv",
+  "npz_file": "processed_data\\npz\\oven.npz",
+  "events_json": "processed_data\\labels\\oven_events.json"
+}

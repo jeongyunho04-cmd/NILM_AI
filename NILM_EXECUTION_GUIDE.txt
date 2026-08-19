@@ -1,0 +1,114 @@
+================================================================================
+  NILM_AI 데이터 전처리, 라벨링, 합성 및 AI 학습 실행 가이드 (CMD 명령어 모음)
+================================================================================
+
+본 문서는 STM32 하드웨어로부터 데이터를 수신하고, 전처리 및 4-Tier 라벨링을 수행하며,
+복소수 고조파 기반 복합 부하 신호 합성과 데이터 증강을 실행하는 모든 CMD 명령어를 정리한 안내서입니다.
+
+--------------------------------------------------------------------------------
+[1] 1단계: STM32 -> 노트북 Wi-Fi 실시간 데이터 수신 (원데이터 수집)
+--------------------------------------------------------------------------------
+* 준비: 노트북 모바일 핫스팟 ON (2.4GHz) -> STM32 보드 리셋
+
+# 콘솔 요약 로그를 보면서 CSV 저장:
+python "D:\stm project\NILM_AI\nilm_receiver.py"
+
+# 콘솔 출력을 끄고 조용히 CSV 저장:
+python "D:\stm project\NILM_AI\nilm_receiver.py" --quiet
+
+# 파일명을 직접 지정하여 저장 (data/ 에 저장됨):
+python "D:\stm project\NILM_AI\nilm_receiver.py" --csv run1.csv
+
+
+--------------------------------------------------------------------------------
+[2] 2단계: 데이터 전처리, 세부 상태 라벨링 및 NumPy(.npz) 바이너리 생성
+--------------------------------------------------------------------------------
+* 동작 내용:
+  - data/ 안의 모든 17개 원본 CSV 파일을 정제 (패킷 역전 정렬, 60Hz 결측 보간, 음수 글리치 제거)
+  - P, Q, S, PF, THD_i, 복소수 2채널(Real/Imag), 고조파 비율 추출
+  - 4-Tier 라벨링 (is_on, state_id, target_power_w, 이벤트 JSON) 생성
+  - 딥러닝 고속 로딩용 .npz 바이너리 압축 저장 및 3패널 진단 차트 PNG 생성
+
+# CMD 실행 명령어 (D:\stm project\NILM_AI 경로에서 실행):
+python -m src.run_preprocess_and_label
+
+* 출력 결과 저장 경로:
+  - processed_data\clean_devices\  : 60Hz 정제 및 라벨 포함 CSV (17개)
+  - processed_data\npz\            : 딥러닝 텐서 최적화 .npz 바이너리 (17개)
+  - processed_data\labels\         : 가전별 상태 전이 이벤트 JSON 및 요약 메타데이터
+  - processed_data\plots\          : 가전별 전력/상태/고조파 프로파일 진단 차트 PNG
+
+
+--------------------------------------------------------------------------------
+[3] 3단계: 복합 가전 부하 신호 합성(Synthesis) 및 물리적 데이터 증강(Augmentation)
+--------------------------------------------------------------------------------
+* 동작 내용:
+  - 정제된 .npz 데이터로부터 유효 동작 구간(Turn-On 돌입, 정상상태, 종료) 세그먼트 풀 구축
+  - 기기별 대기전력(Standby Power) 및 플러그 연결(Plugged-in vs Unplugged) 확률 모델 적용
+  - 복소수 고조파 벡터 덧셈(Phasor Addition)으로 다중 가전 동시 가동 신호 합성
+  - 계통 임피던스(Z_grid) 및 순간 전압 강하(Voltage Sag) 시뮬레이션 적용
+  - 벤치마크 일상 시나리오(모닝, 이브닝 쿠킹, 오피스, 랜덤 부하) 생성 및 진단 차트 PNG 저장
+  - PyTorch 호환 실시간 배치 제너레이터 벤치마크 (초당 170+ 윈도우)
+
+# CMD 실행 명령어 (D:\stm project\NILM_AI 경로에서 실행):
+python -m src.run_synthesis
+
+* 출력 결과 저장 경로:
+  - synthetic_data\scenarios\      : 합성된 복합 부하 시나리오 .npz 파일
+  - synthetic_data\plots\          : 복합 부하 분해 정답 및 전압 강하 진단 차트 PNG
+  - synthetic_data\synthesis_report.json : 합성 통계 및 배치 속도 벤치마크 리포트
+
+
+--------------------------------------------------------------------------------
+[4] 4단계: 전체 시스템 자동화 테스트 검증 (Pytest)
+--------------------------------------------------------------------------------
+* 전처리 무결성, 물리 보존 법칙, 전압 강하 시뮬레이션, 대기전력 분리, 텐서 차원 등 9개 항목 검증
+
+# CMD 실행 명령어:
+python -m pytest -v
+
+
+--------------------------------------------------------------------------------
+[5] 파이썬 / PyTorch 코드에서 데이터셋 로딩 및 활용 예시
+--------------------------------------------------------------------------------
+
+[예시 A: 전처리된 개별 가전 .npz 데이터 로드 (초고속 바이너리 읽기)]
+```python
+from src.preprocessing import load_nilm_npz
+
+# 0.1초 만에 메모리로 즉시 로드
+data = load_nilm_npz("processed_data/npz/air_conditioner.npz")
+
+X_harmonics = data["harmonics_ri"]     # Shape: (N, 15, 2) [Real, Imag]
+X_power     = data["power_features"]    # Shape: (N, 6) [P, Q, S, PF, V, THD]
+y_is_on     = data["is_on"]             # Shape: (N,) [0 or 1]
+y_state     = data["state_id"]          # Shape: (N,) [0, 1, 2, 3, 4]
+y_power     = data["target_power_w"]    # Shape: (N,) [연속 유효전력 W]
+
+print(f"가전명: {data['metadata']['korean_name']}, 샘플 수: {len(X_harmonics)}")
+```
+
+[예시 B: 딥러닝 실시간 훈련용 무한 배치 제너레이터 (On-the-fly Batch Generator)]
+```python
+from src.synthesis import SegmentPool, NILMBatchGenerator
+
+# 1. 세그먼트 풀 로드
+pool = SegmentPool(npz_dir="processed_data/npz")
+
+# 2. 10초(600사이클) 윈도우 배치 생성기 생성
+batch_gen = NILMBatchGenerator(
+    segment_pool=pool,
+    window_size_cycles=600,
+    max_concurrent_appliances=3,
+    target_mode="seq2point",  # 또는 "seq2seq"
+)
+
+# 3. 훈련 루프에서 실시간 배치 호출 (초당 170+ 윈도우 생성)
+X, y_power, y_state, y_on = batch_gen.generate_batch(batch_size=32)
+# X shape      : (32, 33, 600)  -> 15 Real + 15 Imag + P, Q, V
+# y_power shape: (32, 9)        -> 9개 가전의 정답 유효전력
+# y_state shape: (32, 9)        -> 9개 가전의 동작 상태 ID
+# y_on shape   : (32, 9)        -> 9개 가전의 On/Off (0 또는 1)
+```
+
+================================================================================

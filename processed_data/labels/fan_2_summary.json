@@ -1,0 +1,59 @@
+{
+  "raw_rows": 35490,
+  "cleaned_rows": 35490,
+  "duration_s": 591.5,
+  "duplicates_removed": 0,
+  "interpolated_cycles": 0,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "noise_floor_applied_w": 1.4,
+  "source_file": "fan_2.csv",
+  "appliance_type": "fan",
+  "output_file": null,
+  "feature_columns_count": 117,
+  "p_mean": 29.72,
+  "p_max": 45.29,
+  "irms_mean": 0.1375,
+  "korean_name": "선풍기",
+  "total_samples": 35490,
+  "on_percentage": 96.89,
+  "state_distribution": {
+    "OFF": {
+      "state_id": 0,
+      "description": "전원 꺼짐",
+      "count": 1102,
+      "percentage": 3.11,
+      "duration_min": 0.31
+    },
+    "SPEED_LOW": {
+      "state_id": 1,
+      "description": "1단 미풍 운전",
+      "count": 1704,
+      "percentage": 4.8,
+      "duration_min": 0.47
+    },
+    "SPEED_MID": {
+      "state_id": 2,
+      "description": "2단 약풍 운전",
+      "count": 32520,
+      "percentage": 91.63,
+      "duration_min": 9.03
+    },
+    "SPEED_HIGH": {
+      "state_id": 3,
+      "description": "3단 강풍 운전",
+      "count": 164,
+      "percentage": 0.46,
+      "duration_min": 0.05
+    }
+  },
+  "events_summary": {
+    "total_events": 10,
+    "on_events": 3,
+    "off_events": 4,
+    "mode_change_events": 3
+  },
+  "annotated_csv": "processed_data\\clean_devices\\fan_2_annotated.csv",
+  "npz_file": "processed_data\\npz\\fan_2.npz",
+  "events_json": "processed_data\\labels\\fan_2_events.json"
+}
