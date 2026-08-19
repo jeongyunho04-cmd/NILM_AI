@@ -129,6 +129,69 @@ def test_state_classifier_and_annotator(sample_raw_dataframe):
     assert len(events) >= 2
 
 
+def test_state_ids_are_contiguous_from_zero():
+    """상태 ID 에 빈 번호가 있으면 모델 출력 차원에 아무도 채우지 않는 자리가 생긴다."""
+    from src.labeling.state_definitions import STATE_CONFIGURATIONS
+
+    for name, config in STATE_CONFIGURATIONS.items():
+        ids = sorted(s.state_id for s in config.states)
+        assert ids == list(range(len(ids))), \
+            f"{name}: 상태 ID 가 0부터 연속이 아닙니다 -> {ids}"
+
+
+def test_state_power_ranges_have_no_gaps_or_overlaps():
+    """상태 구간이 끊기거나 겹치면 그 사이 전력값이 엉뚱한 상태로 분류된다."""
+    from src.labeling.state_definitions import STATE_CONFIGURATIONS
+
+    for name, config in STATE_CONFIGURATIONS.items():
+        states = sorted(config.states, key=lambda s: s.p_min)
+        assert states[0].p_min == 0.0, f"{name}: 첫 상태가 0W 에서 시작하지 않습니다"
+        for lower, upper in zip(states, states[1:]):
+            assert lower.p_max == upper.p_min, \
+                f"{name}: {lower.name}({lower.p_max}W) 와 {upper.name}({upper.p_min}W) 구간이 맞닿지 않습니다"
+
+
+def test_on_threshold_matches_off_state_boundary():
+    """on_threshold_w 와 OFF 상태 상한이 어긋나면 ON 판정 기준이 두 개가 된다."""
+    from src.labeling.state_definitions import STATE_CONFIGURATIONS
+
+    for name, config in STATE_CONFIGURATIONS.items():
+        off_state = min(config.states, key=lambda s: s.p_min)
+        if config.on_threshold_w >= 9999.0:
+            continue  # 노이즈 기준 파일은 항상 OFF 로 둔다
+        assert abs(off_state.p_max - config.on_threshold_w) < 1e-6, \
+            f"{name}: on_threshold_w={config.on_threshold_w} 인데 OFF 상한은 {off_state.p_max}"
+
+
+@pytest.mark.parametrize("stem", ["oven", "air_conditioner", "minipc_2", "fan_2"])
+def test_every_defined_state_is_actually_observed(stem):
+    """정의만 되어 있고 실측에서 한 번도 나오지 않는 상태가 있으면 안 된다.
+
+    오븐의 MEDIUM_HEAT(단일 히터 400W)가 그런 경우였다. 관측 0분인데 클래스로
+    잡혀 있어, 학습 예시가 하나도 없는 자리를 모델이 예측하도록 요구하고 있었다.
+    (측정 오븐은 목표 온도와 시간만 조절하는 모델이라 애초에 그런 모드가 없다)
+    """
+    npz_path = Path("processed_data/npz") / f"{stem}.npz"
+    if not npz_path.exists():
+        pytest.skip(f"{npz_path} 없음 - 전처리를 먼저 실행하세요")
+
+    data = load_nilm_npz(npz_path)
+    distribution = data["metadata"].get("state_distribution", {})
+    if not distribution:
+        pytest.skip("상태 분포 메타데이터 없음")
+
+    unobserved = [
+        f"{name}(id={d['state_id']})"
+        for name, d in distribution.items()
+        if d["count"] == 0
+    ]
+    assert not unobserved, (
+        f"{stem}: 실측에서 한 번도 관측되지 않은 상태 -> {', '.join(unobserved)}. "
+        f"해당 모드가 기기에 없다면 state_definitions.py 에서 제거하고, "
+        f"있는데 못 잡은 것이라면 그 모드를 측정하세요."
+    )
+
+
 def test_numpy_binary_export_and_complex_channels(sample_raw_dataframe):
     pipeline = PreprocessingPipeline(sampling_hz=60.0)
     cleaned_df, _ = pipeline.cleaner.clean_dataframe(sample_raw_dataframe)

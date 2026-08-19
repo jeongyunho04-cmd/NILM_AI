@@ -127,6 +127,13 @@ STATE_CONFIGURATIONS: Dict[str, ApplianceStateConfig] = {
             StateRule(2, "ACTIVE_LOAD", 13.0, 200.0, "프로그램 실행 및 CPU 연산 부하", nominal_w=18.5),
         ],
     ),
+    # 측정 대상 오븐은 목표 온도와 시간만 설정하는 모델이라, 히터 조합을 나누는
+    # 조작부가 없다. 실측 35.8분에서도 전력은 2.0W(대기) / 16.5W(팬·조명) /
+    # 1156.5W(히터) 세 곳에만 모여 있었고, 그 사이 100~800W 구간은 전체를 합쳐
+    # 1.05초뿐인 On/Off 전환 램프였다.
+    # 이전에는 여기에 MEDIUM_HEAT(단일 히터 400W)가 정의되어 있었으나 관측 0분이었다.
+    # 학습 예시가 하나도 없는 클래스를 예측 대상으로 두면 출력 차원만 늘리고
+    # 모델이 채울 수 없는 자리를 만들 뿐이라 제거한다.
     "oven": ApplianceStateConfig(
         appliance_type="oven",
         korean_name="오븐",
@@ -134,10 +141,9 @@ STATE_CONFIGURATIONS: Dict[str, ApplianceStateConfig] = {
         min_state_duration_s=0.5,
         hysteresis_w=5.0,
         states=[
-            StateRule(0, "OFF_STANDBY", 0.0, 10.0, "대기 전원 상태", nominal_w=1.5),
-            StateRule(1, "FAN_LIGHT", 10.0, 100.0, "조명등 및 컨벡션 팬 단독 동작", nominal_w=18.0),
-            StateRule(2, "MEDIUM_HEAT", 100.0, 800.0, "단일 히터 가열 모드", nominal_w=400.0),
-            StateRule(3, "HIGH_HEAT_CONVECTION", 800.0, 3000.0, "양면 히터 및 고열 컨벡션 조리", nominal_w=1170.0),
+            StateRule(0, "OFF_STANDBY", 0.0, 10.0, "대기 전원 상태", nominal_w=2.0),
+            StateRule(1, "FAN_LIGHT", 10.0, 100.0, "히터 꺼짐 주기 - 조명등 및 컨벡션 팬만 동작", nominal_w=16.5),
+            StateRule(2, "HEATING", 100.0, 3000.0, "서모스탯 통전 - 히터 가열", nominal_w=1157.0),
         ],
     ),
     "noise_noselfpower": ApplianceStateConfig(
