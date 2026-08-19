@@ -11,7 +11,8 @@
     "p_after_w": 49.52,
     "delta_p_w": 45.43,
     "delta_q_var": -57.99,
-    "prev_state_duration_s": 32.77
+    "prev_state_duration_s": 32.77,
+    "at_segment_seam": false
   },
   {
     "sample_idx": 11741,
@@ -25,7 +26,8 @@
     "p_after_w": 5.68,
     "delta_p_w": -43.23,
     "delta_q_var": 55.12,
-    "prev_state_duration_s": 162.92
+    "prev_state_duration_s": 162.92,
+    "at_segment_seam": false
   },
   {
     "sample_idx": 11974,
@@ -39,35 +41,23 @@
     "p_after_w": 2.34,
     "delta_p_w": -3.06,
     "delta_q_var": 4.67,
-    "prev_state_duration_s": 3.88
-  },
-  {
-    "sample_idx": 12379,
-    "t_s": 206.317,
-    "from_state_id": 0,
-    "from_state_name": "OFF_STANDBY",
-    "to_state_id": 1,
-    "to_state_name": "WARMUP_COOLDOWN",
-    "event_type": "ON",
-    "p_before_w": 3.83,
-    "p_after_w": 4.12,
-    "delta_p_w": 0.29,
-    "delta_q_var": -0.48,
-    "prev_state_duration_s": 6.75
+    "prev_state_duration_s": 3.88,
+    "at_segment_seam": false
   },
   {
     "sample_idx": 12410,
     "t_s": 206.833,
-    "from_state_id": 1,
-    "from_state_name": "WARMUP_COOLDOWN",
+    "from_state_id": 0,
+    "from_state_name": "OFF_STANDBY",
     "to_state_id": 2,
     "to_state_name": "LAMP_ON",
-    "event_type": "MODE_CHANGE",
+    "event_type": "ON",
     "p_before_w": 4.12,
     "p_after_w": 48.59,
     "delta_p_w": 44.48,
     "delta_q_var": -56.15,
-    "prev_state_duration_s": 0.52
+    "prev_state_duration_s": 7.27,
+    "at_segment_seam": false
   },
   {
     "sample_idx": 14584,
@@ -81,67 +71,57 @@
     "p_after_w": 5.63,
     "delta_p_w": -43.14,
     "delta_q_var": 54.9,
-    "prev_state_duration_s": 36.23
+    "prev_state_duration_s": 36.23,
+    "at_segment_seam": false
   },
   {
-    "sample_idx": 14816,
-    "t_s": 246.933,
+    "sample_idx": 14817,
+    "t_s": 246.95,
     "from_state_id": 1,
     "from_state_name": "WARMUP_COOLDOWN",
     "to_state_id": 0,
     "to_state_name": "OFF_STANDBY",
     "event_type": "OFF",
-    "p_before_w": 5.44,
-    "p_after_w": 2.4,
+    "p_before_w": 5.43,
+    "p_after_w": 2.39,
     "delta_p_w": -3.04,
-    "delta_q_var": 4.8,
-    "prev_state_duration_s": 3.87
-  },
-  {
-    "sample_idx": 15237,
-    "t_s": 253.95,
-    "from_state_id": 0,
-    "from_state_name": "OFF_STANDBY",
-    "to_state_id": 1,
-    "to_state_name": "WARMUP_COOLDOWN",
-    "event_type": "ON",
-    "p_before_w": 3.86,
-    "p_after_w": 4.16,
-    "delta_p_w": 0.3,
-    "delta_q_var": -0.46,
-    "prev_state_duration_s": 7.02
+    "delta_q_var": 4.78,
+    "prev_state_duration_s": 3.88,
+    "at_segment_seam": false
   },
   {
     "sample_idx": 15267,
     "t_s": 254.45,
-    "from_state_id": 1,
-    "from_state_name": "WARMUP_COOLDOWN",
+    "from_state_id": 0,
+    "from_state_name": "OFF_STANDBY",
     "to_state_id": 2,
     "to_state_name": "LAMP_ON",
-    "event_type": "MODE_CHANGE",
+    "event_type": "ON",
     "p_before_w": 4.16,
     "p_after_w": 48.54,
     "delta_p_w": 44.38,
     "delta_q_var": -56.95,
-    "prev_state_duration_s": 0.5
+    "prev_state_duration_s": 7.5,
+    "at_segment_seam": false
   },
   {
-    "sample_idx": 22460,
-    "t_s": 374.333,
+    "sample_idx": 22461,
+    "t_s": 374.35,
     "from_state_id": 2,
     "from_state_name": "LAMP_ON",
     "to_state_id": 1,
     "to_state_name": "WARMUP_COOLDOWN",
     "event_type": "MODE_CHANGE",
-    "p_before_w": 48.47,
+    "p_before_w": 48.46,
     "p_after_w": 5.69,
-    "delta_p_w": -42.78,
-    "delta_q_var": 56.03,
-    "prev_state_duration_s": 119.88
+    "delta_p_w": -42.77,
+    "delta_q_var": 55.79,
+    "prev_state_duration_s": 119.9,
+    "at_segment_seam": false
   },
   {
-    "sample_idx": 22693,
-    "t_s": 378.217,
+    "sample_idx": 22694,
+    "t_s": 378.233,
     "from_state_id": 1,
     "from_state_name": "WARMUP_COOLDOWN",
     "to_state_id": 0,
@@ -150,36 +130,24 @@
     "p_before_w": 5.41,
     "p_after_w": 2.32,
     "delta_p_w": -3.08,
-    "delta_q_var": 4.95,
-    "prev_state_duration_s": 3.88
-  },
-  {
-    "sample_idx": 23153,
-    "t_s": 385.883,
-    "from_state_id": 0,
-    "from_state_name": "OFF_STANDBY",
-    "to_state_id": 1,
-    "to_state_name": "WARMUP_COOLDOWN",
-    "event_type": "ON",
-    "p_before_w": 3.72,
-    "p_after_w": 4.13,
-    "delta_p_w": 0.4,
-    "delta_q_var": -0.63,
-    "prev_state_duration_s": 7.67
+    "delta_q_var": 4.91,
+    "prev_state_duration_s": 3.88,
+    "at_segment_seam": false
   },
   {
     "sample_idx": 23189,
     "t_s": 386.483,
-    "from_state_id": 1,
-    "from_state_name": "WARMUP_COOLDOWN",
+    "from_state_id": 0,
+    "from_state_name": "OFF_STANDBY",
     "to_state_id": 2,
     "to_state_name": "LAMP_ON",
-    "event_type": "MODE_CHANGE",
+    "event_type": "ON",
     "p_before_w": 4.14,
     "p_after_w": 48.32,
     "delta_p_w": 44.18,
     "delta_q_var": -57.59,
-    "prev_state_duration_s": 0.6
+    "prev_state_duration_s": 8.25,
+    "at_segment_seam": false
   },
   {
     "sample_idx": 27873,
@@ -193,49 +161,38 @@
     "p_after_w": 5.68,
     "delta_p_w": -42.98,
     "delta_q_var": 55.74,
-    "prev_state_duration_s": 78.07
+    "prev_state_duration_s": 78.07,
+    "at_segment_seam": false
   },
   {
-    "sample_idx": 28105,
-    "t_s": 468.417,
+    "sample_idx": 28106,
+    "t_s": 468.433,
     "from_state_id": 1,
     "from_state_name": "WARMUP_COOLDOWN",
     "to_state_id": 0,
     "to_state_name": "OFF_STANDBY",
     "event_type": "OFF",
-    "p_before_w": 5.33,
+    "p_before_w": 5.31,
     "p_after_w": 2.39,
-    "delta_p_w": -2.95,
-    "delta_q_var": 4.89,
-    "prev_state_duration_s": 3.87
-  },
-  {
-    "sample_idx": 28589,
-    "t_s": 476.483,
-    "from_state_id": 0,
-    "from_state_name": "OFF_STANDBY",
-    "to_state_id": 1,
-    "to_state_name": "WARMUP_COOLDOWN",
-    "event_type": "ON",
-    "p_before_w": 3.72,
-    "p_after_w": 4.09,
-    "delta_p_w": 0.37,
-    "delta_q_var": -0.59,
-    "prev_state_duration_s": 8.07
+    "delta_p_w": -2.92,
+    "delta_q_var": 4.83,
+    "prev_state_duration_s": 3.88,
+    "at_segment_seam": false
   },
   {
     "sample_idx": 28624,
     "t_s": 477.067,
-    "from_state_id": 1,
-    "from_state_name": "WARMUP_COOLDOWN",
+    "from_state_id": 0,
+    "from_state_name": "OFF_STANDBY",
     "to_state_id": 2,
     "to_state_name": "LAMP_ON",
-    "event_type": "MODE_CHANGE",
+    "event_type": "ON",
     "p_before_w": 4.13,
     "p_after_w": 48.45,
     "delta_p_w": 44.32,
     "delta_q_var": -57.74,
-    "prev_state_duration_s": 0.58
+    "prev_state_duration_s": 8.63,
+    "at_segment_seam": false
   },
   {
     "sample_idx": 38354,
@@ -249,49 +206,38 @@
     "p_after_w": 5.63,
     "delta_p_w": -42.56,
     "delta_q_var": 55.4,
-    "prev_state_duration_s": 162.17
+    "prev_state_duration_s": 162.17,
+    "at_segment_seam": false
   },
   {
-    "sample_idx": 38586,
-    "t_s": 643.1,
+    "sample_idx": 38587,
+    "t_s": 643.117,
     "from_state_id": 1,
     "from_state_name": "WARMUP_COOLDOWN",
     "to_state_id": 0,
     "to_state_name": "OFF_STANDBY",
     "event_type": "OFF",
-    "p_before_w": 5.36,
+    "p_before_w": 5.35,
     "p_after_w": 2.39,
-    "delta_p_w": -2.97,
+    "delta_p_w": -2.96,
     "delta_q_var": 4.84,
-    "prev_state_duration_s": 3.87
-  },
-  {
-    "sample_idx": 39394,
-    "t_s": 656.567,
-    "from_state_id": 0,
-    "from_state_name": "OFF_STANDBY",
-    "to_state_id": 1,
-    "to_state_name": "WARMUP_COOLDOWN",
-    "event_type": "ON",
-    "p_before_w": 3.76,
-    "p_after_w": 4.11,
-    "delta_p_w": 0.36,
-    "delta_q_var": -0.53,
-    "prev_state_duration_s": 13.47
+    "prev_state_duration_s": 3.88,
+    "at_segment_seam": false
   },
   {
     "sample_idx": 39428,
     "t_s": 657.133,
-    "from_state_id": 1,
-    "from_state_name": "WARMUP_COOLDOWN",
+    "from_state_id": 0,
+    "from_state_name": "OFF_STANDBY",
     "to_state_id": 2,
     "to_state_name": "LAMP_ON",
-    "event_type": "MODE_CHANGE",
+    "event_type": "ON",
     "p_before_w": 4.18,
     "p_after_w": 48.44,
     "delta_p_w": 44.26,
     "delta_q_var": -56.58,
-    "prev_state_duration_s": 0.57
+    "prev_state_duration_s": 14.02,
+    "at_segment_seam": false
   },
   {
     "sample_idx": 42344,
@@ -305,20 +251,22 @@
     "p_after_w": 5.6,
     "delta_p_w": -42.68,
     "delta_q_var": 55.29,
-    "prev_state_duration_s": 48.6
+    "prev_state_duration_s": 48.6,
+    "at_segment_seam": false
   },
   {
-    "sample_idx": 42576,
-    "t_s": 709.6,
+    "sample_idx": 42577,
+    "t_s": 709.617,
     "from_state_id": 1,
     "from_state_name": "WARMUP_COOLDOWN",
     "to_state_id": 0,
     "to_state_name": "OFF_STANDBY",
     "event_type": "OFF",
-    "p_before_w": 5.4,
+    "p_before_w": 5.37,
     "p_after_w": 2.35,
-    "delta_p_w": -3.05,
-    "delta_q_var": 4.95,
-    "prev_state_duration_s": 3.87
+    "delta_p_w": -3.02,
+    "delta_q_var": 4.94,
+    "prev_state_duration_s": 3.88,
+    "at_segment_seam": false
   }
 ]

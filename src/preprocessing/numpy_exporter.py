@@ -16,7 +16,12 @@ NILM NumPy 전용 바이너리 데이터셋 변환기 (.npz / .npy)
 5. 라벨 및 타깃:
    - is_on: (N,) int8 [0: OFF, 1: ON] (이진 분류용)
    - state_id: (N,) int16 [0..K 다중 상태 ID] (상태 분류용)
-   - target_power_w: (N,) float32 [순수 유효전력 타깃] (Seq2Point 회귀용)
+   - target_power_w: (N,) float32 [학습 회귀 타깃. OFF 구간은 0]
+   - p_denoised_w: (N,) float32 [계측 바닥 노이즈만 제거한 전력. OFF 구간도 0 이 아님]
+       target_power_w 는 OFF 이면 0 으로 눌리므로 대기전력을 알 수 없다.
+       기기의 진짜 대기전력은 이 배열의 OFF 구간에서만 얻을 수 있다.
+   - is_valid: (N,) int8 [1: 계측 신뢰 가능, 0: 품질 게이팅에 걸렸거나 보간된 값]
+   - is_segment_seam: (N,) int8 [타임라인 이어붙인 자리 표시]
    - t_rel_s: (N,) float32 [60Hz 연속 상대 시간]
 """
 from pathlib import Path
@@ -84,6 +89,22 @@ class NumpyDatasetExporter:
         target_power_w = df["target_power_w"].values.astype(np.float32) if "target_power_w" in df.columns else df["p_target_w"].values.astype(np.float32)
         t_rel_s = df["t_rel_s"].values.astype(np.float32) if "t_rel_s" in df.columns else (np.arange(n_samples) / 60.0).astype(np.float32)
 
+        # 계측 바닥 노이즈만 제거한 전력. target_power_w 와 달리 OFF 구간에서도 0 이 아니며,
+        # 기기의 진짜 대기전력을 뽑아내는 유일한 근거가 된다.
+        # (target_power_w 는 OFF 이면 0 으로 눌려 있어 대기전력을 알 수 없다)
+        p_denoised_w = (
+            df["p_target_w"].values.astype(np.float32)
+            if "p_target_w" in df.columns else target_power_w
+        )
+        is_valid = (
+            df["is_valid"].values.astype(np.int8)
+            if "is_valid" in df.columns else np.ones(n_samples, dtype=np.int8)
+        )
+        segment_seam = (
+            df["is_segment_seam"].values.astype(np.int8)
+            if "is_segment_seam" in df.columns else np.zeros(n_samples, dtype=np.int8)
+        )
+
         # 5. 메타데이터 JSON 직렬화
         meta_dict = metadata or {}
         meta_dict.update({
@@ -93,7 +114,10 @@ class NumpyDatasetExporter:
             "harmonic_ratio_names": ratio_cols,
             "harmonics_ri_shape": list(harmonics_ri.shape),
             "harmonics_ri_format": "(N, harmonics_15, [Real, Imag])",
+            "valid_sample_ratio": round(float(is_valid.mean()), 4),
         })
+        if "noise_floor_w" in df.columns and n_samples:
+            meta_dict.setdefault("noise_floor_w", float(df["noise_floor_w"].iloc[0]))
 
         return {
             "harmonics_ri": harmonics_ri,
@@ -103,6 +127,9 @@ class NumpyDatasetExporter:
             "is_on": is_on,
             "state_id": state_id,
             "target_power_w": target_power_w,
+            "p_denoised_w": p_denoised_w,
+            "is_valid": is_valid,
+            "is_segment_seam": segment_seam,
             "t_rel_s": t_rel_s,
             "metadata_json": json.dumps(meta_dict, ensure_ascii=False),
         }

@@ -41,8 +41,10 @@ class DataAnnotator:
         p_vals = df["p_w"].values if "p_w" in df.columns else df["p_target_w"].values
         q_vals = df["q_var"].values if "q_var" in df.columns else None
         t_vals = df["t_rel_s"].values if "t_rel_s" in df.columns else None
+        # 타임라인 이어붙인 자리에서 나온 전이는 실제 사건이 아닐 수 있으므로 표시해 둔다.
+        seam_vals = df["is_segment_seam"].values if "is_segment_seam" in df.columns else None
 
-        state_ids, is_on, events = classifier.classify_series(p_vals, q_vals, t_vals)
+        state_ids, is_on, events = classifier.classify_series(p_vals, q_vals, t_vals, seam_vals)
 
         state_names = [classifier.state_map.get(s_id, f"STATE_{s_id}") for s_id in state_ids]
 
@@ -76,6 +78,8 @@ class DataAnnotator:
             "on_events": sum(1 for e in events if e.event_type == "ON"),
             "off_events": sum(1 for e in events if e.event_type == "OFF"),
             "mode_change_events": sum(1 for e in events if e.event_type == "MODE_CHANGE"),
+            # 이어붙인 경계에서 난 전이는 실제 기기 동작이 아닐 수 있다.
+            "seam_suspect_events": sum(1 for e in events if e.at_segment_seam),
         }
 
         summary = {

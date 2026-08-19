@@ -1,21 +1,65 @@
 """
-Multi-Appliance Load Signal Synthesizer for NILM AI
-Combines augmented appliance activations via phasor vector addition,
-supports stochastic plugged-in standby power vs unplugged zero-load states,
-injects single baseline background noise, and simulates dynamic grid voltage sag.
+복합 가전 부하 신호 합성기 (Multi-Appliance Load Synthesizer)
+==============================================================
+여러 가전의 전류 페이저를 중첩해 하나의 계량점에서 볼 법한 합성 신호를 만들고,
+가전별 정답(Ground Truth)을 함께 생성한다.
+
+[이 버전에서 바로잡은 정합성 문제]
+1. 대기전력과 활성전력의 명시적 분리
+   이전에는 대기 전류 위에 활성 전류를 '더했다'. 그러나 활성화 파형은 기기 전체를
+   측정한 것이라 그 안에 이미 기기 자신의 대기 회로 소비가 들어 있다. 더하면 이중 계상이다.
+   이제 시점마다 활성이면 활성 파형으로, 꺼진 채 꽂혀 있으면 대기 지문으로 '교체'한다.
+
+2. 정답 라벨 상호 모순 제거
+   이전에는 gt_is_on = 0, gt_target_power_w = 0.0 인 시점인데 gt_harmonics_ri 는
+   0 이 아닌 값(대기 전류)을 갖고 있었다. 멀티태스크 학습에서 "꺼졌고 0W 인데
+   고조파는 흐른다"는 모순된 지도신호가 된다. 이제 gt_harmonics_ri 는 활성 성분만 담고,
+   대기 성분은 gt_is_plugged / gt_standby_power_w 라는 별도 채널로 명시한다.
+
+3. 전력 분해 검산 가능
+   P_aggregate = Σ(활성 전력) + Σ(대기 전력) + 계측계 자체 소비
+   가 정확히 성립한다. 계측 보드 소비는 기기 것이 아니므로 딱 한 번만 더해진다.
+
+4. 전압 환산 기준을 v_ref 로
+   각 파형이 실제로 녹화된 전압을 기준으로 환산한다. 하드코딩된 220V 가 아니다.
+
+5. 전압-전류 되먹임 2회 반복
+   전압 강하가 전류를 바꾸고, 바뀐 전류가 다시 전압을 바꾼다. 1회만 계산하던 것을
+   2회 반복해 수렴시킨다.
 """
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 
+from src.preprocessing.file_registry import is_low_load
+
 from .augmentor import DataAugmentor
-from .grid_simulator import GridSimulator
+from .grid_simulator import GridSimulator, VoltageEnvironment
 from .segment_pool import ApplianceActivation, SegmentPool, StandbyProfile
+
+NUM_HARMONICS = 15
+
+# 기기별 플러그 연결 확률 기본값.
+# 상시 대기 회로가 있는 기기는 늘 꽂혀 있고, 휴대용 발열 기구는 쓸 때만 꽂는다.
+DEFAULT_PLUG_PROBABILITY: Dict[str, float] = {
+    "air_conditioner": 0.85,
+    "oven": 0.85,
+    "beam_projector": 0.85,
+    "minipc": 0.85,
+    "electiric_kettle": 0.50,
+    "hair_dryer": 0.50,
+}
 
 
 @dataclass
 class ApplianceSchedule:
-    """Defines the scheduling of a single appliance in a synthetic timeline."""
+    """합성 타임라인에 배치할 가전 1회 동작 계획.
+
+    start_cycle 은 음수를 허용한다. 음수는 "윈도우가 시작되기 전에 이미 켜져 있었다"는
+    뜻이며, 활성화 파형의 앞부분을 잘라내어 배치한다.
+    (이전에는 max(0, start) 로 잘라 버려서 활성화 시작점의 52.8% 가 정확히 0번 인덱스에
+     몰렸고, 모델이 "돌입 전류는 항상 윈도우 맨 앞에 있다"를 학습하는 편향이 있었다)
+    """
     appliance_type: str
     start_cycle: int
     duration_cycles: Optional[int] = None
@@ -25,44 +69,78 @@ class ApplianceSchedule:
 
 @dataclass
 class SyntheticLoadSample:
-    """Complete synthesized aggregate electrical signal and ground truth targets."""
+    """합성된 복합 부하 신호와 가전별 정답."""
     duration_cycles: int
     duration_s: float
     appliance_types: List[str]
     active_appliances: List[str]
     plugged_in_appliances: List[str]
-    
-    # Aggregate Input Features (for AI Model Input)
+
+    # ── 모델 입력 (계량점에서 관측되는 값) ──
     harmonics_ri: np.ndarray          # (N, 15, 2) float32 [Real, Imag]
     harmonics_complex: np.ndarray     # (N, 15) complex64
-    power_features: np.ndarray        # (N, 6) float32 [P, Q, S, PF, V_bus, THD_i]
-    v_bus: np.ndarray                 # (N,) float32 terminal voltage
+    power_features: np.ndarray        # (N, 6) float32 [P, Q, S, PF, V_measured, THD_i]
+    v_bus: np.ndarray                 # (N,) float32 계측 해상도로 계단화된 전압 (모델이 보는 값)
+    v_bus_true: np.ndarray            # (N,) float32 연속 실제 전압 (진단용)
     t_rel_s: np.ndarray               # (N,) float32
-    
-    # Ground Truth Targets per Appliance (for AI Model Training)
-    gt_is_on: Dict[str, np.ndarray]          # appliance -> (N,) int8
-    gt_state_id: Dict[str, np.ndarray]       # appliance -> (N,) int16
-    gt_target_power_w: Dict[str, np.ndarray] # appliance -> (N,) float32
-    gt_harmonics_ri: Dict[str, np.ndarray]   # appliance -> (N, 15, 2) float32
-    
-    # Summary metadata
-    metadata: Dict
+
+    # ── 가전별 정답 ──
+    gt_is_on: Dict[str, np.ndarray]           # (N,) int8  활성 동작 여부
+    gt_is_plugged: Dict[str, np.ndarray]      # (N,) int8  콘센트 연결 여부 (대기전력 유무)
+    gt_state_id: Dict[str, np.ndarray]        # (N,) int16
+    gt_target_power_w: Dict[str, np.ndarray]  # (N,) float32 활성 전력 (꺼졌으면 0)
+    gt_standby_power_w: Dict[str, np.ndarray] # (N,) float32 대기 전력 (활성 중이면 0)
+    gt_harmonics_ri: Dict[str, np.ndarray]    # (N, 15, 2) float32 활성 고조파 (꺼졌으면 0)
+
+    # ── 기기 것이 아닌 성분 ──
+    p_noise_w: np.ndarray             # (N,) float32 계측계 자체 소비
+
+    metadata: Dict = field(default_factory=dict)
+
+    def verify_power_decomposition(self, tolerance_w: float = 0.5) -> Tuple[bool, float]:
+        """P_total = Σ활성 + Σ대기 + 계측계 소비 가 성립하는지 검산한다."""
+        total = self.power_features[:, 0]
+        recon = self.p_noise_w.copy()
+        for app in self.appliance_types:
+            recon = recon + self.gt_target_power_w[app] + self.gt_standby_power_w[app]
+        max_err = float(np.max(np.abs(total - recon))) if len(total) else 0.0
+        return max_err <= tolerance_w, max_err
 
 
 class LoadSynthesizer:
-    """Synthesizes realistic composite household electrical loads."""
+    """현실적인 가정 복합 부하를 합성한다."""
 
     def __init__(
         self,
         segment_pool: SegmentPool,
         grid_simulator: Optional[GridSimulator] = None,
         augmentor: Optional[DataAugmentor] = None,
+        voltage_feedback_iterations: int = 2,
+        quantize_voltage_measurement: bool = True,
     ):
         self.pool = segment_pool
         self.grid_sim = grid_simulator or GridSimulator()
         self.augmentor = augmentor or DataAugmentor()
         self.known_appliances = self.pool.get_appliance_types()
+        self.voltage_feedback_iterations = max(1, voltage_feedback_iterations)
+        self.quantize_voltage_measurement = quantize_voltage_measurement
 
+    # ── 플러그 연결 상태 결정 ───────────────────────────────────────────────
+    def _resolve_plugged(
+        self,
+        plugged_in_appliances: Optional[Dict[str, bool]],
+        default_plugged_prob: float,
+    ) -> Dict[str, bool]:
+        is_plugged: Dict[str, bool] = {}
+        for app in self.known_appliances:
+            if plugged_in_appliances is not None and app in plugged_in_appliances:
+                is_plugged[app] = bool(plugged_in_appliances[app])
+            else:
+                prob = DEFAULT_PLUG_PROBABILITY.get(app, default_plugged_prob)
+                is_plugged[app] = bool(np.random.rand() < prob)
+        return is_plugged
+
+    # ── 본체 ────────────────────────────────────────────────────────────────
     def synthesize_scenario(
         self,
         total_duration_cycles: int,
@@ -71,69 +149,54 @@ class LoadSynthesizer:
         default_plugged_prob: float = 0.7,
         include_noise: bool = True,
         simulate_voltage_drop: bool = True,
+        voltage_environment: Optional[VoltageEnvironment] = None,
     ) -> SyntheticLoadSample:
-        """Synthesizes a composite aggregate load timeline according to schedules.
+        """스케줄에 따라 복합 부하 타임라인을 합성한다."""
+        N = int(total_duration_cycles)
 
-        Args:
-            total_duration_cycles: Total length in cycles (e.g. 600 = 10s, 3600 = 60s)
-            schedules: List of ApplianceSchedule instances to place
-            plugged_in_appliances: Dict mapping appliance -> bool (whether plugged into wall socket)
-            default_plugged_prob: Probability that an appliance is plugged in if not specified
-            include_noise: Whether to inject real background noise
-            simulate_voltage_drop: Whether to simulate grid impedance and voltage sag
+        # 1. 배전 환경 결정 (전압 무리, 배선 임피던스, 요동 특성)
+        env = voltage_environment or self.grid_sim.sample_environment()
 
-        Returns:
-            SyntheticLoadSample containing aggregate inputs and individual GTs.
-        """
-        N = total_duration_cycles
-        num_harmonics = 15
+        # 2. 플러그 연결 상태
+        is_plugged = self._resolve_plugged(plugged_in_appliances, default_plugged_prob)
 
-        # 1. Determine Plugged-In Status per Appliance
-        # If an appliance is scheduled to turn on, it must be plugged in at least during activation
-        is_plugged: Dict[str, bool] = {}
+        # 3. 레이어 초기화
+        gt_is_on = {a: np.zeros(N, dtype=np.int8) for a in self.known_appliances}
+        gt_plugged = {a: np.zeros(N, dtype=np.int8) for a in self.known_appliances}
+        gt_state_id = {a: np.zeros(N, dtype=np.int16) for a in self.known_appliances}
+        gt_active_p = {a: np.zeros(N, dtype=np.float32) for a in self.known_appliances}
+        gt_standby_p = {a: np.zeros(N, dtype=np.float32) for a in self.known_appliances}
+        gt_harm_ri = {a: np.zeros((N, NUM_HARMONICS, 2), dtype=np.float32) for a in self.known_appliances}
+
+        # 각 가전의 전류 페이저 레이어와, 그 파형이 녹화된 기준 전압
+        layer_c = {a: np.zeros((N, NUM_HARMONICS), dtype=np.complex64) for a in self.known_appliances}
+        v_ref_series = {
+            a: np.full(N, self.grid_sim.default_ref_voltage, dtype=np.float32)
+            for a in self.known_appliances
+        }
+
+        # 4. 대기 레이어: 꽂혀 있지만 꺼진 상태
         for app in self.known_appliances:
-            if plugged_in_appliances is not None and app in plugged_in_appliances:
-                is_plugged[app] = plugged_in_appliances[app]
-            else:
-                # Appliances with continuous standby electronics (AC, TV/Projector, Oven, MiniPC)
-                # have higher plug-in probability than portable tools (dryer, kettle)
-                if app in ["air_conditioner", "oven", "beam_projector", "minipc"]:
-                    prob = 0.85
-                elif app in ["electiric_kettle", "hair_dryer"]:
-                    prob = 0.50
-                else:
-                    prob = default_plugged_prob
-                is_plugged[app] = bool(np.random.rand() < prob)
-
-        # 2. Initialize per-appliance ground truth arrays and complex layers
-        gt_is_on = {app: np.zeros(N, dtype=np.int8) for app in self.known_appliances}
-        gt_state_id = {app: np.zeros(N, dtype=np.int16) for app in self.known_appliances}
-        gt_target_p = {app: np.zeros(N, dtype=np.float32) for app in self.known_appliances}
-        gt_harm_ri = {app: np.zeros((N, num_harmonics, 2), dtype=np.float32) for app in self.known_appliances}
-        app_complex_layers = {app: np.zeros((N, num_harmonics), dtype=np.complex64) for app in self.known_appliances}
-        standby_p_layers = {app: np.zeros(N, dtype=np.float32) for app in self.known_appliances}
-
-        # Initialize Standby Current Phasors for plugged-in appliances
-        for app in self.known_appliances:
-            if is_plugged[app]:
-                st_profile: StandbyProfile = self.pool.get_standby_profile(app)
-                # Fill timeline with standby current
-                app_complex_layers[app][:] = st_profile.harmonics_complex
-                standby_p_layers[app][:] = st_profile.power_w
+            if not is_plugged[app]:
+                continue
+            gt_plugged[app][:] = 1
+            profile: StandbyProfile = self.pool.get_standby_profile(app)
+            if profile.power_w <= 0.0 and not np.any(profile.harmonics_complex):
+                continue  # 기계식 스위치 기기 - 꺼지면 회로가 끊겨 대기전력이 없다
+            st_c, st_p = self.pool.sample_standby_series(app, N)
+            layer_c[app][:] = st_c
+            gt_standby_p[app][:] = st_p
+            v_ref_series[app][:] = profile.v_ref_v
 
         active_set = set()
 
-        # 3. Place and augment scheduled active activations
+        # 5. 활성화 배치. 활성 구간은 대기 지문을 '덮어쓴다'(더하지 않는다).
         for sched in schedules:
-            app_type = sched.appliance_type
-            if app_type not in self.known_appliances:
+            app = sched.appliance_type
+            if app not in self.known_appliances:
                 continue
 
-            t_start = sched.start_cycle
-            if t_start >= N:
-                continue
-
-            raw_act = self.pool.sample_activation(app_type)
+            raw_act = self.pool.sample_activation(app)
             aug_act = self.augmentor.augment_activation(
                 raw_act,
                 target_duration_cycles=sched.duration_cycles,
@@ -141,165 +204,258 @@ class LoadSynthesizer:
                 phase_jitter_deg=sched.phase_jitter_deg,
             )
 
+            t_start = int(sched.start_cycle)
             act_len = aug_act.duration_cycles
-            t_end = min(N, t_start + act_len)
-            place_len = t_end - t_start
 
+            # 음수 시작 = 윈도우 이전에 이미 켜져 있었다. 파형 앞부분을 잘라낸다.
+            src_offset = 0
+            if t_start < 0:
+                src_offset = -t_start
+                t_start = 0
+                if src_offset >= act_len:
+                    continue  # 윈도우가 시작되기 전에 이미 종료된 동작
+            if t_start >= N:
+                continue
+
+            place_len = min(N - t_start, act_len - src_offset)
             if place_len <= 0:
                 continue
 
-            active_set.add(app_type)
+            t_end = t_start + place_len
+            s0, s1 = src_offset, src_offset + place_len
 
-            act_c_slice = aug_act.net_harmonics_complex[:place_len]
-            act_ri_slice = aug_act.net_harmonics_ri[:place_len]
-            act_p_slice = aug_act.target_power_w[:place_len]
-            act_state_slice = aug_act.state_id[:place_len]
+            active_set.add(app)
 
-            # Net active current is layered on top of standby (or 0 if unplugged)
-            app_complex_layers[app_type][t_start:t_end] += act_c_slice
-            gt_harm_ri[app_type][t_start:t_end] += act_ri_slice
-            gt_target_p[app_type][t_start:t_end] += act_p_slice
-            gt_is_on[app_type][t_start:t_end] = 1
-            gt_state_id[app_type][t_start:t_end] = np.maximum(gt_state_id[app_type][t_start:t_end], act_state_slice)
+            # 활성 구간에서는 기기가 켜져 있으므로 대기 지문 대신 활성 파형이 흐른다.
+            layer_c[app][t_start:t_end] = aug_act.net_harmonics_complex[s0:s1]
+            gt_active_p[app][t_start:t_end] = aug_act.target_power_w[s0:s1]
+            gt_standby_p[app][t_start:t_end] = 0.0  # 활성 전력에 이미 포함되어 있다
+            gt_is_on[app][t_start:t_end] = 1
+            gt_plugged[app][t_start:t_end] = 1      # 켜져 있으면 당연히 꽂혀 있다
+            gt_state_id[app][t_start:t_end] = aug_act.state_id[s0:s1]
+            v_ref_series[app][t_start:t_end] = aug_act.v_ref_v
 
-        # 4. Sum all appliance layers (Phasor superposition)
-        total_complex = np.zeros((N, num_harmonics), dtype=np.complex64)
-        for app in self.known_appliances:
-            total_complex += app_complex_layers[app]
+        # 6. 배경 노이즈 (계측계 자체 소비). 전체에서 딱 한 번만 더한다.
+        noise_c = np.zeros((N, NUM_HARMONICS), dtype=np.complex64)
+        p_noise = np.zeros(N, dtype=np.float32)
+        if include_noise and N > 0:
+            _, noise_c, noise_pow = self.pool.sample_noise_slice(N)
+            noise_c = noise_c.astype(np.complex64)
+            p_noise = noise_pow[:, 0].astype(np.float32)
 
-        # 5. Inject Single Background Noise Slice
-        noise_p_base = 0.0
-        if include_noise:
-            noise_ri, noise_c, noise_pow = self.pool.sample_noise_slice(N)
-            total_complex += noise_c
-            noise_p_base = np.mean(noise_pow[:, 0])
+        # 7. 전압 강하와 부하 응답의 되먹임을 반복 수렴시킨다.
+        if simulate_voltage_drop and N > 0:
+            v_open = self.grid_sim.open_circuit_voltage(N, env)
+            coupled_c = {a: layer_c[a] for a in self.known_appliances}
+            v_true = None
 
-        # 6. Grid Impedance & Voltage Drop Simulation (Z_grid Feedback)
-        if simulate_voltage_drop:
-            v_bus, kappa = self.grid_sim.compute_voltage_drop(total_complex)
-            
-            coupled_total_complex = np.zeros((N, num_harmonics), dtype=np.complex64)
-            if include_noise:
-                coupled_total_complex += noise_c
+            for _ in range(self.voltage_feedback_iterations):
+                total_c = noise_c.copy()
+                for a in self.known_appliances:
+                    total_c += coupled_c[a]
+                v_true = self.grid_sim.apply_load_drop(v_open, total_c, env)
 
-            for app in self.known_appliances:
-                if is_plugged[app] or (app in active_set):
-                    coupled_c = self.grid_sim.apply_cross_appliance_coupling(
-                        app, app_complex_layers[app], kappa
+                # 갱신된 전압으로 각 기기의 전류를 다시 변형한다.
+                coupled_c = {}
+                for a in self.known_appliances:
+                    if not np.any(layer_c[a]):
+                        coupled_c[a] = layer_c[a]
+                        continue
+                    kappa = (v_true / v_ref_series[a]).astype(np.float32)
+                    coupled_c[a] = self.grid_sim.apply_cross_appliance_coupling(
+                        a, layer_c[a], kappa
                     )
-                    coupled_total_complex += coupled_c
-                    # Update ground truth active portion
-                    if app in active_set:
-                        gt_harm_ri[app][:, :, 0] = np.real(coupled_c)
-                        gt_harm_ri[app][:, :, 1] = np.imag(coupled_c)
-                        if app in ["electiric_kettle", "hotplate", "hair_dryer", "oven"]:
-                            gt_target_p[app] *= (kappa**2)
-                        elif app in ["minipc", "laptop_charger", "beam_projector"]:
-                            pass
-                        else:
-                            gt_target_p[app] *= (kappa**0.7)
 
-            total_complex = coupled_total_complex
+            total_complex = noise_c.copy()
+            for a in self.known_appliances:
+                total_complex += coupled_c[a]
+
+            # 전력도 최종 전압 기준으로 응답시킨다.
+            #   저항성 P∝V^2 / SMPS P=일정 / 모터 P∝V^0.7
+            for a in self.known_appliances:
+                kappa = (v_true / v_ref_series[a]).astype(np.float32)
+                gt_active_p[a] = self.grid_sim.apply_power_voltage_response(a, gt_active_p[a], kappa)
+                gt_standby_p[a] = self.grid_sim.apply_power_voltage_response(a, gt_standby_p[a], kappa)
+                # 정답 고조파는 '활성 구간만' 담는다. 꺼진 구간은 0 이어야
+                # gt_is_on / gt_target_power_w 와 모순이 생기지 않는다.
+                on_mask = gt_is_on[a].astype(bool)
+                if on_mask.any():
+                    gt_harm_ri[a][on_mask, :, 0] = np.real(coupled_c[a][on_mask])
+                    gt_harm_ri[a][on_mask, :, 1] = np.imag(coupled_c[a][on_mask])
         else:
-            v_bus = np.full(N, 220.0, dtype=np.float32)
+            v_true = np.full(N, env.base_voltage_v, dtype=np.float32)
+            v_open = v_true
+            total_complex = noise_c.copy()
+            for a in self.known_appliances:
+                total_complex += layer_c[a]
+                on_mask = gt_is_on[a].astype(bool)
+                if on_mask.any():
+                    gt_harm_ri[a][on_mask, :, 0] = np.real(layer_c[a][on_mask])
+                    gt_harm_ri[a][on_mask, :, 1] = np.imag(layer_c[a][on_mask])
 
-        # 7. Compute Aggregate Electrical Output Features
-        harmonics_ri = np.zeros((N, num_harmonics, 2), dtype=np.float32)
+        # 8. 계측 해상도 반영. 실측 센서는 0.5초에 한 번만 전압을 갱신한다.
+        v_measured = (
+            self.grid_sim.quantize_measurement(v_true)
+            if self.quantize_voltage_measurement else v_true
+        )
+
+        # 9. 집계 전기량 계산
+        harmonics_ri = np.zeros((N, NUM_HARMONICS, 2), dtype=np.float32)
         harmonics_ri[:, :, 0] = np.real(total_complex)
         harmonics_ri[:, :, 1] = np.imag(total_complex)
 
-        mag_sq = np.real(total_complex)**2 + np.imag(total_complex)**2
+        mag_sq = np.real(total_complex) ** 2 + np.imag(total_complex) ** 2
         irms_total = np.sqrt(np.sum(mag_sq, axis=1)).astype(np.float32)
-        i1_mag = np.sqrt(mag_sq[:, 0]) + 1e-6
+        i1_mag = np.sqrt(mag_sq[:, 0]) + 1e-6 if N else np.zeros(0, dtype=np.float32)
 
-        # Active Power P = sum(P_ground_truth) + sum(P_standby) + P_noise
-        p_total = np.zeros(N, dtype=np.float32)
-        for app in self.known_appliances:
-            p_total += gt_target_p[app]
-            if is_plugged[app]:
-                p_total += standby_p_layers[app]
-        p_total += float(noise_p_base)
+        # 유효전력은 정답의 합으로 정의한다. 이렇게 해야 분해 검산이 정확히 성립한다.
+        p_total = p_noise.copy()
+        for a in self.known_appliances:
+            p_total = p_total + gt_active_p[a] + gt_standby_p[a]
 
-        s_total = (v_bus * irms_total).astype(np.float32)
-        q_sq = np.maximum(0.0, s_total**2 - p_total**2)
-        q_sign = np.where(np.imag(total_complex[:, 0]) < 0, -1.0, 1.0)
+        s_total = (v_measured * irms_total).astype(np.float32)
+        q_sq = np.maximum(0.0, s_total ** 2 - p_total ** 2)
+        q_sign = np.where(np.imag(total_complex[:, 0]) < 0, -1.0, 1.0) if N else np.zeros(0)
         q_total = (np.sqrt(q_sq) * q_sign).astype(np.float32)
         pf_total = np.clip(p_total / (s_total + 1e-6), 0.0, 1.0).astype(np.float32)
 
-        higher_h_sq = np.sum(mag_sq[:, 1:], axis=1)
+        higher_h_sq = np.sum(mag_sq[:, 1:], axis=1) if N else np.zeros(0)
         thd_i_total = (np.sqrt(higher_h_sq) / i1_mag).astype(np.float32)
 
         power_features = np.stack(
-            [p_total, q_total, s_total, pf_total, v_bus, thd_i_total], axis=1
-        ).astype(np.float32)
+            [p_total, q_total, s_total, pf_total, v_measured, thd_i_total], axis=1
+        ).astype(np.float32) if N else np.zeros((0, 6), dtype=np.float32)
 
         t_rel_s = (np.arange(N) / 60.0).astype(np.float32)
-        plugged_list = [app for app, p in is_plugged.items() if p]
+        plugged_list = sorted(a for a, p in is_plugged.items() if p)
 
+        standby_total = float(np.mean(sum(gt_standby_p[a] for a in self.known_appliances))) if N else 0.0
         meta = {
             "duration_cycles": N,
             "duration_s": round(N / 60.0, 2),
             "num_schedules": len(schedules),
-            "active_appliances": sorted(list(active_set)),
-            "plugged_in_appliances": sorted(plugged_list),
-            "mean_p_w": round(float(np.mean(p_total)), 2),
-            "max_p_w": round(float(np.max(p_total)), 2),
-            "min_v_bus": round(float(np.min(v_bus)), 1),
-            "max_v_drop": round(float(220.0 - np.min(v_bus)), 2),
+            "active_appliances": sorted(active_set),
+            "plugged_in_appliances": plugged_list,
+            "mean_p_w": round(float(np.mean(p_total)), 2) if N else 0.0,
+            "max_p_w": round(float(np.max(p_total)), 2) if N else 0.0,
+            "mean_standby_p_w": round(standby_total, 3),
+            "mean_noise_p_w": round(float(np.mean(p_noise)), 3) if N else 0.0,
+            # 전압 강하는 '그 순간의 개방 전압 대비 자기 부하가 끌어내린 양'으로 정의한다.
+            # 하드코딩된 220V 와 비교하면 기저 전압이 그보다 높은 환경에서 음수가 나오고
+            # (이전 리포트의 -8.56V), 환경 기저값과 비교해도 느린 요동이 위로 올라간
+            # 짧은 윈도우에서는 여전히 음수가 된다. 개방 전압 기준이 물리적으로 옳다.
+            "voltage_environment": env.source,
+            "base_voltage_v": round(env.base_voltage_v, 2),
+            "r_grid_ohm": round(env.r_grid_ohm, 4),
+            "x_grid_ohm": round(env.x_grid_ohm, 4),
+            "mean_v_bus": round(float(np.mean(v_measured)), 2) if N else 0.0,
+            "min_v_bus": round(float(np.min(v_measured)), 2) if N else 0.0,
+            "max_v_bus": round(float(np.max(v_measured)), 2) if N else 0.0,
+            "max_v_sag_v": round(float(np.max(v_open - v_true)), 2) if N else 0.0,
         }
 
         return SyntheticLoadSample(
             duration_cycles=N,
             duration_s=round(N / 60.0, 2),
             appliance_types=self.known_appliances,
-            active_appliances=sorted(list(active_set)),
-            plugged_in_appliances=sorted(plugged_list),
+            active_appliances=sorted(active_set),
+            plugged_in_appliances=plugged_list,
             harmonics_ri=harmonics_ri,
             harmonics_complex=total_complex,
             power_features=power_features,
-            v_bus=v_bus,
+            v_bus=v_measured,
+            v_bus_true=np.asarray(v_true, dtype=np.float32),
             t_rel_s=t_rel_s,
             gt_is_on=gt_is_on,
+            gt_is_plugged=gt_plugged,
             gt_state_id=gt_state_id,
-            gt_target_power_w=gt_target_p,
+            gt_target_power_w=gt_active_p,
+            gt_standby_power_w=gt_standby_p,
             gt_harmonics_ri=gt_harm_ri,
+            p_noise_w=p_noise,
             metadata=meta,
         )
 
+    # ── 무작위 윈도우 ───────────────────────────────────────────────────────
     def synthesize_random_window(
         self,
         window_size_cycles: int = 600,
         max_concurrent_appliances: int = 3,
         plugged_prob: float = 0.6,
+        n_active: Optional[int] = None,
+        candidate_appliances: Optional[Sequence[str]] = None,
+        force_plugged_all: bool = False,
     ) -> SyntheticLoadSample:
-        """Synthesizes a fast random window with stochastic plug-in states and 0~max active appliances."""
-        n_avail = len(self.known_appliances)
-        k_active = np.random.randint(0, min(max_concurrent_appliances + 1, n_avail + 1))
-        
-        # Randomize plug-in states
-        plugged_dict = {
-            app: bool(np.random.rand() < plugged_prob) for app in self.known_appliances
+        """무작위 복합 윈도우를 빠르게 합성한다.
+
+        Args:
+            n_active: 활성 가전 수를 직접 지정 (None 이면 0~max 사이 무작위)
+            candidate_appliances: 활성 가전을 고를 후보 목록 (저부하만 뽑는 등)
+            force_plugged_all: 모든 가전을 콘센트에 연결된 상태로 둔다 (대기전력 최대)
+        """
+        candidates = list(candidate_appliances or self.known_appliances)
+        candidates = [a for a in candidates if a in self.known_appliances]
+        if not candidates:
+            candidates = list(self.known_appliances)
+
+        if n_active is None:
+            k_active = int(np.random.randint(0, min(max_concurrent_appliances, len(candidates)) + 1))
+        else:
+            k_active = int(np.clip(n_active, 0, len(candidates)))
+
+        plugged = {
+            a: (True if force_plugged_all else bool(np.random.rand() < plugged_prob))
+            for a in self.known_appliances
         }
 
-        schedules = []
+        schedules: List[ApplianceSchedule] = []
         if k_active > 0:
-            selected_apps = np.random.choice(self.known_appliances, size=k_active, replace=False)
-            for app in selected_apps:
-                plugged_dict[app] = True  # Must be plugged in if active
-                start_c = int(np.random.randint(-window_size_cycles // 2, window_size_cycles // 2))
+            selected = np.random.choice(candidates, size=k_active, replace=False)
+            for app in selected:
+                plugged[app] = True  # 켜져 있으면 반드시 꽂혀 있다
+                # 음수 시작을 허용하고 클램프하지 않는다. 그래야 돌입 전류가
+                # 윈도우 안 임의 위치에 오거나, 이미 진행 중인 동작으로 나타난다.
+                start_c = int(np.random.randint(-window_size_cycles, window_size_cycles))
                 dur_c = int(np.random.randint(window_size_cycles // 2, window_size_cycles * 3))
-                schedules.append(
-                    ApplianceSchedule(
-                        appliance_type=app,
-                        start_cycle=max(0, start_c),
-                        duration_cycles=dur_c,
-                    )
-                )
+                schedules.append(ApplianceSchedule(app, start_cycle=start_c, duration_cycles=dur_c))
 
         return self.synthesize_scenario(
             total_duration_cycles=window_size_cycles,
             schedules=schedules,
-            plugged_in_appliances=plugged_dict,
+            plugged_in_appliances=plugged,
             include_noise=True,
             simulate_voltage_drop=True,
+        )
+
+    def synthesize_standby_only_window(
+        self, window_size_cycles: int = 600, plugged_prob: float = 0.9
+    ) -> SyntheticLoadSample:
+        """활성 가전이 하나도 없고 대기전력만 존재하는 윈도우.
+
+        모델이 "대기전력 합"을 "저부하 기기 1대"로 오인하지 않게 만드는 핵심 학습 사례다.
+        정답은 전 기기 OFF / 0W 이며, 그럼에도 관측 전력은 0 이 아니다.
+        """
+        plugged = {a: bool(np.random.rand() < plugged_prob) for a in self.known_appliances}
+        return self.synthesize_scenario(
+            total_duration_cycles=window_size_cycles,
+            schedules=[],
+            plugged_in_appliances=plugged,
+            include_noise=True,
+            simulate_voltage_drop=True,
+        )
+
+    def synthesize_low_load_among_standby_window(
+        self, window_size_cycles: int = 600
+    ) -> SyntheticLoadSample:
+        """대기전력이 잔뜩 깔린 상태에서 저전력 기기 딱 1대만 켜진 윈도우.
+
+        대기전력 오탐이 실제로 일어나는 바로 그 상황이다.
+        미니PC 아이들(9.8W)이나 선풍기 1단(23.5W)을, 여러 대기전력의 합과 구분해야 한다.
+        """
+        low_load = [a for a in self.known_appliances if is_low_load(a)]
+        return self.synthesize_random_window(
+            window_size_cycles=window_size_cycles,
+            n_active=1,
+            candidate_appliances=low_load or self.known_appliances,
+            force_plugged_all=True,
         )

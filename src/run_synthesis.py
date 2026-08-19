@@ -64,11 +64,16 @@ def plot_synthetic_scenario(sample: SyntheticLoadSample, title: str, output_path
     ax1.set_title("Composite Aggregate Load & Disaggregated Appliance Ground Truths", fontsize=11, loc="left")
 
     # Panel 2: Terminal Bus Voltage (Voltage Drop Sag Simulation)
+    # 기준선은 하드코딩 220V 가 아니라 이 시나리오가 놓인 환경의 기저 전압이다.
+    base_v = sample.metadata.get("base_voltage_v", 220.0)
     ax2 = axes[1]
-    ax2.plot(t, v_bus, color="#d62728", linewidth=1.3, label="Terminal Bus Voltage V_bus (V)")
-    ax2.axhline(220.0, color="gray", linestyle="--", alpha=0.5, label="Nominal 220V")
+    ax2.plot(t, v_bus, color="#d62728", linewidth=1.3,
+             label="Terminal Bus Voltage V_bus (V, 0.5s sensor resolution)")
+    ax2.axhline(base_v, color="gray", linestyle="--", alpha=0.5,
+                label=f"Environment base {base_v:.1f}V ({sample.metadata.get('voltage_environment', '?')})")
     ax2.set_ylabel("Voltage (V)", fontsize=11)
-    ax2.set_ylim(min(210.0, np.min(v_bus) - 2.0), max(225.0, np.max(v_bus) + 2.0))
+    v_lo, v_hi = float(np.min(v_bus)), float(np.max(v_bus))
+    ax2.set_ylim(min(v_lo, base_v) - 2.0, max(v_hi, base_v) + 2.0)
     ax2.legend(loc="lower right", framealpha=0.9, fontsize=9)
     ax2.grid(True, linestyle=":", alpha=0.6)
     ax2.set_title("Grid Impedance Voltage Sag (Z_grid Feedback)", fontsize=11, loc="left")
@@ -108,9 +113,29 @@ def run_full_synthesis(
 
     pool = SegmentPool(npz_dir=npz_input_dir)
     print(f"Loaded {len(pool.get_appliance_types())} appliance categories: {', '.join(pool.get_appliance_types())}")
-    for app, acts in pool.appliance_activations.items():
-        total_dur = sum(a.duration_s for a in acts)
-        print(f"  - {app:20s}: {len(acts):2d} segmented activations (Total: {total_dur/60:.1f} min)")
+    if pool.rejected_files:
+        print("  [!] Rejected from segment pool:")
+        for name, reason in pool.rejected_files:
+            print(f"      - {name}: {reason}")
+
+    pool_summary = pool.describe()
+    print(f"\n  {'appliance':20s}{'acts':>6s}{'min':>8s}{'standby_W':>11s}{'real?':>7s}"
+          f"{'v_ref':>16s}{'load':>11s}{'periodic':>10s}")
+    for app, d in pool_summary.items():
+        print(f"  {app:20s}{d['activations']:>6d}{d['total_minutes']:>8.1f}{d['standby_w']:>11.3f}"
+              f"{str(d['standby_is_real']):>7s}{str(d['v_ref_range']):>16s}"
+              f"{d['load_class']:>11s}{str(d['periodic_duty']):>10s}")
+
+    standby_total = sum(pool.get_standby_profile(a).power_w for a in pool.get_appliance_types())
+    print(f"\n  Total standby if ALL plugged in: {standby_total:.2f}W "
+          f"(measurement board self-consumption counted once, separately)")
+
+    # 활성화 구간이 너무 적은 기기는 모델이 그 파형을 통째로 외울 수 있다.
+    thin = [(a, d["activations"]) for a, d in pool_summary.items() if d["activations"] < 5]
+    if thin:
+        print("  [!] Low activation diversity (model may memorize these traces):")
+        for app, n in thin:
+            print(f"      - {app}: only {n} independent activation(s) - consider recording more")
 
     grid_sim = GridSimulator(r_grid=0.25, x_grid=0.05)
     augmentor = DataAugmentor(duration_scale_range=(0.6, 2.2), power_scale_std=0.05)
@@ -129,33 +154,54 @@ def run_full_synthesis(
         ("random_scenario_2", "Random Multi-Load Scenario #2", lambda: scenario_gen.create_random_scenario(20.0, num_activations=10)),
     ]
 
-    report = {"generated_scenarios": {}, "batch_benchmark": {}}
+    report = {
+        "segment_pool": pool_summary,
+        "total_standby_if_all_plugged_w": round(standby_total, 3),
+        "generated_scenarios": {},
+        "batch_benchmark": {},
+    }
 
     for name, desc, func in scenarios:
         print(f"Generating: {name:20s} ({desc}) ... ", end="", flush=True)
         sample: SyntheticLoadSample = func()
-        
+
+        # 정답이 물리적으로 맞는지 검산한다: P = Σ활성 + Σ대기 + 계측계 소비
+        decomp_ok, decomp_err = sample.verify_power_decomposition(tolerance_w=0.01)
+
         # Save NPZ
         npz_file = scenarios_dir / f"{name}.npz"
         ScenarioGenerator.export_synthetic_sample_to_npz(sample, npz_file)
-        
+
         # Save Plot
         plot_file = plots_dir / f"{name}_profile.png"
         plot_synthetic_scenario(sample, title=f"NILM Synthetic Scenario: {desc}", output_path=plot_file)
 
+        m = sample.metadata
         report["generated_scenarios"][name] = {
             "description": desc,
             "duration_s": sample.duration_s,
             "duration_cycles": sample.duration_cycles,
             "active_appliances": sample.active_appliances,
-            "mean_p_w": sample.metadata["mean_p_w"],
-            "max_p_w": sample.metadata["max_p_w"],
-            "min_v_bus": sample.metadata["min_v_bus"],
-            "max_v_drop": sample.metadata["max_v_drop"],
+            "plugged_in_appliances": sample.plugged_in_appliances,
+            "mean_p_w": m["mean_p_w"],
+            "max_p_w": m["max_p_w"],
+            "mean_standby_p_w": m["mean_standby_p_w"],
+            "mean_noise_p_w": m["mean_noise_p_w"],
+            "voltage_environment": m["voltage_environment"],
+            "base_voltage_v": m["base_voltage_v"],
+            "mean_v_bus": m["mean_v_bus"],
+            "min_v_bus": m["min_v_bus"],
+            "max_v_bus": m["max_v_bus"],
+            "max_v_sag_v": m["max_v_sag_v"],
+            "power_decomposition_ok": bool(decomp_ok),
+            "power_decomposition_max_error_w": round(decomp_err, 6),
             "npz_file": str(npz_file),
             "plot_file": str(plot_file),
         }
-        print(f"DONE | Duration: {sample.duration_s/60:.1f}m | Max P: {sample.metadata['max_p_w']}W | Max V-Drop: {sample.metadata['max_v_drop']}V")
+        print(f"DONE | {sample.duration_s/60:.1f}m | Max P: {m['max_p_w']:7.1f}W | "
+              f"V: {m['base_voltage_v']:.1f}V base ({m['voltage_environment']}) | "
+              f"Sag: {m['max_v_sag_v']:.2f}V | Standby: {m['mean_standby_p_w']:.2f}W | "
+              f"Decomp: {'OK' if decomp_ok else f'ERR {decomp_err:.3f}W'}")
 
     # Benchmark on-the-fly Batch Generator for PyTorch Training
     print("\n" + "=" * 80)
@@ -174,13 +220,22 @@ def run_full_synthesis(
     batch_size = 32
     total_samples = num_batches * batch_size
 
+    recipe_counts = {}
     for _ in range(num_batches):
-        X, y_pow, y_state, y_on = batch_gen.generate_batch(batch_size=batch_size)
+        d = batch_gen.generate_batch_dict(batch_size=batch_size)
+        for r in d["recipe"]:
+            recipe_counts[str(r)] = recipe_counts.get(str(r), 0) + 1
 
     elapsed_gen = time.time() - t0
     samples_per_sec = total_samples / elapsed_gen
+    X, y_pow, y_state, y_on = d["X"], d["y_power"], d["y_state"], d["y_on"]
+
     print(f"Generated {total_samples} training windows in {elapsed_gen:.2f}s ({samples_per_sec:.1f} windows/sec)")
     print(f"Tensor Shapes -> X: {X.shape}, Y_power: {y_pow.shape}, Y_state: {y_state.shape}, Y_on: {y_on.shape}")
+    print(f"                 Y_plugged: {d['y_plugged'].shape}, Y_standby_power: {d['y_standby_power'].shape}")
+    print(f"Window recipe mix (hard negatives for standby confusion):")
+    for r, c in sorted(recipe_counts.items(), key=lambda kv: -kv[1]):
+        print(f"   {r:26s}: {c:4d} / {total_samples}  ({100*c/total_samples:5.1f}%)")
 
     report["batch_benchmark"] = {
         "batch_size": batch_size,
@@ -188,6 +243,10 @@ def run_full_synthesis(
         "samples_per_second": round(samples_per_sec, 1),
         "x_shape": list(X.shape),
         "y_power_shape": list(y_pow.shape),
+        "y_plugged_shape": list(d["y_plugged"].shape),
+        "y_standby_power_shape": list(d["y_standby_power"].shape),
+        "recipe_mix_configured": batch_gen.describe_recipe_mix(),
+        "recipe_mix_realized": {k: round(v / total_samples, 3) for k, v in recipe_counts.items()},
     }
 
     # Save synthesis report

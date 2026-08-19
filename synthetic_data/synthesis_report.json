@@ -1,4 +1,157 @@
 {
+  "segment_pool": {
+    "air_conditioner": {
+      "activations": 7,
+      "total_minutes": 55.2,
+      "source_files": [
+        "air_conditioner"
+      ],
+      "v_ref_range": [
+        233.6,
+        233.6
+      ],
+      "load_class": "motor",
+      "periodic_duty": false,
+      "standby_w": 4.825,
+      "standby_is_real": true,
+      "standby_samples": 27891
+    },
+    "beam_projector": {
+      "activations": 6,
+      "total_minutes": 10.5,
+      "source_files": [
+        "beam_projector"
+      ],
+      "v_ref_range": [
+        223.1,
+        223.1
+      ],
+      "load_class": "smps",
+      "periodic_duty": false,
+      "standby_w": 0.884,
+      "standby_is_real": true,
+      "standby_samples": 4849
+    },
+    "electiric_kettle": {
+      "activations": 13,
+      "total_minutes": 5.8,
+      "source_files": [
+        "electiric_kettle"
+      ],
+      "v_ref_range": [
+        212.5,
+        212.5
+      ],
+      "load_class": "resistive",
+      "periodic_duty": false,
+      "standby_w": 0.179,
+      "standby_is_real": false,
+      "standby_samples": 8481
+    },
+    "fan": {
+      "activations": 22,
+      "total_minutes": 44.4,
+      "source_files": [
+        "fan_1",
+        "fan_2",
+        "fan_3"
+      ],
+      "v_ref_range": [
+        233.7,
+        236.0
+      ],
+      "load_class": "motor",
+      "periodic_duty": false,
+      "standby_w": 0.257,
+      "standby_is_real": false,
+      "standby_samples": 7622
+    },
+    "hair_dryer": {
+      "activations": 13,
+      "total_minutes": 3.9,
+      "source_files": [
+        "hair_dryer_1",
+        "hair_dryer_2"
+      ],
+      "v_ref_range": [
+        234.2,
+        235.3
+      ],
+      "load_class": "resistive",
+      "periodic_duty": false,
+      "standby_w": 0.328,
+      "standby_is_real": false,
+      "standby_samples": 4590
+    },
+    "hotplate": {
+      "activations": 482,
+      "total_minutes": 9.2,
+      "source_files": [
+        "hotplate_1",
+        "hotplate_2"
+      ],
+      "v_ref_range": [
+        219.0,
+        221.3
+      ],
+      "load_class": "resistive",
+      "periodic_duty": true,
+      "standby_w": 0.653,
+      "standby_is_real": true,
+      "standby_samples": 51716
+    },
+    "laptop_charger": {
+      "activations": 14,
+      "total_minutes": 49.6,
+      "source_files": [
+        "laptop_charger_1",
+        "laptop_charger_2"
+      ],
+      "v_ref_range": [
+        221.9,
+        222.8
+      ],
+      "load_class": "smps",
+      "periodic_duty": false,
+      "standby_w": 0.012,
+      "standby_is_real": false,
+      "standby_samples": 8125
+    },
+    "minipc": {
+      "activations": 7,
+      "total_minutes": 53.1,
+      "source_files": [
+        "minipc_1",
+        "minipc_2"
+      ],
+      "v_ref_range": [
+        221.4,
+        221.9
+      ],
+      "load_class": "smps",
+      "periodic_duty": false,
+      "standby_w": 0.423,
+      "standby_is_real": false,
+      "standby_samples": 9672
+    },
+    "oven": {
+      "activations": 2,
+      "total_minutes": 35.0,
+      "source_files": [
+        "oven"
+      ],
+      "v_ref_range": [
+        223.3,
+        223.3
+      ],
+      "load_class": "resistive",
+      "periodic_duty": true,
+      "standby_w": 0.638,
+      "standby_is_real": true,
+      "standby_samples": 3110
+    }
+  },
+  "total_standby_if_all_plugged_w": 8.201,
   "generated_scenarios": {
     "morning_routine": {
       "description": "Morning Routine (Kettle, Dryer, Charger, Fan)",
@@ -10,10 +163,29 @@
         "hair_dryer",
         "laptop_charger"
       ],
-      "mean_p_w": 512.34,
-      "max_p_w": 1263.09,
-      "min_v_bus": 215.4,
-      "max_v_drop": 4.63,
+      "plugged_in_appliances": [
+        "air_conditioner",
+        "beam_projector",
+        "electiric_kettle",
+        "fan",
+        "hair_dryer",
+        "hotplate",
+        "laptop_charger",
+        "minipc",
+        "oven"
+      ],
+      "mean_p_w": 579.51,
+      "max_p_w": 1443.22,
+      "mean_standby_p_w": 6.509,
+      "mean_noise_p_w": 2.37,
+      "voltage_environment": "outlet_low_221v",
+      "base_voltage_v": 219.61,
+      "mean_v_bus": 218.33,
+      "min_v_bus": 210.9,
+      "max_v_bus": 221.38,
+      "max_v_sag_v": 2.62,
+      "power_decomposition_ok": true,
+      "power_decomposition_max_error_w": 0.0,
       "npz_file": "synthetic_data\\scenarios\\morning_routine.npz",
       "plot_file": "synthetic_data\\plots\\morning_routine_profile.png"
     },
@@ -27,10 +199,24 @@
         "hotplate",
         "oven"
       ],
-      "mean_p_w": 1127.84,
-      "max_p_w": 2346.0,
-      "min_v_bus": 214.3,
-      "max_v_drop": 5.67,
+      "plugged_in_appliances": [
+        "air_conditioner",
+        "beam_projector",
+        "hotplate",
+        "laptop_charger"
+      ],
+      "mean_p_w": 1355.37,
+      "max_p_w": 2628.12,
+      "mean_standby_p_w": 1.037,
+      "mean_noise_p_w": 1.401,
+      "voltage_environment": "exploration",
+      "base_voltage_v": 240.68,
+      "mean_v_bus": 238.63,
+      "min_v_bus": 223.94,
+      "max_v_bus": 242.76,
+      "max_v_sag_v": 3.14,
+      "power_decomposition_ok": true,
+      "power_decomposition_max_error_w": 0.0,
       "npz_file": "synthetic_data\\scenarios\\evening_cooking.npz",
       "plot_file": "synthetic_data\\plots\\evening_cooking_profile.png"
     },
@@ -44,10 +230,27 @@
         "laptop_charger",
         "minipc"
       ],
-      "mean_p_w": 423.18,
-      "max_p_w": 1504.85,
-      "min_v_bus": 215.2,
-      "max_v_drop": 4.78,
+      "plugged_in_appliances": [
+        "air_conditioner",
+        "beam_projector",
+        "fan",
+        "hair_dryer",
+        "hotplate",
+        "minipc",
+        "oven"
+      ],
+      "mean_p_w": 450.73,
+      "max_p_w": 1652.27,
+      "mean_standby_p_w": 6.302,
+      "mean_noise_p_w": 1.404,
+      "voltage_environment": "outlet_high_234v",
+      "base_voltage_v": 234.88,
+      "mean_v_bus": 233.56,
+      "min_v_bus": 221.68,
+      "max_v_bus": 237.51,
+      "max_v_sag_v": 2.85,
+      "power_decomposition_ok": true,
+      "power_decomposition_max_error_w": 0.0,
       "npz_file": "synthetic_data\\scenarios\\work_office.npz",
       "plot_file": "synthetic_data\\plots\\work_office_profile.png"
     },
@@ -58,14 +261,32 @@
       "active_appliances": [
         "air_conditioner",
         "beam_projector",
+        "hotplate",
+        "laptop_charger",
+        "minipc"
+      ],
+      "plugged_in_appliances": [
+        "air_conditioner",
+        "beam_projector",
+        "electiric_kettle",
+        "fan",
+        "hair_dryer",
         "laptop_charger",
         "minipc",
         "oven"
       ],
-      "mean_p_w": 539.4,
-      "max_p_w": 1299.0,
-      "min_v_bus": 216.2,
-      "max_v_drop": 3.82,
+      "mean_p_w": 638.99,
+      "max_p_w": 1371.33,
+      "mean_standby_p_w": 2.529,
+      "mean_noise_p_w": 1.402,
+      "voltage_environment": "outlet_high_234v",
+      "base_voltage_v": 235.92,
+      "mean_v_bus": 234.61,
+      "min_v_bus": 222.46,
+      "max_v_bus": 238.93,
+      "max_v_sag_v": 2.61,
+      "power_decomposition_ok": true,
+      "power_decomposition_max_error_w": 0.0,
       "npz_file": "synthetic_data\\scenarios\\random_scenario_1.npz",
       "plot_file": "synthetic_data\\plots\\random_scenario_1_profile.png"
     },
@@ -75,16 +296,31 @@
       "duration_cycles": 72000,
       "active_appliances": [
         "air_conditioner",
-        "beam_projector",
         "electiric_kettle",
         "fan",
-        "laptop_charger",
-        "minipc"
+        "hotplate",
+        "laptop_charger"
       ],
-      "mean_p_w": 580.55,
-      "max_p_w": 1850.91,
-      "min_v_bus": 217.4,
-      "max_v_drop": 2.57,
+      "plugged_in_appliances": [
+        "air_conditioner",
+        "fan",
+        "hotplate",
+        "laptop_charger",
+        "minipc",
+        "oven"
+      ],
+      "mean_p_w": 756.95,
+      "max_p_w": 2316.03,
+      "mean_standby_p_w": 4.736,
+      "mean_noise_p_w": 1.401,
+      "voltage_environment": "outlet_low_221v",
+      "base_voltage_v": 225.46,
+      "mean_v_bus": 224.26,
+      "min_v_bus": 214.48,
+      "max_v_bus": 228.38,
+      "max_v_sag_v": 3.14,
+      "power_decomposition_ok": true,
+      "power_decomposition_max_error_w": 0.0,
       "npz_file": "synthetic_data\\scenarios\\random_scenario_2.npz",
       "plot_file": "synthetic_data\\plots\\random_scenario_2_profile.png"
     }
@@ -92,7 +328,7 @@
   "batch_benchmark": {
     "batch_size": 32,
     "window_size_cycles": 600,
-    "samples_per_second": 172.6,
+    "samples_per_second": 131.5,
     "x_shape": [
       32,
       33,
@@ -101,6 +337,26 @@
     "y_power_shape": [
       32,
       9
-    ]
+    ],
+    "y_plugged_shape": [
+      32,
+      9
+    ],
+    "y_standby_power_shape": [
+      32,
+      9
+    ],
+    "recipe_mix_configured": {
+      "random": 0.55,
+      "standby_only": 0.18,
+      "low_load_among_standby": 0.22,
+      "unplugged_baseline": 0.05
+    },
+    "recipe_mix_realized": {
+      "random": 0.541,
+      "standby_only": 0.141,
+      "low_load_among_standby": 0.269,
+      "unplugged_baseline": 0.05
+    }
   }
 }

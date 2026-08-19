@@ -2,56 +2,66 @@
   "raw_rows": 52980,
   "cleaned_rows": 52980,
   "duration_s": 883.0,
+  "sessions_detected": 1,
   "duplicates_removed": 0,
-  "interpolated_cycles": 0,
+  "invalid_samples_flagged": 60,
+  "invalid_samples_dropped": 0,
+  "invalid_samples_interpolated": 60,
+  "interpolated_cycles": 60,
+  "timeline_segments": 1,
   "glitch_spikes_fixed": 0,
-  "negative_power_clamped": 4,
+  "negative_power_clamped": 2,
   "noise_floor_applied_w": 1.4,
   "source_file": "fan_3.csv",
+  "file_role": "device",
   "appliance_type": "fan",
+  "load_class": "motor",
+  "classification_reason": "등록된 단일 가전 'fan'",
   "output_file": null,
-  "feature_columns_count": 117,
-  "p_mean": 37.81,
+  "feature_columns_count": 122,
+  "v_ref_v": 235.96,
+  "p_mean": 37.79,
   "p_max": 56.02,
-  "irms_mean": 0.1617,
+  "irms_mean": 0.1616,
   "korean_name": "선풍기",
   "total_samples": 52980,
-  "on_percentage": 95.81,
+  "on_percentage": 95.72,
   "state_distribution": {
     "OFF": {
       "state_id": 0,
       "description": "전원 꺼짐",
-      "count": 2221,
-      "percentage": 4.19,
-      "duration_min": 0.62
+      "count": 2267,
+      "percentage": 4.28,
+      "duration_min": 0.63
     },
     "SPEED_LOW": {
       "state_id": 1,
       "description": "1단 미풍 운전",
-      "count": 884,
+      "count": 885,
       "percentage": 1.67,
       "duration_min": 0.25
     },
     "SPEED_MID": {
       "state_id": 2,
       "description": "2단 약풍 운전",
-      "count": 886,
+      "count": 884,
       "percentage": 1.67,
       "duration_min": 0.25
     },
     "SPEED_HIGH": {
       "state_id": 3,
       "description": "3단 강풍 운전",
-      "count": 48989,
-      "percentage": 92.47,
-      "duration_min": 13.61
+      "count": 48944,
+      "percentage": 92.38,
+      "duration_min": 13.6
     }
   },
   "events_summary": {
     "total_events": 17,
     "on_events": 6,
     "off_events": 6,
-    "mode_change_events": 5
+    "mode_change_events": 5,
+    "seam_suspect_events": 0
   },
   "annotated_csv": "processed_data\\clean_devices\\fan_3_annotated.csv",
   "npz_file": "processed_data\\npz\\fan_3.npz",

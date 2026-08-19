@@ -1,67 +1,67 @@
 """
 Preprocessing Pipeline for NILM AI
 Executes full data cleaning and feature engineering across all raw appliance CSV files.
+
+파일의 역할(단일 가전 / 노이즈 / 복합 부하 검증용)은 file_registry 가 단독으로 결정한다.
+파이프라인은 더 이상 파일 이름을 가전 종류로 추측하지 않는다.
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
-import os
 import pandas as pd
 
 from .cleaner import DataCleaner
 from .feature_extractor import FeatureExtractor
+from .file_registry import (
+    FileClassification,
+    FileRole,
+    UnregisteredFileError,
+    classify_file,
+    require_known,
+)
 
 
 class PreprocessingPipeline:
     """End-to-end preprocessing pipeline for NILM raw files."""
-
-    DEVICE_MAP = {
-        "air_conditioner": "air_conditioner",
-        "beam_projector": "beam_projector",
-        "electiric_kettle": "electiric_kettle",
-        "fan_1": "fan",
-        "fan_2": "fan",
-        "fan_3": "fan",
-        "hair_dryer_1": "hair_dryer",
-        "hair_dryer_2": "hair_dryer",
-        "hotplate_1": "hotplate",
-        "hotplate_2": "hotplate",
-        "laptop_charger_1": "laptop_charger",
-        "laptop_charger_2": "laptop_charger",
-        "minipc_1": "minipc",
-        "minipc_2": "minipc",
-        "noise_noselfpower": "noise_noselfpower",
-        "noise_selfpower": "noise_selfpower",
-        "oven": "oven",
-    }
 
     def __init__(
         self,
         sampling_hz: float = 60.0,
         noise_floor_w: float = 1.4,
         harmonics_count: int = 15,
+        quality_gating: bool = True,
     ):
-        self.cleaner = DataCleaner(sampling_hz=sampling_hz, noise_floor_w=noise_floor_w)
+        self.cleaner = DataCleaner(
+            sampling_hz=sampling_hz,
+            noise_floor_w=noise_floor_w,
+            quality_gating=quality_gating,
+        )
         self.extractor = FeatureExtractor(harmonics_count=harmonics_count)
 
     def process_file(
         self,
         file_path: Union[str, Path],
         output_dir: Optional[Union[str, Path]] = None,
+        strict: bool = True,
     ) -> Tuple[pd.DataFrame, Dict]:
-        """Loads, cleans, extracts features, and optionally saves the preprocessed dataset."""
+        """Loads, cleans, extracts features, and optionally saves the preprocessed dataset.
+
+        Args:
+            strict: True 이면 미등록 파일에 대해 UnregisteredFileError 를 발생시킨다.
+                    이전처럼 파일명을 가전 종류로 추측해 조용히 넘어가지 않는다.
+        """
         path = Path(file_path)
-        stem = path.stem
-        appliance_type = self.DEVICE_MAP.get(stem, stem)
+        classification = classify_file(path)
+        if strict:
+            require_known(classification)
+
+        stem = classification.stem
 
         # Load raw CSV
         df_raw = pd.read_csv(path)
 
-        # Set device-specific noise floor if self-powered noise
-        custom_noise = 2.37 if "noise_selfpower" in stem else None
-
-        # Clean data
+        # 계측 보드 전원 방식에 따른 바닥 전력은 레지스트리가 정한다.
         df_clean, clean_stats = self.cleaner.clean_dataframe(
-            df_raw, custom_noise_floor=custom_noise
+            df_raw, custom_noise_floor=classification.noise_floor_w
         )
 
         # Extract physical and harmonic features
@@ -69,7 +69,8 @@ class PreprocessingPipeline:
 
         # Add metadata columns
         df_features["source_file"] = path.name
-        df_features["appliance_type"] = appliance_type
+        df_features["appliance_type"] = classification.appliance_type or stem
+        df_features["file_role"] = classification.role.value
 
         # Save to output directory if specified
         output_file = None
@@ -79,12 +80,22 @@ class PreprocessingPipeline:
             output_file = out_dir / f"{stem}_clean.csv"
             df_features.to_csv(output_file, index=False)
 
+        # 이 측정 구간의 대표 계통 전압. 합성 시 전압 스케일링의 기준(v_ref)이 되며,
+        # 하드코딩된 220V 대신 이 값을 써야 물리적으로 올바른 환산이 된다.
+        valid = df_features["is_valid"] == 1 if "is_valid" in df_features.columns else slice(None)
+        v_series = df_features.loc[valid, "vrms"] if "vrms" in df_features.columns else pd.Series(dtype=float)
+        v_ref = float(v_series.median()) if len(v_series) else 220.0
+
         stats = {
             **clean_stats,
             "source_file": path.name,
-            "appliance_type": appliance_type,
+            "file_role": classification.role.value,
+            "appliance_type": classification.appliance_type or stem,
+            "load_class": classification.load_class.value,
+            "classification_reason": classification.reason,
             "output_file": str(output_file) if output_file else None,
             "feature_columns_count": len(df_features.columns),
+            "v_ref_v": round(v_ref, 2),
             "p_mean": round(float(df_features["p_w"].mean()), 2),
             "p_max": round(float(df_features["p_w"].max()), 2),
             "irms_mean": round(float(df_features["irms"].mean()), 4),
@@ -97,17 +108,40 @@ class PreprocessingPipeline:
         input_dir: Union[str, Path],
         output_dir: Union[str, Path],
         pattern: str = "*.csv",
+        roles: Optional[List[FileRole]] = None,
+        strict: bool = True,
     ) -> Dict[str, Dict]:
-        """Processes all CSV files matching pattern in input_dir."""
+        """Processes all CSV files matching pattern in input_dir.
+
+        Args:
+            roles: 처리할 역할 목록. 기본은 단일 가전과 노이즈만 처리하고
+                   복합 부하 검증 파일(test*, nilm_*)은 건너뛴다.
+        """
         in_path = Path(input_dir)
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)
+
+        allowed = set(roles or [FileRole.DEVICE, FileRole.NOISE])
 
         files = sorted(in_path.glob(pattern))
         all_stats = {}
 
         for f in files:
-            _, stats = self.process_file(f, output_dir=out_path)
-            all_stats[f.stem] = stats
+            classification = classify_file(f)
+            if strict:
+                require_known(classification)
+            if classification.role not in allowed:
+                continue
+            _, stats = self.process_file(f, output_dir=out_path, strict=strict)
+            all_stats[classification.stem] = stats
 
         return all_stats
+
+    @staticmethod
+    def survey_directory(input_dir: Union[str, Path], pattern: str = "*.csv") -> Dict[str, List[str]]:
+        """디렉터리의 파일들을 역할별로 분류만 해서 보여준다 (처리 없음)."""
+        survey: Dict[str, List[str]] = {role.value: [] for role in FileRole}
+        for f in sorted(Path(input_dir).glob(pattern)):
+            c = classify_file(f)
+            survey[c.role.value].append(c.stem)
+        return survey

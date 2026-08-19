@@ -2,63 +2,73 @@
   "raw_rows": 226770,
   "cleaned_rows": 226770,
   "duration_s": 3779.5,
+  "sessions_detected": 1,
   "duplicates_removed": 0,
+  "invalid_samples_flagged": 0,
+  "invalid_samples_dropped": 0,
+  "invalid_samples_interpolated": 0,
   "interpolated_cycles": 0,
+  "timeline_segments": 1,
   "glitch_spikes_fixed": 0,
   "negative_power_clamped": 0,
   "noise_floor_applied_w": 1.4,
   "source_file": "air_conditioner.csv",
+  "file_role": "device",
   "appliance_type": "air_conditioner",
+  "load_class": "motor",
+  "classification_reason": "등록된 단일 가전 'air_conditioner'",
   "output_file": null,
-  "feature_columns_count": 117,
+  "feature_columns_count": 122,
+  "v_ref_v": 233.62,
   "p_mean": 422.53,
   "p_max": 1022.07,
   "irms_mean": 2.2086,
   "korean_name": "에어컨",
   "total_samples": 226770,
-  "on_percentage": 88.7,
+  "on_percentage": 87.7,
   "state_distribution": {
     "OFF_STANDBY": {
       "state_id": 0,
       "description": "대기 상태 또는 전원 꺼짐",
-      "count": 25619,
-      "percentage": 11.3,
-      "duration_min": 7.12
+      "count": 27891,
+      "percentage": 12.3,
+      "duration_min": 7.75
     },
     "FAN_ONLY": {
       "state_id": 1,
       "description": "송풍/팬 단독 동작 모드",
-      "count": 34401,
-      "percentage": 15.17,
-      "duration_min": 9.56
+      "count": 32129,
+      "percentage": 14.17,
+      "duration_min": 8.92
     },
     "COOLING_LOW": {
       "state_id": 2,
       "description": "인버터 컴프레서 저부하 냉방",
-      "count": 22236,
-      "percentage": 9.81,
-      "duration_min": 6.18
+      "count": 22316,
+      "percentage": 9.84,
+      "duration_min": 6.2
     },
     "COOLING_MID": {
       "state_id": 3,
       "description": "인버터 컴프레서 중부하 냉방",
-      "count": 59035,
-      "percentage": 26.03,
+      "count": 59040,
+      "percentage": 26.04,
       "duration_min": 16.4
     },
     "COOLING_HIGH": {
       "state_id": 4,
       "description": "인버터 컴프레서 고부하/터보 냉방",
-      "count": 85479,
-      "percentage": 37.69,
-      "duration_min": 23.74
+      "count": 85394,
+      "percentage": 37.66,
+      "duration_min": 23.72
     }
   },
   "events_summary": {
-    "total_events": 40,
+    "total_events": 39,
     "on_events": 7,
     "off_events": 7,
-    "mode_change_events": 26
+    "mode_change_events": 25,
+    "seam_suspect_events": 0
   },
   "annotated_csv": "processed_data\\clean_devices\\air_conditioner_annotated.csv",
   "npz_file": "processed_data\\npz\\air_conditioner.npz",

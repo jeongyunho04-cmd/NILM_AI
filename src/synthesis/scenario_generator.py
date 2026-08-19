@@ -6,6 +6,7 @@ and exports synthetic benchmark datasets.
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 import json
+import os
 import numpy as np
 
 from .synthesizer import ApplianceSchedule, LoadSynthesizer, SyntheticLoadSample
@@ -122,8 +123,11 @@ class ScenarioGenerator:
             "harmonics_ri": sample.harmonics_ri,
             "harmonics_complex": sample.harmonics_complex,
             "power_features": sample.power_features,
-            "v_bus": sample.v_bus,
+            "v_bus": sample.v_bus,             # 계측 해상도로 계단화된 전압 (모델 입력)
+            "v_bus_true": sample.v_bus_true,   # 연속 실제 전압 (진단용)
             "t_rel_s": sample.t_rel_s,
+            # 어느 기기의 것도 아닌 계측계 자체 소비. 전력 분해 검산에 필요하다.
+            "p_noise_w": sample.p_noise_w,
             "metadata_json": json.dumps(sample.metadata, ensure_ascii=False),
         }
 
@@ -133,6 +137,21 @@ class ScenarioGenerator:
             data_dict[f"gt_state_id_{app}"] = sample.gt_state_id[app]
             data_dict[f"gt_target_power_{app}"] = sample.gt_target_power_w[app]
             data_dict[f"gt_harmonics_ri_{app}"] = sample.gt_harmonics_ri[app]
+            # 대기전력을 활성전력과 구분해 학습시키기 위한 채널
+            data_dict[f"gt_is_plugged_{app}"] = sample.gt_is_plugged[app]
+            data_dict[f"gt_standby_power_{app}"] = sample.gt_standby_power_w[app]
 
-        np.savez_compressed(out_p, **data_dict)
+        # 임시 파일에 쓴 뒤 원자적으로 교체한다.
+        # 기존 파일을 직접 열어 덮어쓰면 (1) 도중에 실패했을 때 반쯤 쓰인 파일이 남고,
+        # (2) Windows 에서 백신이 방금 쓴 대용량 파일을 스캔하는 동안
+        #     OSError(Errno 22) 로 열기가 실패하는 일이 있다.
+        # 이름이 .npz 로 끝나야 한다. np.savez_compressed 는 그렇지 않으면
+        # 뒤에 .npz 를 덧붙여 버려서 os.replace 가 찾을 파일이 사라진다.
+        tmp_p = out_p.with_name(f"{out_p.stem}.tmp.npz")
+        try:
+            np.savez_compressed(tmp_p, **data_dict)
+            os.replace(tmp_p, out_p)
+        except BaseException:
+            tmp_p.unlink(missing_ok=True)
+            raise
         return str(out_p)
