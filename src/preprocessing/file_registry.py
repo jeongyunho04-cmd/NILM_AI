@@ -249,6 +249,20 @@ def get_low_load_appliances() -> List[str]:
     return sorted(a for a, s in APPLIANCE_SPECS.items() if s.low_load)
 
 
+def get_resistive_appliances() -> List[str]:
+    """순수 저항 발열 부하 목록.
+
+    이 기기들은 니크롬선만 있어 고조파가 거의 없다. 실측에서 전기포트와 오븐 히터의
+    고조파 지문 거리는 0.596%p 로 사실상 같은 신호이며, 서로를 가르는 단서는
+    시간 패턴(포트는 한 번에 끝, 오븐은 주기 반복)뿐이다.
+    그런데 하필 이 기기들이 사용 빈도가 낮아 학습 표본이 가장 적으므로,
+    합성 단계에서 따로 챙겨 줘야 한다.
+    """
+    return sorted(
+        a for a, s in APPLIANCE_SPECS.items() if s.load_class == LoadClass.RESISTIVE
+    )
+
+
 def get_usage_probability(appliance_type: str) -> float:
     """임의의 순간에 이 가전이 켜져 있을 확률 (하루 사용 시간 / 24)."""
     spec = APPLIANCE_SPECS.get(appliance_type)

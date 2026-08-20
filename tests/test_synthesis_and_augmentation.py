@@ -503,6 +503,45 @@ def test_hard_negative_windows_are_generated(segment_pool):
     assert np.all(d["y_standby_power"][d["y_on"] == 1] == 0.0)
 
 
+def test_high_power_resistive_windows_boost_rare_appliances(segment_pool):
+    """고전력 저항 부하는 무작위 추출만으로는 학습 표본이 모자란다.
+
+    포트·오븐·드라이기·핫플레이트는 고조파 지문이 거의 같아 시간 패턴으로만
+    갈리는데, 사용 빈도가 낮아 표본이 가장 적다. 전용 레시피로 보강해야 한다.
+    """
+    from src.preprocessing.file_registry import get_resistive_appliances
+
+    resistive = set(get_resistive_appliances())
+    assert resistive, "저항 부하가 등록되어 있지 않습니다"
+
+    gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=300)
+    assert "high_power_resistive" in gen.describe_recipe_mix()
+
+    # 전용 레시피는 반드시 저항 부하를 켠다
+    for _ in range(20):
+        s = gen.synthesizer.synthesize_high_power_window(300)
+        active = set(s.active_appliances)
+        assert active, "고전력 윈도우인데 켜진 기기가 없습니다"
+        assert active <= resistive, f"저항 부하가 아닌 기기가 켜졌습니다: {active - resistive}"
+        assert s.metadata["max_sustained_p_w"] <= gen.synthesizer.sustained_power_limit_w
+
+
+def test_recipe_mix_reduces_class_imbalance(segment_pool):
+    """어떤 가전도 학습 표본이 사실상 0 이 되면 안 된다."""
+    gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=600)
+    d = gen.generate_batch_dict(batch_size=256)
+    positives = d["y_on"].sum(axis=0)
+
+    assert positives.min() > 0, (
+        f"양성 표본이 0 인 가전이 있습니다: "
+        f"{[a for a, c in zip(gen.appliance_list, positives) if c == 0]}"
+    )
+    # 최다/최소 비율. 물리적 듀티 때문에 완전 균등은 될 수 없지만
+    # 이전의 55:1 수준으로 벌어지면 희귀 기기를 못 배운다.
+    imbalance = positives.max() / max(positives.min(), 1)
+    assert imbalance < 30, f"클래스 불균형이 과합니다: {imbalance:.0f}:1"
+
+
 def test_low_load_among_standby_is_the_confusable_case(synthesizer):
     """저부하 1대 + 대기전력 최대 상황이 실제로 헷갈릴 만한 크기인지 확인한다."""
     low_load = get_low_load_appliances()

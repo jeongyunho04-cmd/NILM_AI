@@ -31,7 +31,11 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 
-from src.preprocessing.file_registry import get_usage_probability, is_low_load
+from src.preprocessing.file_registry import (
+    get_resistive_appliances,
+    get_usage_probability,
+    is_low_load,
+)
 
 from .augmentor import DataAugmentor
 from .grid_simulator import GridSimulator, VoltageEnvironment
@@ -496,6 +500,7 @@ class LoadSynthesizer:
         compute_gt_harmonics: Optional[bool] = None,
         selection_mode: str = SELECTION_REALISTIC,
         sustained_power_limit_w: Optional[float] = -1.0,
+        center_biased_placement: bool = False,
     ) -> SyntheticLoadSample:
         """무작위 복합 윈도우를 빠르게 합성한다.
 
@@ -512,6 +517,9 @@ class LoadSynthesizer:
                     학습 표본을 확보하는 데 필요하다.
             sustained_power_limit_w: 지속 부하 상한(W). -1 이면 생성자 기본값,
                 None 이면 제한 없음. 돌입 스파이크는 제한하지 않는다.
+            center_biased_placement: 활성 구간이 윈도우 중앙(seq2point 타깃 시점)을
+                덮도록 배치를 치우친다. 특정 기기의 표본을 늘리려는 레시피에서,
+                켜 놓고도 중앙에 걸리지 않아 라벨이 0 이 되는 낭비를 줄인다.
         """
         candidates = list(candidate_appliances or self.known_appliances)
         candidates = [a for a in candidates if a in self.known_appliances]
@@ -548,12 +556,24 @@ class LoadSynthesizer:
         }
 
         schedules: List[ApplianceSchedule] = []
+        center = window_size_cycles // 2
         for app in chosen:
             plugged[app] = True  # 켜져 있으면 반드시 꽂혀 있다
+            dur_c = int(np.random.randint(window_size_cycles // 2, window_size_cycles * 3))
             # 음수 시작을 허용하고 클램프하지 않는다. 그래야 돌입 전류가
             # 윈도우 안 임의 위치에 오거나, 이미 진행 중인 동작으로 나타난다.
-            start_c = int(np.random.randint(-window_size_cycles, window_size_cycles))
-            dur_c = int(np.random.randint(window_size_cycles // 2, window_size_cycles * 3))
+            if center_biased_placement and np.random.rand() < 0.8:
+                # 중앙을 덮는 범위에서 고른다: start <= center < start + 실제길이
+                #
+                # 요청한 dur_c 를 그대로 믿으면 안 된다. 증강기는 원본보다
+                # max_stretch(3)배 넘게 늘이지 않으므로, 핫플레이트(0.77초 펄스)에
+                # 15초를 요청하면 실제로는 2.3초짜리가 돌아온다. 그것을 모르고
+                # 멀리 배치하면 활성화가 윈도우 밖으로 나가 통째로 버려진다.
+                guaranteed = min(dur_c, 3 * self.pool.get_min_activation_cycles(app))
+                guaranteed = max(1, guaranteed)
+                start_c = int(np.random.randint(center - guaranteed + 1, center + 1))
+            else:
+                start_c = int(np.random.randint(-window_size_cycles, window_size_cycles))
             schedules.append(ApplianceSchedule(app, start_cycle=start_c, duration_cycles=dur_c))
 
         sample = self.synthesize_scenario(
@@ -608,4 +628,38 @@ class LoadSynthesizer:
             candidate_appliances=low_load or self.known_appliances,
             force_plugged_all=True,
             compute_gt_harmonics=compute_gt_harmonics,
+        )
+
+    def synthesize_high_power_window(
+        self,
+        window_size_cycles: int = 600,
+        compute_gt_harmonics: Optional[bool] = None,
+    ) -> SyntheticLoadSample:
+        """고전력 저항 부하를 반드시 1~2대 켜는 윈도우.
+
+        전기포트·오븐·드라이기·핫플레이트는 모두 니크롬선 부하라 고조파 지문이
+        사실상 같다(포트 vs 오븐 거리 0.596%p). 서로를 가르는 단서는 시간 패턴뿐인데,
+        실제 사용 빈도가 낮아 무작위 추출에만 맡기면 학습 표본이 2016 윈도우당
+        11~37개까지 떨어진다. 대기전력 하드네거티브가 45%를 차지하면서
+        이 기기들의 자리를 밀어낸 영향도 있다.
+
+        대기전력 학습을 건드리지 않고 이 구간만 따로 보강하기 위한 레시피다.
+        1대만 켜는 경우와 2대를 겹치는 경우를 섞어, 단독 신호와 합쳐진 신호를
+        모두 보게 한다. 겹쳐서 멀티탭 용량을 넘으면 예산 로직이 알아서 줄인다.
+        """
+        resistive = [a for a in self.known_appliances if a in set(get_resistive_appliances())]
+        if not resistive:
+            return self.synthesize_random_window(
+                window_size_cycles=window_size_cycles,
+                compute_gt_harmonics=compute_gt_harmonics,
+            )
+
+        k = 1 if np.random.rand() < 0.6 else 2
+        return self.synthesize_random_window(
+            window_size_cycles=window_size_cycles,
+            n_active=min(k, len(resistive)),
+            candidate_appliances=resistive,
+            plugged_prob=0.7,
+            compute_gt_harmonics=compute_gt_harmonics,
+            center_biased_placement=True,
         )

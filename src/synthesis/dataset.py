@@ -38,12 +38,20 @@ from .synthesizer import (
 # 반대로 균등하게만 뽑으면 사전확률이 틀려 실제 집에서 오탐이 늘어난다.
 # 둘을 섞어 커버리지와 보정을 동시에 잡는다.
 DEFAULT_RECIPE_MIX: Dict[str, float] = {
-    "random_realistic": 0.39,        # 기기별 사용률대로 각자 독립적으로 켜짐
+    "random_realistic": 0.24,        # 기기별 사용률대로 각자 독립적으로 켜짐
     "random_uniform": 0.16,          # 균등 추첨 - 희귀 기기 학습 표본 확보
-    "standby_only": 0.18,
-    "low_load_among_standby": 0.22,
+    "standby_only": 0.18,            # 대기전력만 - 저부하 오탐 방지
+    "low_load_among_standby": 0.22,  # 대기전력 속 저부하 1대 - 가장 헷갈리는 경우
+    "high_power_resistive": 0.15,    # 고전력 저항 부하 1~2대 - 아래 설명 참조
     "unplugged_baseline": 0.05,
 }
+
+# high_power_resistive 를 따로 둔 이유
+# 전기포트·오븐·드라이기·핫플레이트는 모두 니크롬선 부하라 고조파 지문이 거의 같다
+# (포트 vs 오븐 거리 0.596%p). 서로를 가르는 단서는 시간 패턴뿐인데, 실제 사용 빈도가
+# 낮아 무작위 추출에만 맡기면 2016 윈도우당 양성 라벨이 11~37개까지 떨어졌다.
+# 대기전력 하드네거티브(45%)가 이 기기들의 자리를 밀어낸 영향도 있다.
+# 대기전력 학습 비중은 그대로 두고 random_realistic 에서 몫을 떼어 보강한다.
 
 # 구버전 설정 호환: "random" 하나만 주면 현실/균등 7:3 으로 나눠 준다.
 _LEGACY_RANDOM_SPLIT = {"random_realistic": 0.7, "random_uniform": 0.3}
@@ -99,6 +107,10 @@ class NILMBatchGenerator:
             )
         elif recipe == "low_load_among_standby":
             sample = self.synthesizer.synthesize_low_load_among_standby_window(
+                self.window_size, compute_gt_harmonics=gt_h
+            )
+        elif recipe == "high_power_resistive":
+            sample = self.synthesizer.synthesize_high_power_window(
                 self.window_size, compute_gt_harmonics=gt_h
             )
         elif recipe == "unplugged_baseline":

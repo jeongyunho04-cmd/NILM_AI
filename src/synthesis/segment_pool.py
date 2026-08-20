@@ -443,6 +443,16 @@ class SegmentPool:
         self._steady_power_cache[appliance_type] = value
         return value
 
+    def get_min_activation_cycles(self, appliance_type: str) -> int:
+        """이 가전에서 뽑을 수 있는 가장 짧은 활성화 길이.
+
+        증강기는 원본보다 max_stretch 배 넘게 늘이지 않으므로, 요청한 길이가
+        이 값의 몇 배를 넘으면 실제로는 더 짧은 파형이 돌아온다. 배치 위치를
+        계산할 때 그것을 모르면 활성화가 윈도우 밖에 놓여 통째로 버려진다.
+        """
+        acts = self.appliance_activations.get(appliance_type, [])
+        return min((a.duration_cycles for a in acts), default=MIN_ACTIVATION_CYCLES)
+
     def get_reference_voltage(self, appliance_type: str) -> float:
         """이 가전 파형이 녹화될 때의 계통 전압 (전력 환산 기준)."""
         acts = self.appliance_activations.get(appliance_type, [])
