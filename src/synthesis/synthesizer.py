@@ -31,13 +31,39 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 
-from src.preprocessing.file_registry import is_low_load
+from src.preprocessing.file_registry import get_usage_probability, is_low_load
 
 from .augmentor import DataAugmentor
 from .grid_simulator import GridSimulator, VoltageEnvironment
 from .segment_pool import ApplianceActivation, SegmentPool, StandbyProfile
 
 NUM_HARMONICS = 15
+
+# 멀티탭/차단기 용량 상한. 이 값을 넘는 '지속' 부하 조합은 만들지 않는다.
+# 돌입 전류 같은 순간 스파이크는 제한하지 않는다 - 물리적으로도 정상이고
+# 모델이 배워야 할 신호이기 때문이다.
+# 국내 멀티탭은 보통 15A(3.3kW) ~ 16A(3.5kW) 정격이라 4kW 는 그 위의 안전 한도다.
+DEFAULT_SUSTAINED_POWER_LIMIT_W = 4000.0
+
+# 무작위 윈도우에서 가전을 고르는 방식
+SELECTION_REALISTIC = "realistic"  # 기기별 사용률에 따라 각자 독립적으로 켜짐/꺼짐
+SELECTION_UNIFORM = "uniform"      # 9종 균등 추첨 (희귀 기기 학습 표본 확보용)
+
+# 지속 부하를 판정하는 창 길이 (초). 이보다 짧게 스쳐가는 피크는 스파이크로 본다.
+SUSTAINED_WINDOW_S = 2.0
+
+
+def _max_sustained_power(p_series: np.ndarray, sampling_hz: float = 60.0) -> float:
+    """가장 오래 유지된 부하 크기. 순간 스파이크는 이동평균에 희석되어 잡히지 않는다."""
+    n = len(p_series)
+    if n == 0:
+        return 0.0
+    w = max(1, int(SUSTAINED_WINDOW_S * sampling_hz))
+    if n <= w:
+        return float(np.mean(p_series))
+    # 누적합으로 O(N) 이동평균
+    c = np.concatenate([[0.0], np.cumsum(p_series, dtype=np.float64)])
+    return float(np.max((c[w:] - c[:-w]) / w))
 
 # 기기별 플러그 연결 확률 기본값.
 # 상시 대기 회로가 있는 기기는 늘 꽂혀 있고, 휴대용 발열 기구는 쓸 때만 꽂는다.
@@ -91,11 +117,15 @@ class SyntheticLoadSample:
     gt_target_power_w: Dict[str, np.ndarray]  # (N,) float32 활성 전력 (꺼졌으면 0)
     gt_standby_power_w: Dict[str, np.ndarray] # (N,) float32 대기 전력 (활성 중이면 0)
     gt_harmonics_ri: Dict[str, np.ndarray]    # (N, 15, 2) float32 활성 고조파 (꺼졌으면 0)
+                                              # compute_gt_harmonics=False 이면 빈 딕셔너리
 
     # ── 기기 것이 아닌 성분 ──
     p_noise_w: np.ndarray             # (N,) float32 계측계 자체 소비
 
     metadata: Dict = field(default_factory=dict)
+    # 가전별 고조파 정답이 채워져 있는지. 전력 회귀만 학습한다면 필요 없고,
+    # 나머지 정답 5종을 합친 것의 10배 용량을 차지하므로 기본적으로 끄는 편이 낫다.
+    gt_harmonics_included: bool = True
 
     def verify_power_decomposition(self, tolerance_w: float = 0.5) -> Tuple[bool, float]:
         """P_total = Σ활성 + Σ대기 + 계측계 소비 가 성립하는지 검산한다."""
@@ -117,13 +147,64 @@ class LoadSynthesizer:
         augmentor: Optional[DataAugmentor] = None,
         voltage_feedback_iterations: int = 2,
         quantize_voltage_measurement: bool = True,
+        compute_gt_harmonics: bool = True,
+        sustained_power_limit_w: Optional[float] = DEFAULT_SUSTAINED_POWER_LIMIT_W,
     ):
         self.pool = segment_pool
         self.grid_sim = grid_simulator or GridSimulator()
         self.augmentor = augmentor or DataAugmentor()
         self.known_appliances = self.pool.get_appliance_types()
+        # 지속 부하 상한. None 이면 제한하지 않는다.
+        self.sustained_power_limit_w = sustained_power_limit_w
         self.voltage_feedback_iterations = max(1, voltage_feedback_iterations)
         self.quantize_voltage_measurement = quantize_voltage_measurement
+        # 가전별 고조파 정답을 만들지 여부의 기본값. 호출 시점에 덮어쓸 수 있다.
+        # 전력·상태만 학습한다면 쓰이지 않는데, 윈도우당 0.65MB 로
+        # 나머지 정답 5종을 합친 것(0.065MB)의 10배를 차지한다.
+        self.compute_gt_harmonics = compute_gt_harmonics
+
+    # ── 지속 부하 예산 ──────────────────────────────────────────────────────
+    def estimate_steady_power_w(self, appliance_type: str, bus_voltage_v: float) -> float:
+        """주어진 계통 전압에서 이 가전이 지속적으로 끌어갈 전력을 추정한다.
+
+        전압 환산이 반드시 필요하다. 전기포트는 212.5V 에서 녹화되어 1271W 였지만,
+        240V 환경에서는 P ∝ V² 이므로 1621W 까지 오른다(+27%). 녹화 당시 값으로
+        용량을 계산하면 실제로는 한도를 넘는 조합이 통과해 버린다.
+        """
+        base = self.pool.get_steady_power_w(appliance_type)
+        if base <= 0.0:
+            return 0.0
+        v_ref = self.pool.get_reference_voltage(appliance_type)
+        kappa = float(np.clip(bus_voltage_v / max(v_ref, 1.0), 0.80, 1.20))
+        exponent = self.grid_sim.power_voltage_exponent(appliance_type)
+        return float(base * (kappa ** exponent))
+
+    def _fit_within_power_budget(
+        self, candidates: List[str], bus_voltage_v: float, limit_w: Optional[float]
+    ) -> Tuple[List[str], List[str]]:
+        """지속 부하 합이 한도를 넘지 않도록 가전 목록을 추려낸다.
+
+        Returns:
+            (채택된 가전, 예산 초과로 빠진 가전)
+        """
+        if limit_w is None or not candidates:
+            return list(candidates), []
+
+        # 순서를 섞어 특정 가전만 반복적으로 탈락하는 편향을 없앤다.
+        order = list(candidates)
+        np.random.shuffle(order)
+
+        accepted: List[str] = []
+        dropped: List[str] = []
+        budget = float(limit_w)
+        for app in order:
+            need = self.estimate_steady_power_w(app, bus_voltage_v)
+            if need <= budget:
+                accepted.append(app)
+                budget -= need
+            else:
+                dropped.append(app)
+        return accepted, dropped
 
     # ── 플러그 연결 상태 결정 ───────────────────────────────────────────────
     def _resolve_plugged(
@@ -150,9 +231,19 @@ class LoadSynthesizer:
         include_noise: bool = True,
         simulate_voltage_drop: bool = True,
         voltage_environment: Optional[VoltageEnvironment] = None,
+        compute_gt_harmonics: Optional[bool] = None,
     ) -> SyntheticLoadSample:
-        """스케줄에 따라 복합 부하 타임라인을 합성한다."""
+        """스케줄에 따라 복합 부하 타임라인을 합성한다.
+
+        Args:
+            compute_gt_harmonics: 가전별 고조파 정답을 만들지 여부.
+                None 이면 생성자에서 정한 기본값을 따른다.
+                전력·상태 회귀만 학습한다면 False 로 두는 편이 낫다.
+        """
         N = int(total_duration_cycles)
+        want_gt_harmonics = (
+            self.compute_gt_harmonics if compute_gt_harmonics is None else bool(compute_gt_harmonics)
+        )
 
         # 1. 배전 환경 결정 (전압 무리, 배선 임피던스, 요동 특성)
         env = voltage_environment or self.grid_sim.sample_environment()
@@ -166,7 +257,12 @@ class LoadSynthesizer:
         gt_state_id = {a: np.zeros(N, dtype=np.int16) for a in self.known_appliances}
         gt_active_p = {a: np.zeros(N, dtype=np.float32) for a in self.known_appliances}
         gt_standby_p = {a: np.zeros(N, dtype=np.float32) for a in self.known_appliances}
-        gt_harm_ri = {a: np.zeros((N, NUM_HARMONICS, 2), dtype=np.float32) for a in self.known_appliances}
+        # 고조파 정답은 요청했을 때만 할당한다. 9종 x (N,15,2) float32 라
+        # 나머지 정답을 전부 합친 것보다 10배 크고, 쓰지 않으면 순수한 낭비다.
+        gt_harm_ri = (
+            {a: np.zeros((N, NUM_HARMONICS, 2), dtype=np.float32) for a in self.known_appliances}
+            if want_gt_harmonics else {}
+        )
 
         # 각 가전의 전류 페이저 레이어와, 그 파형이 녹화된 기준 전압
         layer_c = {a: np.zeros((N, NUM_HARMONICS), dtype=np.complex64) for a in self.known_appliances}
@@ -278,20 +374,22 @@ class LoadSynthesizer:
                 gt_standby_p[a] = self.grid_sim.apply_power_voltage_response(a, gt_standby_p[a], kappa)
                 # 정답 고조파는 '활성 구간만' 담는다. 꺼진 구간은 0 이어야
                 # gt_is_on / gt_target_power_w 와 모순이 생기지 않는다.
-                on_mask = gt_is_on[a].astype(bool)
-                if on_mask.any():
-                    gt_harm_ri[a][on_mask, :, 0] = np.real(coupled_c[a][on_mask])
-                    gt_harm_ri[a][on_mask, :, 1] = np.imag(coupled_c[a][on_mask])
+                if want_gt_harmonics:
+                    on_mask = gt_is_on[a].astype(bool)
+                    if on_mask.any():
+                        gt_harm_ri[a][on_mask, :, 0] = np.real(coupled_c[a][on_mask])
+                        gt_harm_ri[a][on_mask, :, 1] = np.imag(coupled_c[a][on_mask])
         else:
             v_true = np.full(N, env.base_voltage_v, dtype=np.float32)
             v_open = v_true
             total_complex = noise_c.copy()
             for a in self.known_appliances:
                 total_complex += layer_c[a]
-                on_mask = gt_is_on[a].astype(bool)
-                if on_mask.any():
-                    gt_harm_ri[a][on_mask, :, 0] = np.real(layer_c[a][on_mask])
-                    gt_harm_ri[a][on_mask, :, 1] = np.imag(layer_c[a][on_mask])
+                if want_gt_harmonics:
+                    on_mask = gt_is_on[a].astype(bool)
+                    if on_mask.any():
+                        gt_harm_ri[a][on_mask, :, 0] = np.real(layer_c[a][on_mask])
+                        gt_harm_ri[a][on_mask, :, 1] = np.imag(layer_c[a][on_mask])
 
         # 8. 계측 해상도 반영. 실측 센서는 0.5초에 한 번만 전압을 갱신한다.
         v_measured = (
@@ -352,7 +450,15 @@ class LoadSynthesizer:
             "min_v_bus": round(float(np.min(v_measured)), 2) if N else 0.0,
             "max_v_bus": round(float(np.max(v_measured)), 2) if N else 0.0,
             "max_v_sag_v": round(float(np.max(v_open - v_true)), 2) if N else 0.0,
+            "gt_harmonics_included": want_gt_harmonics,
+            # 2초 이동평균 최댓값. 순간 스파이크가 아니라 '지속' 부하를 본다.
+            # 직접 짠 시나리오는 요청대로 만들어 주되, 한도를 넘었으면 알 수 있게 표시한다.
+            "max_sustained_p_w": round(_max_sustained_power(p_total), 1) if N else 0.0,
         }
+        if self.sustained_power_limit_w is not None and N:
+            meta["exceeds_sustained_limit"] = bool(
+                meta["max_sustained_p_w"] > self.sustained_power_limit_w
+            )
 
         return SyntheticLoadSample(
             duration_cycles=N,
@@ -374,6 +480,7 @@ class LoadSynthesizer:
             gt_harmonics_ri=gt_harm_ri,
             p_noise_w=p_noise,
             metadata=meta,
+            gt_harmonics_included=want_gt_harmonics,
         )
 
     # ── 무작위 윈도우 ───────────────────────────────────────────────────────
@@ -385,23 +492,54 @@ class LoadSynthesizer:
         n_active: Optional[int] = None,
         candidate_appliances: Optional[Sequence[str]] = None,
         force_plugged_all: bool = False,
+        compute_gt_harmonics: Optional[bool] = None,
+        selection_mode: str = SELECTION_REALISTIC,
+        sustained_power_limit_w: Optional[float] = -1.0,
     ) -> SyntheticLoadSample:
         """무작위 복합 윈도우를 빠르게 합성한다.
 
         Args:
-            n_active: 활성 가전 수를 직접 지정 (None 이면 0~max 사이 무작위)
+            n_active: 활성 가전 수를 직접 지정 (None 이면 selection_mode 를 따른다)
             candidate_appliances: 활성 가전을 고를 후보 목록 (저부하만 뽑는 등)
             force_plugged_all: 모든 가전을 콘센트에 연결된 상태로 둔다 (대기전력 최대)
+            compute_gt_harmonics: 가전별 고조파 정답 생성 여부 (None 이면 생성자 기본값)
+            selection_mode:
+                "realistic" - 기기별 사용률에 따라 각자 독립적으로 켜짐/꺼짐.
+                    미니PC 42% / 드라이기 0.4% 처럼 실제 빈도 차이가 반영되고,
+                    동시 가동 수도 0~9대로 자연스럽게 분포한다.
+                "uniform"   - 9종 균등 추첨. 현실적이지는 않지만 희귀 기기의
+                    학습 표본을 확보하는 데 필요하다.
+            sustained_power_limit_w: 지속 부하 상한(W). -1 이면 생성자 기본값,
+                None 이면 제한 없음. 돌입 스파이크는 제한하지 않는다.
         """
         candidates = list(candidate_appliances or self.known_appliances)
         candidates = [a for a in candidates if a in self.known_appliances]
         if not candidates:
             candidates = list(self.known_appliances)
 
-        if n_active is None:
-            k_active = int(np.random.randint(0, min(max_concurrent_appliances, len(candidates)) + 1))
+        limit = (
+            self.sustained_power_limit_w
+            if (isinstance(sustained_power_limit_w, float) and sustained_power_limit_w == -1.0)
+            else sustained_power_limit_w
+        )
+
+        # 전압을 먼저 정해야 지속 부하 예산을 제대로 계산할 수 있다.
+        # (같은 전기포트도 212V 에서 1271W, 240V 에서 1621W 를 먹는다)
+        env = self.grid_sim.sample_environment()
+
+        # 1. 어떤 가전을 켤지 고른다
+        if n_active is not None:
+            k = int(np.clip(n_active, 0, len(candidates)))
+            chosen = list(np.random.choice(candidates, size=k, replace=False)) if k else []
+        elif selection_mode == SELECTION_UNIFORM:
+            k = int(np.random.randint(0, min(max_concurrent_appliances, len(candidates)) + 1))
+            chosen = list(np.random.choice(candidates, size=k, replace=False)) if k else []
         else:
-            k_active = int(np.clip(n_active, 0, len(candidates)))
+            # 각 가전이 자기 사용률대로 독립적으로 켜진다.
+            chosen = [a for a in candidates if np.random.rand() < get_usage_probability(a)]
+
+        # 2. 멀티탭/차단기 용량을 넘는 조합은 걸러낸다
+        chosen, over_budget = self._fit_within_power_budget(chosen, env.base_voltage_v, limit)
 
         plugged = {
             a: (True if force_plugged_all else bool(np.random.rand() < plugged_prob))
@@ -409,26 +547,33 @@ class LoadSynthesizer:
         }
 
         schedules: List[ApplianceSchedule] = []
-        if k_active > 0:
-            selected = np.random.choice(candidates, size=k_active, replace=False)
-            for app in selected:
-                plugged[app] = True  # 켜져 있으면 반드시 꽂혀 있다
-                # 음수 시작을 허용하고 클램프하지 않는다. 그래야 돌입 전류가
-                # 윈도우 안 임의 위치에 오거나, 이미 진행 중인 동작으로 나타난다.
-                start_c = int(np.random.randint(-window_size_cycles, window_size_cycles))
-                dur_c = int(np.random.randint(window_size_cycles // 2, window_size_cycles * 3))
-                schedules.append(ApplianceSchedule(app, start_cycle=start_c, duration_cycles=dur_c))
+        for app in chosen:
+            plugged[app] = True  # 켜져 있으면 반드시 꽂혀 있다
+            # 음수 시작을 허용하고 클램프하지 않는다. 그래야 돌입 전류가
+            # 윈도우 안 임의 위치에 오거나, 이미 진행 중인 동작으로 나타난다.
+            start_c = int(np.random.randint(-window_size_cycles, window_size_cycles))
+            dur_c = int(np.random.randint(window_size_cycles // 2, window_size_cycles * 3))
+            schedules.append(ApplianceSchedule(app, start_cycle=start_c, duration_cycles=dur_c))
 
-        return self.synthesize_scenario(
+        sample = self.synthesize_scenario(
             total_duration_cycles=window_size_cycles,
             schedules=schedules,
             plugged_in_appliances=plugged,
             include_noise=True,
             simulate_voltage_drop=True,
+            voltage_environment=env,
+            compute_gt_harmonics=compute_gt_harmonics,
         )
+        sample.metadata["selection_mode"] = selection_mode if n_active is None else "explicit"
+        sample.metadata["sustained_power_limit_w"] = limit
+        sample.metadata["dropped_over_budget"] = sorted(over_budget)
+        return sample
 
     def synthesize_standby_only_window(
-        self, window_size_cycles: int = 600, plugged_prob: float = 0.9
+        self,
+        window_size_cycles: int = 600,
+        plugged_prob: float = 0.9,
+        compute_gt_harmonics: Optional[bool] = None,
     ) -> SyntheticLoadSample:
         """활성 가전이 하나도 없고 대기전력만 존재하는 윈도우.
 
@@ -442,10 +587,13 @@ class LoadSynthesizer:
             plugged_in_appliances=plugged,
             include_noise=True,
             simulate_voltage_drop=True,
+            compute_gt_harmonics=compute_gt_harmonics,
         )
 
     def synthesize_low_load_among_standby_window(
-        self, window_size_cycles: int = 600
+        self,
+        window_size_cycles: int = 600,
+        compute_gt_harmonics: Optional[bool] = None,
     ) -> SyntheticLoadSample:
         """대기전력이 잔뜩 깔린 상태에서 저전력 기기 딱 1대만 켜진 윈도우.
 
@@ -458,4 +606,5 @@ class LoadSynthesizer:
             n_active=1,
             candidate_appliances=low_load or self.known_appliances,
             force_plugged_all=True,
+            compute_gt_harmonics=compute_gt_harmonics,
         )

@@ -136,10 +136,13 @@ class ScenarioGenerator:
             data_dict[f"gt_is_on_{app}"] = sample.gt_is_on[app]
             data_dict[f"gt_state_id_{app}"] = sample.gt_state_id[app]
             data_dict[f"gt_target_power_{app}"] = sample.gt_target_power_w[app]
-            data_dict[f"gt_harmonics_ri_{app}"] = sample.gt_harmonics_ri[app]
             # 대기전력을 활성전력과 구분해 학습시키기 위한 채널
             data_dict[f"gt_is_plugged_{app}"] = sample.gt_is_plugged[app]
             data_dict[f"gt_standby_power_{app}"] = sample.gt_standby_power_w[app]
+            # 고조파 정답은 만들어졌을 때만 저장한다. 전력·상태 회귀만 학습한다면
+            # 쓰이지 않으면서 파일 용량의 73%를 차지한다.
+            if sample.gt_harmonics_included:
+                data_dict[f"gt_harmonics_ri_{app}"] = sample.gt_harmonics_ri[app]
 
         # 임시 파일에 쓴 뒤 원자적으로 교체한다.
         # 기존 파일을 직접 열어 덮어쓰면 (1) 도중에 실패했을 때 반쯤 쓰인 파일이 남고,

@@ -8,7 +8,12 @@ from src.preprocessing.file_registry import get_low_load_appliances, is_periodic
 from src.synthesis.segment_pool import SegmentPool
 from src.synthesis.grid_simulator import GridSimulator, OBSERVED_VOLTAGE_CLUSTERS
 from src.synthesis.augmentor import DataAugmentor
-from src.synthesis.synthesizer import ApplianceSchedule, LoadSynthesizer
+from src.synthesis.synthesizer import (
+    SELECTION_REALISTIC,
+    SELECTION_UNIFORM,
+    ApplianceSchedule,
+    LoadSynthesizer,
+)
 from src.synthesis.dataset import NILMBatchGenerator
 
 
@@ -135,6 +140,129 @@ def test_ground_truth_labels_are_mutually_consistent(synthesizer):
         assert np.all(sample.gt_standby_power_w[app][on] == 0.0)
 
 
+def test_gt_harmonics_can_be_switched_off(segment_pool):
+    """전력·상태만 학습한다면 가전별 고조파 정답을 만들지 않아야 한다.
+
+    나머지 정답 5종을 합친 것의 10배 용량을 차지하는데, 쓰지 않으면 순수한 낭비다.
+    """
+    lean = LoadSynthesizer(segment_pool=segment_pool, compute_gt_harmonics=False)
+    sample = lean.synthesize_random_window(window_size_cycles=300)
+
+    assert sample.gt_harmonics_included is False
+    assert sample.gt_harmonics_ri == {}
+    assert sample.metadata["gt_harmonics_included"] is False
+
+    # 전력·상태 정답은 그대로 있어야 한다
+    for app in sample.appliance_types:
+        assert len(sample.gt_target_power_w[app]) == 300
+        assert len(sample.gt_state_id[app]) == 300
+        assert len(sample.gt_standby_power_w[app]) == 300
+    ok, err = sample.verify_power_decomposition(tolerance_w=0.01)
+    assert ok, f"고조파를 꺼도 전력 분해는 성립해야 합니다. 오차 {err:.4f}W"
+
+    # 호출 단위로 다시 켤 수 있어야 한다 (합성기 진단용)
+    diag = lean.synthesize_random_window(window_size_cycles=300, compute_gt_harmonics=True)
+    assert diag.gt_harmonics_included is True
+    assert set(diag.gt_harmonics_ri) == set(diag.appliance_types)
+    assert diag.gt_harmonics_ri[diag.appliance_types[0]].shape == (300, 15, 2)
+
+
+def test_batch_generator_omits_gt_harmonics_by_default(segment_pool):
+    """학습 배치 기본값은 고조파 정답을 만들지 않는 것이다."""
+    gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=300)
+    assert gen.compute_gt_harmonics is False
+
+    sample, _ = gen._synthesize_window()
+    assert sample.gt_harmonics_included is False
+
+    d = gen.generate_batch_dict(batch_size=4)
+    assert not any("harmonic" in k for k in d), "배치에 고조파 정답이 섞여 나옵니다"
+    assert d["y_power"].shape == (4, len(gen.appliance_list))
+    assert d["y_state"].shape == (4, len(gen.appliance_list))
+
+
+def test_realistic_selection_matches_usage_frequency(synthesizer):
+    """기기별 가동 빈도가 실제 사용률을 따라야 한다.
+
+    이전에는 9종을 균등 추첨해 미니PC와 헤어드라이기가 똑같이 15%씩 나왔다.
+    실제로는 미니PC가 하루 10시간, 드라이기가 6분으로 100배 차이가 난다.
+    """
+    from src.preprocessing.file_registry import get_usage_probability
+
+    counts = {a: 0 for a in synthesizer.known_appliances}
+    trials = 400
+    for _ in range(trials):
+        s = synthesizer.synthesize_random_window(300, selection_mode=SELECTION_REALISTIC)
+        for a in s.active_appliances:
+            counts[a] += 1
+
+    high = max(synthesizer.known_appliances, key=get_usage_probability)
+    low = min(synthesizer.known_appliances, key=get_usage_probability)
+    assert counts[high] > counts[low] * 3, (
+        f"사용률이 높은 {high}({counts[high]})가 낮은 {low}({counts[low]})보다 "
+        f"뚜렷하게 자주 나와야 합니다"
+    )
+
+
+def test_uniform_selection_keeps_rare_appliances_visible(synthesizer):
+    """희귀 기기도 학습 표본을 얻으려면 균등 추첨 모드가 필요하다."""
+    counts = {a: 0 for a in synthesizer.known_appliances}
+    for _ in range(400):
+        s = synthesizer.synthesize_random_window(300, selection_mode=SELECTION_UNIFORM)
+        for a in s.active_appliances:
+            counts[a] += 1
+    assert min(counts.values()) > 0, f"균등 모드인데 한 번도 안 나온 기기가 있습니다: {counts}"
+
+
+def test_sustained_power_stays_under_limit(segment_pool):
+    """멀티탭 용량을 넘는 '지속' 부하 조합은 만들지 않아야 한다.
+
+    돌입 전류 같은 순간 스파이크는 제한하지 않는다 - 물리적으로 정상이고
+    모델이 배워야 할 신호다.
+    """
+    limit = 4000.0
+    syn = LoadSynthesizer(
+        segment_pool=segment_pool, compute_gt_harmonics=False,
+        sustained_power_limit_w=limit,
+    )
+    n_apps = len(syn.known_appliances)
+
+    # 전 기기를 켜라고 요청해도 상한 안에서만 채택되어야 한다
+    for _ in range(40):
+        s = syn.synthesize_random_window(600, n_active=n_apps)
+        assert s.metadata["max_sustained_p_w"] <= limit, (
+            f"지속 부하가 한도를 넘었습니다: {s.metadata['max_sustained_p_w']:.0f}W > {limit:.0f}W "
+            f"(가동 {s.active_appliances})"
+        )
+
+
+def test_power_budget_is_voltage_aware(segment_pool):
+    """전압이 높으면 같은 저항 부하도 더 먹는다. 예산도 그걸 반영해야 한다.
+
+    전기포트는 212.5V 에서 녹화되어 1271W 였지만 240V 에서는 P ∝ V² 로 1621W 가 된다.
+    녹화 당시 값으로 계산하면 실제로는 한도를 넘는 조합이 통과해 버린다.
+    """
+    syn = LoadSynthesizer(segment_pool=segment_pool, compute_gt_harmonics=False)
+    low = syn.estimate_steady_power_w("electiric_kettle", 210.0)
+    high = syn.estimate_steady_power_w("electiric_kettle", 240.0)
+    assert high > low * 1.15, f"저항 부하의 전압 응답이 반영되지 않았습니다: {low:.0f}W -> {high:.0f}W"
+
+    # SMPS 는 정전력이라 전압이 변해도 소비 전력이 거의 같아야 한다
+    smps_low = syn.estimate_steady_power_w("minipc", 210.0)
+    smps_high = syn.estimate_steady_power_w("minipc", 240.0)
+    assert abs(smps_high - smps_low) < 0.01 * max(smps_low, 1.0)
+
+
+def test_power_limit_can_be_disabled(segment_pool):
+    """상한은 끌 수 있어야 한다 (다른 환경에서 학습할 때)."""
+    syn = LoadSynthesizer(
+        segment_pool=segment_pool, compute_gt_harmonics=False, sustained_power_limit_w=None,
+    )
+    s = syn.synthesize_random_window(600, n_active=len(syn.known_appliances))
+    assert s.metadata["sustained_power_limit_w"] is None
+    assert s.metadata["dropped_over_budget"] == []
+
+
 def test_grid_simulator_voltage_drop_and_coupling():
     grid_sim = GridSimulator(
         nominal_voltage=220.0, r_grid=0.3, x_grid=0.05, voltage_variation_std=0.0,
@@ -198,6 +326,63 @@ def test_data_augmentor_time_warping_and_scaling(segment_pool):
     assert aug_act.net_harmonics_complex.shape == (target_len, 15)
     assert len(aug_act.target_power_w) == target_len
     assert aug_act.v_ref_v == act.v_ref_v
+
+
+def test_long_activation_is_cropped_not_time_compressed(segment_pool):
+    """긴 동작 구간을 짧은 윈도우에 넣을 때 시간을 압축하면 안 된다.
+
+    미니PC 는 한 번에 2500초를 연속으로 돌았다. 이것을 10초 윈도우에 맞추려고
+    250배 압축하면 몇 분에 걸친 IDLE->ACTIVE 전이가 수 밀리초 만에 끝나는,
+    실제로는 존재할 수 없는 파형이 된다.
+    """
+    augmentor = DataAugmentor()
+    long_app = max(
+        segment_pool.get_appliance_types(),
+        key=lambda a: max(x.duration_cycles for x in segment_pool.appliance_activations[a]),
+    )
+    act = max(segment_pool.appliance_activations[long_app], key=lambda x: x.duration_cycles)
+    assert act.duration_cycles > 6000, "이 검사는 충분히 긴 활성화 구간이 필요합니다"
+
+    target = 600
+    aug = augmentor.augment_activation(act, target_duration_cycles=target, power_scale=1.0)
+    assert aug.duration_cycles == target
+
+    # 잘라낸 것이라면 출력 전력값이 원본 어딘가에 그대로 존재해야 한다.
+    # 압축(보간)이었다면 원본에 없는 중간값이 만들어진다.
+    orig = np.round(act.target_power_w, 3)
+    out = np.round(aug.target_power_w, 3)
+    assert np.isin(out, orig).all(), "시간 압축(보간)이 일어났습니다 - 잘라내기여야 합니다"
+
+
+def test_extreme_stretch_is_capped(segment_pool):
+    """짧은 동작을 몇십 배로 늘이면 물리적으로 불가능한 파형이 된다."""
+    augmentor = DataAugmentor(max_stretch=3.0)
+    short_app = min(
+        segment_pool.get_appliance_types(),
+        key=lambda a: min(x.duration_cycles for x in segment_pool.appliance_activations[a]),
+    )
+    act = min(segment_pool.appliance_activations[short_app], key=lambda x: x.duration_cycles)
+
+    aug = augmentor.augment_activation(act, target_duration_cycles=act.duration_cycles * 50)
+    assert aug.duration_cycles <= act.duration_cycles * 3 + 1, (
+        f"확대 배율이 제한되지 않았습니다: {act.duration_cycles} -> {aug.duration_cycles}"
+    )
+
+
+def test_crop_covers_onset_middle_and_offset(segment_pool):
+    """잘라내는 위치가 한쪽에 몰리면 그 기기의 특정 전이만 학습하게 된다."""
+    augmentor = DataAugmentor()
+    long_app = max(
+        segment_pool.get_appliance_types(),
+        key=lambda a: max(x.duration_cycles for x in segment_pool.appliance_activations[a]),
+    )
+    act = max(segment_pool.appliance_activations[long_app], key=lambda x: x.duration_cycles)
+
+    firsts = set()
+    for _ in range(60):
+        aug = augmentor.augment_activation(act, target_duration_cycles=600, power_scale=1.0)
+        firsts.add(round(float(aug.target_power_w[0]), 4))
+    assert len(firsts) > 3, f"잘라내는 위치가 다양하지 않습니다: {firsts}"
 
 
 def test_periodic_load_preserves_duty_cycle(segment_pool):

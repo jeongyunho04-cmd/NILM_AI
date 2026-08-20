@@ -36,11 +36,16 @@ class DataAugmentor:
         power_scale_std: float = 0.05,
         phase_jitter_max_deg: float = 4.0,
         switching_inrush_jitter: bool = True,
+        max_stretch: float = 3.0,
     ):
         self.duration_scale_range = duration_scale_range
         self.power_scale_std = power_scale_std
         self.phase_jitter_max_deg = phase_jitter_max_deg
         self.switching_inrush_jitter = switching_inrush_jitter
+        # 원본보다 이 배율 이상으로는 늘이지 않는다. 0.5초짜리 동작을 30초로 늘이면
+        # 60배 느려진 파형이 되어 실제로는 존재할 수 없는 기기가 만들어진다.
+        # 한도를 넘으면 늘이는 대신 그 길이에서 동작이 끝난 것으로 처리한다.
+        self.max_stretch = max(1.0, float(max_stretch))
 
     def augment_activation(
         self,
@@ -63,7 +68,12 @@ class DataAugmentor:
             scale = np.random.uniform(*self.duration_scale_range)
             new_len = max(MIN_AUGMENTED_CYCLES, int(orig_len * scale))
 
-        # 2. 시간 신축 - 부하 종류에 따라 방식이 갈린다
+        # 지나친 확대는 물리적으로 말이 안 되므로 그 지점에서 동작이 끝난 것으로 본다.
+        if new_len > orig_len * self.max_stretch:
+            new_len = max(MIN_AUGMENTED_CYCLES, int(orig_len * self.max_stretch))
+
+        # 2. 시간 신축 - 부하 종류와 방향에 따라 방식이 갈린다
+        includes_onset = True
         if new_len == orig_len:
             aug_c = act.net_harmonics_complex.copy()
             aug_pow = act.net_power_features.copy()
@@ -72,6 +82,21 @@ class DataAugmentor:
         elif act.periodic_duty:
             # 서모스탯 주기를 보존해야 한다 - 늘이면 순환 이어붙이기, 줄이면 잘라내기
             aug_c, aug_pow, aug_state, aug_target_p = self._tile_or_crop(
+                act.net_harmonics_complex,
+                act.net_power_features,
+                act.state_id,
+                act.target_power_w,
+                target_len=new_len,
+            )
+            includes_onset = False
+        elif new_len < orig_len:
+            # 원본이 목표보다 길다 - 압축하지 않고 잘라 쓴다.
+            #
+            # 미니PC 는 한 번에 2500초를 연속으로 돌았다. 이것을 10초 윈도우에
+            # 맞추려고 250배로 압축하면, 몇 분에 걸쳐 일어나는 IDLE->ACTIVE 전이가
+            # 수 밀리초 만에 끝나는 파형이 된다. 실제로 그 기기는 계속 돌고 있었으므로
+            # 10초짜리 창으로 보면 '진짜 10초'가 보여야 한다.
+            aug_c, aug_pow, aug_state, aug_target_p, includes_onset = self._crop_window(
                 act.net_harmonics_complex,
                 act.net_power_features,
                 act.state_id,
@@ -115,8 +140,8 @@ class DataAugmentor:
             aug_c = aug_c * rotation_vector[np.newaxis, :]
 
         # 5. 스위치 접점이 닫히는 순간의 위상 (돌입 전류 첫 2주기)
-        #    주기 부하는 잘라낸 위치가 펄스 중간일 수 있어 이 처리를 하지 않는다.
-        if self.switching_inrush_jitter and not act.periodic_duty and len(aug_c) >= 3:
+        #    파형 중간을 잘라 온 경우에는 첫 샘플이 투입 순간이 아니므로 적용하지 않는다.
+        if self.switching_inrush_jitter and includes_onset and len(aug_c) >= 3:
             contact_angle_rad = np.radians(np.random.uniform(-15.0, 15.0))
             aug_c[0] *= np.exp(1j * contact_angle_rad)
             aug_c[1] *= np.exp(1j * contact_angle_rad * 0.5)
@@ -167,6 +192,42 @@ class DataAugmentor:
             pow_series[idx].copy(),
             state_series[idx].copy(),
             target_p[idx].copy(),
+        )
+
+    # ── 원본이 목표보다 길 때: 잘라내기 ─────────────────────────────────────
+    def _crop_window(
+        self,
+        c_series: np.ndarray,
+        pow_series: np.ndarray,
+        state_series: np.ndarray,
+        target_p: np.ndarray,
+        target_len: int,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]:
+        """긴 동작 구간에서 목표 길이만큼 연속 구간을 잘라낸다 (시간 압축 없음).
+
+        어디를 자르느냐에 따라 보이는 과도현상이 달라지므로 세 위치를 섞는다.
+        한쪽만 쓰면 그 기기의 특정 전이만 학습하게 된다.
+
+        Returns:
+            잘라낸 배열 4개와, 그 구간이 '켜지는 순간'을 포함하는지 여부
+        """
+        orig_len = len(c_series)
+        span = orig_len - target_len
+        r = np.random.rand()
+        if r < 0.25:
+            start = 0                                   # 켜지는 순간(돌입 전류) 포함
+        elif r < 0.50:
+            start = span                                # 꺼지는 순간 포함
+        else:
+            start = int(np.random.randint(0, span + 1))  # 정상 운전 중간
+
+        sl = slice(start, start + target_len)
+        return (
+            c_series[sl].copy(),
+            pow_series[sl].copy(),
+            state_series[sl].copy(),
+            target_p[sl].copy(),
+            start == 0,
         )
 
     # ── 일반 부하: 돌입 구간 보존 리샘플링 ──────────────────────────────────

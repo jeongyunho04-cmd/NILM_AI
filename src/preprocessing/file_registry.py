@@ -61,28 +61,33 @@ class DeviceSpec:
     noise_floor_w: float = NOISE_FLOOR_EXTERNAL_W
     periodic_duty: bool = False  # 서모스탯/릴레이로 주기적 ON-OFF 를 반복하는가
     low_load: bool = False       # 대기전력과 혼동될 수 있는 저전력 대역(<60W)에서 동작하는가
+    # 하루 평균 사용 시간. 합성에서 각 기기가 켜져 있을 확률(= 시간/24)로 쓴다.
+    # 이전에는 9종을 균등 추첨해 미니PC와 헤어드라이기가 똑같이 15%씩 나왔는데,
+    # 실제로는 미니PC가 42%, 드라이기가 0.4% 로 100배 차이가 난다.
+    # 집집마다 다른 값이므로 필요하면 여기서 바로 조정하면 된다.
+    daily_usage_hours: float = 2.0
 
 
 # ── 단일 가전 측정 파일 등록부 ───────────────────────────────────────────────
 # 새 가전을 측정하면 반드시 여기에 한 줄 추가해야 파이프라인이 받아들인다.
 DEVICE_FILES: Dict[str, DeviceSpec] = {
-    "air_conditioner":  DeviceSpec("air_conditioner",  LoadClass.MOTOR),
-    "beam_projector":   DeviceSpec("beam_projector",   LoadClass.SMPS,      low_load=True),
-    "electiric_kettle": DeviceSpec("electiric_kettle", LoadClass.RESISTIVE),
-    "fan_1":            DeviceSpec("fan",              LoadClass.MOTOR,     low_load=True),
-    "fan_2":            DeviceSpec("fan",              LoadClass.MOTOR,     low_load=True),
-    "fan_3":            DeviceSpec("fan",              LoadClass.MOTOR,     low_load=True),
-    "hair_dryer_1":     DeviceSpec("hair_dryer",       LoadClass.RESISTIVE),
-    "hair_dryer_2":     DeviceSpec("hair_dryer",       LoadClass.RESISTIVE),
+    "air_conditioner":  DeviceSpec("air_conditioner",  LoadClass.MOTOR,     daily_usage_hours=4.0),
+    "beam_projector":   DeviceSpec("beam_projector",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=2.0),
+    "electiric_kettle": DeviceSpec("electiric_kettle", LoadClass.RESISTIVE, daily_usage_hours=0.15),
+    "fan_1":            DeviceSpec("fan",              LoadClass.MOTOR,     low_load=True,  daily_usage_hours=5.0),
+    "fan_2":            DeviceSpec("fan",              LoadClass.MOTOR,     low_load=True,  daily_usage_hours=5.0),
+    "fan_3":            DeviceSpec("fan",              LoadClass.MOTOR,     low_load=True,  daily_usage_hours=5.0),
+    "hair_dryer_1":     DeviceSpec("hair_dryer",       LoadClass.RESISTIVE, daily_usage_hours=0.1),
+    "hair_dryer_2":     DeviceSpec("hair_dryer",       LoadClass.RESISTIVE, daily_usage_hours=0.1),
     # 핫플레이트는 릴레이가 약 1초 ON / 1초 OFF 로 통전을 끊는 주기 부하다.
-    "hotplate_1":       DeviceSpec("hotplate",         LoadClass.RESISTIVE, periodic_duty=True),
-    "hotplate_2":       DeviceSpec("hotplate",         LoadClass.RESISTIVE, periodic_duty=True),
-    "laptop_charger_1": DeviceSpec("laptop_charger",   LoadClass.SMPS,      low_load=True),
-    "laptop_charger_2": DeviceSpec("laptop_charger",   LoadClass.SMPS,      low_load=True),
-    "minipc_1":         DeviceSpec("minipc",           LoadClass.SMPS,      low_load=True),
-    "minipc_2":         DeviceSpec("minipc",           LoadClass.SMPS,      low_load=True),
+    "hotplate_1":       DeviceSpec("hotplate",         LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
+    "hotplate_2":       DeviceSpec("hotplate",         LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
+    "laptop_charger_1": DeviceSpec("laptop_charger",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=8.0),
+    "laptop_charger_2": DeviceSpec("laptop_charger",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=8.0),
+    "minipc_1":         DeviceSpec("minipc",           LoadClass.SMPS,      low_load=True,  daily_usage_hours=10.0),
+    "minipc_2":         DeviceSpec("minipc",           LoadClass.SMPS,      low_load=True,  daily_usage_hours=10.0),
     # 오븐은 히터가 꺼져도 팬/조명 약 17W 가 남아 서모스탯 주기가 전력에 그대로 드러난다.
-    "oven":             DeviceSpec("oven",             LoadClass.RESISTIVE, periodic_duty=True),
+    "oven":             DeviceSpec("oven",             LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
 }
 
 
@@ -242,6 +247,18 @@ def is_low_load(appliance_type: str) -> bool:
 def get_low_load_appliances() -> List[str]:
     """대기전력 오탐이 일어나기 쉬운 저전력 가전 목록."""
     return sorted(a for a, s in APPLIANCE_SPECS.items() if s.low_load)
+
+
+def get_usage_probability(appliance_type: str) -> float:
+    """임의의 순간에 이 가전이 켜져 있을 확률 (하루 사용 시간 / 24)."""
+    spec = APPLIANCE_SPECS.get(appliance_type)
+    hours = spec.daily_usage_hours if spec else 2.0
+    return float(min(max(hours / 24.0, 0.0), 1.0))
+
+
+def get_usage_probabilities() -> Dict[str, float]:
+    """모든 가전의 가동 확률."""
+    return {a: get_usage_probability(a) for a in APPLIANCE_SPECS}
 
 
 def get_all_appliance_types() -> List[str]:

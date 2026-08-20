@@ -133,6 +133,7 @@ class SegmentPool:
         self.standby_profiles: Dict[str, StandbyProfile] = {}
         self.noise_references: Dict[str, NoiseReference] = {}
         self.rejected_files: List[Tuple[str, str]] = []  # (파일명, 거부 사유)
+        self._steady_power_cache: Dict[str, float] = {}
 
         # 구버전 호환 속성
         self.noise_pool: Optional[np.ndarray] = None
@@ -404,6 +405,36 @@ class SegmentPool:
     def get_appliance_types(self) -> List[str]:
         """사용 가능한 가전 종류 목록."""
         return sorted(self.appliance_activations.keys())
+
+    def get_steady_power_w(self, appliance_type: str) -> float:
+        """이 가전이 켜져 있을 때 '지속적으로' 소비하는 전력 추정치 (W).
+
+        돌입 전류 구간을 뺀 활성화 구간의 90 백분위수를 쓴다. 평균이나 중앙값은
+        오븐·핫플레이트처럼 서모스탯이 통전을 끊는 기기에서 실제 통전 전력을
+        크게 과소평가한다(오븐 중앙값 15W vs 실제 히터 1161W).
+        멀티탭 용량 같은 물리 한도를 지키려면 최댓값에 가까운 쪽을 봐야 한다.
+
+        반환값은 녹화 당시 전압(v_ref) 기준이다. 다른 전압에서의 값이 필요하면
+        GridSimulator.power_voltage_exponent 로 환산할 것.
+        """
+        if appliance_type in self._steady_power_cache:
+            return self._steady_power_cache[appliance_type]
+
+        acts = self.appliance_activations.get(appliance_type, [])
+        chunks = [
+            a.target_power_w[a.inrush_cycles:]
+            for a in acts if len(a.target_power_w) > a.inrush_cycles
+        ]
+        value = float(np.percentile(np.concatenate(chunks), 90)) if chunks else 0.0
+        self._steady_power_cache[appliance_type] = value
+        return value
+
+    def get_reference_voltage(self, appliance_type: str) -> float:
+        """이 가전 파형이 녹화될 때의 계통 전압 (전력 환산 기준)."""
+        acts = self.appliance_activations.get(appliance_type, [])
+        if acts:
+            return float(np.median([a.v_ref_v for a in acts]))
+        return self.get_standby_profile(appliance_type).v_ref_v
 
     def sample_activation(self, appliance_type: str) -> ApplianceActivation:
         """지정한 가전의 활성화 구간을 무작위로 하나 뽑는다."""

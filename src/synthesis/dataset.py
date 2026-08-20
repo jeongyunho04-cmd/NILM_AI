@@ -23,15 +23,30 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 
 from .segment_pool import SegmentPool
-from .synthesizer import LoadSynthesizer, SyntheticLoadSample
+from .synthesizer import (
+    SELECTION_REALISTIC,
+    SELECTION_UNIFORM,
+    LoadSynthesizer,
+    SyntheticLoadSample,
+)
 
 # 윈도우 종류별 기본 혼합 비율
+#
+# random_realistic 과 random_uniform 을 나눈 이유가 있다.
+# 실제 가정에서 기기별 사용 빈도는 100배까지 차이 난다(미니PC 42% vs 드라이기 0.4%).
+# 그런데 그 분포 그대로만 학습시키면 드라이기 표본이 거의 없어 못 배우고,
+# 반대로 균등하게만 뽑으면 사전확률이 틀려 실제 집에서 오탐이 늘어난다.
+# 둘을 섞어 커버리지와 보정을 동시에 잡는다.
 DEFAULT_RECIPE_MIX: Dict[str, float] = {
-    "random": 0.55,
+    "random_realistic": 0.39,        # 기기별 사용률대로 각자 독립적으로 켜짐
+    "random_uniform": 0.16,          # 균등 추첨 - 희귀 기기 학습 표본 확보
     "standby_only": 0.18,
     "low_load_among_standby": 0.22,
     "unplugged_baseline": 0.05,
 }
+
+# 구버전 설정 호환: "random" 하나만 주면 현실/균등 7:3 으로 나눠 준다.
+_LEGACY_RANDOM_SPLIT = {"random_realistic": 0.7, "random_uniform": 0.3}
 
 
 class NILMBatchGenerator:
@@ -46,8 +61,13 @@ class NILMBatchGenerator:
         target_mode: str = "seq2point",  # "seq2point"(중앙 시점) 또는 "seq2seq"(전 구간)
         recipe_mix: Optional[Dict[str, float]] = None,
         synthesizer: Optional[LoadSynthesizer] = None,
+        compute_gt_harmonics: bool = False,
     ):
         self.synthesizer = synthesizer or LoadSynthesizer(segment_pool=segment_pool)
+        # 학습 배치에는 가전별 고조파 정답이 나가지 않는다. 전력·상태 회귀만 한다면
+        # 쓰이지 않으면서 윈도우당 0.65MB(나머지 정답 전부의 10배)를 만들었다 버리게 되므로
+        # 기본적으로 만들지 않는다. 합성기 진단이 필요할 때만 True 로 켠다.
+        self.compute_gt_harmonics = compute_gt_harmonics
         self.window_size = window_size_cycles
         self.max_concurrent = max_concurrent_appliances
         self.include_power_channels = include_power_channels
@@ -56,6 +76,11 @@ class NILMBatchGenerator:
         self.app_to_idx = {app: i for i, app in enumerate(self.appliance_list)}
 
         mix = dict(recipe_mix or DEFAULT_RECIPE_MIX)
+        # 구버전 "random" 키는 현실/균등으로 갈라 준다.
+        if "random" in mix:
+            share = mix.pop("random")
+            for name, frac in _LEGACY_RANDOM_SPLIT.items():
+                mix[name] = mix.get(name, 0.0) + share * frac
         total = sum(mix.values())
         if total <= 0:
             raise ValueError("recipe_mix 의 비율 합이 0 보다 커야 합니다.")
@@ -66,11 +91,16 @@ class NILMBatchGenerator:
     def _synthesize_window(self) -> Tuple[SyntheticLoadSample, str]:
         """혼합 비율에 따라 윈도우 종류를 골라 합성한다."""
         recipe = str(np.random.choice(self.recipe_names, p=self.recipe_probs))
+        gt_h = self.compute_gt_harmonics
 
         if recipe == "standby_only":
-            sample = self.synthesizer.synthesize_standby_only_window(self.window_size)
+            sample = self.synthesizer.synthesize_standby_only_window(
+                self.window_size, compute_gt_harmonics=gt_h
+            )
         elif recipe == "low_load_among_standby":
-            sample = self.synthesizer.synthesize_low_load_among_standby_window(self.window_size)
+            sample = self.synthesizer.synthesize_low_load_among_standby_window(
+                self.window_size, compute_gt_harmonics=gt_h
+            )
         elif recipe == "unplugged_baseline":
             sample = self.synthesizer.synthesize_scenario(
                 total_duration_cycles=self.window_size,
@@ -78,11 +108,16 @@ class NILMBatchGenerator:
                 plugged_in_appliances={a: False for a in self.appliance_list},
                 include_noise=True,
                 simulate_voltage_drop=True,
+                compute_gt_harmonics=gt_h,
             )
         else:
             sample = self.synthesizer.synthesize_random_window(
                 window_size_cycles=self.window_size,
                 max_concurrent_appliances=self.max_concurrent,
+                compute_gt_harmonics=gt_h,
+                selection_mode=(
+                    SELECTION_UNIFORM if recipe == "random_uniform" else SELECTION_REALISTIC
+                ),
             )
         return sample, recipe
 
