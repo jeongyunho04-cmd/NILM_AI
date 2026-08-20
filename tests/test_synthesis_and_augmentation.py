@@ -4,7 +4,11 @@
 import numpy as np
 import pytest
 
-from src.preprocessing.file_registry import get_low_load_appliances, is_periodic_duty
+from src.preprocessing.file_registry import (
+    get_low_load_appliances,
+    is_low_load,
+    is_periodic_duty,
+)
 from src.synthesis.segment_pool import SegmentPool
 from src.synthesis.grid_simulator import GridSimulator, OBSERVED_VOLTAGE_CLUSTERS
 from src.synthesis.augmentor import DataAugmentor
@@ -592,6 +596,44 @@ def test_high_power_resistive_windows_boost_rare_appliances(segment_pool):
         assert active, "고전력 윈도우인데 켜진 기기가 없습니다"
         assert active <= resistive, f"저항 부하가 아닌 기기가 켜졌습니다: {active - resistive}"
         assert s.metadata["max_sustained_p_w"] <= gen.synthesizer.sustained_power_limit_w
+
+
+def test_high_low_mixed_creates_the_error_bleed_case(segment_pool):
+    """고부하 오차가 저부하로 전가되는 상황을 학습 데이터가 담고 있어야 한다.
+
+    고부하와 저부하가 같이 켜진 창에서 크기 차이가 31배라(1139W vs 37W),
+    고부하 3% 오차가 저부하 전체의 93% 를 왜곡할 수 있다. 그런데 다른 레시피는
+    이 조합을 만들지 않아 동시 가동 창이 3.3% 뿐이었다.
+    """
+    from src.preprocessing.file_registry import get_resistive_appliances
+
+    resistive = set(get_resistive_appliances())
+    syn = LoadSynthesizer(segment_pool=segment_pool, compute_gt_harmonics=False)
+    low_load = {a for a in syn.known_appliances if is_low_load(a)}
+
+    for _ in range(20):
+        s = syn.synthesize_high_low_mixed_window(600)
+        active = set(s.active_appliances)
+        assert active & resistive, f"고부하가 없습니다: {active}"
+        assert active & low_load, f"저부하가 없습니다: {active}"
+        assert s.metadata["max_sustained_p_w"] <= syn.sustained_power_limit_w
+
+
+def test_recipe_mix_covers_high_low_cooccurrence(segment_pool):
+    """배치 전체에서 고부하+저부하 동시 가동 창이 충분히 나와야 한다."""
+    gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=600)
+    assert "high_low_mixed" in gen.describe_recipe_mix()
+
+    apps = gen.appliance_list
+    hi = [apps.index(a) for a in ("electiric_kettle", "oven", "hair_dryer", "hotplate") if a in apps]
+    lo = [apps.index(a) for a in ("beam_projector", "laptop_charger", "fan", "minipc") if a in apps]
+
+    y = np.concatenate([gen.generate_batch_dict(32)["y_on"] for _ in range(12)])
+    both = y[:, hi].any(1) & y[:, lo].any(1)
+    assert both.mean() > 0.07, (
+        f"고부하+저부하 동시 가동 창이 {100*both.mean():.1f}% 뿐입니다 "
+        f"(보강 전 3.3%). 오차 전가를 배울 표본이 부족합니다."
+    )
 
 
 def test_recipe_mix_reduces_class_imbalance(segment_pool):

@@ -520,6 +520,7 @@ class LoadSynthesizer:
         selection_mode: str = SELECTION_REALISTIC,
         sustained_power_limit_w: Optional[float] = -1.0,
         center_biased_placement: bool = False,
+        force_active: Optional[Sequence[str]] = None,
     ) -> SyntheticLoadSample:
         """무작위 복합 윈도우를 빠르게 합성한다.
 
@@ -539,6 +540,10 @@ class LoadSynthesizer:
             center_biased_placement: 활성 구간이 윈도우 중앙(seq2point 타깃 시점)을
                 덮도록 배치를 치우친다. 특정 기기의 표본을 늘리려는 레시피에서,
                 켜 놓고도 중앙에 걸리지 않아 라벨이 0 이 되는 낭비를 줄인다.
+            force_active: 켤 가전을 직접 지정한다. 서로 다른 성격의 기기를 조합해야
+                하는 레시피(고부하 + 저부하 동시)에서 쓴다. 지정하면
+                n_active / selection_mode / candidate_appliances 는 무시된다.
+                지속 부하 예산은 그대로 적용되므로 한도를 넘는 조합은 줄어든다.
         """
         candidates = list(candidate_appliances or self.known_appliances)
         candidates = [a for a in candidates if a in self.known_appliances]
@@ -556,7 +561,9 @@ class LoadSynthesizer:
         env = self.grid_sim.sample_environment()
 
         # 1. 어떤 가전을 켤지 고른다
-        if n_active is not None:
+        if force_active is not None:
+            chosen = [a for a in force_active if a in self.known_appliances]
+        elif n_active is not None:
             k = int(np.clip(n_active, 0, len(candidates)))
             chosen = list(np.random.choice(candidates, size=k, replace=False)) if k else []
         elif selection_mode == SELECTION_UNIFORM:
@@ -608,7 +615,10 @@ class LoadSynthesizer:
             voltage_environment=env,
             compute_gt_harmonics=compute_gt_harmonics,
         )
-        sample.metadata["selection_mode"] = selection_mode if n_active is None else "explicit"
+        if force_active is not None:
+            sample.metadata["selection_mode"] = "forced"
+        else:
+            sample.metadata["selection_mode"] = selection_mode if n_active is None else "explicit"
         sample.metadata["sustained_power_limit_w"] = limit
         sample.metadata["dropped_over_budget"] = sorted(over_budget)
         return sample
@@ -654,6 +664,44 @@ class LoadSynthesizer:
             # 이 레시피의 존재 이유가 "대기전력 속에 저부하 1대"이므로 그 1대가
             # 반드시 창 안에 있어야 한다. 배치를 자유롭게 두면 활성화가 창 밖으로
             # 나가 버려 대기 전용 윈도우와 구분되지 않는 표본이 섞인다.
+            center_biased_placement=True,
+        )
+
+    def synthesize_high_low_mixed_window(
+        self,
+        window_size_cycles: int = 600,
+        compute_gt_harmonics: Optional[bool] = None,
+    ) -> SyntheticLoadSample:
+        """고전력 저항 부하 1~2대와 저전력 기기 2~3대가 동시에 켜진 윈도우.
+
+        이 프로젝트에서 가장 어려운 상황이다. 두 무리의 전력 크기가 31배 차이라
+        (고부하 1139W vs 저부하 37W), 고부하 예측이 3% 만 틀려도 그 오차가
+        저부하 전체의 93% 를 왜곡할 수 있다.
+
+        그런데 다른 레시피로는 이 조합이 거의 만들어지지 않았다.
+        high_power_resistive 는 저항 부하만, low_load_among_standby 는 저부하만 켠다.
+        무작위 레시피에 맡기면 동시 가동 창이 3.3% 에 그친다.
+
+        모델이 고부하 오차를 저부하로 흘리지 않도록 배우려면 이 상황을 충분히 봐야 한다.
+        """
+        resistive = [a for a in self.known_appliances if a in set(get_resistive_appliances())]
+        low_load = [a for a in self.known_appliances if is_low_load(a)]
+        if not resistive or not low_load:
+            return self.synthesize_random_window(
+                window_size_cycles=window_size_cycles,
+                compute_gt_harmonics=compute_gt_harmonics,
+            )
+
+        n_hi = 1 if np.random.rand() < 0.7 else 2
+        n_lo = int(np.random.randint(2, 4))   # 2 또는 3
+        chosen = list(np.random.choice(resistive, min(n_hi, len(resistive)), replace=False))
+        chosen += list(np.random.choice(low_load, min(n_lo, len(low_load)), replace=False))
+
+        return self.synthesize_random_window(
+            window_size_cycles=window_size_cycles,
+            force_active=chosen,
+            force_plugged_all=True,
+            compute_gt_harmonics=compute_gt_harmonics,
             center_biased_placement=True,
         )
 

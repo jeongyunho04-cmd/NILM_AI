@@ -38,13 +38,22 @@ from .synthesizer import (
 # 반대로 균등하게만 뽑으면 사전확률이 틀려 실제 집에서 오탐이 늘어난다.
 # 둘을 섞어 커버리지와 보정을 동시에 잡는다.
 DEFAULT_RECIPE_MIX: Dict[str, float] = {
-    "random_realistic": 0.24,        # 기기별 사용률대로 각자 독립적으로 켜짐
-    "random_uniform": 0.16,          # 균등 추첨 - 희귀 기기 학습 표본 확보
-    "standby_only": 0.18,            # 대기전력만 - 저부하 오탐 방지
-    "low_load_among_standby": 0.22,  # 대기전력 속 저부하 1대 - 가장 헷갈리는 경우
-    "high_power_resistive": 0.15,    # 고전력 저항 부하 1~2대 - 아래 설명 참조
+    "random_realistic": 0.18,        # 기기별 사용률대로 각자 독립적으로 켜짐
+    "random_uniform": 0.15,          # 균등 추첨 - 희귀 기기 학습 표본 확보
+    "standby_only": 0.16,            # 대기전력만 - 저부하 오탐 방지
+    "low_load_among_standby": 0.20,  # 대기전력 속 저부하 1대
+    "high_power_resistive": 0.12,    # 고전력 저항 부하 1~2대 - 아래 설명 참조
+    "high_low_mixed": 0.14,          # 고부하 + 저부하 동시 - 오차 전가 방지, 아래 참조
     "unplugged_baseline": 0.05,
 }
+
+# high_low_mixed 를 따로 둔 이유
+# 고부하와 저부하가 같이 켜진 창에서 둘의 크기 차이가 31배다 (1139W vs 37W).
+# 고부하 예측이 3% 만 틀려도 그 오차가 저부하 전체의 93% 를 왜곡할 수 있어,
+# 모델이 고부하 오차를 저부하 기기로 흘리는 법을 배우기 쉽다.
+# 그런데 다른 레시피는 이 조합을 만들지 않는다 - high_power_resistive 는 저항 부하만,
+# low_load_among_standby 는 저부하만 켠다. 무작위에 맡기면 동시 가동 창이 3.3% 뿐이다.
+# 모델이 전가하지 않는 법을 배우려면 이 상황을 충분히 봐야 한다.
 
 # high_power_resistive 를 따로 둔 이유
 # 전기포트·오븐·드라이기·핫플레이트는 모두 니크롬선 부하라 고조파 지문이 거의 같다
@@ -111,6 +120,10 @@ class NILMBatchGenerator:
             )
         elif recipe == "high_power_resistive":
             sample = self.synthesizer.synthesize_high_power_window(
+                self.window_size, compute_gt_harmonics=gt_h
+            )
+        elif recipe == "high_low_mixed":
+            sample = self.synthesizer.synthesize_high_low_mixed_window(
                 self.window_size, compute_gt_harmonics=gt_h
             )
         elif recipe == "unplugged_baseline":
