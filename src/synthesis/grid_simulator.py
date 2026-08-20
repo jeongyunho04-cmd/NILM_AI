@@ -94,6 +94,7 @@ class GridSimulator:
         voltage_variation_std: float = 1.0,   # 느린 요동의 정상상태 표준편차 (V)
         drift_tau_s: float = 30.0,            # 요동 상관 시간 (초)
         sag_rate_per_min: float = 0.8,        # 외부 부하 사그 발생 빈도 (회/분)
+        max_external_sag_v: float = 10.0,     # 외부 사그 총 강하량 상한 (겹침 누적 방지)
         measurement_frame_cycles: int = 30,   # 실측 센서의 전압 갱신 주기 (0.5초 = 30사이클)
         sampling_hz: float = 60.0,
     ):
@@ -103,6 +104,7 @@ class GridSimulator:
         self.voltage_variation_std = voltage_variation_std
         self.drift_tau_s = drift_tau_s
         self.sag_rate_per_min = sag_rate_per_min
+        self.max_external_sag_v = max_external_sag_v
         self.measurement_frame_cycles = measurement_frame_cycles
         self.sampling_hz = sampling_hz
 
@@ -207,7 +209,11 @@ class GridSimulator:
                 t = np.arange(tail_end - end_hold, dtype=np.float32)
                 sag[end_hold:tail_end] += depth * np.exp(-t / recover)
 
-        return sag
+        # 겹친 이벤트가 무한정 쌓이지 않게 총 강하량을 제한한다.
+        # 긴 구간을 만들수록 이벤트가 많아져 겹칠 확률이 커지는데, 그대로 두면
+        # 2시간짜리에서 200V 까지 내려가 한국 표준 공급 전압 하한(198V)에 닿았다.
+        # 실제 계통에서 그만한 사그가 반복되면 기기가 먼저 멈춘다.
+        return np.minimum(sag, self.max_external_sag_v)
 
     def open_circuit_voltage(
         self,

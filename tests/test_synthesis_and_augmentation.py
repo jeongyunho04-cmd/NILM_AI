@@ -263,6 +263,42 @@ def test_power_limit_can_be_disabled(segment_pool):
     assert s.metadata["dropped_over_budget"] == []
 
 
+def test_long_timeline_respects_power_limit_over_time(segment_pool):
+    """긴 타임라인에서는 겹침이 시간에 따라 변한다. 어느 시점에서도 한도를 넘으면 안 된다."""
+    from src.synthesis.scenario_generator import ScenarioGenerator
+
+    limit = 4000.0
+    syn = LoadSynthesizer(
+        segment_pool=segment_pool, compute_gt_harmonics=False,
+        sustained_power_limit_w=limit,
+    )
+    gen = ScenarioGenerator(synthesizer=syn)
+    sample = gen.create_long_timeline(duration_min=6.0)
+
+    p = sample.power_features[:, 0]
+    w = int(2.0 * 60)
+    c = np.concatenate([[0.0], np.cumsum(p, dtype=np.float64)])
+    sustained = (c[w:] - c[:-w]) / w
+    assert sustained.max() <= limit, f"지속 부하가 한도를 넘었습니다: {sustained.max():.0f}W"
+
+    ok, err = sample.verify_power_decomposition(tolerance_w=0.01)
+    assert ok, f"전력 분해가 맞지 않습니다: {err:.4f}W"
+    assert sample.metadata["episodes_scheduled"] > 0
+
+
+def test_long_timeline_covers_every_appliance(segment_pool):
+    """구성을 확인하려면 모든 가전이 최소 한 번은 나와야 한다."""
+    from src.synthesis.scenario_generator import ScenarioGenerator
+
+    syn = LoadSynthesizer(segment_pool=segment_pool, compute_gt_harmonics=False)
+    gen = ScenarioGenerator(synthesizer=syn)
+    sample = gen.create_long_timeline(duration_min=8.0, min_episodes_per_appliance=1)
+
+    missing = [a for a in sample.appliance_types if not sample.gt_is_on[a].any()]
+    # 용량 초과로 빠지는 경우가 있으므로 전부를 강제하지는 않되, 대부분은 나와야 한다
+    assert len(missing) <= 2, f"너무 많은 가전이 한 번도 안 나왔습니다: {missing}"
+
+
 def test_grid_simulator_voltage_drop_and_coupling():
     grid_sim = GridSimulator(
         nominal_voltage=220.0, r_grid=0.3, x_grid=0.05, voltage_variation_std=0.0,

@@ -454,6 +454,7 @@ class LoadSynthesizer:
             # 2초 이동평균 최댓값. 순간 스파이크가 아니라 '지속' 부하를 본다.
             # 직접 짠 시나리오는 요청대로 만들어 주되, 한도를 넘었으면 알 수 있게 표시한다.
             "max_sustained_p_w": round(_max_sustained_power(p_total), 1) if N else 0.0,
+            "sustained_power_limit_w": self.sustained_power_limit_w,
         }
         if self.sustained_power_limit_w is not None and N:
             meta["exceeds_sustained_limit"] = bool(

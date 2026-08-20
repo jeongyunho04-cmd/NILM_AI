@@ -110,6 +110,109 @@ class ScenarioGenerator:
             simulate_voltage_drop=True,
         )
 
+    def create_long_timeline(
+        self,
+        duration_min: float = 120.0,
+        min_episodes_per_appliance: int = 1,
+        plugged_prob: float = 0.85,
+    ) -> SyntheticLoadSample:
+        """몇 시간짜리 가정 소비 타임라인을 만든다.
+
+        짧은 윈도우를 뽑는 것과 접근이 다르다. 긴 시간축에서는 각 가전이
+        '몇 번, 얼마나 오래' 켜지는지가 핵심이므로, 기기별 사용률에서 총 가동
+        시간을 잡고 그것을 실제 활성화 길이만큼의 에피소드로 쪼개 배치한다.
+
+        멀티탭 용량을 넘는 겹침은 배치 단계에서 걸러낸다. 윈도우 단위 검사와 달리
+        여기서는 시간에 따라 겹침이 변하므로, 에피소드를 하나씩 넣어 보며
+        어느 시점에서도 한도를 넘지 않을 때만 확정한다.
+        """
+        from src.preprocessing.file_registry import get_usage_probability
+
+        n_cycles = int(duration_min * 60.0 * self.sampling_hz)
+        syn = self.synthesizer
+        pool = syn.pool
+        limit = syn.sustained_power_limit_w
+
+        # 이 타임라인의 전압 환경을 먼저 정해야 용량 계산이 맞는다.
+        env = syn.grid_sim.sample_environment()
+
+        # 1. 기기별로 가동 에피소드 후보를 만든다
+        candidates: List[Tuple[str, int, int, float]] = []  # (가전, 시작, 끝, 지속전력)
+        for app in syn.known_appliances:
+            acts = pool.appliance_activations[app]
+            typical = float(np.median([a.duration_cycles for a in acts]))
+            target_on = get_usage_probability(app) * n_cycles
+            n_episodes = max(min_episodes_per_appliance, int(round(target_on / max(typical, 1.0))))
+            steady = syn.estimate_steady_power_w(app, env.base_voltage_v)
+            duty_period = pool.duty_period_cycles.get(app)
+
+            if duty_period and duty_period > typical:
+                # 서모스탯 부하는 낱개 펄스를 흩뿌리면 안 된다. 실제로는 한 번의
+                # 조리 세션(수십 분) 안에서 일정 주기로 통전이 반복된다.
+                # 필요한 펄스 수를 몇 개의 세션으로 묶고, 세션 안에서는 실측 주기로 배치한다.
+                n_sessions = max(min_episodes_per_appliance,
+                                 int(np.ceil(n_episodes / 400)))
+                per_session = max(1, n_episodes // n_sessions)
+                session_span = int(per_session * duty_period)
+                for _ in range(n_sessions):
+                    if session_span >= n_cycles:
+                        s0 = 0
+                    else:
+                        s0 = int(np.random.randint(0, n_cycles - session_span))
+                    for k in range(per_session):
+                        s = s0 + k * duty_period
+                        dur = int(np.clip(typical * np.random.uniform(0.8, 1.2), 30, duty_period))
+                        if s + dur >= n_cycles:
+                            break
+                        candidates.append((app, s, s + dur, steady))
+                continue
+
+            for _ in range(n_episodes):
+                # 실제 활성화 길이 분포에서 뽑되 증강 한도(3배) 안에서 흔든다
+                dur = int(np.clip(typical * np.random.uniform(0.5, 2.0), 30, n_cycles))
+                start = int(np.random.randint(0, max(1, n_cycles - dur)))
+                candidates.append((app, start, start + dur, steady))
+
+        # 2. 같은 가전끼리 겹치면 하나로 합쳐지므로, 겹치는 후보는 버린다
+        occupied: Dict[str, np.ndarray] = {
+            a: np.zeros(n_cycles, dtype=bool) for a in syn.known_appliances
+        }
+        # 3. 어느 시점에서도 멀티탭 한도를 넘지 않게 한다
+        load = np.zeros(n_cycles, dtype=np.float64)
+
+        np.random.shuffle(candidates)
+        accepted: List[ApplianceSchedule] = []
+        rejected_overlap = 0
+        rejected_budget = 0
+
+        for app, s, e, steady in candidates:
+            if occupied[app][s:e].any():
+                rejected_overlap += 1
+                continue
+            if limit is not None and float((load[s:e] + steady).max()) > limit:
+                rejected_budget += 1
+                continue
+            occupied[app][s:e] = True
+            load[s:e] += steady
+            accepted.append(ApplianceSchedule(app, start_cycle=s, duration_cycles=e - s))
+
+        # 시작 시각 순으로 정렬해 두면 이후 진단과 그래프가 읽기 쉬워진다
+        accepted.sort(key=lambda x: x.start_cycle)
+
+        plugged = {a: bool(np.random.rand() < plugged_prob) for a in syn.known_appliances}
+        sample = syn.synthesize_scenario(
+            total_duration_cycles=n_cycles,
+            schedules=accepted,
+            plugged_in_appliances=plugged,
+            include_noise=True,
+            simulate_voltage_drop=True,
+            voltage_environment=env,
+        )
+        sample.metadata["episodes_scheduled"] = len(accepted)
+        sample.metadata["episodes_rejected_overlap"] = rejected_overlap
+        sample.metadata["episodes_rejected_over_budget"] = rejected_budget
+        return sample
+
     @staticmethod
     def export_synthetic_sample_to_npz(
         sample: SyntheticLoadSample,

@@ -1,0 +1,115 @@
+{
+  "duration_minutes": 120.0,
+  "duration_cycles": 432000,
+  "energy_kwh": 0.4173,
+  "power": {
+    "mean_w": 208.6,
+    "median_w": 34.9,
+    "peak_instant_w": 1964.6,
+    "peak_sustained_2s_w": 1940.8,
+    "sustained_limit_w": 4000.0,
+    "sustained_limit_respected": true
+  },
+  "voltage": {
+    "environment": "outlet_low_221v",
+    "base_v": 218.63,
+    "mean_v": 217.89,
+    "min_v": 207.78,
+    "max_sag_v": 2.32
+  },
+  "scheduling": {
+    "episodes_scheduled": 427,
+    "episodes_rejected_overlap": 94,
+    "episodes_rejected_over_budget": 0
+  },
+  "power_decomposition_ok": true,
+  "power_decomposition_max_error_w": 0.0,
+  "appliances": {
+    "air_conditioner": {
+      "on_minutes": 22.68,
+      "on_percentage": 18.9,
+      "activations": 3,
+      "plugged_percentage": 100.0,
+      "mean_active_w": 111.02,
+      "peak_active_w": 803.5,
+      "mean_standby_w": 3.516
+    },
+    "beam_projector": {
+      "on_minutes": 11.54,
+      "on_percentage": 9.62,
+      "activations": 6,
+      "plugged_percentage": 100.0,
+      "mean_active_w": 4.52,
+      "peak_active_w": 52.6,
+      "mean_standby_w": 0.656
+    },
+    "electiric_kettle": {
+      "on_minutes": 0.93,
+      "on_percentage": 0.78,
+      "activations": 5,
+      "plugged_percentage": 100.0,
+      "mean_active_w": 10.06,
+      "peak_active_w": 1432.6,
+      "mean_standby_w": 0.186
+    },
+    "fan": {
+      "on_minutes": 21.23,
+      "on_percentage": 17.69,
+      "activations": 19,
+      "plugged_percentage": 100.0,
+      "mean_active_w": 5.01,
+      "peak_active_w": 41.8,
+      "mean_standby_w": 0.137
+    },
+    "hair_dryer": {
+      "on_minutes": 0.42,
+      "on_percentage": 0.35,
+      "activations": 3,
+      "plugged_percentage": 100.0,
+      "mean_active_w": 2.74,
+      "peak_active_w": 947.5,
+      "mean_standby_w": 0.001
+    },
+    "hotplate": {
+      "on_minutes": 2.5,
+      "on_percentage": 2.08,
+      "activations": 196,
+      "plugged_percentage": 100.0,
+      "mean_active_w": 9.06,
+      "peak_active_w": 518.3,
+      "mean_standby_w": 0.245
+    },
+    "laptop_charger": {
+      "on_minutes": 29.73,
+      "on_percentage": 24.77,
+      "activations": 173,
+      "plugged_percentage": 100.0,
+      "mean_active_w": 10.41,
+      "peak_active_w": 84.2,
+      "mean_standby_w": 0.001
+    },
+    "minipc": {
+      "on_minutes": 45.93,
+      "on_percentage": 38.28,
+      "activations": 21,
+      "plugged_percentage": 100.0,
+      "mean_active_w": 4.63,
+      "peak_active_w": 31.3,
+      "mean_standby_w": 0.238
+    },
+    "oven": {
+      "on_minutes": 6.27,
+      "on_percentage": 5.22,
+      "activations": 1,
+      "plugged_percentage": 100.0,
+      "mean_active_w": 44.27,
+      "peak_active_w": 1081.3,
+      "mean_standby_w": 0.548
+    }
+  },
+  "files": {
+    "npz": "synthetic_data\\long\\household_120min.npz",
+    "overview_png": "synthetic_data\\long\\household_120min_overview.png",
+    "detail_png": "synthetic_data\\long\\household_120min_detail.png"
+  }
+}

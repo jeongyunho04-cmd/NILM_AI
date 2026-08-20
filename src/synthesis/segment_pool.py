@@ -133,6 +133,8 @@ class SegmentPool:
         self.standby_profiles: Dict[str, StandbyProfile] = {}
         self.noise_references: Dict[str, NoiseReference] = {}
         self.rejected_files: List[Tuple[str, str]] = []  # (파일명, 거부 사유)
+        # 주기 부하의 통전 반복 주기 (시작-시작 간격, 사이클). 조리 세션 재구성에 쓴다.
+        self.duty_period_cycles: Dict[str, int] = {}
         self._steady_power_cache: Dict[str, float] = {}
 
         # 구버전 호환 속성
@@ -353,6 +355,18 @@ class SegmentPool:
         blocks = np.split(on_indices, np.where(np.diff(on_indices) > 1)[0] + 1)
         bucket = self.appliance_activations.setdefault(appliance_type, [])
         periodic = is_periodic_duty(appliance_type)
+
+        # 서모스탯/릴레이 부하는 통전 펄스 하나하나가 별개 활성화로 잘린다.
+        # 실제로는 한 번의 조리 세션 안에서 일정 주기로 반복되는 것이므로,
+        # 그 주기를 기록해 두어야 긴 타임라인에서 세션 형태로 다시 묶을 수 있다.
+        # (기록하지 않으면 20분 조리가 2시간에 흩뿌려진 낱개 펄스가 되어 버린다)
+        if periodic and len(blocks) >= 3:
+            starts = np.array([b[0] for b in blocks], dtype=np.int64)
+            intervals = np.diff(starts)
+            # 세션이 끊긴 자리의 긴 공백은 빼고 본다
+            intervals = intervals[intervals < np.percentile(intervals, 75) * 3 + 1]
+            if len(intervals):
+                self.duty_period_cycles[appliance_type] = int(np.median(intervals))
 
         for block in blocks:
             if len(block) < MIN_ACTIVATION_CYCLES:
