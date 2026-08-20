@@ -625,3 +625,76 @@ def test_low_load_among_standby_is_the_confusable_case(synthesizer):
     # 대기전력이 존재하고, 활성 기기도 존재하는 상황이어야 학습 가치가 있다
     assert standby_total > 0.0
     assert active_total > 0.0
+
+
+# ── 학습용 윈도우 캐시 ────────────────────────────────────────────────────────
+
+def test_cache_build_and_read(tmp_path):
+    """캐시가 생성되고 창 형태가 학습에 바로 쓸 수 있어야 한다."""
+    from src.synthesis.cache import WindowCache, build_cache
+
+    meta = build_cache(
+        cache_dir=tmp_path / "c", n_scenarios=24, scenario_seconds=20.0,
+        window_cycles=600, stride_cycles=120, seed=0,
+    )
+    assert meta["n_windows"] > 0
+
+    cache = WindowCache(tmp_path / "c")
+    assert len(cache) == meta["n_windows"]
+    assert len(cache.appliances) == 9
+
+    w = cache.get(0)
+    assert w["X"].shape == (33, 600) and w["X"].dtype == np.float32
+    for key in ("y_power", "y_standby", "y_on", "y_plugged"):
+        assert w[key].shape == (9,)
+    assert w["y_state"].shape == (9,)
+    assert not np.isnan(w["X"]).any()
+
+    seq = cache.get_sequence(0)
+    assert seq["y_power"].shape == (9, 600)
+
+
+def test_cache_weights_restore_class_balance(tmp_path):
+    """부창을 그냥 자르면 균형이 무너진다. 가중치가 그것을 되돌려야 한다.
+
+    측정: 보정 없이 자르면 핫플레이트가 5.5% -> 0.4% 로 사라지고
+    불균형이 2.7:1 -> 34.9:1 이 된다.
+    """
+    from src.synthesis.cache import WindowCache, build_cache
+
+    build_cache(cache_dir=tmp_path / "c", n_scenarios=120, scenario_seconds=60.0,
+                window_cycles=600, stride_cycles=120, seed=0)
+    cache = WindowCache(tmp_path / "c")
+
+    uniform = np.array(list(cache.class_share(weighted=False).values()))
+    weighted = np.array(list(cache.class_share(weighted=True).values()))
+
+    imb_u = uniform.max() / max(uniform.min(), 1e-9)
+    imb_w = weighted.max() / max(weighted.min(), 1e-9)
+    assert imb_w < imb_u, f"가중치가 균형을 개선하지 못했습니다: {imb_u:.1f} -> {imb_w:.1f}"
+    assert imb_w < 5.0, f"보정 후에도 불균형이 큽니다: {imb_w:.1f}:1"
+
+    # 실제로 뽑아도 유지되어야 한다
+    idx = cache.sample_indices(3000, np.random.default_rng(0))
+    got = cache.on_center[idx].mean(axis=0)
+    assert got.min() > 0, "한 번도 안 뽑힌 가전이 있습니다"
+    assert got.max() / got.min() < 6.0
+
+
+def test_cache_weights_sum_to_one(tmp_path):
+    """가중치는 확률분포여야 한다 (np.random.choice 에 그대로 넘긴다)."""
+    from src.synthesis.cache import compute_balance_weights
+
+    rng = np.random.default_rng(0)
+    on = (rng.random((500, 9)) < 0.15).astype(np.int8)
+    on[:80] = 0  # 전부 꺼진 창을 확실히 섞는다
+    w = compute_balance_weights(on, negative_share=0.2)
+
+    assert abs(w.sum() - 1.0) < 1e-9
+    assert np.all(w >= 0)
+
+    # 무작위 생성분에도 전부 꺼진 창이 섞이므로(0.85^9 = 23%) 앞 80개가 아니라
+    # 전체 음성 집합의 몫을 봐야 한다.
+    negative = on.sum(axis=1) == 0
+    assert negative.sum() > 80
+    assert abs(w[negative].sum() - 0.2) < 1e-6, "전부 꺼진 창의 몫이 지정값과 다릅니다"

@@ -336,13 +336,35 @@ asinh 스케일링도 학습 쪽에서 적용한다. 생성기는 물리값을 �
 
 1. **워커부터** (`num_workers=코어수−1`, `persistent_workers=True`).
    코드 변경이 없고 균형이 그대로다. 6코어면 약 1,900 win/s 까지.
-2. **부족하면 타임라인 풀 캐시.** 레시피별로 60초 시나리오를 미리 대량 생성해
-   디스크에 두고, 학습 중에는 memmap 에서 잘라 쓰기만 한다.
-   - 60초 시나리오 1개 ≈ 0.5 MB, 10,000개 ≈ 5 GB = 신호 167시간분
-   - 생성 시간 10,000 × 12.2ms ≈ 2분 (1회)
-   - **균형은 레시피별 시나리오 개수로 맞추고**, 부창 샘플링에 가중 추출을 걸어
-     최종 분포를 2~3:1 로 되돌린다. 각 부창의 중앙 라벨을 미리 계산해 인덱스로 둘 것.
-   - 다양성이 걱정되면 매 epoch 일부를 새로 생성해 교체한다.
+2. **부족하면 윈도우 캐시.** 구현되어 있다.
+
+```bash
+python -m src.run_build_cache                          # 4000개 x 60초, 약 3.4GB
+python -m src.run_build_cache --scenarios 8000         # 더 크게
+python -m src.run_build_cache --inspect                # 기존 캐시 균형 점검
+```
+
+```python
+from src.synthesis.cache import WindowCache
+cache = WindowCache("cache/train")
+idx = cache.sample_indices(batch_size)        # 균형 보정된 분포에서 추출
+w = cache.get(int(idx[0]))                    # X (33,600), 라벨 (9,)
+# seq2seq 이면 cache.get_sequence(i) -> 라벨 (9,600)
+```
+
+측정 결과:
+
+| | 속도 | 불균형 |
+|---|---|---|
+| 실시간 생성 | 372 win/s | 2.7:1 |
+| **캐시 읽기 (워커 1개)** | **30,369 win/s** | **1.5:1** |
+
+워커 1개로도 모델 처리 능력(8,000~16,000)을 넘는다. **데이터 병목이 사라진다.**
+균형도 실시간 생성보다 낫다 — 부창마다 중앙 라벨을 미리 계산해 두고 역빈도
+가중치로 샘플링 확률을 보정하기 때문이다(보정 없이 자르면 8.0:1).
+
+PyTorch 에서는 `cache.weights` 를 `WeightedRandomSampler` 에 그대로 넘기면 된다.
+다양성이 걱정되면 매 epoch 일부 시나리오를 새로 생성해 교체한다.
 
 **워커 설정 시 주의**
 

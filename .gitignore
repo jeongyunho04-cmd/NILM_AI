@@ -23,4 +23,7 @@ synthetic_data/scenarios/
 # 같은 폴더의 진단 차트(PNG)와 리포트(JSON)는 작으므로 계속 추적한다.
 synthetic_data/long/*.npz
 
+# 학습용 윈도우 캐시 (수 GB). python -m src.run_build_cache 로 재생성한다.
+cache/
+
 # 리뷰에 필요한 작은 산출물(라벨 JSON, 진단 차트, 리포트)은 계속 추적한다.
