@@ -317,6 +317,74 @@ def test_grid_simulator_voltage_drop_and_coupling():
     assert np.all(kappa_heavy < 1.0)
 
 
+def test_reactive_power_sign_matches_real_meter_convention(synthesizer):
+    """Q 의 부호는 imag(I1) 의 '반대'여야 한다.
+
+    펌웨어의 두 출력은 phase_deg = -ihdeg1 관계이고(실측 전 구간에서
+    |phase_deg + ihdeg1| 중앙값이 정확히 0), FeatureExtractor 는 phase_deg 부호로
+    Q 를 정한다. 따라서 imag(I1) = ih1*sin(ihdeg1) 과는 부호가 뒤집힌다.
+    실측 3개 파일 전 구간에서 Q 와 imag(I1) 의 부호가 같은 비율은 0.0% 였다.
+    이전 구현은 같은 부호를 주어 합성 데이터의 Q 채널이 통째로 반대였다.
+    """
+    sample = synthesizer.synthesize_random_window(600, n_active=2)
+    q = sample.power_features[:, 1]
+    i_im = np.imag(sample.harmonics_complex[:, 0])
+
+    m = (np.abs(q) > 5.0) & (np.abs(i_im) > 1e-3)
+    if m.sum() < 30:
+        pytest.skip("무효전력이 유의미한 표본이 부족합니다")
+    same_sign = float(np.mean(np.sign(q[m]) == np.sign(i_im[m])))
+    assert same_sign < 0.05, (
+        f"Q 와 imag(I1) 의 부호가 같은 비율이 {same_sign:.1%} 입니다. "
+        f"실측 규약에서는 0% 여야 합니다."
+    )
+
+
+def test_grid_resistance_matches_measured_outlets():
+    """배선 저항이 실측 콘센트 값 근처여야 한다.
+
+    실측 복합 부하에서 3가지 방법(회귀 2종 + 오븐 펄스 dV/dI 직접 측정)이 모두
+    221V 콘센트 R ≈ 1.55 Ohm, 234V 콘센트 R ≈ 0.45 Ohm 으로 일치했다.
+    이전 모델의 0.15~0.35 Ohm 은 실측의 1/4~1/6 이라 전압 강하가 거의 없었다.
+    """
+    grid = GridSimulator()
+    envs = [grid.sample_environment() for _ in range(500)]
+    r = np.array([e.r_grid_ohm for e in envs])
+
+    assert np.median(r) > 0.4, f"배선 저항이 실측보다 너무 작습니다: 중앙값 {np.median(r):.3f} Ohm"
+    assert r.max() < 3.0, f"배선 저항이 비현실적으로 큽니다: 최대 {r.max():.3f} Ohm"
+
+    # 두 실측 콘센트 근방이 모두 생성되어야 한다
+    assert np.any(np.abs(r - 1.55) < 0.5), "221V 콘센트(R≈1.55) 근방이 생성되지 않았습니다"
+    assert np.any(np.abs(r - 0.45) < 0.3), "234V 콘센트(R≈0.45) 근방이 생성되지 않았습니다"
+
+    # 임피던스가 큰 회선일수록 전압이 낮게 관측된다 (같은 회선의 성질이므로)
+    low_v = np.array([e.r_grid_ohm for e in envs if e.source == "outlet_low_221v"])
+    high_v = np.array([e.r_grid_ohm for e in envs if e.source == "outlet_high_234v"])
+    if len(low_v) > 10 and len(high_v) > 10:
+        assert np.median(low_v) > np.median(high_v), \
+            "낮은 전압 콘센트가 더 큰 임피던스를 가져야 합니다"
+
+
+def test_activation_sampling_is_duration_weighted(segment_pool):
+    """짧고 특이한 활성화가 실제보다 자주 뽑히면 안 된다.
+
+    오븐은 활성화가 2개뿐인데 2.1분(통전율 80.8%)과 32.9분(21.9%)이다.
+    균등 추첨하면 절반의 확률로 예열 구간이 뽑혀 실측(22~41%)보다 과하게 통전한다.
+    """
+    acts = segment_pool.appliance_activations["oven"]
+    if len(acts) < 2:
+        pytest.skip("오븐 활성화가 1개뿐입니다")
+
+    longest = max(acts, key=lambda a: a.duration_cycles)
+    picks = [segment_pool.sample_activation("oven") for _ in range(300)]
+    share = sum(1 for p in picks if p is longest) / len(picks)
+    expected = longest.duration_cycles / sum(a.duration_cycles for a in acts)
+    assert share > expected * 0.8, (
+        f"가장 긴 활성화가 뽑힌 비율 {share:.1%} 가 길이 비중 {expected:.1%} 에 못 미칩니다"
+    )
+
+
 def test_voltage_environment_covers_observed_range():
     """실측에서 관찰된 두 전압 무리(약 221V / 234V)를 모두 만들어야 한다."""
     grid_sim = GridSimulator()

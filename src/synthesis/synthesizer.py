@@ -333,7 +333,18 @@ class LoadSynthesizer:
             gt_is_on[app][t_start:t_end] = 1
             gt_plugged[app][t_start:t_end] = 1      # 켜져 있으면 당연히 꽂혀 있다
             gt_state_id[app][t_start:t_end] = aug_act.state_id[s0:s1]
-            v_ref_series[app][t_start:t_end] = aug_act.v_ref_v
+
+            # 전압 환산의 기준은 '녹화 당시 그 순간의 전압'이어야 한다.
+            # 녹화 파일 전체의 중앙값을 쓰면, 자기 부하로 전압이 내려간 채 측정된
+            # 구간을 높은 전압에서 측정한 것으로 착각한다.
+            # 오븐이 그 예로, 전체 중앙값은 223.3V 지만 히터가 통전하는 동안에는
+            # 자기 강하로 216.8V 였다. 저항 부하는 P∝V^2 이라 6.0% 전력 오차가 되고,
+            # PF 가 1 에 가까운 구간에서는 그것이 Q 로 3배 증폭되어 나타났다
+            # (실측 -82 VAR vs 합성 -262 VAR).
+            vref_slice = aug_act.net_power_features[s0:s1, 4]
+            v_ref_series[app][t_start:t_end] = np.where(
+                (vref_slice > 150.0) & (vref_slice < 280.0), vref_slice, aug_act.v_ref_v
+            )
 
         # 6. 배경 노이즈 (계측계 자체 소비). 전체에서 딱 한 번만 더한다.
         noise_c = np.zeros((N, NUM_HARMONICS), dtype=np.complex64)
@@ -417,7 +428,15 @@ class LoadSynthesizer:
 
         s_total = (v_measured * irms_total).astype(np.float32)
         q_sq = np.maximum(0.0, s_total ** 2 - p_total ** 2)
-        q_sign = np.where(np.imag(total_complex[:, 0]) < 0, -1.0, 1.0) if N else np.zeros(0)
+        # Q 의 부호는 imag(I1) 의 '반대'다.
+        #
+        # 펌웨어가 내보내는 두 값의 관계가 phase_deg = -ihdeg1 이고(실측 전 구간에서
+        # |phase_deg + ihdeg1| 중앙값이 정확히 0), FeatureExtractor 는 phase_deg 의
+        # 부호로 Q 를 정한다. 따라서 imag(I1) = ih1*sin(ihdeg1) 과는 부호가 뒤집힌다.
+        # 실측 3개 파일 전 구간에서 Q 와 imag(I1) 의 부호가 같은 비율은 0.0% 였다.
+        # 이전 구현은 같은 부호를 주어, 합성 데이터의 Q 채널이 통째로 반대였다
+        # (실측 저부하 -89 VAR vs 합성 +77 VAR).
+        q_sign = np.where(np.imag(total_complex[:, 0]) < 0, 1.0, -1.0) if N else np.zeros(0)
         q_total = (np.sqrt(q_sq) * q_sign).astype(np.float32)
         pf_total = np.clip(p_total / (s_total + 1e-6), 0.0, 1.0).astype(np.float32)
 

@@ -39,12 +39,21 @@ class VoltageCluster:
     mean_v: float
     std_v: float
     weight: float
+    r_grid_ohm: float = 0.8   # 이 콘센트까지의 배선 저항
 
 
-# data/*.csv 의 파일별 평균 전압을 집계해 얻은 값이다.
+# data/*.csv 의 파일별 평균 전압과, 복합 부하 실측(test*.csv)에서 회귀로 구한
+# 배선 저항이다. 임피던스가 큰 회선일수록 부하 시 전압이 더 내려가므로
+# 평균 전압도 낮게 관측된다 - 두 값이 함께 움직이는 것이 물리적으로 맞다.
+#
+# 측정 방법 3가지가 모두 일치했다 (221V 콘센트 기준):
+#   V = V0 - R*I_re 회귀            R = 1.501 Ohm (R^2 = 0.915)
+#   X 를 포함한 회귀                 R = 1.499 Ohm
+#   오븐 펄스 8개의 dV/dI 직접 측정   R = 1.588 Ohm
+# 이전 모델의 0.15~0.35 Ohm 은 실측의 1/4~1/6 수준이었다.
 OBSERVED_VOLTAGE_CLUSTERS: Tuple[VoltageCluster, ...] = (
-    VoltageCluster("outlet_low_221v", mean_v=221.3, std_v=2.4, weight=0.50),
-    VoltageCluster("outlet_high_234v", mean_v=234.7, std_v=1.0, weight=0.30),
+    VoltageCluster("outlet_low_221v", mean_v=221.3, std_v=2.4, weight=0.50, r_grid_ohm=1.55),
+    VoltageCluster("outlet_high_234v", mean_v=234.7, std_v=1.0, weight=0.30, r_grid_ohm=0.45),
 )
 
 # 두 콘센트만 학습하면 모델이 그 두 전압대에만 맞춰진다. 한국 표준 공급 전압
@@ -87,8 +96,12 @@ class GridSimulator:
         default_ref_voltage: float = 220.0,   # v_ref 를 모를 때만 쓰는 최후 기본값
         nominal_voltage: Optional[float] = None,  # 지정 시 전압을 이 값으로 고정
         nominal_voltage_range: Optional[Tuple[float, float]] = None,  # 구버전 호환
-        r_grid_range: Tuple[float, float] = (0.15, 0.35),
-        x_grid_range: Tuple[float, float] = (0.02, 0.08),
+        # 실측 두 콘센트가 0.45 / 1.55 Ohm 이었다. 그 사이와 바깥을 조금씩 덮는다.
+        r_grid_range: Tuple[float, float] = (0.35, 1.80),
+        # X 는 식별이 어렵다. 저항 부하가 지배하는 구간에서는 I_im 변동폭이
+        # 0.03A 뿐이라 회귀로 분리되지 않는다(X 를 빼도 R^2 가 같다).
+        # 유도성 부하가 있는 test.csv 에서만 X≈0.12 로 잡혀 그 근방을 쓴다.
+        x_grid_range: Tuple[float, float] = (0.02, 0.15),
         r_grid: Optional[float] = None,
         x_grid: Optional[float] = None,
         voltage_variation_std: float = 1.0,   # 느린 요동의 정상상태 표준편차 (V)
@@ -125,10 +138,16 @@ class GridSimulator:
     # ── 환경 샘플링 ─────────────────────────────────────────────────────────
     def sample_environment(self) -> VoltageEnvironment:
         """이번 합성이 놓일 배전 환경 하나를 뽑는다."""
-        base_v, source = self._sample_base_voltage()
+        base_v, source, cluster_r = self._sample_base_voltage()
+        # 실측 콘센트에서 뽑았다면 그 회선의 배선 저항을 함께 쓴다.
+        # 전압과 임피던스는 같은 회선의 성질이므로 따로 뽑으면 짝이 어긋난다.
+        if cluster_r is not None and self.r_grid_range[0] != self.r_grid_range[1]:
+            r = float(np.clip(np.random.normal(cluster_r, cluster_r * 0.15), 0.1, 3.0))
+        else:
+            r = float(np.random.uniform(*self.r_grid_range))
         return VoltageEnvironment(
             base_voltage_v=base_v,
-            r_grid_ohm=float(np.random.uniform(*self.r_grid_range)),
+            r_grid_ohm=r,
             x_grid_ohm=float(np.random.uniform(*self.x_grid_range)),
             drift_std_v=self.voltage_variation_std,
             drift_tau_s=self.drift_tau_s,
@@ -136,12 +155,16 @@ class GridSimulator:
             source=source,
         )
 
-    def _sample_base_voltage(self) -> Tuple[float, str]:
-        """실측 이봉분포 + 미측정 영역 탐색 성분에서 기저 전압을 뽑는다."""
+    def _sample_base_voltage(self) -> Tuple[float, str, Optional[float]]:
+        """실측 이봉분포 + 미측정 영역 탐색 성분에서 기저 전압을 뽑는다.
+
+        Returns:
+            (기저 전압, 출처 이름, 그 회선의 배선 저항 or None)
+        """
         cluster_weight = sum(c.weight for c in self.voltage_clusters)
         total = cluster_weight + self.exploration_weight
         if total <= 0:
-            return self.default_ref_voltage, "default"
+            return self.default_ref_voltage, "default", None
 
         r = np.random.rand() * total
         acc = 0.0
@@ -149,10 +172,10 @@ class GridSimulator:
             acc += c.weight
             if r < acc:
                 v = float(np.random.normal(c.mean_v, c.std_v)) if c.std_v > 0 else c.mean_v
-                return float(np.clip(v, *EXPLORATION_VOLTAGE_RANGE)), c.name
+                return float(np.clip(v, *EXPLORATION_VOLTAGE_RANGE)), c.name, c.r_grid_ohm
 
         lo, hi = self.exploration_range
-        return float(np.random.uniform(lo, hi)), "exploration"
+        return float(np.random.uniform(lo, hi)), "exploration", None
 
     # ── 전압 시계열 생성 ────────────────────────────────────────────────────
     def _generate_drift(self, n_samples: int, env: VoltageEnvironment) -> np.ndarray:

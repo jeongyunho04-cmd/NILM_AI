@@ -460,12 +460,31 @@ class SegmentPool:
             return float(np.median([a.v_ref_v for a in acts]))
         return self.get_standby_profile(appliance_type).v_ref_v
 
-    def sample_activation(self, appliance_type: str) -> ApplianceActivation:
-        """지정한 가전의 활성화 구간을 무작위로 하나 뽑는다."""
+    def sample_activation(
+        self, appliance_type: str, duration_weighted: bool = True
+    ) -> ApplianceActivation:
+        """지정한 가전의 활성화 구간을 하나 뽑는다.
+
+        기본은 길이 가중 추첨이다. 균등하게 뽑으면 짧고 특이한 구간이 실제보다
+        훨씬 자주 나온다. 오븐이 그 예로, 활성화가 2개뿐인데
+            2.1분짜리  - 예열 위주라 히터 통전율 80.8%
+            32.9분짜리 - 정상 조리라 통전율 21.9%
+        이다. 균등 추첨하면 절반의 확률로 예열 구간이 뽑혀 합성 데이터의 오븐이
+        실제(실측 22~41%)보다 훨씬 많이 통전한다.
+        임의의 순간에 어떤 구간을 만날 확률은 그 구간의 길이에 비례하므로
+        길이로 가중하는 것이 물리적으로 맞다.
+        """
         acts = self.appliance_activations.get(appliance_type, [])
         if not acts:
             raise ValueError(f"No activations available for appliance type '{appliance_type}'")
-        return acts[int(np.random.randint(0, len(acts)))]
+        if not duration_weighted or len(acts) == 1:
+            return acts[int(np.random.randint(0, len(acts)))]
+
+        w = np.array([a.duration_cycles for a in acts], dtype=np.float64)
+        total = w.sum()
+        if total <= 0:
+            return acts[int(np.random.randint(0, len(acts)))]
+        return acts[int(np.random.choice(len(acts), p=w / total))]
 
     def get_standby_profile(self, appliance_type: str) -> StandbyProfile:
         """가전의 대기 전기 지문을 반환한다 (없으면 0 대기전력)."""
