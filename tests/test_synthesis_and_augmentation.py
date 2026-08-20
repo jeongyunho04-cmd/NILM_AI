@@ -723,6 +723,30 @@ def test_cache_weights_restore_class_balance(tmp_path):
     assert got.max() / got.min() < 6.0
 
 
+def test_cache_reports_effective_sample_size(tmp_path):
+    """가중 추출로 잃는 다양성을 ESS 로 확인할 수 있어야 한다.
+
+    ESS = 1/Σp² 이므로 균등이면 N, 한쪽에 몰리면 1 에 가까워진다.
+    과적합 판단(재사용 횟수 = 추출 횟수 / ESS)의 기준값이다.
+    """
+    from src.synthesis.cache import WindowCache, build_cache
+
+    meta = build_cache(cache_dir=tmp_path / "c", n_scenarios=60, scenario_seconds=60.0,
+                       window_cycles=600, stride_cycles=120, seed=0)
+    cache = WindowCache(tmp_path / "c")
+    ess, ratio = cache.effective_sample_size()
+
+    assert 1.0 <= ess <= len(cache), f"ESS 가 범위를 벗어났습니다: {ess} / {len(cache)}"
+    assert 0.0 < ratio <= 1.0
+    assert abs(meta["effective_sample_size"] - ess) < 1.0, "meta.json 값이 계산과 다릅니다"
+
+    # 가중치를 끄면 균등 추출이므로 ESS = N 이어야 한다
+    flat = WindowCache(tmp_path / "c", use_weights=False)
+    ess_u, ratio_u = flat.effective_sample_size()
+    assert ess_u == len(flat) and ratio_u == 1.0
+    assert ess < ess_u, "가중 추출인데 ESS 가 줄지 않았습니다"
+
+
 def test_cache_weights_sum_to_one(tmp_path):
     """가중치는 확률분포여야 한다 (np.random.choice 에 그대로 넘긴다)."""
     from src.synthesis.cache import compute_balance_weights

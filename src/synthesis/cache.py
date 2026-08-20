@@ -203,6 +203,11 @@ def build_cache(
         "class_share_uniform": _share(flat_on, None).tolist(),
         "class_share_weighted": _share(flat_on, weights).tolist(),
     }
+    # Kish 유효 표본 수 - 가중 추출로 잃는 다양성의 크기
+    p_norm = weights / weights.sum() if weights.sum() > 0 else weights
+    ess = 1.0 / float(np.sum(p_norm ** 2)) if weights.sum() > 0 else float(len(index))
+    meta["effective_sample_size"] = round(ess, 1)
+    meta["effective_sample_ratio"] = round(ess / max(len(index), 1), 4)
     with open(out_dir / "meta.json", "w", encoding="utf-8") as fp:
         json.dump(meta, fp, indent=2, ensure_ascii=False)
     return meta
@@ -319,3 +324,33 @@ class WindowCache:
         """가전별 양성 라벨 비율. 균형이 유지되는지 확인용."""
         share = _share(self.on_center, self.weights if weighted else None)
         return {a: float(v) for a, v in zip(self.appliances, share)}
+
+    def effective_sample_size(self) -> Tuple[float, float]:
+        """Kish 유효 표본 수 (Effective Sample Size).
+
+        가중 추출은 어떤 창을 자주, 어떤 창을 드물게 뽑는다. 명목상 N 개를 갖고 있어도
+        실질적인 다양성은 그보다 작다. ESS 는 "균등 추출 몇 개짜리와 통계적으로 같은가"다.
+
+            ESS = 1 / Σ(p_i²)     p_i = 정규화된 추출 확률
+            전부 균등 -> ESS = N (손실 없음)  /  하나에 몰림 -> ESS = 1
+
+        과적합 판단에 쓴다. 예를 들어 50 epoch x 100k 샘플이면 500만 번 추출인데,
+        ESS 가 12만이면 평균 42회씩 재사용하는 셈이다.
+
+        주의: ESS 는 '가중치 불균등으로 인한 손실'만 잰다. 스트라이드가 좁아
+        인접 창이 겹치는 것(1초 스트라이드면 10초 창의 90% 가 공통)은 잡지 못하므로,
+        진짜 독립적인 정보량은 ESS 보다 훨씬 적다.
+
+        Returns:
+            (ESS, 전체 대비 비율)
+        """
+        n = len(self.index)
+        if self.weights is None or n == 0:
+            return float(n), 1.0
+        p = self.weights.astype(np.float64)
+        total = p.sum()
+        if total <= 0:
+            return float(n), 1.0
+        p = p / total
+        ess = 1.0 / float(np.sum(p ** 2))
+        return ess, ess / n

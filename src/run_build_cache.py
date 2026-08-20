@@ -52,6 +52,24 @@ def inspect(cache_dir: str) -> None:
     print(f"    {'불균형(최다/최소)':18s}{u.max()/max(u.min(),1e-9):>10.1f}:1"
           f"{w.max()/max(w.min(),1e-9):>10.1f}:1")
 
+    # ── 가중 추출로 잃는 다양성 ────────────────────────────────────────────
+    ess, ratio = cache.effective_sample_size()
+    print(f"\n  유효 표본 수 (Kish ESS)")
+    print(f"    {'전체 부창':22s}{m['n_windows']:>12,d}")
+    print(f"    {'ESS (균등 환산)':22s}{ess:>12,.0f}   ({100*ratio:.1f}%)")
+    if cache.weights is not None:
+        p = cache.weights.astype(np.float64); p = p / p.sum()
+        print(f"    {'추출 확률 최대/최소':22s}{p.max()/max(p.min(), 1e-15):>11.1f}배")
+    verdict = "양호" if ratio >= 0.4 else ("주의" if ratio >= 0.25 else "낮음 - 가중치 조정 필요")
+    print(f"    {'판정':22s}{verdict:>12s}")
+    # 재사용 횟수는 과적합 판단의 실질 지표다
+    for epochs, per_epoch in [(50, 100_000)]:
+        draws = epochs * per_epoch
+        print(f"    {epochs} epoch x {per_epoch // 1000}k 샘플 = {draws:,} 추출 "
+              f"-> 평균 {draws / max(ess, 1):.0f}회 재사용")
+    print("    (ESS 는 가중치 불균등만 잰다. 스트라이드가 좁아 인접 창이 겹치는 것은")
+    print("     포함되지 않으므로 진짜 독립 정보량은 이보다 적다)")
+
     # 실제로 뽑아 보고 확인
     rng = np.random.default_rng(0)
     idx = cache.sample_indices(4000, rng)
