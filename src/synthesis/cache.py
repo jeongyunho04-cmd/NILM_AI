@@ -149,7 +149,12 @@ def build_cache(
     }
 
     recipes: List[str] = []
-    total_bytes = sum(np.prod(s) * np.dtype(_ARRAYS[n][1]).itemsize for n, s in shapes.items())
+    # np.prod 는 Windows 에서 int32 를 돌려주므로 3GB 를 넘으면 음수가 된다.
+    # 파이썬 정수로 곱해야 한다.
+    total_bytes = sum(
+        int(np.prod(s, dtype=np.int64)) * np.dtype(_ARRAYS[n][1]).itemsize
+        for n, s in shapes.items()
+    )
     print(f"[cache] 시나리오 {n_scenarios:,}개 x {scenario_seconds:.0f}초 "
           f"= 신호 {n_scenarios * scenario_seconds / 3600:.1f}시간 | 예상 {total_bytes / 1e9:.2f} GB")
 
