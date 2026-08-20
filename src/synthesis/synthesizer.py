@@ -581,16 +581,20 @@ class LoadSynthesizer:
             dur_c = int(np.random.randint(window_size_cycles // 2, window_size_cycles * 3))
             # 음수 시작을 허용하고 클램프하지 않는다. 그래야 돌입 전류가
             # 윈도우 안 임의 위치에 오거나, 이미 진행 중인 동작으로 나타난다.
-            if center_biased_placement and np.random.rand() < 0.8:
-                # 중앙을 덮는 범위에서 고른다: start <= center < start + 실제길이
-                #
+            if center_biased_placement:
                 # 요청한 dur_c 를 그대로 믿으면 안 된다. 증강기는 원본보다
                 # max_stretch(3)배 넘게 늘이지 않으므로, 핫플레이트(0.77초 펄스)에
                 # 15초를 요청하면 실제로는 2.3초짜리가 돌아온다. 그것을 모르고
                 # 멀리 배치하면 활성화가 윈도우 밖으로 나가 통째로 버려진다.
-                guaranteed = min(dur_c, 3 * self.pool.get_min_activation_cycles(app))
-                guaranteed = max(1, guaranteed)
-                start_c = int(np.random.randint(center - guaranteed + 1, center + 1))
+                guaranteed = max(1, min(dur_c, 3 * self.pool.get_min_activation_cycles(app)))
+                if np.random.rand() < 0.8:
+                    # 중앙을 덮는 범위: start <= center < start + 실제길이
+                    start_c = int(np.random.randint(center - guaranteed + 1, center + 1))
+                else:
+                    # 나머지 20% 는 온셋 위치를 다양화하되, 창과 겹치는 것은 보장한다.
+                    # 특정 기기의 표본을 늘리려는 레시피에서 그 기기가 아예 안 나오면
+                    # 레시피 자체가 무의미해진다.
+                    start_c = int(np.random.randint(-guaranteed + 1, window_size_cycles))
             else:
                 start_c = int(np.random.randint(-window_size_cycles, window_size_cycles))
             schedules.append(ApplianceSchedule(app, start_cycle=start_c, duration_cycles=dur_c))
@@ -647,6 +651,10 @@ class LoadSynthesizer:
             candidate_appliances=low_load or self.known_appliances,
             force_plugged_all=True,
             compute_gt_harmonics=compute_gt_harmonics,
+            # 이 레시피의 존재 이유가 "대기전력 속에 저부하 1대"이므로 그 1대가
+            # 반드시 창 안에 있어야 한다. 배치를 자유롭게 두면 활성화가 창 밖으로
+            # 나가 버려 대기 전용 윈도우와 구분되지 않는 표본이 섞인다.
+            center_biased_placement=True,
         )
 
     def synthesize_high_power_window(
