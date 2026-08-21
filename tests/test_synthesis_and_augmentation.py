@@ -13,10 +13,12 @@ from src.synthesis.segment_pool import SegmentPool
 from src.synthesis.grid_simulator import GridSimulator, OBSERVED_VOLTAGE_CLUSTERS
 from src.synthesis.augmentor import DataAugmentor
 from src.synthesis.synthesizer import (
+    DEFAULT_TARGET_LOOKAHEAD_CYCLES,
     SELECTION_REALISTIC,
     SELECTION_UNIFORM,
     ApplianceSchedule,
     LoadSynthesizer,
+    window_target_index,
 )
 from src.synthesis.dataset import NILMBatchGenerator
 
@@ -509,6 +511,93 @@ def test_periodic_load_preserves_duty_cycle(segment_pool):
     orig_levels = np.unique(np.round(act.target_power_w, 3))
     aug_levels = np.unique(np.round(aug.target_power_w, 3))
     assert np.isin(aug_levels, orig_levels).all(), "주기 부하가 리샘플링되었습니다"
+
+
+def test_periodic_activation_contains_off_gaps(segment_pool):
+    """주기 부하의 활성화는 통전 구간과 휴지 구간을 모두 담아야 한다.
+
+    이 조건이 깨지면 위의 '리샘플링 안 함' 검사는 통과하는데도 duty 가 사라진다.
+    통전 펄스만 잘라 온 배열은 전부 같은 전력 레벨이라, 순환 이어붙이기를 해도
+    원본 레벨 집합을 벗어나지 않기 때문이다. 실제로 그렇게 되어 있었고
+    핫플레이트가 실측 42% 통전에서 합성 95% 통전으로 부풀었다.
+    """
+    for act in segment_pool.appliance_activations["hotplate"]:
+        on_ratio = float(act.is_on.mean())
+        assert 0.05 < on_ratio < 0.95, (
+            f"핫플레이트 활성화의 통전율이 {on_ratio:.3f} 다. "
+            "0 또는 1 에 붙어 있으면 휴지 구간이 활성화 밖으로 빠져나간 것이다."
+        )
+
+
+def test_synthesized_periodic_duty_matches_measurement(synthesizer):
+    """합성 창의 핫플레이트 통전율이 실측 범위 안에 들어와야 한다.
+
+    실측: hotplate_1 42.4% / hotplate_2 31.8%, 10초당 전이 8.3~8.6회.
+    수정 전에는 통전율 95%, 전이는 타일 이음매의 1사이클 노치뿐이었다.
+    """
+    duties, off_runs = [], []
+    for _ in range(60):
+        s = synthesizer.synthesize_random_window(
+            600, force_active=["hotplate"], force_plugged_all=True,
+            target_biased_placement=True, compute_gt_harmonics=False,
+        )
+        on = s.gt_is_on["hotplate"].astype(bool)
+        if on.sum() < 60:
+            continue
+        # 통전 런의 시작/끝. 창 앞뒤의 '아직 안 켜짐/이미 끝남' 구간은 릴레이 휴지가
+        # 아니므로 세면 안 된다. 통전 런 사이의 공백만 본다.
+        d = np.diff(np.concatenate([[0], on.astype(np.int8), [0]]))
+        on_starts, on_ends = np.where(d == 1)[0], np.where(d == -1)[0]
+        # 동작 구간(첫 통전 ~ 마지막 통전) 안에서의 통전율
+        span = on_ends[-1] - on_starts[0]
+        if span > 0:
+            duties.append(float(on[on_starts[0]:on_ends[-1]].mean()))
+        off_runs += list(on_starts[1:] - on_ends[:-1])
+
+    assert duties, "핫플레이트가 든 창을 만들지 못했습니다"
+    mean_duty = float(np.mean(duties))
+    assert 0.20 < mean_duty < 0.75, (
+        f"동작 구간 내 통전율이 {mean_duty:.3f} 다. 실측은 0.32~0.42 이고, "
+        "1.0 에 가까우면 휴지 구간이 사라진 것이다."
+    )
+    # 휴지 구간이 1~2 사이클짜리 타일 이음매 노치가 아니라 실제 릴레이 공백(약 1초)이어야 한다
+    assert off_runs, "통전 런이 하나뿐입니다 - 릴레이 휴지 구간이 만들어지지 않았습니다"
+    med_off = float(np.median(off_runs))
+    assert 20 < med_off < 200, (
+        f"휴지 구간 중앙값 {med_off:.0f} 사이클. 실측 릴레이 공백은 약 64~75 사이클이다."
+    )
+
+
+def test_target_index_is_causal_not_centered():
+    """seq2point 타깃은 창 중앙이 아니라 끝쪽이어야 한다.
+
+    중앙이면 추론할 때 창 절반만큼의 미래가 필요해 실시간 스트리밍이 성립하지 않는다.
+    """
+    for w in (600, 3600, 7200):
+        idx = window_target_index(w)
+        future = w - 1 - idx
+        assert future == DEFAULT_TARGET_LOOKAHEAD_CYCLES
+        assert future <= 60, f"창 {w}: 미래 {future} 사이클이 필요합니다"
+        assert idx > w * 0.8, f"창 {w}: 타깃 {idx} 가 창 중앙 쪽에 있습니다"
+
+
+def test_generator_and_cache_use_the_same_target_index(segment_pool, tmp_path):
+    """배치 생성기와 캐시의 타깃 시점이 어긋나면 균형 보정이 조용히 틀린다."""
+    from src.synthesis.cache import WindowCache, build_cache
+
+    gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=600)
+    assert gen.target_index == window_target_index(600)
+
+    build_cache(cache_dir=tmp_path / "c", n_scenarios=3, scenario_seconds=15.0,
+                window_cycles=600, stride_cycles=150, seed=1, progress_every=0)
+    cache = WindowCache(tmp_path / "c")
+    assert cache.target_offset == gen.target_index
+
+    # 캐시가 돌려주는 라벨이 정말 그 시점의 값인지 원본 배열로 대조한다
+    w = cache.get(0)
+    s, off = int(cache.index[0, 0]), int(cache.index[0, 1])
+    raw = np.load(tmp_path / "c" / "y_on.npy", mmap_mode="r")
+    assert np.array_equal(w["y_on"], raw[s, :, off + cache.target_offset].astype(np.float32))
 
 
 def test_activation_onset_is_not_biased_to_window_start(synthesizer):

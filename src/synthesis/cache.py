@@ -13,14 +13,17 @@
 긴 시나리오를 한 번 만들어 여러 창으로 나누면 그 비용이 분산된다.
 
 [그런데 그냥 자르면 클래스 균형이 무너진다]
-레시피는 시나리오 단위로 정해지고, center_biased_placement 는 원래 창의 중앙만
+레시피는 시나리오 단위로 정해지고, target_biased_placement 는 원래 창의 타깃 시점만
 겨냥하므로 부창에는 적용되지 않는다. 실측 결과:
 
     핫플레이트   5.5% -> 0.4%
     불균형      2.7:1 -> 34.9:1
 
-그래서 이 모듈은 부창마다 중앙 라벨을 미리 계산해 두고, 역빈도 가중치로
+그래서 이 모듈은 부창마다 타깃 시점 라벨을 미리 계산해 두고, 역빈도 가중치로
 샘플링 확률을 보정한다. 가중치를 쓰지 않으면 위 불균형이 그대로 남는다.
+
+타깃 시점은 창 중앙이 아니라 끝에서 1초 안쪽이다(synthesizer.window_target_index).
+중앙을 쓰면 추론할 때 창 절반만큼의 미래가 필요해 실시간 스트리밍이 성립하지 않는다.
 
 [저장 구조]
     <cache_dir>/
@@ -40,7 +43,11 @@ import numpy as np
 
 from .dataset import DEFAULT_RECIPE_MIX, NILMBatchGenerator
 from .segment_pool import SegmentPool
-from .synthesizer import LoadSynthesizer
+from .synthesizer import (
+    DEFAULT_TARGET_LOOKAHEAD_CYCLES,
+    LoadSynthesizer,
+    window_target_index,
+)
 
 # 캐시가 담는 채널 수: 15 Real + 15 Imag + P + Q + V
 INPUT_CHANNELS = 33
@@ -97,6 +104,7 @@ def build_cache(
     recipe_mix: Optional[Dict[str, float]] = None,
     seed: Optional[int] = None,
     progress_every: int = 200,
+    target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
 ) -> Dict:
     """시나리오를 생성해 캐시를 만든다.
 
@@ -171,8 +179,11 @@ def build_cache(
         m.flush()
 
     # ── 부창 색인과 균형 보정 가중치 ────────────────────────────────────────
+    # 가중치 기준 시점은 반드시 학습 라벨과 같은 시점이어야 한다. 창 중앙으로
+    # 계산해 놓고 끝 시점 라벨로 학습하면 균형 보정이 엉뚱한 분포를 맞추게 된다.
     offsets = np.arange(0, scenario_cycles - window_cycles + 1, stride_cycles, dtype=np.int32)
-    centers = offsets + window_cycles // 2
+    target_offset = window_target_index(window_cycles, target_lookahead_cycles)
+    centers = offsets + target_offset
     on_center = mm["y_on"][:, :, centers]                      # (n, k, n_off)
     on_center = np.ascontiguousarray(on_center.transpose(0, 2, 1))  # (n, n_off, k)
     flat_on = on_center.reshape(-1, k).astype(np.int8)
@@ -193,6 +204,8 @@ def build_cache(
         "scenario_cycles": scenario_cycles,
         "window_cycles": window_cycles,
         "stride_cycles": stride_cycles,
+        "target_lookahead_cycles": int(target_lookahead_cycles),
+        "target_offset_in_window": int(target_offset),
         "n_windows": int(len(index)),
         "input_channels": INPUT_CHANNELS,
         "channel_layout": "0:15 harmonic Real, 15:30 harmonic Imag, 30 P, 31 Q, 32 V",
@@ -219,11 +232,14 @@ def compute_balance_weights(
     """부창별 샘플링 가중치. 희귀 가전이 든 창을 더 자주 뽑는다.
 
     다중 라벨 역빈도 방식이다. 창 하나에 여러 가전이 켜져 있을 수 있으므로
-    활성 가전들의 역빈도 평균을 쓴다. 가전이 하나도 안 켜진 창(대기전력 전용)은
-    별도 몫으로 고정한다 - 이 창들도 대기전력 오탐 방지에 필요하기 때문이다.
+    활성 가전들의 역빈도 중 **최댓값**을 쓴다. 평균을 쓰면 희귀 기기가 흔한 기기와
+    함께 켜진 창의 가중치가 희석된다 - 핫플레이트(희귀)와 미니PC(흔함)가 같이
+    켜진 창은 핫플레이트 표본으로서의 가치가 그대로인데 평균이 절반으로 깎는다.
+    가전이 하나도 안 켜진 창(대기전력 전용)은 별도 몫으로 고정한다 - 이 창들도
+    대기전력 오탐 방지에 필요하기 때문이다.
 
     Args:
-        on_center: (n_windows, n_appliances) int8, 각 창 중앙 시점의 on/off
+        on_center: (n_windows, n_appliances) int8, 각 창의 타깃 시점 on/off
         negative_share: 전부 꺼진 창에 배정할 표본 비율
     """
     n, k = on_center.shape
@@ -235,8 +251,8 @@ def compute_balance_weights(
 
     pos = active > 0
     if pos.any():
-        # 활성 가전들의 역빈도 평균
-        w[pos] = (on_center[pos] * inv).sum(axis=1) / np.maximum(active[pos], 1)
+        # 그 창에 든 가전 중 가장 희귀한 기기의 역빈도
+        w[pos] = (on_center[pos] * inv).max(axis=1)
         s = w[pos].sum()
         if s > eps:
             w[pos] *= (1.0 - negative_share) / s
@@ -271,6 +287,10 @@ class WindowCache:
             self.meta = json.load(fp)
         self.appliances: List[str] = self.meta["appliances"]
         self.window_cycles: int = self.meta["window_cycles"]
+        # 라벨을 뽑는 시점. 구버전 캐시(중앙 타깃)도 읽을 수 있게 기본값을 남긴다.
+        self.target_offset: int = int(
+            self.meta.get("target_offset_in_window", self.window_cycles // 2)
+        )
 
         self._arr = {
             name: np.load(self.dir / fname, mmap_mode="r")
@@ -292,10 +312,10 @@ class WindowCache:
         return rng.choice(len(self.index), size=n, replace=True, p=p / p.sum())
 
     def get(self, i: int) -> Dict[str, np.ndarray]:
-        """창 하나. 입력은 (33, W), 라벨은 창 중앙 시점의 (9,) 값."""
+        """창 하나. 입력은 (33, W), 라벨은 타깃 시점(창 끝쪽)의 (9,) 값."""
         s, off = int(self.index[i, 0]), int(self.index[i, 1])
         sl = slice(off, off + self.window_cycles)
-        mid = off + self.window_cycles // 2
+        mid = off + self.target_offset
         return {
             "X": np.asarray(self._arr["inputs"][s, :, sl], dtype=np.float32),
             "y_power": np.asarray(self._arr["y_power"][s, :, mid], dtype=np.float32),

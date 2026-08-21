@@ -79,13 +79,15 @@ class DataAugmentor:
             aug_pow = act.net_power_features.copy()
             aug_state = act.state_id.copy()
             aug_target_p = act.target_power_w.copy()
+            aug_on = act.is_on.copy()
         elif act.periodic_duty:
             # 서모스탯 주기를 보존해야 한다 - 늘이면 순환 이어붙이기, 줄이면 잘라내기
-            aug_c, aug_pow, aug_state, aug_target_p = self._tile_or_crop(
+            aug_c, aug_pow, aug_state, aug_target_p, aug_on = self._tile_or_crop(
                 act.net_harmonics_complex,
                 act.net_power_features,
                 act.state_id,
                 act.target_power_w,
+                act.is_on,
                 target_len=new_len,
             )
             includes_onset = False
@@ -96,19 +98,21 @@ class DataAugmentor:
             # 맞추려고 250배로 압축하면, 몇 분에 걸쳐 일어나는 IDLE->ACTIVE 전이가
             # 수 밀리초 만에 끝나는 파형이 된다. 실제로 그 기기는 계속 돌고 있었으므로
             # 10초짜리 창으로 보면 '진짜 10초'가 보여야 한다.
-            aug_c, aug_pow, aug_state, aug_target_p, includes_onset = self._crop_window(
+            aug_c, aug_pow, aug_state, aug_target_p, aug_on, includes_onset = self._crop_window(
                 act.net_harmonics_complex,
                 act.net_power_features,
                 act.state_id,
                 act.target_power_w,
+                act.is_on,
                 target_len=new_len,
             )
         else:
-            aug_c, aug_pow, aug_state, aug_target_p = self._warp_time_series(
+            aug_c, aug_pow, aug_state, aug_target_p, aug_on = self._warp_time_series(
                 act.net_harmonics_complex,
                 act.net_power_features,
                 act.state_id,
                 act.target_power_w,
+                act.is_on,
                 inrush_len=inrush_len,
                 target_len=new_len,
             )
@@ -161,7 +165,9 @@ class DataAugmentor:
             net_harmonics_ri=aug_ri,
             net_harmonics_complex=aug_c.astype(np.complex64),
             net_power_features=aug_pow.astype(np.float32),
-            is_on=np.ones(actual_len, dtype=np.int8),
+            # 통전이 끊긴 구간(서모스탯/릴레이 OFF)을 1 로 덮어쓰면 안 된다.
+            # 그렇게 하면 주기 부하가 연속 발열로 둔갑한다.
+            is_on=np.asarray(aug_on, dtype=np.int8),
             state_id=aug_state.astype(np.int16),
             target_power_w=aug_target_p.astype(np.float32),
             inrush_cycles=min(inrush_len, max(1, actual_len // 3)),
@@ -176,13 +182,19 @@ class DataAugmentor:
         pow_series: np.ndarray,
         state_series: np.ndarray,
         target_p: np.ndarray,
+        on_series: np.ndarray,
         target_len: int,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """서모스탯 주기를 그대로 둔 채 길이만 맞춘다.
 
         시작 위치를 매번 무작위로 잡아 순환 인덱싱하므로, 같은 원본에서도
         서모스탯 주기의 다른 위상이 잘려 나온다. 활성화 구간이 2개뿐인 오븐 같은
         기기에서 실질적인 다양성을 크게 늘려 주는 효과가 있다.
+
+        전제: 원본 활성화가 통전 구간과 휴지 구간을 **모두** 담고 있어야 한다.
+        통전 펄스만 잘라 온 배열을 여기에 넣으면 순환 이어붙이기가 휴지 구간을
+        만들어 내지 못해 100% 통전 파형이 나온다. 세션 병합은
+        SegmentPool._merge_duty_blocks 가 담당한다.
         """
         orig_len = len(c_series)
         start = int(np.random.randint(0, orig_len))
@@ -192,6 +204,7 @@ class DataAugmentor:
             pow_series[idx].copy(),
             state_series[idx].copy(),
             target_p[idx].copy(),
+            on_series[idx].copy(),
         )
 
     # ── 원본이 목표보다 길 때: 잘라내기 ─────────────────────────────────────
@@ -201,8 +214,9 @@ class DataAugmentor:
         pow_series: np.ndarray,
         state_series: np.ndarray,
         target_p: np.ndarray,
+        on_series: np.ndarray,
         target_len: int,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]:
         """긴 동작 구간에서 목표 길이만큼 연속 구간을 잘라낸다 (시간 압축 없음).
 
         어디를 자르느냐에 따라 보이는 과도현상이 달라지므로 세 위치를 섞는다.
@@ -227,6 +241,7 @@ class DataAugmentor:
             pow_series[sl].copy(),
             state_series[sl].copy(),
             target_p[sl].copy(),
+            on_series[sl].copy(),
             start == 0,
         )
 
@@ -237,9 +252,10 @@ class DataAugmentor:
         pow_series: np.ndarray,     # (L_orig, 6) float32
         state_series: np.ndarray,   # (L_orig,) int16
         target_p: np.ndarray,       # (L_orig,) float32
+        on_series: np.ndarray,      # (L_orig,) int8
         inrush_len: int,
         target_len: int,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """돌입 전류 구간은 그대로 두고 정상상태만 리샘플링해 길이를 맞춘다."""
         orig_len = len(c_series)
         inrush_len = max(0, min(inrush_len, orig_len // 2, target_len // 2))
@@ -252,17 +268,20 @@ class DataAugmentor:
                 pow_series[:take].copy(),
                 state_series[:take].copy(),
                 target_p[:take].copy(),
+                on_series[:take].copy(),
             )
 
         c_inrush = c_series[:inrush_len]
         pow_inrush = pow_series[:inrush_len]
         state_inrush = state_series[:inrush_len]
         target_p_inrush = target_p[:inrush_len]
+        on_inrush = on_series[:inrush_len]
 
         c_steady = c_series[inrush_len:]
         pow_steady = pow_series[inrush_len:]
         state_steady = state_series[inrush_len:]
         target_p_steady = target_p[inrush_len:]
+        on_steady = on_series[inrush_len:]
 
         orig_steady_len = len(c_steady)
         target_steady_len = target_len - inrush_len
@@ -286,10 +305,12 @@ class DataAugmentor:
         # 상태 ID 는 이산값이므로 최근접 이웃으로 옮긴다
         nearest_idx = np.clip(np.round(x_target * (orig_steady_len - 1)).astype(int), 0, orig_steady_len - 1)
         state_warped = state_steady[nearest_idx]
+        on_warped = on_steady[nearest_idx]  # 이진 라벨이므로 최근접 이웃
 
         return (
             np.concatenate([c_inrush, c_steady_warped], axis=0),
             np.concatenate([pow_inrush, pow_steady_warped], axis=0),
             np.concatenate([state_inrush, state_warped], axis=0),
             np.concatenate([target_p_inrush, target_p_warped], axis=0),
+            np.concatenate([on_inrush, on_warped], axis=0),
         )

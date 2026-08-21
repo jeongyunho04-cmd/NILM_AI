@@ -56,6 +56,32 @@ SELECTION_UNIFORM = "uniform"      # 9종 균등 추첨 (희귀 기기 학습 �
 # 지속 부하를 판정하는 창 길이 (초). 이보다 짧게 스쳐가는 피크는 스파이크로 본다.
 SUSTAINED_WINDOW_S = 2.0
 
+# seq2point 타깃 시점을 창 '끝'에서 몇 사이클 안쪽에 둘지.
+#
+# 창 중앙을 타깃으로 잡으면 창 절반만큼의 미래가 필요하다. 10초 창이면 5초,
+# 120초 광역 창이면 60초 지연이라 실시간 추론이 성립하지 않는다.
+# 그렇다고 0(완전 인과)으로 두면 기기가 켜지는 순간의 증거가 마지막 1샘플뿐이라
+# 돌입 전류를 쓸 수 없다 - 드라이기 냉간저항 시정수가 0.15초(9사이클)이고
+# 스위칭 과도는 그보다 뒤에 온다.
+# 60사이클(1초)을 남기면 돌입·정착 과도를 전부 포함하면서 지연은 1초에 머문다.
+DEFAULT_TARGET_LOOKAHEAD_CYCLES = 60
+
+
+def window_target_index(
+    window_size_cycles: int,
+    lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
+) -> int:
+    """창 안에서 seq2point 타깃이 놓이는 인덱스.
+
+    이 값 하나가 배치 생성기·캐시·활성화 배치 세 곳에서 같아야 한다.
+    어긋나면 캐시의 균형 가중치가 실제 학습 라벨과 다른 시점을 기준으로 계산되어
+    조용히 틀린다.
+    """
+    n = int(window_size_cycles)
+    if n <= 0:
+        return 0
+    return int(np.clip(n - 1 - int(lookahead_cycles), 0, n - 1))
+
 
 def _max_sustained_power(p_series: np.ndarray, sampling_hz: float = 60.0) -> float:
     """가장 오래 유지된 부하 크기. 순간 스파이크는 이동평균에 희석되어 잡히지 않는다."""
@@ -324,14 +350,27 @@ class LoadSynthesizer:
             t_end = t_start + place_len
             s0, s1 = src_offset, src_offset + place_len
 
-            active_set.add(app)
+            # 활성화 안에서도 통전이 끊기는 구간이 있다. 서모스탯/릴레이 부하가
+            # 그렇다 - 핫플레이트는 약 0.9초 통전 / 1.1초 휴지를 반복한다.
+            # 그 구간을 일괄 ON 으로 덮으면 실측 42% 통전이 100% 로 둔갑한다.
+            on_slice = aug_act.is_on[s0:s1].astype(bool)
+            if on_slice.any():
+                active_set.add(app)
 
-            # 활성 구간에서는 기기가 켜져 있으므로 대기 지문 대신 활성 파형이 흐른다.
+            # 동작 구간에서는 기기가 꽂힌 채 돌고 있으므로 대기 지문 대신 실측 파형이
+            # 흐른다. 휴지 구간의 전류도 그 파형 안에 이미 들어 있다.
             layer_c[app][t_start:t_end] = aug_act.net_harmonics_complex[s0:s1]
-            gt_active_p[app][t_start:t_end] = aug_act.target_power_w[s0:s1]
-            gt_standby_p[app][t_start:t_end] = 0.0  # 활성 전력에 이미 포함되어 있다
-            gt_is_on[app][t_start:t_end] = 1
-            gt_plugged[app][t_start:t_end] = 1      # 켜져 있으면 당연히 꽂혀 있다
+            gt_active_p[app][t_start:t_end] = np.where(
+                on_slice, aug_act.target_power_w[s0:s1], 0.0
+            )
+            # 휴지 구간은 '꺼진 것'이 아니라 '꽂힌 채 통전만 끊긴 것'이다.
+            # 그때 실제로 흐르는 전력(계측 바닥 제거본)을 대기 전력으로 잡아야
+            # P = Σ활성 + Σ대기 + 계측계 분해가 계속 성립한다.
+            gt_standby_p[app][t_start:t_end] = np.where(
+                on_slice, 0.0, np.maximum(0.0, aug_act.net_power_features[s0:s1, 0])
+            )
+            gt_is_on[app][t_start:t_end] = on_slice.astype(np.int8)
+            gt_plugged[app][t_start:t_end] = 1      # 돌고 있으면 당연히 꽂혀 있다
             gt_state_id[app][t_start:t_end] = aug_act.state_id[s0:s1]
 
             # 전압 환산의 기준은 '녹화 당시 그 순간의 전압'이어야 한다.
@@ -519,8 +558,9 @@ class LoadSynthesizer:
         compute_gt_harmonics: Optional[bool] = None,
         selection_mode: str = SELECTION_REALISTIC,
         sustained_power_limit_w: Optional[float] = -1.0,
-        center_biased_placement: bool = False,
+        target_biased_placement: bool = False,
         force_active: Optional[Sequence[str]] = None,
+        target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
     ) -> SyntheticLoadSample:
         """무작위 복합 윈도우를 빠르게 합성한다.
 
@@ -537,9 +577,12 @@ class LoadSynthesizer:
                     학습 표본을 확보하는 데 필요하다.
             sustained_power_limit_w: 지속 부하 상한(W). -1 이면 생성자 기본값,
                 None 이면 제한 없음. 돌입 스파이크는 제한하지 않는다.
-            center_biased_placement: 활성 구간이 윈도우 중앙(seq2point 타깃 시점)을
-                덮도록 배치를 치우친다. 특정 기기의 표본을 늘리려는 레시피에서,
-                켜 놓고도 중앙에 걸리지 않아 라벨이 0 이 되는 낭비를 줄인다.
+            target_biased_placement: 활성 구간이 seq2point 타깃 시점을 덮도록 배치를
+                치우친다. 특정 기기의 표본을 늘리려는 레시피에서, 켜 놓고도 타깃
+                시점에 걸리지 않아 라벨이 0 이 되는 낭비를 줄인다.
+                타깃은 창 중앙이 아니라 끝쪽이다 (window_target_index 참조).
+            target_lookahead_cycles: 타깃을 창 끝에서 몇 사이클 안쪽에 둘지.
+                배치 생성기·캐시와 반드시 같은 값을 써야 한다.
             force_active: 켤 가전을 직접 지정한다. 서로 다른 성격의 기기를 조합해야
                 하는 레시피(고부하 + 저부하 동시)에서 쓴다. 지정하면
                 n_active / selection_mode / candidate_appliances 는 무시된다.
@@ -582,21 +625,21 @@ class LoadSynthesizer:
         }
 
         schedules: List[ApplianceSchedule] = []
-        center = window_size_cycles // 2
+        target = window_target_index(window_size_cycles, target_lookahead_cycles)
         for app in chosen:
             plugged[app] = True  # 켜져 있으면 반드시 꽂혀 있다
             dur_c = int(np.random.randint(window_size_cycles // 2, window_size_cycles * 3))
             # 음수 시작을 허용하고 클램프하지 않는다. 그래야 돌입 전류가
             # 윈도우 안 임의 위치에 오거나, 이미 진행 중인 동작으로 나타난다.
-            if center_biased_placement:
+            if target_biased_placement:
                 # 요청한 dur_c 를 그대로 믿으면 안 된다. 증강기는 원본보다
-                # max_stretch(3)배 넘게 늘이지 않으므로, 핫플레이트(0.77초 펄스)에
-                # 15초를 요청하면 실제로는 2.3초짜리가 돌아온다. 그것을 모르고
-                # 멀리 배치하면 활성화가 윈도우 밖으로 나가 통째로 버려진다.
+                # max_stretch(3)배 넘게 늘이지 않으므로, 짧은 활성화에 긴 길이를
+                # 요청하면 실제로는 짧은 파형이 돌아온다. 그것을 모르고 멀리
+                # 배치하면 활성화가 윈도우 밖으로 나가 통째로 버려진다.
                 guaranteed = max(1, min(dur_c, 3 * self.pool.get_min_activation_cycles(app)))
                 if np.random.rand() < 0.8:
-                    # 중앙을 덮는 범위: start <= center < start + 실제길이
-                    start_c = int(np.random.randint(center - guaranteed + 1, center + 1))
+                    # 타깃 시점을 덮는 범위: start <= target < start + 실제길이
+                    start_c = int(np.random.randint(target - guaranteed + 1, target + 1))
                 else:
                     # 나머지 20% 는 온셋 위치를 다양화하되, 창과 겹치는 것은 보장한다.
                     # 특정 기기의 표본을 늘리려는 레시피에서 그 기기가 아예 안 나오면
@@ -648,6 +691,7 @@ class LoadSynthesizer:
         self,
         window_size_cycles: int = 600,
         compute_gt_harmonics: Optional[bool] = None,
+        target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
     ) -> SyntheticLoadSample:
         """대기전력이 잔뜩 깔린 상태에서 저전력 기기 딱 1대만 켜진 윈도우.
 
@@ -664,13 +708,15 @@ class LoadSynthesizer:
             # 이 레시피의 존재 이유가 "대기전력 속에 저부하 1대"이므로 그 1대가
             # 반드시 창 안에 있어야 한다. 배치를 자유롭게 두면 활성화가 창 밖으로
             # 나가 버려 대기 전용 윈도우와 구분되지 않는 표본이 섞인다.
-            center_biased_placement=True,
+            target_biased_placement=True,
+            target_lookahead_cycles=target_lookahead_cycles,
         )
 
     def synthesize_high_low_mixed_window(
         self,
         window_size_cycles: int = 600,
         compute_gt_harmonics: Optional[bool] = None,
+        target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
     ) -> SyntheticLoadSample:
         """고전력 저항 부하 1~2대와 저전력 기기 2~3대가 동시에 켜진 윈도우.
 
@@ -702,13 +748,15 @@ class LoadSynthesizer:
             force_active=chosen,
             force_plugged_all=True,
             compute_gt_harmonics=compute_gt_harmonics,
-            center_biased_placement=True,
+            target_biased_placement=True,
+            target_lookahead_cycles=target_lookahead_cycles,
         )
 
     def synthesize_high_power_window(
         self,
         window_size_cycles: int = 600,
         compute_gt_harmonics: Optional[bool] = None,
+        target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
     ) -> SyntheticLoadSample:
         """고전력 저항 부하를 반드시 1~2대 켜는 윈도우.
 
@@ -736,5 +784,6 @@ class LoadSynthesizer:
             candidate_appliances=resistive,
             plugged_prob=0.7,
             compute_gt_harmonics=compute_gt_harmonics,
-            center_biased_placement=True,
+            target_biased_placement=True,
+            target_lookahead_cycles=target_lookahead_cycles,
         )

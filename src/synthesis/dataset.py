@@ -24,10 +24,12 @@ import numpy as np
 
 from .segment_pool import SegmentPool
 from .synthesizer import (
+    DEFAULT_TARGET_LOOKAHEAD_CYCLES,
     SELECTION_REALISTIC,
     SELECTION_UNIFORM,
     LoadSynthesizer,
     SyntheticLoadSample,
+    window_target_index,
 )
 
 # 윈도우 종류별 기본 혼합 비율
@@ -79,6 +81,7 @@ class NILMBatchGenerator:
         recipe_mix: Optional[Dict[str, float]] = None,
         synthesizer: Optional[LoadSynthesizer] = None,
         compute_gt_harmonics: bool = False,
+        target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
     ):
         self.synthesizer = synthesizer or LoadSynthesizer(segment_pool=segment_pool)
         # 학습 배치에는 가전별 고조파 정답이 나가지 않는다. 전력·상태 회귀만 한다면
@@ -89,6 +92,10 @@ class NILMBatchGenerator:
         self.max_concurrent = max_concurrent_appliances
         self.include_power_channels = include_power_channels
         self.target_mode = target_mode
+        # seq2point 타깃 시점. 창 중앙이 아니라 끝쪽이다.
+        # 중앙을 쓰면 추론할 때 창 절반만큼의 미래가 필요해 실시간이 성립하지 않는다.
+        self.target_lookahead_cycles = int(target_lookahead_cycles)
+        self.target_index = window_target_index(window_size_cycles, target_lookahead_cycles)
         self.appliance_list = sorted(self.synthesizer.known_appliances)
         self.app_to_idx = {app: i for i, app in enumerate(self.appliance_list)}
 
@@ -116,15 +123,18 @@ class NILMBatchGenerator:
             )
         elif recipe == "low_load_among_standby":
             sample = self.synthesizer.synthesize_low_load_among_standby_window(
-                self.window_size, compute_gt_harmonics=gt_h
+                self.window_size, compute_gt_harmonics=gt_h,
+                target_lookahead_cycles=self.target_lookahead_cycles,
             )
         elif recipe == "high_power_resistive":
             sample = self.synthesizer.synthesize_high_power_window(
-                self.window_size, compute_gt_harmonics=gt_h
+                self.window_size, compute_gt_harmonics=gt_h,
+                target_lookahead_cycles=self.target_lookahead_cycles,
             )
         elif recipe == "high_low_mixed":
             sample = self.synthesizer.synthesize_high_low_mixed_window(
-                self.window_size, compute_gt_harmonics=gt_h
+                self.window_size, compute_gt_harmonics=gt_h,
+                target_lookahead_cycles=self.target_lookahead_cycles,
             )
         elif recipe == "unplugged_baseline":
             sample = self.synthesizer.synthesize_scenario(
@@ -164,7 +174,7 @@ class NILMBatchGenerator:
         n_apps = len(self.appliance_list)
 
         if self.target_mode == "seq2point":
-            mid = self.window_size // 2
+            mid = self.target_index
             out = {
                 "y_power": np.zeros(n_apps, dtype=np.float32),
                 "y_state": np.zeros(n_apps, dtype=np.int16),

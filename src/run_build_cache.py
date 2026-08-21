@@ -38,13 +38,17 @@ def inspect(cache_dir: str) -> None:
           f"= 신호 {m['signal_hours']}시간 | {m['bytes']/1e9:.2f} GB")
     print(f"  창 {m['window_cycles']/60:.0f}초, 스트라이드 {m['stride_cycles']/60:.2f}초 "
           f"-> 부창 {m['n_windows']:,}개")
+    tgt = m.get("target_offset_in_window", m["window_cycles"] // 2)
+    look = m["window_cycles"] - 1 - tgt
+    print(f"  타깃 시점 {tgt}/{m['window_cycles']} (창 끝에서 {look}사이클={look/60:.2f}초 안쪽)"
+          f" -> 추론 지연 {look/60:.2f}초")
     print(f"\n  레시피 구성:")
     for r, c in sorted(m["recipe_counts"].items(), key=lambda kv: -kv[1]):
         print(f"    {r:26s}{c:>7,d}  ({100*c/m['n_scenarios']:5.1f}%)")
 
     uni = cache.class_share(weighted=False)
     wei = cache.class_share(weighted=True)
-    print(f"\n  가전별 양성 라벨 비율 (창 중앙 시점)")
+    print(f"\n  가전별 양성 라벨 비율 (타깃 시점)")
     print(f"    {'가전':18s}{'보정 없음':>12s}{'가중 보정':>12s}")
     for a in cache.appliances:
         print(f"    {a:18s}{100*uni[a]:>11.1f}%{100*wei[a]:>11.1f}%")

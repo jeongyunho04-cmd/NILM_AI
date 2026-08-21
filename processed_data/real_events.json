@@ -1,0 +1,69 @@
+{
+  "_comment": [
+    "TEST_DATASET_TIMELINE_ANALYSIS.txt 를 기계가 읽을 수 있게 옮긴 것.",
+    "설계 문서 4.2절대로 **정상상태 귀속은 옮기지 않았다** - 그 부분에 오류가 확인되었다",
+    "(예: '미니PC 단독 18.9W' -> 실제 4.3W). 여기 담긴 것은 두 가지뿐이다:",
+    "  1) intervals : 그 기기가 확실히 켜져 있던 구간 (on/off F1 채점용)",
+    "  2) events    : 시각과 ΔP 가 명시된 전이 (ΔP 채점용)",
+    "uncertain 구간은 어느 쪽으로도 채점하지 않는다. 오븐이 대표적이다 -",
+    "타임라인은 히터 통전만 적어 두었고 팬/조명(state 1, is_on=1)이 언제 켜졌는지는",
+    "알 수 없다. 그 구간을 OFF 로 채점하면 모델을 부당하게 벌하게 된다.",
+    "test.csv 는 봉인 대상이라 여기 없다 (sealing.py). 최종 평가 때 별도로 옮길 것."
+  ],
+  "files": {
+    "test.2": {
+      "duration_s": 466.0,
+      "cycles": 27960,
+      "v_mean": 220.9,
+      "appliances_present": ["minipc", "beam_projector", "oven"],
+      "intervals": {
+        "minipc": {"on": [[0.0, 466.0]], "uncertain": []},
+        "beam_projector": {"on": [[105.3, 235.4], [327.1, 437.0]], "uncertain": []},
+        "oven": {
+          "on": [[127, 137], [167, 180], [207, 223], [247, 264],
+                 [287, 303], [327, 343], [372, 380], [412, 418]],
+          "uncertain": [[127.0, 420.0]],
+          "_note": "on 은 히터 통전 펄스. uncertain 은 조리 세션 전체 - 그 사이에 팬/조명만 도는 구간이 섞여 있다"
+        },
+        "electiric_kettle": {"on": [], "uncertain": []},
+        "hair_dryer": {"on": [], "uncertain": []},
+        "hotplate": {"on": [], "uncertain": []},
+        "air_conditioner": {"on": [], "uncertain": []},
+        "fan": {"on": [], "uncertain": []},
+        "laptop_charger": {"on": [], "uncertain": []}
+      },
+      "events": [
+        {"t_s": 105.3, "appliance": "beam_projector", "kind": "on",  "delta_p_w": 43.0},
+        {"t_s": 235.4, "appliance": "beam_projector", "kind": "off", "delta_p_w": -43.3},
+        {"t_s": 327.1, "appliance": "beam_projector", "kind": "on",  "delta_p_w": 46.2},
+        {"t_s": 437.0, "appliance": "beam_projector", "kind": "off", "delta_p_w": -45.0}
+      ]
+    },
+    "test3": {
+      "duration_s": 413.0,
+      "cycles": 24780,
+      "v_mean": 219.8,
+      "appliances_present": ["minipc", "beam_projector", "oven"],
+      "intervals": {
+        "minipc": {"on": [[0.0, 413.0]], "uncertain": []},
+        "beam_projector": {"on": [[102.7, 413.0]], "uncertain": []},
+        "oven": {
+          "on": [[63.4, 140.0], [145, 170], [185, 201], [225, 235],
+                 [265, 278], [305, 315], [345, 355], [385, 395]],
+          "uncertain": [[63.4, 395.0]],
+          "_note": "63.4~140 은 연속 예열, 이후는 서모스탯 주기 펄스 7회"
+        },
+        "electiric_kettle": {"on": [], "uncertain": []},
+        "hair_dryer": {"on": [], "uncertain": []},
+        "hotplate": {"on": [], "uncertain": []},
+        "air_conditioner": {"on": [], "uncertain": []},
+        "fan": {"on": [], "uncertain": []},
+        "laptop_charger": {"on": [], "uncertain": []}
+      },
+      "events": [
+        {"t_s": 63.4,  "appliance": "oven",           "kind": "on", "delta_p_w": 1157.4},
+        {"t_s": 102.7, "appliance": "beam_projector", "kind": "on", "delta_p_w": 46.7}
+      ]
+    }
+  }
+}

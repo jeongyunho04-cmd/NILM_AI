@@ -177,7 +177,7 @@ def run_full_pipeline(
             f" | GATED: {clean_stats['invalid_samples_dropped']}"
             if clean_stats["invalid_samples_dropped"] else ""
         )
-        print(f"DONE | Rows: {len(df_annotated):6d} ({len(df_annotated)/3600:4.1f}h) | "
+        print(f"DONE | Rows: {len(df_annotated):6d} ({len(df_annotated)/3600:5.1f}min) | "
               f"ON: {label_summary['on_percentage']:5.1f}% | V_ref: {clean_stats['v_ref_v']:6.1f}V{drop_note}")
 
     # ── 복합 부하 검증 파일: 정제만 하고 세그먼트 풀과 분리된 곳에 저장 ──────

@@ -194,12 +194,23 @@ class GridSimulator:
         sigma = env.drift_std_v * np.sqrt(2.0 * theta - theta * theta)
 
         noise = np.random.normal(0.0, sigma, size=n_samples)
-        drift = np.empty(n_samples, dtype=np.float64)
         # 첫 값은 정상상태 분포에서 뽑아 초기 과도구간이 생기지 않게 한다.
-        drift[0] = np.random.normal(0.0, env.drift_std_v)
+        x0 = np.random.normal(0.0, env.drift_std_v)
         decay = 1.0 - theta
-        for i in range(1, n_samples):
-            drift[i] = drift[i - 1] * decay + noise[i]
+
+        # x[i] = decay*x[i-1] + noise[i] 는 1차 IIR 필터다.
+        # 파이썬 for 문으로 돌면 60초 창(3,600 사이클)에서 창당 1.6ms 를 쓴다 -
+        # 합성 전체의 7% 였다. lfilter 는 같은 점화식을 C 로 돈다.
+        noise = noise.copy()
+        noise[0] = x0
+        try:
+            from scipy.signal import lfilter
+            drift = lfilter([1.0], [1.0, -decay], noise)
+        except ImportError:
+            drift = np.empty(n_samples, dtype=np.float64)
+            drift[0] = x0
+            for i in range(1, n_samples):
+                drift[i] = drift[i - 1] * decay + noise[i]
         return drift.astype(np.float32)
 
     def _generate_external_sags(self, n_samples: int, env: VoltageEnvironment) -> np.ndarray:
@@ -367,7 +378,14 @@ class GridSimulator:
         load_class = get_load_class(appliance_type)
         i_exp = self._LOAD_EXPONENTS[load_class][0]
 
-        scale = np.power(kappa_col, i_exp)
+        # np.power 는 임의 실수 지수를 다루느라 느리다. 실제로 쓰이는 지수는
+        # 1.0(저항) / -1.0(SMPS) / 0.7(모터) 셋뿐이라 앞 둘은 특수화한다.
+        if i_exp == 1.0:
+            scale = kappa_col
+        elif i_exp == -1.0:
+            scale = 1.0 / kappa_col
+        else:
+            scale = np.power(kappa_col, i_exp)
         mod_c = harmonics_complex * scale
 
         # SMPS 는 저전압에서 정류 다이오드 도통각이 좁아져 3차 고조파 왜율이 상승한다.
@@ -386,7 +404,11 @@ class GridSimulator:
     ) -> np.ndarray:
         """전압 변화에 따른 유효전력 변화를 적용한다. P ∝ V^exp"""
         exp = self.power_voltage_exponent(appliance_type)
+        p = np.asarray(power_w, dtype=np.float32)
         if exp == 0.0:
-            return np.asarray(power_w, dtype=np.float32)  # SMPS 정전력
+            return p                                       # SMPS 정전력
+        if not p.any():
+            return p                                       # 꺼진 기기 - 계산할 것이 없다
         k = np.clip(np.asarray(kappa_v, dtype=np.float32), 0.80, 1.20)
-        return (np.asarray(power_w, dtype=np.float32) * np.power(k, exp)).astype(np.float32)
+        scale = k * k if exp == 2.0 else (k if exp == 1.0 else np.power(k, exp))
+        return (p * scale).astype(np.float32)

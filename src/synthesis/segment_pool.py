@@ -34,6 +34,11 @@ from src.preprocessing.file_registry import FileRole, get_load_class, is_periodi
 
 # 활성화로 인정할 최소 길이 (0.5초)
 MIN_ACTIVATION_CYCLES = 30
+# 주기 부하의 통전 펄스를 하나의 '세션'으로 묶을 때 허용하는 최대 공백.
+# 측정 주기(duty_period)의 이 배수까지는 릴레이/서모스탯이 끊은 것으로 보고 이어 붙인다.
+PERIODIC_MERGE_GAP_FACTOR = 2.0
+# 배수 규칙이 폭주하지 않도록 둔 절대 상한 (10초). 이보다 긴 공백은 세션이 끊긴 것이다.
+PERIODIC_MERGE_GAP_CAP_CYCLES = 600
 # 대기 지문을 신뢰하려면 최소 이만큼의 OFF 샘플이 필요하다 (1초)
 MIN_STANDBY_SAMPLES = 60
 # 대기 지터 풀로 보관할 최대 샘플 수 (메모리 상한)
@@ -125,9 +130,36 @@ class SegmentPool:
         self,
         npz_dir: Union[str, Path] = "processed_data/npz",
         strict_role_check: bool = True,
+        time_split: str = "all",
+        holdout_frac: float = 0.2,
     ):
+        """
+        Args:
+            time_split: 원본 녹화의 어느 구간을 쓸지.
+                "all"     - 전체 (기본. 기존 동작과 같다)
+                "train"   - 앞 (1-holdout_frac)
+                "holdout" - 뒤 holdout_frac
+            holdout_frac: 홀드아웃으로 뗄 뒷부분 비율.
+
+        **시드만 바꾼 합성 테스트 셋은 홀드아웃이 아니다.** 같은 측정 파형을 다시
+        쓰기 때문이다. 오븐은 활성화가 2개뿐이라 모델이 그 파형 자체를 외울 수 있고,
+        그 상태로 잰 "테스트 성능"은 의미가 없다.
+
+        파일 단위로 나눌 수도 없다. 에어컨·오븐·전기포트·빔프로젝터는 원본이
+        1개씩이라 홀드아웃으로 빼면 학습에서 통째로 사라진다.
+
+        그래서 시간축으로 나눈다. 각 녹화의 뒤 20% 는 학습에 쓰지 않고,
+        테스트 셋은 그 구간으로만 만든다. 9종 전부에 대해 안 본 파형이 생긴다.
+        """
+        if time_split not in ("all", "train", "holdout"):
+            raise ValueError(f"time_split 은 all/train/holdout 중 하나여야 합니다: {time_split!r}")
+        if not 0.0 < holdout_frac < 1.0:
+            raise ValueError(f"holdout_frac 은 0 과 1 사이여야 합니다: {holdout_frac}")
+
         self.npz_dir = Path(npz_dir)
         self.strict_role_check = strict_role_check
+        self.time_split = time_split
+        self.holdout_frac = float(holdout_frac)
 
         self.appliance_activations: Dict[str, List[ApplianceActivation]] = {}
         self.standby_profiles: Dict[str, StandbyProfile] = {}
@@ -151,7 +183,7 @@ class SegmentPool:
         if not npz_files:
             raise FileNotFoundError(f"No .npz files found in {self.npz_dir}. Run preprocessing first!")
 
-        loaded = [(f, load_nilm_npz(f)) for f in npz_files]
+        loaded = [(f, self._apply_time_split(load_nilm_npz(f))) for f in npz_files]
 
         # 1차: 배경 노이즈 기준을 먼저 만든다.
         #      기기의 순수 전류를 뽑으려면 계측계 기준값이 먼저 있어야 한다.
@@ -204,6 +236,33 @@ class SegmentPool:
             self.standby_profiles[app] = self._merge_standby_profiles(app, profiles)
 
         self._build_legacy_noise_view()
+
+    def _apply_time_split(self, data: dict) -> dict:
+        """녹화의 앞/뒤 구간만 남긴다. 길이 N 인 시계열 배열만 자른다.
+
+        노이즈 파일도 함께 자른다. 배경 노이즈 파형이 학습과 테스트에서 같으면
+        모델이 그 실현값을 외울 수 있고, 저부하 창에서는 그 영향이 작지 않다.
+        (노이즈는 정상 과정이라 기준 상수 자체는 어느 구간에서 뽑아도 거의 같다 —
+         테스트로 고정해 두었다)
+        """
+        if self.time_split == "all":
+            return data
+
+        lengths = {v.shape[0] for k, v in data.items()
+                   if isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] > 1}
+        if not lengths:
+            return data
+        n = max(lengths)
+        cut = int(round(n * (1.0 - self.holdout_frac)))
+        lo, hi = (0, cut) if self.time_split == "train" else (cut, n)
+        if hi - lo < MIN_ACTIVATION_CYCLES:
+            # 너무 짧게 잘리면 아무것도 못 뽑는다. 그대로 두고 상위에서 걸러지게 한다.
+            return data
+
+        out = {}
+        for k, v in data.items():
+            out[k] = v[lo:hi] if (isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] == n) else v
+        return out
 
     def _register_noise_reference(self, stem: str, data: dict, meta: dict):
         """무부하 노이즈 파일 하나를 계측계 기준값으로 등록한다."""
@@ -346,9 +405,18 @@ class SegmentPool:
         noise_ref: NoiseReference,
         v_ref: float,
     ):
-        """is_on == 1 인 연속 구간을 기기 순수 전류로 분리해 저장한다."""
+        """기기가 동작한 연속 구간을 기기 순수 전류로 분리해 저장한다.
+
+        품질 게이팅에 걸렸거나 보간으로 채운 샘플(is_valid == 0)은 계측값이 아니므로
+        활성화에 넣지 않는다. 이전에는 대기 지문 추출에만 이 조건을 걸어서,
+        보간으로 만들어진 가짜 사이클이 활성 세그먼트로 흘러들었다.
+        """
         is_on = data["is_on"]
-        on_indices = np.where(is_on == 1)[0]
+        valid = (
+            data["is_valid"] == 1
+            if "is_valid" in data else np.ones(len(is_on), dtype=bool)
+        )
+        on_indices = np.where((is_on == 1) & valid)[0]
         if len(on_indices) == 0:
             return
 
@@ -360,13 +428,23 @@ class SegmentPool:
         # 실제로는 한 번의 조리 세션 안에서 일정 주기로 반복되는 것이므로,
         # 그 주기를 기록해 두어야 긴 타임라인에서 세션 형태로 다시 묶을 수 있다.
         # (기록하지 않으면 20분 조리가 2시간에 흩뿌려진 낱개 펄스가 되어 버린다)
+        duty_period: Optional[int] = None
         if periodic and len(blocks) >= 3:
             starts = np.array([b[0] for b in blocks], dtype=np.int64)
             intervals = np.diff(starts)
             # 세션이 끊긴 자리의 긴 공백은 빼고 본다
             intervals = intervals[intervals < np.percentile(intervals, 75) * 3 + 1]
             if len(intervals):
-                self.duty_period_cycles[appliance_type] = int(np.median(intervals))
+                duty_period = int(np.median(intervals))
+                self.duty_period_cycles[appliance_type] = duty_period
+
+        # 펄스를 세션으로 묶는다. 이것을 하지 않으면 통전 구간만 활성화가 되어
+        # 릴레이가 끊은 OFF 구간이 통째로 사라진다. 그 상태로 증강기가 길이를 맞추면
+        # 실측 42% 통전인 핫플레이트가 95% 통전(사실상 연속 발열)으로 합성된다.
+        # 오븐은 히터가 꺼져도 팬/조명이 남아 is_on 이 1로 유지되므로 애초에
+        # 세션 하나가 통째로 잡히고(블록 2개 < 3), 여기서 손대지 않는다.
+        if duty_period:
+            blocks = self._merge_duty_blocks(blocks, duty_period, valid)
 
         for block in blocks:
             if len(block) < MIN_ACTIVATION_CYCLES:
@@ -407,6 +485,40 @@ class SegmentPool:
                 v_ref_v=v_ref,
                 periodic_duty=periodic,
             ))
+
+    @staticmethod
+    def _merge_duty_blocks(
+        blocks: List[np.ndarray], duty_period: int, valid: np.ndarray
+    ) -> List[np.ndarray]:
+        """주기 부하의 통전 펄스들을 하나의 동작 세션으로 이어 붙인다.
+
+        릴레이가 끊은 짧은 공백은 '기기가 꺼진 것'이 아니라 동작의 일부다.
+        공백을 세션 안에 남겨 두어야 증강기가 길이를 맞출 때 통전율이 보존된다.
+
+        경계는 측정된 통전 주기에서 끌어온다. 실측 공백 분포를 보면 릴레이 공백과
+        세션 단절이 확실히 갈린다.
+            핫플레이트1  공백 최대  89사이클(1.5초)   주기 약 125사이클
+            핫플레이트2  공백 대부분 78사이클, 세션 단절 1건 620사이클(10.3초)
+        주기의 2배(약 250사이클)면 릴레이 공백은 전부 잇고 세션 단절은 남긴다.
+        """
+        limit = int(min(PERIODIC_MERGE_GAP_FACTOR * duty_period, PERIODIC_MERGE_GAP_CAP_CYCLES))
+        merged: List[np.ndarray] = []
+        start = int(blocks[0][0])
+        end = int(blocks[0][-1])
+
+        for blk in blocks[1:]:
+            b0, b1 = int(blk[0]), int(blk[-1])
+            gap = b0 - end - 1
+            # 공백이 짧고 그 안이 전부 유효 계측일 때만 잇는다.
+            # 품질 게이팅에 걸린 구간을 가로질러 이으면 보간값이 세션에 들어온다.
+            if 0 <= gap <= limit and bool(valid[end + 1:b0].all()):
+                end = b1
+                continue
+            merged.append(np.arange(start, end + 1, dtype=np.int64))
+            start, end = b0, b1
+
+        merged.append(np.arange(start, end + 1, dtype=np.int64))
+        return merged
 
     def _build_legacy_noise_view(self):
         """구버전 API 호환용 노이즈 배열을 만든다."""
