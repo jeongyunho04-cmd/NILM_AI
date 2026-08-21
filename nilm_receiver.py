@@ -146,10 +146,16 @@ assert CYC_SIZE == 104, f"CYC_SIZE={CYC_SIZE}, 펌웨어와 어긋남"
 
 # 이 시간 동안 무수신이면 죽은 연결로 보고 끊는다.
 # 펌웨어는 ACK가 안 오면 같은 프레임을 2.5초 간격으로 최대 5번까지 다시
-# 보낸다(nilm_link.h). 그동안 WiFi가 정말 막혀 있으면 이쪽엔 아무것도 안
-# 들어오는데, 이 값이 짧으면 곧 되살아날 연결을 먼저 끊어 버린다.
-# 실제로 5초로 두었더니 9초짜리 정체에서 연결이 끊기고 ESP 재접속까지
-# 겹쳐 공백이 더 커졌다. 펌웨어가 한 프레임에 쓰는 12.5초보다 길게 잡는다.
+# 보낸다(nilm_link.h 의 ACK_TIMEOUT_MS x (TX_RETRIES+1) = 12.5초). 그동안
+# WiFi가 정말 막혀 있으면 이쪽엔 아무것도 안 들어오는데, 이 값이 짧으면 곧
+# 되살아날 연결을 먼저 끊어 버린다. 실제로 5초로 두었더니 9초짜리 정체에서
+# 연결이 끊기고 ESP 재접속까지 겹쳐 공백이 더 커졌다.
+#
+# 재전송 한도를 넘겨도 큐가 3/4 미만이면 보드는 그 프레임을 계속 붙들고
+# 재시도한다(NILM_LINK_QUEUE_DROP_LEVEL). 그때도 2.5초마다 바이트가 나오므로
+# 이 타이머는 리셋되고, 15초로도 헛발동하지 않는다. 되돌아오는 길이 완전히
+# 막힌 동안에는 보드가 5초마다 탐침 한 장만 내보낸다(TX_PROBE_MS) - 그것도
+# 못 도착하는 상황이면 15초에 소켓을 놓는 것이 맞다.
 #
 # 이 값은 반드시 펌웨어의 NILM_LINK_DEAD_MS(20초)보다 **작아야** 한다.
 # 보드가 재접속을 걸기 전에 낡은 소켓을 비워 둬야 그 연결을 곧바로 받는다.
@@ -493,29 +499,55 @@ def summary_line(d: dict) -> str:
 CAUSE_RECV = "recv"    # 프레임은 왔는데 수신기가 파싱 못 해 버림
 CAUSE_BOARD = "board"  # 프레임이 선로에 나오지도 않았다
 
+EMPTY_DELTA = {"crc_err": 0, "resync": 0, "dup": 0}
 
-def classify_loss(delta: dict, dwall: float) -> tuple:
-    """유실 하나의 원인을 파서 카운터의 증분으로 가른다.
 
-    유실 직전 구간에서 CRC오류나 재동기가 늘었다면, 그 프레임은 도착했으나
-    깨져서 버려진 것이다(바이트 무결성 문제).
+def gap_evidence(delta: dict, dwall: float) -> dict:
+    """공백 구간 하나에 대한 '손상 증거' 묶음.
 
-    셋 다 그대로인데 seq만 건너뛰었다면 프레임이 선로에 나오지도 않은 것이다.
-    여기서 멈춰야 한다 - 수신기는 보드의 큐 상태를 볼 수 없으므로 그 이상은
-    단정할 수 없다. 원인은 둘 중 하나이고, 가르려면 펌웨어의 drop 카운터가
-    필요하다:
-      - 큐 축출     : 링크가 생산 속도를 못 따라가 오래된 것부터 밀려났다.
-                      설계된 동작이다(항상 최근 20초를 유지한다).
-      - 보드가 잃음 : 보냈다고 여기는데 도착하지 않았다. ACK 처리나 ESP 의심.
+    한 공백(seq a+1 .. b-1)에 속한 모든 유실이 이 dict 하나를 공유한다.
+    핵심은 budget 이다: 이 구간의 CRC/재동기로 **설명할 수 있는 최대 프레임
+    수**이고, 유실을 한 장 판정할 때마다 한 장씩 소비된다.
 
-    예전에는 이 경우를 "ACK 처리를 의심하라"고 단정했는데, 큐 축출까지 같은
-    분류로 묶여서 멀쩡한 동작을 버그로 지목했다.
+    예전에는 증거의 양을 전혀 안 봤다. delta["crc_err"] > 0 이기만 하면
+    그 구간의 유실을 전부 "도착했으나 깨짐"으로 분류했다. 실측에서
+    CRC 1건 + 재동기 2,626바이트(≈0.8프레임)를 근거로 6프레임(19,278바이트)
+    전부가 그렇게 분류됐고, 그래서 최종 요약이 "STM32->ESP UART 의 바이트
+    무결성 문제"를 지목했다. 실제로는 18kB가 TCP 스트림에 들어오지도 않은
+    것이라(= 보드/ESP가 안 내보낸 것) 원인 지목이 통째로 틀렸다.
 
-    dwall(직전 프레임과의 벽시계 간격)은 판정에 쓰지 않고 참고로만 찍는다.
+    설명 가능량 = CRC 오류 건수(깨진 채 도착한 장) + 재동기 바이트 / 프레임크기
+    (프레임 경계에서 잘려 나온 부스러기). 이걸 넘는 몫은 CAUSE_BOARD 다.
     """
-    if delta["crc_err"] > 0 or delta["resync"] > 0:
+    explain = delta.get("crc_err", 0) + delta.get("resync", 0) // FRAME_SIZE
+    return {
+        "crc_err": delta.get("crc_err", 0),
+        "resync": delta.get("resync", 0),
+        "dup": delta.get("dup", 0),
+        "dwall": dwall,      # 공백 앞뒤 프레임의 벽시계 간격 [s]
+        "n": 0,              # 이 공백에 속한 유실 후보 장수
+        "explain": explain,  # 표시용(불변)
+        "budget": explain,   # 판정하며 소비되는 잔량
+    }
+
+
+def classify_loss(ev: dict) -> tuple:
+    """유실 한 장의 원인을, 그 구간에 남은 증거를 한 장분 소비해 가른다.
+
+    증거가 남아 있으면 "도착했으나 깨짐"(바이트 무결성 문제)이다.
+    증거가 바닥나면 그 프레임은 선로에 나오지도 않은 것이다. 여기서 멈춰야
+    한다 - 수신기는 보드의 큐 상태를 볼 수 없으므로 그 이상은 단정할 수
+    없고, 가르려면 펌웨어의 drop 카운터가 필요하다:
+      - drop 이 같이 올랐다 -> 큐 축출. 큐가 3/4 이상 차서 가장 오래된 것을
+                               버린 것이고, 설계된 동작이다(항상 최근
+                               15초를 유지한다).
+      - drop 은 그대로다    -> 보드는 내보냈는데 도착하지 않았다.
+                               ESP 가 UART 입력을 흘린 것(버퍼 넘침)이다.
+    """
+    if ev["budget"] > 0:
+        ev["budget"] -= 1
         return CAUSE_RECV, "수신기 폐기(도착했으나 깨짐)"
-    return CAUSE_BOARD, "보드가 안 보냄"
+    return CAUSE_BOARD, "보드/ESP가 안 내보냄(선로에 안 나옴)"
 
 
 def loss_str(got: int, lost: int) -> str:
@@ -578,14 +610,15 @@ def print_summary(frames: int, lost: int, stats: dict, dur: float, csv_path,
         print(f"  유실 원인: 수신기 폐기 {r}프레임 ({r / lost * 100:.0f}%)"
               f" / 보드가 안 보냄 {b}프레임 ({b / lost * 100:.0f}%)")
         if b > r:
-            print("  ! 대부분이 '보드가 안 보냄'입니다. 프레임이 선로에 나오지도"
-                  " 않았다는 뜻입니다. 여기서부터는 펌웨어 로그의 drop 카운터와"
-                  " 맞춰 봐야 갈립니다:")
-            print("      drop 이 같이 올랐다 -> 큐 축출. 링크가 생산 속도를 못"
-                  " 따라간 것이고, 설계된 동작입니다. resent 와 무음 구간을"
-                  " 보세요.")
-            print("      drop 은 그대로다    -> 보드는 보냈다고 여기는데 도착하지"
-                  " 않았습니다. ACK 처리나 ESP 쪽을 의심하세요.")
+            print("  ! 대부분이 '보드/ESP가 안 내보냄'입니다. 프레임이 선로에"
+                  " 나오지도 않았다는 뜻입니다. 여기서부터는 펌웨어 로그의"
+                  " drop / resent 카운터와 맞춰 봐야 갈립니다:")
+            print("      drop 이 같이 올랐다 -> 큐 축출(q 가 30 이상에 붙어"
+                  " 있었을 겁니다). 링크가 생산 속도를 못 따라간 것이고,"
+                  " 설계된 동작입니다.")
+            print("      drop 은 0인데 유실  -> ESP 가 UART 입력을 흘렸습니다"
+                  " (내부 버퍼 넘침). resent 가 같이 튀었다면 재전송이 그"
+                  " 넘침을 키운 것이니, 위 '무음 N초' 값과 함께 보세요.")
         elif r > 0:
             print("  ! 대부분이 '수신기 폐기'입니다. 프레임은 도착했는데 깨져"
                   " 있었다는 뜻이라, STM32->ESP UART 구간의 바이트 무결성"
@@ -840,26 +873,35 @@ def main():
                     # 시점의 값이 잡힌다. 원인 판정은 사건이 난 순간의
                     # CRC/재동기 증분으로 해야 의미가 있다.
                     if (seq_prev is not None) and (s > seq_prev + 1):
-                        snap = {k: stats[k] - stat_prev[k] for k in stats}
-                        dw = t_recv - t_prev
+                        delta = {k: stats[k] - stat_prev[k] for k in stats}
+                        gap_ev = gap_evidence(delta, t_recv - t_prev)
                         for q in range(seq_prev + 1, min(s, seq_prev + 1 + 64)):
                             if q not in got_seq:
-                                pending.setdefault(q, (snap, dw))
+                                # 이 공백의 유실들은 증거 묶음 하나를 공유한다.
+                                # 그래야 손상 증거가 장수만큼 복제되지 않는다.
+                                if pending.setdefault(q, gap_ev) is gap_ev:
+                                    gap_ev["n"] += 1
 
                     # 이제 와서는 절대 안 올 seq 를 유실로 확정한다.
                     while lost_scan + REORDER_MAX < seq_max:
                         if lost_scan not in got_seq:
                             lost += 1
                             c_lost += 1
-                            snap, dw = pending.pop(
-                                lost_scan,
-                                ({k: 0 for k in stats}, 0.0))
-                            cause, why = classify_loss(snap, dw)
+                            ev = pending.pop(lost_scan, None)
+                            if ev is None:
+                                ev = gap_evidence(EMPTY_DELTA, 0.0)
+                            cause, why = classify_loss(ev)
                             cause_lost[cause] += 1
+                            # 공백 폭과 무음 시간을 같이 찍는다. 이 둘만 있어도
+                            # "순간 손상"과 "수 초짜리 정체"가 즉시 갈린다 -
+                            # 예전에는 dwall 을 계산해 놓고 쓰지 않아, 6장짜리
+                            # 구멍과 1장짜리 손상이 똑같은 줄로 보였다.
                             print(f"[!] 프레임 유실 확정 (seq {lost_scan}) | "
-                                  f"CRC +{snap['crc_err']} "
-                                  f"재동기 +{snap['resync']} "
-                                  f"중복 +{snap['dup']}  -> {why}")
+                                  f"공백 {ev['n']}장 / 무음 {ev['dwall']:.1f}초 | "
+                                  f"CRC +{ev['crc_err']} "
+                                  f"재동기 +{ev['resync']}B "
+                                  f"(손상으로 설명 가능 {ev['explain']}장)"
+                                  f"  -> {why}")
                         else:
                             got_seq.discard(lost_scan)   # 다 쓴 것은 버린다
                         lost_scan += 1
@@ -886,9 +928,10 @@ def main():
                     tail = {CAUSE_RECV: 0, CAUSE_BOARD: 0}
                     while lost_scan <= seq_max:
                         if lost_scan not in got_seq:
-                            snap, dw = pending.pop(
-                                lost_scan, ({k: 0 for k in stats}, 0.0))
-                            cause, _ = classify_loss(snap, dw)
+                            ev = pending.pop(lost_scan, None)
+                            if ev is None:
+                                ev = gap_evidence(EMPTY_DELTA, 0.0)
+                            cause, _ = classify_loss(ev)
                             cause_lost[cause] += 1
                             tail[cause] += 1
                         lost_scan += 1
