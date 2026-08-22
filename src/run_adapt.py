@@ -132,7 +132,9 @@ def main() -> int:
     # (w_cons 0.4 / w_harm 0.1 / w_hedge 0)은 **스윕 6개 조합 중 최악**이었다
     # (12.12.2절: L_cons 가 L_harm 보다 38.8배 강해 배분을 결정하지 못한다).
     # 기본값으로 남겨 두면 아무 옵션 없이 돌린 사람이 그 조합을 얻는다.
-    ap.add_argument("--init", default="results/cnn_v15.pt", help="1단계 체크포인트")
+    ap.add_argument("--init", default="results/cnn_v17.pt",
+                    help="1단계 체크포인트. v17 은 듀티 주기 무작위화로 다시 학습한 것이고 "
+                         "1단계만으로 v15 의 2단계 결과를 앞선다 (12.17절)")
     ap.add_argument("--steps", type=int, default=1000)
     ap.add_argument("--batch", type=int, default=256, help="실측/합성 각각의 배치 크기")
     ap.add_argument("--lr", type=float, default=3e-5, help="1단계(3e-4)의 1/10")
