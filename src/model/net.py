@@ -125,6 +125,7 @@ class NILMNet(nn.Module):
         prior_beta: float = 0.5,
         wide_summary: bool = False,
         periodicity: bool = False,
+        fine_dropout: float = 0.0,
         min_on_w: Optional[Sequence[float]] = None,
     ):
         super().__init__()
@@ -136,6 +137,15 @@ class NILMNet(nn.Module):
         # 12.19.4 의 후보 1 / 2. 서로 독립이라 따로 켜서 귀속한다.
         self.wide_summary = bool(wide_summary)     # 광역에도 amax + 창끝 슬라이스
         self.periodicity = bool(periodicity)       # 자기상관 + 교차율
+        # **갈래 드롭아웃** (12.21절). 학습 중 이 확률로 세밀 갈래 특징을 통째로
+        # 가려, 광역만으로도 답할 수 있게 강제한다.
+        #
+        # 근거: 두 갈래 다 합성에서 A/B 를 선형으로 완벽히 가른다 (AUC 1.0000 /
+        # 0.9963). 그런데 **합성에서 학습한 선형 probe 를 실측에 옮기면 세밀은
+        # 0.3197 로 뒤집히고 광역은 0.6874 로 옳은 방향을 유지한다.** 세밀이 합성에서
+        # 더 강하니 학습이 그쪽으로 몰리고(로짓 기여 7:1), 실측에서 그것이 뒤집히면
+        # 백업이 없다. 정보는 광역에 있는데 쓰는 법을 안 배운 것이다.
+        self.fine_dropout = float(fine_dropout)
         w_on = ([MIN_ON_W.get(a, 0.0) for a in self.appliances]
                 if min_on_w is None else list(min_on_w))
         self.register_buffer(
@@ -190,6 +200,23 @@ class NILMNet(nn.Module):
             # 눌려 수렴이 느려진다 (2.4절).
             with torch.no_grad():
                 hd.bias[self.i_on] = on_bias_init
+        # 세밀 유래 차원 표식. **연결 순서를 바꾸지 않고** 마스킹만 한다.
+        # 순서를 바꾸면 이전 체크포인트가 뒤섞인 입력을 받는다 (실제로 한 번 겪었다).
+        fine_flags: List[int] = (
+            [1] * FINE_CHANNELS + [1] * c1 + [1] * c1 + [1] * c2 + [1] * c2 + [1] * c2
+            + [0] * w2                                        # 광역 평균
+            + ([0] * (w2 * 2) if self.wide_summary else [])   # 광역 amax + 창끝
+            + [1, 1, 0, 0]                                    # fp_max, fp_min, wp_max, wp_mean
+        )
+        if self.periodicity:
+            fine_flags += ([1] * len(PERIOD_LAGS_FINE) + [0] * len(PERIOD_LAGS_WIDE)
+                           + [1, 0])                          # 교차율 세밀/광역
+        assert len(fine_flags) == trunk_in, (len(fine_flags), trunk_in)
+        # persistent=False — 옛 체크포인트에 없는 키라 state_dict 호환을 깨면 안 된다.
+        self.register_buffer("fine_dim_mask",
+                             torch.tensor(fine_flags, dtype=torch.float32),
+                             persistent=False)
+
         # 전력 혼합에서 state 0(OFF_STANDBY)은 뺀다 — 켜진 상태들만 섞어야 한다.
         on_states = self.state_mask.clone()
         on_states[:, 0] = 0.0
@@ -226,7 +253,14 @@ class NILMNet(nn.Module):
                 _autocorr(fp, PERIOD_LAGS_FINE), _autocorr(wp, PERIOD_LAGS_WIDE),
                 _crossing_rate(fp)[:, None], _crossing_rate(wp)[:, None],
             ], dim=1))
-        z = self.trunk(torch.cat(feats, dim=1))
+        x = torch.cat(feats, dim=1)
+        if self.training and self.fine_dropout > 0:
+            # 창 단위로 세밀 갈래를 통째로 가린다. 부분 드롭아웃이 아니라 **갈래
+            # 전체**여야 광역만으로 답하는 법을 배운다.
+            keep = (torch.rand(x.shape[0], 1, device=x.device)
+                    >= self.fine_dropout).to(x.dtype)
+            x = x * (1.0 - self.fine_dim_mask[None] * (1.0 - keep))
+        z = self.trunk(x)
 
         o = torch.stack([hd(z) for hd in self.heads], dim=1)   # (B, K, 13)
         on_logit = o[..., self.i_on]

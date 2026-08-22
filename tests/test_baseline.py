@@ -176,3 +176,62 @@ def test_chunk_seed_is_reproducible_and_decorrelated():
     seeds = [chunk_seed(3, i) for i in range(64)]
     assert len(set(seeds)) == 64, "청크 시드가 충돌합니다"
     assert chunk_seed(0, 1) != chunk_seed(1, 0), "seed_base 와 index 가 뒤섞였습니다"
+
+
+def test_trunk_input_layout_is_frozen():
+    """`trunk` 입력의 **연결 순서**가 조용히 바뀌면 안 된다 (설계 문서 12.21.4절).
+
+    실제로 겪은 사고다. `fine_dropout` 을 넣으면서 창 통계 4개를 세밀 2개와 광역
+    2개로 쪼개 `feats` 중간에 삽입했더니 순서가 바뀌었고, 저장된 체크포인트가
+    **뒤섞인 입력**을 받았다. 형상이 맞고 오류도 안 나서 `cnn_v17` 의 test_4
+    정답률이 1.2% -> 0.0% 로 떨어진 것을 성능 변화로 읽을 뻔했다.
+
+    여기서는 각 구간이 무엇인지 고정한다. 순서를 바꿔야 할 이유가 생기면 이
+    테스트가 먼저 깨지고, 그때 옛 체크포인트를 어떻게 할지 결정하게 된다.
+    """
+    import torch
+    from src.model.inputs import FINE_CHANNELS
+    from src.model.net import NILMNet
+
+    m = NILMNet(["a", "b"], [2, 2])
+    c1, c2, w2 = 64, 128, 64
+    # [원본타깃, tap0, tap1, 깊은평균, 깊은최대, 깊은타깃, 광역평균, 창통계4]
+    expected = [FINE_CHANNELS, c1, c1, c2, c2, c2, w2, 4]
+    assert m.trunk[0].in_features == sum(expected) == 618
+
+    # 세밀 유래 차원은 앞에서부터 연속이고, 창통계의 앞 2개가 추가로 세밀이다.
+    mask = m.fine_dim_mask
+    n_fine_conv = FINE_CHANNELS + c1 + c1 + c2 + c2 + c2      # 552 - 2 = 550
+    assert mask[:n_fine_conv].sum() == n_fine_conv, "세밀 conv 구간이 앞에 연속이 아닙니다"
+    assert mask[n_fine_conv:n_fine_conv + w2].sum() == 0, "광역 평균 자리가 어긋났습니다"
+    assert list(mask[-4:]) == [1.0, 1.0, 0.0, 0.0], (
+        "창통계 순서가 (fp_max, fp_min, wp_max, wp_mean) 이 아닙니다"
+    )
+    assert int(mask.sum()) == 552
+
+    # 버퍼가 state_dict 에 들어가면 옛 체크포인트 로딩이 깨진다
+    assert "fine_dim_mask" not in m.state_dict(), (
+        "fine_dim_mask 는 persistent=False 여야 합니다 (옛 체크포인트 호환)"
+    )
+
+
+def test_fine_dropout_is_off_at_inference_and_masks_only_fine():
+    """드롭아웃은 학습에서만 걸리고, 광역 차원은 건드리지 않아야 한다."""
+    import torch
+    from src.model.net import NILMNet
+
+    m = NILMNet(["a", "b"], [2, 2], fine_dropout=1.0)   # 항상 가린다
+    f, w = torch.randn(4, 38, 600), torch.randn(4, 12, 120)
+
+    m.eval()
+    with torch.no_grad():
+        a, b = m(f, w)["on_logit"], m(f, w)["on_logit"]
+    assert torch.allclose(a, b), "추론에서 드롭아웃이 걸리고 있습니다"
+
+    # 학습 모드에서 세밀을 전부 가리면 세밀 conv 에 기울기가 안 가야 한다
+    m.train()
+    m(f, w)["power"].sum().backward()
+    g_fine = sum(p.grad.abs().sum().item() for p in m.fine.parameters())
+    g_wide = sum(p.grad.abs().sum().item() for p in m.wide.parameters())
+    assert g_fine == 0.0, f"가려진 창에서 세밀에 기울기가 갔습니다: {g_fine}"
+    assert g_wide > 0.0, "광역에 기울기가 안 갔습니다"

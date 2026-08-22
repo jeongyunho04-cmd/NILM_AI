@@ -171,6 +171,10 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--w-harm", type=float, default=0.1)
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
+    ap.add_argument("--fine-dropout", type=float, default=0.0,
+                    help="학습 중 세밀 갈래를 통째로 가릴 확률 (12.21절). 합성에서 학습한 "
+                         "선형 probe 가 실측에서 세밀은 AUC 0.32 로 뒤집히고 광역은 0.69 를 "
+                         "유지한다 - 광역을 쓰는 법을 배우게 강제한다")
     ap.add_argument("--wide-summary", action="store_true",
                     help="광역 갈래에도 amax + 창끝 슬라이스를 준다 (12.19.4 후보 1)")
     ap.add_argument("--periodicity", action="store_true",
@@ -226,6 +230,7 @@ def main() -> int:
 
     model = NILMNet(apps, appliance_state_counts(apps), width=a.width,
                     wide_summary=a.wide_summary, periodicity=a.periodicity,
+                    fine_dropout=a.fine_dropout,
                     prior_kappa=a.prior_kappa, prior_beta=a.prior_beta).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
     crit = NILMLoss(
@@ -285,6 +290,7 @@ def main() -> int:
                     "width": a.width, "epoch": ep_saved,
                     "prior_kappa": a.prior_kappa, "prior_beta": a.prior_beta,
                     "wide_summary": a.wide_summary, "periodicity": a.periodicity,
+                    "fine_dropout": a.fine_dropout,
                     "select": a.select}, path)
 
     hist, best = [], None
