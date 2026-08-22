@@ -1,5 +1,5 @@
 {
-  "processed_files_count": 17,
+  "processed_files_count": 20,
   "sampling_hz": 60.0,
   "devices": {
     "air_conditioner": {
@@ -93,6 +93,46 @@
           "count": 36473,
           "percentage": 85.38,
           "duration_min": 10.13
+        }
+      }
+    },
+    "beam_projector_2": {
+      "appliance_type": "beam_projector",
+      "korean_name": "빔프로젝터",
+      "file_role": "device",
+      "load_class": "smps",
+      "rows": 40860,
+      "duration_min": 11.35,
+      "p_mean": 38.75,
+      "p_max": 50.65,
+      "v_ref_v": 223.46,
+      "invalid_samples_flagged": 60,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 1,
+      "on_percentage": 80.21,
+      "events_count": 9,
+      "npz_file": "processed_data\\npz\\beam_projector_2.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "대기 전원 상태",
+          "count": 8085,
+          "percentage": 19.79,
+          "duration_min": 2.25
+        },
+        "WARMUP_COOLDOWN": {
+          "state_id": 1,
+          "description": "부팅 예열 또는 전원 끈 후 팬 냉각",
+          "count": 701,
+          "percentage": 1.72,
+          "duration_min": 0.19
+        },
+        "LAMP_ON": {
+          "state_id": 2,
+          "description": "램프 점등 및 정상 화면 투사",
+          "count": 32074,
+          "percentage": 78.5,
+          "duration_min": 8.91
         }
       }
     },
@@ -576,6 +616,46 @@
         }
       }
     },
+    "minipc_3": {
+      "appliance_type": "minipc",
+      "korean_name": "미니PC",
+      "file_role": "device",
+      "load_class": "smps",
+      "rows": 76860,
+      "duration_min": 21.35,
+      "p_mean": 16.36,
+      "p_max": 30.15,
+      "v_ref_v": 223.78,
+      "invalid_samples_flagged": 0,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 1,
+      "on_percentage": 96.22,
+      "events_count": 48,
+      "npz_file": "processed_data\\npz\\minipc_3.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "전원 꺼짐 또는 절전 모드",
+          "count": 2904,
+          "percentage": 3.78,
+          "duration_min": 0.81
+        },
+        "IDLE": {
+          "state_id": 1,
+          "description": "바탕화면 대기 및 경부하 상태",
+          "count": 31256,
+          "percentage": 40.67,
+          "duration_min": 8.68
+        },
+        "ACTIVE_LOAD": {
+          "state_id": 2,
+          "description": "프로그램 실행 및 CPU 연산 부하",
+          "count": 42700,
+          "percentage": 55.56,
+          "duration_min": 11.86
+        }
+      }
+    },
     "oven": {
       "appliance_type": "oven",
       "korean_name": "오븐",
@@ -613,6 +693,46 @@
           "count": 32062,
           "percentage": 24.85,
           "duration_min": 8.91
+        }
+      }
+    },
+    "oven_2": {
+      "appliance_type": "oven",
+      "korean_name": "오븐",
+      "file_role": "device",
+      "load_class": "resistive",
+      "rows": 57330,
+      "duration_min": 15.93,
+      "p_mean": 444.45,
+      "p_max": 1158.22,
+      "v_ref_v": 223.09,
+      "invalid_samples_flagged": 60,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 1,
+      "on_percentage": 90.8,
+      "events_count": 48,
+      "npz_file": "processed_data\\npz\\oven_2.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "대기 전원 상태",
+          "count": 5277,
+          "percentage": 9.2,
+          "duration_min": 1.47
+        },
+        "FAN_LIGHT": {
+          "state_id": 1,
+          "description": "히터 꺼짐 주기 - 조명등 및 컨벡션 팬만 동작",
+          "count": 29979,
+          "percentage": 52.29,
+          "duration_min": 8.33
+        },
+        "HEATING": {
+          "state_id": 2,
+          "description": "서모스탯 통전 - 히터 가열",
+          "count": 22074,
+          "percentage": 38.5,
+          "duration_min": 6.13
         }
       }
     },
@@ -696,9 +816,18 @@
       "v_ref_v": 221.62,
       "npz_file": "processed_data\\composite_eval\\test3.npz",
       "excluded_from_segment_pool": true
+    },
+    "test_4": {
+      "rows": 42090,
+      "duration_s": 701.5,
+      "p_mean": 623.24,
+      "p_max": 1769.69,
+      "v_ref_v": 219.44,
+      "npz_file": "processed_data\\composite_eval\\test_4.npz",
+      "excluded_from_segment_pool": true
     }
   },
-  "total_cleaned_samples": 1188300,
-  "total_duration_hours": 5.5,
-  "total_events_detected": 1730
+  "total_cleaned_samples": 1363350,
+  "total_duration_hours": 6.31,
+  "total_events_detected": 1835
 }

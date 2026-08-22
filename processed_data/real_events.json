@@ -15,54 +15,429 @@
       "duration_s": 466.0,
       "cycles": 27960,
       "v_mean": 220.9,
-      "appliances_present": ["minipc", "beam_projector", "oven"],
+      "appliances_present": [
+        "minipc",
+        "beam_projector",
+        "oven"
+      ],
       "intervals": {
-        "minipc": {"on": [[0.0, 466.0]], "uncertain": []},
-        "beam_projector": {"on": [[105.3, 235.4], [327.1, 437.0]], "uncertain": []},
+        "minipc": {
+          "on": [
+            [
+              0.0,
+              466.0
+            ]
+          ],
+          "uncertain": []
+        },
+        "beam_projector": {
+          "on": [
+            [
+              105.3,
+              235.4
+            ],
+            [
+              327.1,
+              437.0
+            ]
+          ],
+          "uncertain": []
+        },
         "oven": {
-          "on": [[127, 137], [167, 180], [207, 223], [247, 264],
-                 [287, 303], [327, 343], [372, 380], [412, 418]],
-          "uncertain": [[127.0, 420.0]],
+          "on": [
+            [
+              127,
+              137
+            ],
+            [
+              167,
+              180
+            ],
+            [
+              207,
+              223
+            ],
+            [
+              247,
+              264
+            ],
+            [
+              287,
+              303
+            ],
+            [
+              327,
+              343
+            ],
+            [
+              372,
+              380
+            ],
+            [
+              412,
+              418
+            ]
+          ],
+          "uncertain": [
+            [
+              127.0,
+              420.0
+            ]
+          ],
           "_note": "on 은 히터 통전 펄스. uncertain 은 조리 세션 전체 - 그 사이에 팬/조명만 도는 구간이 섞여 있다"
         },
-        "electiric_kettle": {"on": [], "uncertain": []},
-        "hair_dryer": {"on": [], "uncertain": []},
-        "hotplate": {"on": [], "uncertain": []},
-        "air_conditioner": {"on": [], "uncertain": []},
-        "fan": {"on": [], "uncertain": []},
-        "laptop_charger": {"on": [], "uncertain": []}
+        "electiric_kettle": {
+          "on": [],
+          "uncertain": []
+        },
+        "hair_dryer": {
+          "on": [],
+          "uncertain": []
+        },
+        "hotplate": {
+          "on": [],
+          "uncertain": []
+        },
+        "air_conditioner": {
+          "on": [],
+          "uncertain": []
+        },
+        "fan": {
+          "on": [],
+          "uncertain": []
+        },
+        "laptop_charger": {
+          "on": [],
+          "uncertain": []
+        }
       },
       "events": [
-        {"t_s": 105.3, "appliance": "beam_projector", "kind": "on",  "delta_p_w": 43.0},
-        {"t_s": 235.4, "appliance": "beam_projector", "kind": "off", "delta_p_w": -43.3},
-        {"t_s": 327.1, "appliance": "beam_projector", "kind": "on",  "delta_p_w": 46.2},
-        {"t_s": 437.0, "appliance": "beam_projector", "kind": "off", "delta_p_w": -45.0}
+        {
+          "t_s": 105.3,
+          "appliance": "beam_projector",
+          "kind": "on",
+          "delta_p_w": 43.0
+        },
+        {
+          "t_s": 235.4,
+          "appliance": "beam_projector",
+          "kind": "off",
+          "delta_p_w": -43.3
+        },
+        {
+          "t_s": 327.1,
+          "appliance": "beam_projector",
+          "kind": "on",
+          "delta_p_w": 46.2
+        },
+        {
+          "t_s": 437.0,
+          "appliance": "beam_projector",
+          "kind": "off",
+          "delta_p_w": -45.0
+        }
       ]
     },
     "test3": {
       "duration_s": 413.0,
       "cycles": 24780,
       "v_mean": 219.8,
-      "appliances_present": ["minipc", "beam_projector", "oven"],
+      "appliances_present": [
+        "minipc",
+        "beam_projector",
+        "oven"
+      ],
       "intervals": {
-        "minipc": {"on": [[0.0, 413.0]], "uncertain": []},
-        "beam_projector": {"on": [[102.7, 413.0]], "uncertain": []},
+        "minipc": {
+          "on": [
+            [
+              0.0,
+              413.0
+            ]
+          ],
+          "uncertain": []
+        },
+        "beam_projector": {
+          "on": [
+            [
+              102.7,
+              413.0
+            ]
+          ],
+          "uncertain": []
+        },
         "oven": {
-          "on": [[63.4, 140.0], [145, 170], [185, 201], [225, 235],
-                 [265, 278], [305, 315], [345, 355], [385, 395]],
-          "uncertain": [[63.4, 395.0]],
+          "on": [
+            [
+              63.4,
+              140.0
+            ],
+            [
+              145,
+              170
+            ],
+            [
+              185,
+              201
+            ],
+            [
+              225,
+              235
+            ],
+            [
+              265,
+              278
+            ],
+            [
+              305,
+              315
+            ],
+            [
+              345,
+              355
+            ],
+            [
+              385,
+              395
+            ]
+          ],
+          "uncertain": [
+            [
+              63.4,
+              395.0
+            ]
+          ],
           "_note": "63.4~140 은 연속 예열, 이후는 서모스탯 주기 펄스 7회"
         },
-        "electiric_kettle": {"on": [], "uncertain": []},
-        "hair_dryer": {"on": [], "uncertain": []},
-        "hotplate": {"on": [], "uncertain": []},
-        "air_conditioner": {"on": [], "uncertain": []},
-        "fan": {"on": [], "uncertain": []},
-        "laptop_charger": {"on": [], "uncertain": []}
+        "electiric_kettle": {
+          "on": [],
+          "uncertain": []
+        },
+        "hair_dryer": {
+          "on": [],
+          "uncertain": []
+        },
+        "hotplate": {
+          "on": [],
+          "uncertain": []
+        },
+        "air_conditioner": {
+          "on": [],
+          "uncertain": []
+        },
+        "fan": {
+          "on": [],
+          "uncertain": []
+        },
+        "laptop_charger": {
+          "on": [],
+          "uncertain": []
+        }
       },
       "events": [
-        {"t_s": 63.4,  "appliance": "oven",           "kind": "on", "delta_p_w": 1157.4},
-        {"t_s": 102.7, "appliance": "beam_projector", "kind": "on", "delta_p_w": 46.7}
+        {
+          "t_s": 63.4,
+          "appliance": "oven",
+          "kind": "on",
+          "delta_p_w": 1157.4
+        },
+        {
+          "t_s": 102.7,
+          "appliance": "beam_projector",
+          "kind": "on",
+          "delta_p_w": 46.7
+        }
+      ]
+    },
+    "test_4": {
+      "duration_s": 701.5,
+      "cycles": 42090,
+      "v_mean": 218.4,
+      "appliances_present": [
+        "oven",
+        "hotplate",
+        "beam_projector",
+        "laptop_charger"
+      ],
+      "_source": "TEST_DATASET_TIMELINE_ANALYSIS.txt [4] 절 + 신호 재검증 (2026-08-22)",
+      "_verification": [
+        "타임라인은 AI 가 신호에서 추정한 것이라 그대로 옮기지 않고 npz 로 대조했다.",
+        "일치: 오븐 히터 펄스 17개 / 총 227.4s (문서 227.3s), 오븐 ON ΔP 실측 +1126W (문서 +1140W),",
+        "      핫플 세션2 시작 357.9s, 핫플 세션1 종료 ΔP 실측 -463W (문서 -474W),",
+        "      535.5s 이후 SMPS 소멸 (I3 중앙 0.29 -> 0.0089).",
+        "불일치 셋 - 문서가 아니라 실측을 따랐다:",
+        "  1) 핫플 세션1 시작: 문서 113.0s -> 실측 123.3s. 113.0s 는 오븐 펄스 #2 가 끝나는",
+        "     지점이고 그때 ΔP 는 -1112W 다 (핫플 투입이 아니다).",
+        "  2) 핫플 세션2 종료: 문서 695.9s -> 실측 687.5s.",
+        "  3) 핫플 세션1 중간 148.0~156.0s 에 휴지가 있다 (문서에는 없다).",
+        "'535.5s 이후 I3>0.05' 는 SMPS 가 아니라 핫플 릴레이 스위칭 과도다 (1초 간격 단발, I3/I1 0.20)."
+      ],
+      "intervals": {
+        "oven": {
+          "on": [
+            [
+              44.9,
+              695.9
+            ]
+          ],
+          "uncertain": [],
+          "_note": "팬/조명이 세션 내내 돈다 (660~690s 바닥 P 16.0W 로 직접 확인). 히터 통전은 _heater_pulses",
+          "_heater_pulses": [
+            [
+              44.9,
+              73.6
+            ],
+            [
+              79.0,
+              113.0
+            ],
+            [
+              119.0,
+              136.0
+            ],
+            [
+              159.0,
+              175.0
+            ],
+            [
+              198.7,
+              212.0
+            ],
+            [
+              238.9,
+              243.2
+            ],
+            [
+              291.4,
+              298.9
+            ],
+            [
+              330.9,
+              338.9
+            ],
+            [
+              370.9,
+              379.9
+            ],
+            [
+              410.9,
+              423.9
+            ],
+            [
+              450.9,
+              464.0
+            ],
+            [
+              491.0,
+              507.0
+            ],
+            [
+              531.0,
+              544.0
+            ],
+            [
+              571.0,
+              581.0
+            ],
+            [
+              611.0,
+              621.1
+            ],
+            [
+              651.1,
+              661.1
+            ],
+            [
+              691.2,
+              695.8
+            ]
+          ]
+        },
+        "hotplate": {
+          "on": [
+            [
+              123.3,
+              148.0
+            ],
+            [
+              156.0,
+              303.2
+            ],
+            [
+              357.9,
+              687.5
+            ]
+          ],
+          "uncertain": [
+            [
+              113.0,
+              123.3
+            ],
+            [
+              330.0,
+              357.9
+            ],
+            [
+              687.5,
+              696.0
+            ]
+          ],
+          "_note": "릴레이 2초 주기 통전. 세션 전체가 is_on=1 (11.1절 _merge_duty_blocks 규약). 경계는 문서와 다르다 - _verification 참조"
+        },
+        "beam_projector": {
+          "on": [],
+          "uncertain": [
+            [
+              0.0,
+              535.5
+            ]
+          ],
+          "_note": "프로젝터와 충전기 둘 다 SMPS 라 P/I3 가 238 vs 243 으로 거의 같아 개별 귀속 불가. 535.5s 이후는 I3 로 둘 다 확실히 OFF"
+        },
+        "laptop_charger": {
+          "on": [],
+          "uncertain": [
+            [
+              0.0,
+              535.5
+            ]
+          ],
+          "_note": "beam_projector 와 같은 이유"
+        },
+        "minipc": {
+          "on": [],
+          "uncertain": []
+        },
+        "electiric_kettle": {
+          "on": [],
+          "uncertain": []
+        },
+        "hair_dryer": {
+          "on": [],
+          "uncertain": []
+        },
+        "air_conditioner": {
+          "on": [],
+          "uncertain": []
+        },
+        "fan": {
+          "on": [],
+          "uncertain": []
+        }
+      },
+      "events": [
+        {
+          "t_s": 44.9,
+          "appliance": "oven",
+          "kind": "on",
+          "delta_p_w": 1126.0
+        },
+        {
+          "t_s": 303.2,
+          "appliance": "hotplate",
+          "kind": "off",
+          "delta_p_w": -463.0
+        }
       ]
     }
   }

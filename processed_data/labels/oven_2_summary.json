@@ -1,0 +1,62 @@
+{
+  "raw_rows": 57330,
+  "cleaned_rows": 57330,
+  "duration_s": 955.5,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 60,
+  "invalid_samples_dropped": 0,
+  "invalid_samples_interpolated": 60,
+  "interpolated_cycles": 60,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "noise_floor_applied_w": 1.4,
+  "source_file": "oven_2.csv",
+  "file_role": "device",
+  "appliance_type": "oven",
+  "load_class": "resistive",
+  "classification_reason": "등록된 단일 가전 'oven'",
+  "output_file": null,
+  "feature_columns_count": 122,
+  "v_ref_v": 223.09,
+  "p_mean": 444.45,
+  "p_max": 1158.22,
+  "irms_mean": 2.0666,
+  "korean_name": "오븐",
+  "total_samples": 57330,
+  "on_percentage": 90.8,
+  "state_distribution": {
+    "OFF_STANDBY": {
+      "state_id": 0,
+      "description": "대기 전원 상태",
+      "count": 5277,
+      "percentage": 9.2,
+      "duration_min": 1.47
+    },
+    "FAN_LIGHT": {
+      "state_id": 1,
+      "description": "히터 꺼짐 주기 - 조명등 및 컨벡션 팬만 동작",
+      "count": 29979,
+      "percentage": 52.29,
+      "duration_min": 8.33
+    },
+    "HEATING": {
+      "state_id": 2,
+      "description": "서모스탯 통전 - 히터 가열",
+      "count": 22074,
+      "percentage": 38.5,
+      "duration_min": 6.13
+    }
+  },
+  "events_summary": {
+    "total_events": 48,
+    "on_events": 3,
+    "off_events": 3,
+    "mode_change_events": 42,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\oven_2_annotated.csv",
+  "npz_file": "processed_data\\npz\\oven_2.npz",
+  "events_json": "processed_data\\labels\\oven_2_events.json"
+}

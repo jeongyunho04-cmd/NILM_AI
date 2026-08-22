@@ -1,0 +1,62 @@
+{
+  "raw_rows": 76800,
+  "cleaned_rows": 76860,
+  "duration_s": 1281.0,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 0,
+  "invalid_samples_dropped": 0,
+  "invalid_samples_interpolated": 0,
+  "interpolated_cycles": 60,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "noise_floor_applied_w": 1.4,
+  "source_file": "minipc_3.csv",
+  "file_role": "device",
+  "appliance_type": "minipc",
+  "load_class": "smps",
+  "classification_reason": "등록된 단일 가전 'minipc'",
+  "output_file": null,
+  "feature_columns_count": 122,
+  "v_ref_v": 223.78,
+  "p_mean": 16.36,
+  "p_max": 30.15,
+  "irms_mean": 0.1454,
+  "korean_name": "미니PC",
+  "total_samples": 76860,
+  "on_percentage": 96.22,
+  "state_distribution": {
+    "OFF_STANDBY": {
+      "state_id": 0,
+      "description": "전원 꺼짐 또는 절전 모드",
+      "count": 2904,
+      "percentage": 3.78,
+      "duration_min": 0.81
+    },
+    "IDLE": {
+      "state_id": 1,
+      "description": "바탕화면 대기 및 경부하 상태",
+      "count": 31256,
+      "percentage": 40.67,
+      "duration_min": 8.68
+    },
+    "ACTIVE_LOAD": {
+      "state_id": 2,
+      "description": "프로그램 실행 및 CPU 연산 부하",
+      "count": 42700,
+      "percentage": 55.56,
+      "duration_min": 11.86
+    }
+  },
+  "events_summary": {
+    "total_events": 48,
+    "on_events": 1,
+    "off_events": 1,
+    "mode_change_events": 46,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\minipc_3_annotated.csv",
+  "npz_file": "processed_data\\npz\\minipc_3.npz",
+  "events_json": "processed_data\\labels\\minipc_3_events.json"
+}
