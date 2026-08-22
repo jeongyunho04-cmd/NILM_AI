@@ -257,8 +257,15 @@ def test_uncertain_regions_are_not_scored():
     assert (~scorable[:, j]).any(), "오븐 불확실 구간이 표시되지 않았습니다"
     # 통전 구간은 불확실 안에 있어도 채점 대상이어야 한다
     assert scorable[on[:, j], j].all()
-    # 미니PC 는 전 구간 확실
-    assert scorable[:, apps.index("minipc")].all()
+
+    # 미니PC 도 불확실 구간이 있다 (설계 문서 12.25절).
+    # 이 단언은 원래 "미니PC 는 전 구간 확실" 이었는데, 그 전제가 틀렸다 —
+    # `test3` 첫 63초는 총전력이 4.3W 라 미니PC(최저 유휴 7.8W)가 켜져 있을 수
+    # 없었고, 정답이 그것을 ON 으로 적고 있었다. 테스트가 그 오류를 고정하고 있었다.
+    jm = apps.index("minipc")
+    assert (~scorable[:, jm]).any(), "미니PC 판정보류 구간이 사라졌습니다 (12.25절 정정)"
+    assert scorable[on[:, jm], jm].all(), "미니PC ON 구간이 채점에서 빠졌습니다"
+    assert not on[:int(63.0 * 60), jm].any(), "미니PC 가 없던 첫 63초가 다시 ON 이 됐습니다"
 
 
 def test_on_off_scoring_rewards_a_correct_predictor():
@@ -385,3 +392,52 @@ def test_lookahead_flows_through_training_set_builder():
         out[la] = yo.mean()
     # 값 자체보다 '다르게 나오는가' 가 핵심이다 (같으면 배선이 끊긴 것)
     assert out[60] != out[299], f"lookahead 가 라벨에 영향을 주지 않습니다: {out}"
+
+
+def test_real_event_labels_are_physically_possible():
+    """정답이 "켜짐" 이라 한 구간의 **총전력**이 그 기기의 최저 소비보다 낮으면 안 된다.
+
+    설계 문서 12.25절. `test.2` 는 정답 ON 의 8.5%, `test3` 는 14.6% 가 이 검사에
+    걸렸다 — 총전력이 0.76W 인데 미니PC(최저 유휴 7.8W)가 켜져 있다고 적혀 있었다.
+    12.13 의 핫플 granularity 오류와 같은 종류이고, 이 한 줄 검사로 잡힌다.
+
+    `uncertain` 구간은 채점에서 빠지므로 여기서도 뺀다.
+    """
+    import json
+    import numpy as np
+    from pathlib import Path
+    from src.preprocessing import load_nilm_npz
+
+    ev_path = Path("processed_data/real_events.json")
+    if not ev_path.exists():
+        pytest.skip("real_events.json 이 없습니다")
+    files = json.loads(ev_path.read_text(encoding="utf-8"))["files"]
+
+    # 기기별 최저 소비 (개별 녹화의 p10 중 최솟값). 여유를 두고 보수적으로 잡는다.
+    MIN_W = {"minipc": 7.0, "beam_projector": 35.0, "laptop_charger": 15.0,
+             "hotplate": 300.0, "oven": 10.0, "electiric_kettle": 800.0,
+             "hair_dryer": 300.0, "fan": 15.0, "air_conditioner": 10.0}
+
+    bad = []
+    for stem, spec in files.items():
+        npz = Path("processed_data/composite_eval") / f"{stem}.npz"
+        if not npz.exists():
+            continue
+        p = np.asarray(load_nilm_npz(npz)["power_features"])[:, 0]
+        n = len(p)
+        for app, iv in spec.get("intervals", {}).items():
+            floor = MIN_W.get(app)
+            if floor is None or not iv.get("on"):
+                continue
+            m = np.zeros(n, bool)
+            for a, b in iv["on"]:
+                m[int(a * 60):int(b * 60)] = True
+            for a, b in iv.get("uncertain", []):
+                m[int(a * 60):int(b * 60)] = False
+            if not m.any():
+                continue
+            share = float((p[m] < floor).mean())
+            if share > 0.02:
+                bad.append(f"{stem}/{app}: ON 구간의 {100*share:.1f}% 에서 "
+                           f"총전력이 {floor}W 미만 (최소 {p[m].min():.2f}W)")
+    assert not bad, "정답이 신호와 모순됩니다: " + " | ".join(bad)
