@@ -9,3 +9,115 @@ python -m serial.tools.miniterm COM12 115200
 
 
 minipc pw:nitez348*
+
+
+================================================================================
+  실시간 분해 (수신기 + 모델) — cmd 창 두 개를 띄운다
+================================================================================
+
+수신기와 모델을 **한 프로그램에 합치지 않았다.** 수신 루프는 ACK 타이밍에
+묶여 있어서(펌웨어가 2.5초 안에 ACK 가 없으면 프레임을 다시 보낸다) 그 안에서
+GPU 추론을 돌리면 ACK 가 늦어져 프레임을 잃는다. 그래서 수신기는 CSV 에 쓰기만
+하고, 모델은 그 CSV 를 따라 읽는다. 추론이 느려져도 측정은 안 망가진다.
+
+
+[준비 - 처음 한 번만]
+
+  1) 노트북 핫스팟에 보드가 붙었는지 확인
+  2) cmd 를 열고 프로젝트 폴더로 이동한다. 모델 쪽은 **반드시 이 폴더에서**
+     실행해야 한다 (python -m src.xxx 는 패키지 경로를 쓴다)
+
+     cd /d C:\Users\yunho\Documents\NILM_train\NILM_AI-main
+
+  3) 한글이 깨지면 그 창에서 한 번:
+
+     chcp 65001
+
+
+[평소 실행 - 창 두 개]
+
+  ■ 창 1 : 수신기 (파일명을 live.csv 로 고정한다)
+
+     cd /d C:\Users\yunho\Documents\NILM_train\NILM_AI-main
+     python nilm_receiver.py --csv live.csv
+
+     -> data\live.csv 에 쌓인다. 이미 있으면 이어쓴다.
+     -> 콘솔 요약이 거슬리면 뒤에 --quiet 를 붙인다.
+
+  ■ 창 2 : 실시간 분해 (창 1 을 먼저 띄우고 나서)
+
+     cd /d C:\Users\yunho\Documents\NILM_train\NILM_AI-main
+     python -m src.run_live --csv data\live.csv
+
+     -> 60초 치가 쌓여야 첫 예측이 나온다. 그전까지는 조용하다.
+     -> 0.5초마다 한 줄씩 찍는다:
+
+        t=  123.5s  관측   93.1W | 예측   92.5W | 프로젝터  60W  미니PC  18W
+
+
+[창 2 를 켜 두고 쓰는 키]
+
+  1 ~ 9    그 번호의 기기를 켜짐/꺼짐으로 토글 (실행 직후 맨 위에 번호가 뜬다)
+  0        전부 꺼짐으로
+  space    지금 상태를 "실제 정답" 으로 확정해 기록
+  u        지금까지 찍은 토글 취소
+  q        종료
+
+  쓰는 법: 기기를 켜거나 끈 **직후에** 그 기기 번호를 누르고 space.
+  모델 예측과 다르면 그 줄에 다르다는 표시가 붙고 기록에도 남는다.
+
+  기록은 results\live_log.jsonl 에 계속 쌓인다.
+  예측은 **누르지 않아도 전부** 저장된다. 사람이 못 알아챈 오답도
+  나중에 찾을 수 있게 하려는 것이다.
+
+
+[보드 없이 확인하고 싶을 때 - 옛 파일 재생]
+
+  python -m src.run_live --replay data\test3.csv --speed 20
+
+  --speed 20  : 20배속 (0 이면 최대 속도로 즉시 끝낸다)
+  407초 짜리 파일이 20배속이면 약 20초에 끝난다.
+
+
+[자주 쓰는 변형]
+
+  다른 모델로 돌리기
+     python -m src.run_live --csv data\live.csv --ckpt results\cnn_v17.pt
+
+  화면 출력 없이 기록만
+     python -m src.run_live --csv data\live.csv --quiet
+
+  추론 간격 바꾸기 (기본 30 = 0.5초, 1 이면 매 사이클 = 60Hz)
+     python -m src.run_live --csv data\live.csv --every 1
+
+  기록 파일 따로 두기
+     python -m src.run_live --csv data\live.csv --log results\run2.jsonl
+
+
+[끝내는 순서]
+
+  1) 창 2 에서 q  (또는 Ctrl+C)
+  2) 창 1 에서 Ctrl+C  -> 수신 요약이 찍힌다
+
+  순서를 지키는 이유: 수신기를 먼저 끄면 창 2 가 새 줄을 기다리며 계속 돈다.
+
+
+[문제가 생겼을 때]
+
+  창 2 가 "data\live.csv 를 기다리는 중" 에서 안 넘어감
+     -> 창 1 이 안 떴거나 --csv 이름이 다르다. 두 창의 파일명을 맞춘다.
+
+  예측이 안 나옴
+     -> 60초(3600 사이클)가 안 쌓였다. 1분 기다린다.
+
+  한글이 깨짐
+     -> 그 창에서 chcp 65001 을 한 번 치고 다시 실행한다.
+
+  CUDA 관련 오류
+     -> GPU 없이도 돈다. 느릴 뿐이다. 확인:
+        python -c "import torch; print(torch.cuda.is_available())"
+
+  속도가 평소의 절반
+     -> 작업관리자에서 python.exe 개수를 본다. 학습이나 추론이 두 개
+        떠 있으면 GPU 를 나눠 쓴다.
+
