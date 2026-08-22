@@ -144,3 +144,35 @@ def test_baseline_model_roundtrip(tmp_path):
     m2 = BaselineModel.load(tmp_path / "m.pkl")
     assert np.allclose(m.predict(F)[0], m2.predict(F)[0])
     assert m2.appliances == ["a"] and len(m2.feature_names) == 84
+
+
+def test_worker_count_does_not_change_the_generated_training_set():
+    """`--seed` 가 같으면 워커 수와 무관하게 **같은 학습셋**이 나와야 한다.
+
+    설계 문서 12.11절이 남긴 숙제다. 워커 번호로 시드하고 `imap_unordered` 로
+    거두면 (a) 어느 RNG 스트림이 어느 청크를 만드는지와 (b) 이어붙이는 순서가
+    실행마다 달라진다. 그 탓에 같은 명령을 두 번 돌린 GBM 이 MAE 0.02W /
+    오븐->포트 2.2%p 씩 흔들렸다 (12.7절).
+
+    이제 청크 **번호**로 시드하고 `imap`(순서 보장)으로 거둔다. 어느 워커가
+    집어 가든 같은 창이 나오고 같은 자리에 붙는다.
+    """
+    from src.baseline.train import build_training_set
+
+    kw = dict(n_windows=300, chunk=100, seed=11)
+    single, _, _, _ = build_training_set(n_workers=1, **kw)
+    multi, _, _, _ = build_training_set(n_workers=3, **kw)
+    wider, _, _, _ = build_training_set(n_workers=5, **kw)
+
+    assert np.array_equal(single, multi), "워커 1개와 3개가 다른 학습셋을 만들었습니다"
+    assert np.array_equal(multi, wider), "워커 3개와 5개가 다른 학습셋을 만들었습니다"
+
+
+def test_chunk_seed_is_reproducible_and_decorrelated():
+    """청크 시드는 재현되어야 하고, 이웃한 청크가 같은 스트림을 쓰면 안 된다."""
+    from src.synthesis.dataset import chunk_seed
+
+    assert chunk_seed(0, 0) == chunk_seed(0, 0)
+    seeds = [chunk_seed(3, i) for i in range(64)]
+    assert len(set(seeds)) == 64, "청크 시드가 충돌합니다"
+    assert chunk_seed(0, 1) != chunk_seed(1, 0), "seed_base 와 index 가 뒤섞였습니다"

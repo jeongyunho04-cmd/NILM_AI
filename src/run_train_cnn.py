@@ -39,6 +39,7 @@ from src.evaluation import (
     score_appliances, summarize, total_power_residual,
 )
 from src.model.inputs import build_inputs
+from src.synthesis.dataset import chunk_seed
 from src.model.traincache import CachedWindows
 from src.model.losses import LossWeights, NILMLoss, build_state_scales
 from src.model.net import (
@@ -73,14 +74,10 @@ class SynthBatchDataset(Dataset):
     def _ensure(self):
         if self.gen is not None:
             return
-        import torch.utils.data as tud
         from src.synthesis.dataset import NILMBatchGenerator
         from src.synthesis.segment_pool import SegmentPool
         from src.synthesis.synthesizer import LoadSynthesizer
-        # PID 가 아니라 DataLoader 가 매기는 워커 번호를 쓴다 (실행 간 재현된다).
-        # 이유는 src/baseline/train.py 의 _init_worker 주석 참조.
-        info = tud.get_worker_info()
-        np.random.seed((self.seed * 7919 + (info.id if info else 0)) % (2 ** 31))
+        # 시드는 여기서 걸지 않는다 - `__getitem__` 이 배치 번호로 건다.
         pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
         self.gen = NILMBatchGenerator(
             segment_pool=pool, window_size_cycles=WINDOW_CYCLES,
@@ -89,6 +86,9 @@ class SynthBatchDataset(Dataset):
 
     def __getitem__(self, i: int):
         self._ensure()
+        # 시드는 **배치 번호**로 건다. 워커 번호로 걸면 `--workers` 를 바꾸는 것만으로
+        # 같은 시드가 다른 학습 데이터를 만든다 (`chunk_seed` 주석, 12.11절).
+        np.random.seed(chunk_seed(self.seed, i))
         g, n = self.gen, self.bs
         k = len(g.appliance_list)
         ti = g.target_index

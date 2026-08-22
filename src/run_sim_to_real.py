@@ -59,6 +59,37 @@ REAL_SEGMENTS: List[dict] = [
          p_lo=800, p_hi=1200, after_s=250),
     dict(file="test", name="드라이기 고열+저부하", apps=["hair_dryer", "laptop_charger", "fan"],
          p_lo=1000, p_hi=1300, after_s=660),
+    # ── test_4 (2026-08-22 추가) ────────────────────────────────────────────
+    # 0.2절이 "저항성끼리 겹칠 때가 진짜 시험대" 라 한 구간을 sim-to-real 로 처음 잰다.
+    # 여기 없으면 이 검증은 저항 부하가 겹친 적이 한 번도 없는 채로 "양호" 를 낸다.
+    # 전력 구간은 실측 라벨로 확인했다 (real_events.json 의 오븐 `_heater_pulses`
+    # 와 핫플 통전 구간 교집합):
+    #   핫플 단독      P 491~602W  (11,917 사이클)
+    #   오븐히터 단독  P 1146~1224W ( 8,563 사이클)
+    #   **동시**       P 1558~1643W ( 5,093 사이클, 85초)
+    # 세 구간이 안 겹치므로 전력만으로 갈린다. 프로젝터·충전기는 파일 내내 켜져 있어
+    # (둘만 있을 때 P 중앙값 73W) 조합에 반드시 넣어야 비교가 성립한다.
+    # test_4 는 218.4V 회선이지만 `compare_segment` 가 파일에서 V0·R 을 추정해
+    # 합성 쪽에 그대로 물리므로 전압 차이는 비교를 깨지 않는다.
+    dict(file="test_4", name="핫플 단독+저부하", apps=["hotplate", "beam_projector", "laptop_charger"],
+         p_lo=420, p_hi=700, after_s=120),
+    dict(file="test_4", name="오븐히터+저부하", apps=["oven", "beam_projector", "laptop_charger"],
+         p_lo=1050, p_hi=1300, after_s=120),
+    dict(file="test_4", name="오븐히터+핫플 동시 (저항 겹침)",
+         apps=["oven", "hotplate", "beam_projector", "laptop_charger"],
+         p_lo=1450, p_hi=1800, after_s=120),
+    # 저부하 SMPS 기저 두 개. **위 세 구간의 고조파 오차를 읽으려면 이 둘이 필요하다.**
+    # 실측에서는 두 조합이 거의 같다 (P 89.5 vs 92.9W, I3 0.3157 vs 0.3261).
+    # 그런데 합성은 서로 **반대 방향**으로 틀린다 - 충전기 쪽이 P +15.5%/I3 +36.7%,
+    # 미니PC 쪽이 P -35.3%/I3 -22.5% 다. 그래서 같은 오븐 히터(~1198W)를 재도
+    # 동반 저부하가 충전기면 I3 오차가 +43.1%, 미니PC면 +8.7% 로 갈린다.
+    # 이 구간이 없으면 그 차이가 저항 부하의 문제로 잘못 읽힌다.
+    # 기존 구간에서 안 보였던 이유: 충전기가 든 유일한 구간(`test` 에어컨+충전기+선풍기)은
+    # 에어컨 I3=2.09 가 충전기의 10배라 충전기 오차가 묻힌다.
+    dict(file="test_4", name="저부하 기저 (프로젝터+충전기)", apps=["beam_projector", "laptop_charger"],
+         p_lo=40, p_hi=140, after_s=120),
+    dict(file="test.2", name="저부하 기저 (미니PC+프로젝터)", apps=["minipc", "beam_projector"],
+         p_lo=40, p_hi=140, after_s=120),
 ]
 
 FEATURES = [

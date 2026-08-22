@@ -57,17 +57,17 @@ _SPEC = {
 }
 
 _GEN = None
+_SEED_BASE = 0
 
 
 def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int) -> None:
-    global _GEN
-    import multiprocessing as mp
+    global _GEN, _SEED_BASE
     from src.synthesis.dataset import NILMBatchGenerator
     from src.synthesis.segment_pool import SegmentPool
     from src.synthesis.synthesizer import LoadSynthesizer
-    # PID 대신 워커 번호를 쓴다 (src/baseline/train.py 의 _init_worker 주석 참조).
-    ident = mp.current_process()._identity
-    np.random.seed((seed * 7919 + (ident[0] if ident else 0)) % (2 ** 31))
+    # 시드는 여기서 걸지 않는다. 워커 번호로 걸면 어느 워커가 어느 청크를 집어 가느냐에
+    # 따라 결과가 달라진다 (`chunk_seed` 주석). 청크마다 `_chunk` 안에서 건다.
+    _SEED_BASE = int(seed)
     pool = SegmentPool(npz_dir=npz_dir, time_split=time_split)
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
@@ -75,7 +75,11 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int) -> None:
         compute_gt_harmonics=False)
 
 
-def _chunk(n: int) -> Dict[str, np.ndarray]:
+def _chunk(task: Tuple[int, int]) -> Dict[str, np.ndarray]:
+    """청크 하나를 만든다. 시드는 **청크 번호**로 건다 (`chunk_seed` 주석)."""
+    from src.synthesis.dataset import chunk_seed
+    index, n = task
+    np.random.seed(chunk_seed(_SEED_BASE, index))
     g = _GEN
     w = g.window_size
     k = len(g.appliance_list)
@@ -137,14 +141,17 @@ def build_cache(
     print(f"[traincache] 독립 창 {n_windows:,}개 x {window_cycles/60:.0f}초 "
           f"| 예상 {total/1e9:.2f} GB | 창당 {total/n_windows/1024:.0f} KB")
 
-    tasks = [chunk] * (n_windows // chunk)
+    sizes = [chunk] * (n_windows // chunk)
     if n_windows % chunk:
-        tasks.append(n_windows % chunk)
+        sizes.append(n_windows % chunk)
+    tasks = list(enumerate(sizes))
     t0 = time.time(); pos = 0
     ctx = mp.get_context("spawn")
     with ctx.Pool(n_workers, initializer=_init,
                   initargs=(npz_dir, window_cycles, time_split, seed)) as pool:
-        for i, r in enumerate(pool.imap_unordered(_chunk, tasks), 1):
+        # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
+        # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
+        for i, r in enumerate(pool.imap(_chunk, tasks), 1):
             m = len(r["y_power"])
             for name in shapes:
                 mm[name][pos:pos + m] = r[name]

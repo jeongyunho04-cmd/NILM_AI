@@ -32,6 +32,24 @@ from .synthesizer import (
     window_target_index,
 )
 
+
+def chunk_seed(seed_base: int, index: int) -> int:
+    """작업 단위 번호로 시드를 만든다. **워커 번호로 시드하면 안 된다.**
+
+    설계 문서 12.11절이 남긴 숙제다. 워커 번호로 시드하면 `imap_unordered` 가
+    노는 워커에 청크를 던지는 순간 (a) 어느 RNG 스트림이 어느 청크를 만드는지가
+    실행마다 달라진다. 워커 수를 바꿔도 결과가 달라진다. `--seed` 를 줘도
+    재현되지 않던 원인이고, 그 앞 단계(PID 를 섞던 것)는 이미 고쳤다.
+
+    작업 **번호**로 시드하면 어느 워커가 집어 가든 같은 청크가 나온다. 남은
+    (b) 이어붙이는 순서는 호출부가 `imap`(순서 보장)을 쓰면 닫힌다.
+
+    `SeedSequence` 를 쓰는 이유는 `seed_base * k + index` 같은 선형 조합이
+    이웃한 index 끼리 상관된 스트림을 줄 수 있어서다.
+    """
+    return int(np.random.SeedSequence([int(seed_base), int(index)]).generate_state(1)[0])
+
+
 # 윈도우 종류별 기본 혼합 비율
 #
 # random_realistic 과 random_uniform 을 나눈 이유가 있다.

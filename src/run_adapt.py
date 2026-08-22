@@ -24,6 +24,7 @@ Phase 5 — 2단계 실측 준지도 적응 (설계 문서 4.2절)
 `RealWindows` 가 목록에서 빼고, 채점도 봉인 해제 없이 도는 파일만 한다.
 """
 from pathlib import Path
+from typing import Optional, Sequence
 import argparse
 import json
 import sys
@@ -99,7 +100,14 @@ def score_real_files(model, apps, dev, stride: int = 30) -> dict:
     return out
 
 
-def summarize_real(rs: dict) -> dict:
+def summarize_real(rs: dict, only: Optional[Sequence[str]] = None) -> dict:
+    """`only` 를 주면 그 파일들만 요약한다 (leave-one-file-out 채점용)."""
+    if only is not None:
+        rs = {k: v for k, v in rs.items() if k in set(only)}
+    if not rs:
+        return {k: float("nan") for k in
+                ("residual_mean_w", "residual_abs_w", "on_off_f1_mean", "event_abs_rel_mean",
+                 "absent_sum_w", "absent_share", "absent_fa_rel_max")} | {"n_scored_windows": 0}
     f1 = [v["f1"] for s in rs.values() for v in s["on_off"].values() if v["n_true_on"] > 0]
     er = [abs(e["error_rel"]) for s in rs.values() for e in s["events"] if e["error_rel"] == e["error_rel"]]
     n = sum(s["n_windows"] for s in rs.values())
@@ -120,17 +128,29 @@ def summarize_real(rs: dict) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Phase 5 — 2단계 실측 준지도 적응 (4.2절)")
-    ap.add_argument("--init", default="results/cnn_v11.pt", help="1단계 체크포인트")
-    ap.add_argument("--steps", type=int, default=1500)
+    # 기본값은 12.9.5절 "확정된 것" 표와 일치시킨다. 4.2절이 적었던 첫 제안값
+    # (w_cons 0.4 / w_harm 0.1 / w_hedge 0)은 **스윕 6개 조합 중 최악**이었다
+    # (12.12.2절: L_cons 가 L_harm 보다 38.8배 강해 배분을 결정하지 못한다).
+    # 기본값으로 남겨 두면 아무 옵션 없이 돌린 사람이 그 조합을 얻는다.
+    ap.add_argument("--init", default="results/cnn_v15.pt", help="1단계 체크포인트")
+    ap.add_argument("--steps", type=int, default=1000)
     ap.add_argument("--batch", type=int, default=256, help="실측/합성 각각의 배치 크기")
     ap.add_argument("--lr", type=float, default=3e-5, help="1단계(3e-4)의 1/10")
     ap.add_argument("--lam", type=float, default=0.5, help="합성 replay 가중 (4.2절)")
-    ap.add_argument("--w-cons", type=float, default=0.4, help="실측 보존 손실 (4.2절)")
-    ap.add_argument("--w-harm", type=float, default=0.1, help="실측 고조파 제약")
+    ap.add_argument("--w-cons", type=float, default=0.1,
+                    help="실측 보존 손실. 4.2절 제안값 0.4 는 L_harm 을 압도해 배분을 "
+                         "방치한다 (12.12.2절)")
+    ap.add_argument("--w-harm", type=float, default=4.0,
+                    help="실측 고조파 제약. 배분을 결정하는 유일한 항이라 0.1 로는 "
+                         "발언권이 2.5%% 밖에 안 된다 (12.12.2절)")
     ap.add_argument("--w-over", type=float, default=0.0)
-    ap.add_argument("--w-hedge", type=float, default=0.0,
-                    help="게이트 헤지 벌점 (12.9.13절). 실측은 라벨이 없어 BCE 가 "
+    ap.add_argument("--w-hedge", type=float, default=0.2,
+                    help="게이트 헤지 벌점 (12.12.3절). 실측은 라벨이 없어 BCE 가 "
                          "확신을 강제하지 못한다. 이진 엔트로피로 결정을 요구한다")
+    ap.add_argument("--holdout-real", default="",
+                    help="적응에서 뺄 실측 파일 (쉼표 구분, 예: test_4). 뺀 파일도 "
+                         "채점은 하므로 실측 홀드아웃이 된다. 12.12 의 가중치가 "
+                         "튜닝 잔향인지 확인하는 용도")
     ap.add_argument("--real-stride", type=int, default=30)
     ap.add_argument("--eval-every", type=int, default=250)
     ap.add_argument("--cache", default="cache/train60")
@@ -152,8 +172,12 @@ def main() -> int:
     prep = prepare_holdout_inputs(hs)
     hs.X = np.zeros((len(prep[0]), 1, 1), np.float32)
 
-    rw = RealWindows(stride=a.real_stride)
+    held = [x.strip() for x in a.holdout_real.split(",") if x.strip()]
+    rw = RealWindows(stride=a.real_stride, exclude=held or None)
+    adapted = list(rw.stems)
     print(rw.describe())
+    if held:
+        print(f"  ** 실측 홀드아웃: {', '.join(held)} - 적응에 안 쓰고 채점만 한다 **")
     print(f"합성 replay: {a.cache} | λ={a.lam} | w_cons={a.w_cons} w_harm={a.w_harm}")
 
     from src.synthesis.segment_pool import SegmentPool
@@ -192,12 +216,23 @@ def main() -> int:
               f"이벤트 |상대오차| {rsum['event_abs_rel_mean']:.3f}")
         print(f"  {'':{len(tag)+4}s}**오귀속**    없는 기기 합계 {rsum['absent_sum_w']:.1f}W "
               f"(예측 총합의 {100*rsum['absent_share']:.1f}%)  최악 FA_rel {rsum['absent_fa_rel_max']:.3f}")
-        return {"tag": tag, "synth": {"mae": summ["mae_w_mean"], "f1": summ["f1_mean"],
-                                      "resistive_acc": cm["accuracy"],
-                                      "resid_abs": resid["mean_abs_w"]},
-                "real": rsum, "real_detail": rs,
-                "summary": summ, "resistive_confusion": cm, "total_power_residual": resid,
-                "per_appliance": [x.as_row() for x in sc]}
+        out = {"tag": tag, "synth": {"mae": summ["mae_w_mean"], "f1": summ["f1_mean"],
+                                     "resistive_acc": cm["accuracy"],
+                                     "resid_abs": resid["mean_abs_w"]},
+               "real": rsum, "real_detail": rs,
+               "summary": summ, "resistive_confusion": cm, "total_power_residual": resid,
+               "per_appliance": [x.as_row() for x in sc]}
+        if held:
+            # **판정은 여기를 본다.** 위 `real` 은 적응에 쓴 파일이 섞여 있다.
+            out["real_adapted"] = summarize_real(rs, only=adapted)
+            out["real_heldout"] = summarize_real(rs, only=held)
+            pad = " " * (len(tag) + 4)
+            for lab, key in (("적응셋", "real_adapted"), ("**홀드아웃**", "real_heldout")):
+                v = out[key]
+                print(f"  {pad}{lab:12s}오귀속 {v['absent_sum_w']:6.1f}W  "
+                      f"잔차 {v['residual_abs_w']:6.2f}W  on/off F1 {v['on_off_f1_mean']:.3f}  "
+                      f"최악 FA_rel {v['absent_fa_rel_max']:.3f}")
+        return out
 
     hist = [snapshot("적응 전")]
     t0 = time.time()
@@ -260,7 +295,23 @@ def main() -> int:
         g, k = kk
         print(f"  {lab:26s}{first[g][k]:>12.4f}{last[g][k]:>12.4f}")
 
+    if held:
+        # 위 표는 적응에 쓴 파일이 섞여 있다. 일반화 판정은 이 표를 본다.
+        bar = "-" * 84
+        print("")
+        print(bar)
+        print(f"실측 홀드아웃 ({', '.join(held)}) - 적응에 쓰지 않은 파일")
+        print(bar)
+        print(f"  {'':26s}{'전':>12s}{'후':>12s}")
+        for lab, k in [("**오귀속 합계 (W)**", "absent_sum_w"),
+                       ("**최악 FA_rel**", "absent_fa_rel_max"),
+                       ("잔차 절대 (W)", "residual_abs_w"),
+                       ("on/off F1", "on_off_f1_mean"),
+                       ("이벤트 |상대오차|", "event_abs_rel_mean")]:
+            print(f"  {lab:26s}{first['real_heldout'][k]:>12.4f}{last['real_heldout'][k]:>12.4f}")
+
     payload = {"phase": "5-adapt", "config": vars(a),
+               "adapted_on": adapted, "held_out": held,
                "holdout": {k: hs.meta[k] for k in ("n_windows", "content_sha256", "target_index")},
                "history": [{k: v for k, v in h.items() if k != "real_detail"} for h in hist],
                "real_detail": last["real_detail"],

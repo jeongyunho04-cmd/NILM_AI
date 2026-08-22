@@ -45,7 +45,16 @@ class RealWindows:
         window_cycles: int = WINDOW_CYCLES,
         stride: int = 60,
         require_valid: bool = True,
+        exclude: Optional[Sequence[str]] = None,
     ):
+        """`exclude` 는 적응에서 뺄 파일이다 (leave-one-file-out).
+
+        2단계는 봉인 안 된 실측 3파일 전부로 학습하고 **같은 3파일로 채점**한다.
+        도메인 적응이라 transductive 자체는 정당하지만, `w_cons`/`w_harm`/`w_hedge`
+        까지 그 점수를 보고 골랐으므로 (12.12.2·12.12.3절) 실측 일반화 증거가 없다.
+        `test.csv` 는 봉인되어 있어 쓸 수 없다. 그래서 한 파일을 빼고 적응한 뒤
+        그 파일로 채점해 가중치가 튜닝 잔향인지 확인한다.
+        """
         d = Path(npz_dir)
         found = sorted(p.stem for p in d.glob("*.npz"))
         if stems is None:
@@ -54,6 +63,15 @@ class RealWindows:
             bad = [s for s in stems if is_sealed(s)]
             if bad:
                 raise ValueError(f"봉인된 파일은 적응에 쓸 수 없습니다: {bad} (4.3절)")
+        if exclude:
+            drop = set(exclude)
+            unknown = drop - set(found)
+            if unknown:
+                raise ValueError(f"{npz_dir} 에 없는 파일입니다: {sorted(unknown)}")
+            stems = [s for s in stems if s not in drop]
+            if not stems:
+                raise ValueError(f"전부 제외되어 적응할 파일이 없습니다: exclude={sorted(drop)}")
+        self.stems = list(stems)
         self.window_cycles = int(window_cycles)
         self.target_in_window = target_index(self.window_cycles)
 
