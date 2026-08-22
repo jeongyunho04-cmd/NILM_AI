@@ -25,11 +25,17 @@ import numpy as np
 FINE_CYCLES = 600            # 세밀 갈래 길이 (10초 @ 60Hz)
 WIDE_HZ = 2.0                # 광역 갈래 해상도
 WIDE_BLOCK = int(60 / WIDE_HZ)   # 30 사이클 = 0.5초
-TARGET_LOOKAHEAD = 60        # 창 끝에서 1초 안쪽
+TARGET_LOOKAHEAD = 360       # 창 끝에서 6초 안쪽 (12.9.12절)
 
 N_HARM = 15
-FINE_CHANNELS = 36
+FINE_CHANNELS = 38           # 36 + 추세 제거 전력 2채널 (아래 참조)
 WIDE_CHANNELS = 12
+
+# 추세 제거 전력 채널의 스케일. P 자체(POWER_SCALE=100)보다 작게 잡아야
+# 수백 W 리플이 해상된다.
+RIPPLE_SCALE = 20.0
+RIPPLE_HALF_SHORT = 30       # ±0.5초 - 핫플 릴레이(주기 약 2초) 대역
+RIPPLE_HALF_LONG = 150       # ±2.5초 - 더 느린 주기
 
 # 1.2절의 asinh 스케일 상수. 배치마다 재계산하지 않는다.
 RATIO_SCALE = 50.0           # 고조파비
@@ -45,6 +51,19 @@ def target_index(window_cycles: int) -> int:
 def fine_target_index() -> int:
     """세밀 갈래 안에서의 타깃 위치. 창 길이와 무관하게 539 다."""
     return FINE_CYCLES - 1 - TARGET_LOOKAHEAD
+
+
+def _movavg(a: np.ndarray, half: int) -> np.ndarray:
+    """(B, T) 가장자리 반사 없는 이동평균. cumsum 이라 O(T) 다.
+
+    중앙값이 이상치에 강하지만 (B,600,61) 짜리 정렬이 필요해 캐시 생성이
+    25분 넘게 늘어난다. 리플 검출에는 평균으로 충분하다.
+    """
+    k = 2 * half + 1
+    pad = np.pad(a, ((0, 0), (half, half)), mode="edge")
+    c = np.zeros((a.shape[0], pad.shape[1] + 1), np.float64)
+    np.cumsum(pad, axis=1, out=c[:, 1:])
+    return ((c[:, k:] - c[:, :-k]) / k).astype(np.float32)
 
 
 def build_fine(x: np.ndarray) -> np.ndarray:
@@ -78,6 +97,23 @@ def build_fine(x: np.ndarray) -> np.ndarray:
     out[:, 33] = np.arcsinh(mag[:, 2] / i1 * RATIO_SCALE)   # |I3|/|I1|
     out[:, 34] = np.arcsinh(mag[:, 4] / i1 * RATIO_SCALE)   # |I5|/|I1|
     out[:, 35] = np.arcsinh(mag[:, 1] / i1 * RATIO_SCALE)   # |I2|/|I1|
+
+    # ── 추세 제거 전력 (12.9.12절) ────────────────────────────────────
+    # asinh(P/100) 은 **고부하 위에 얹힌 리플의 대비를 죽인다.** 474W 핫플
+    # 리플이 바닥에서는 채널을 2.260 움직이는데, 오븐(1140W) 위에서는 0.347 로
+    # 1/6.5 다. asinh 는 저부하 판별을 살리려고 넣은 것인데(0.3/1.2절) 여기서는
+    # 정반대로 작용한다. 실측 test_4 의 핫플 미탐이 정확히 그 영역에서 난다.
+    #
+    # 국소 추세를 빼면 기준선이 0 이든 1600W 든 같은 크기로 들어온다.
+    # 광역 갈래에도 `p_dev` 가 있지만 2Hz/0.5초 블록이라 0.4초 휴지가
+    # 평균에 지워진다 - 60Hz 에서 해야 한다.
+    #
+    # **36채널 구성도 만들 수 있어야 한다.** v11 이전 체크포인트를 정정된 정답으로
+    # 다시 채점하려면 그때의 입력을 재현해야 하는데, 모듈 상수만 되돌려 놓고
+    # 이 두 줄이 무조건 실행되면 IndexError 가 난다.
+    if FINE_CHANNELS >= 38:
+        out[:, 36] = np.arcsinh((p - _movavg(p, RIPPLE_HALF_SHORT)) / RIPPLE_SCALE)
+        out[:, 37] = np.arcsinh((p - _movavg(p, RIPPLE_HALF_LONG)) / RIPPLE_SCALE)
     return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
 

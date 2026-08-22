@@ -300,7 +300,8 @@ def test_holdout_build_and_load(tmp_path):
     assert hs.X.shape == (40, 33, 600) and hs.X.dtype == np.float32
     assert hs.y_power.shape == (40, len(hs.appliances))
     assert meta["time_split"] == "holdout"
-    assert meta["target_index"] == 539
+    from src.model.inputs import target_index as _ti
+    assert meta["target_index"] == _ti(600)      # lookahead 를 따라간다
     assert len(meta["content_sha256"]) == 16
     # 부분집합 추출
     sub = hs.subset(hs.recipe == hs.recipe[0])

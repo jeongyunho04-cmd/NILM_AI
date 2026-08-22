@@ -38,7 +38,7 @@ import numpy as np
 import torch
 
 from src.evaluation import load_holdout, resistive_confusion, score_appliances, summarize, total_power_residual
-from src.evaluation.real_events import load_events, score_events, score_on_off
+from src.evaluation.real_events import load_events, score_absent, score_events, score_on_off
 from src.evaluation.sealing import is_sealed
 from src.model.losses import LossWeights, NILMLoss, build_state_scales
 from src.model.net import (
@@ -92,6 +92,8 @@ def score_real_files(model, apps, dev, stride: int = 30) -> dict:
             "residual_mean_w": float(r.mean()), "residual_abs_w": float(np.abs(r).mean()),
             "on_off": score_on_off(oc, stem, apps, events=ev),
             "events": score_events(pc, stem, apps, events=ev),
+            # **2단계의 주 지표** — 없는 기기에 붙인 전력 (라벨 없이 잴 수 있다)
+            "absent": score_absent(P, stem, apps, pred_on=ON > 0.5, s_i=S_I, events=ev),
         }
     model.train()
     return out
@@ -101,11 +103,17 @@ def summarize_real(rs: dict) -> dict:
     f1 = [v["f1"] for s in rs.values() for v in s["on_off"].values() if v["n_true_on"] > 0]
     er = [abs(e["error_rel"]) for s in rs.values() for e in s["events"] if e["error_rel"] == e["error_rel"]]
     n = sum(s["n_windows"] for s in rs.values())
+    fa_rel = [v["fa_rel"] for s in rs.values() for v in s["absent"]["absent"].values()
+              if v["fa_rel"] == v["fa_rel"]]
     return {
         "residual_mean_w": float(np.mean([s["residual_mean_w"] for s in rs.values()])),
         "residual_abs_w": float(np.mean([s["residual_abs_w"] for s in rs.values()])),
         "on_off_f1_mean": float(np.mean(f1)) if f1 else float("nan"),
         "event_abs_rel_mean": float(np.mean(er)) if er else float("nan"),
+        # 없는 기기에 붙인 전력 — 2단계 주 지표
+        "absent_sum_w": float(np.mean([s["absent"]["absent_sum_w"] for s in rs.values()])),
+        "absent_share": float(np.mean([s["absent"]["absent_share"] for s in rs.values()])),
+        "absent_fa_rel_max": float(np.max(fa_rel)) if fa_rel else float("nan"),
         "n_scored_windows": int(n),
     }
 
@@ -120,6 +128,9 @@ def main() -> int:
     ap.add_argument("--w-cons", type=float, default=0.4, help="실측 보존 손실 (4.2절)")
     ap.add_argument("--w-harm", type=float, default=0.1, help="실측 고조파 제약")
     ap.add_argument("--w-over", type=float, default=0.0)
+    ap.add_argument("--w-hedge", type=float, default=0.0,
+                    help="게이트 헤지 벌점 (12.9.13절). 실측은 라벨이 없어 BCE 가 "
+                         "확신을 강제하지 못한다. 이진 엔트로피로 결정을 요구한다")
     ap.add_argument("--real-stride", type=int, default=30)
     ap.add_argument("--eval-every", type=int, default=250)
     ap.add_argument("--cache", default="cache/train60")
@@ -179,6 +190,8 @@ def main() -> int:
         print(f"  {'':{len(tag)+4}s}실측          잔차 평균 {rsum['residual_mean_w']:+.2f}W  "
               f"절대 {rsum['residual_abs_w']:.2f}W  on/off F1 {rsum['on_off_f1_mean']:.3f}  "
               f"이벤트 |상대오차| {rsum['event_abs_rel_mean']:.3f}")
+        print(f"  {'':{len(tag)+4}s}**오귀속**    없는 기기 합계 {rsum['absent_sum_w']:.1f}W "
+              f"(예측 총합의 {100*rsum['absent_share']:.1f}%)  최악 FA_rel {rsum['absent_fa_rel_max']:.3f}")
         return {"tag": tag, "synth": {"mae": summ["mae_w_mean"], "f1": summ["f1_mean"],
                                       "resistive_acc": cm["accuracy"],
                                       "resid_abs": resid["mean_abs_w"]},
@@ -198,7 +211,7 @@ def main() -> int:
 
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
             rp = crit.unlabeled(model(rf, rwd), rtg, w_cons=a.w_cons,
-                                w_harm=a.w_harm, w_over=a.w_over)
+                                w_harm=a.w_harm, w_over=a.w_over, w_hedge=a.w_hedge)
             sp = crit(model(sf, swd), stg)
             loss = rp["total"] + a.lam * sp["total"]
         opt.zero_grad(set_to_none=True)
@@ -207,6 +220,7 @@ def main() -> int:
         opt.step()
 
         for k, v in (("real_cons", rp["cons"]), ("real_harm", rp["harm"]),
+                     ("real_hedge", rp["hedge"]),
                      ("synth_total", sp["total"]), ("loss", loss)):
             d = v.detach()
             agg[k] = d if k not in agg else agg[k] + d
@@ -215,7 +229,8 @@ def main() -> int:
         if step % a.eval_every == 0 or step == a.steps:
             m = {k: float(v) / nb for k, v in agg.items()}
             print(f"\n  step {step:>5d}/{a.steps}  loss {m['loss']:.4f} "
-                  f"(실측 cons {m['real_cons']:.2f} harm {m['real_harm']:.3f} / "
+                  f"(실측 cons {m['real_cons']:.2f} harm {m['real_harm']:.3f} "
+                  f"hedge {m['real_hedge']:.3f} / "
                   f"합성 {m['synth_total']:.4f})  [{time.time()-t0:.0f}s]", flush=True)
             hist.append(snapshot(f"step {step}"))
             agg, nb = {}, 0
@@ -231,7 +246,10 @@ def main() -> int:
     first, last = hist[0], hist[-1]
     print(f"\n{'=' * 84}\n적응 전 -> 후\n{'=' * 84}")
     print(f"  {'':26s}{'전':>12s}{'후':>12s}")
-    for lab, kk in [("실측 잔차 평균 (W)", ("real", "residual_mean_w")),
+    for lab, kk in [("**실측 오귀속 합계 (W)**", ("real", "absent_sum_w")),
+                    ("**오귀속 비중**", ("real", "absent_share")),
+                    ("**최악 FA_rel**", ("real", "absent_fa_rel_max")),
+                    ("실측 잔차 평균 (W)", ("real", "residual_mean_w")),
                     ("실측 잔차 절대 (W)", ("real", "residual_abs_w")),
                     ("실측 on/off F1", ("real", "on_off_f1_mean")),
                     ("실측 이벤트 |상대오차|", ("real", "event_abs_rel_mean")),

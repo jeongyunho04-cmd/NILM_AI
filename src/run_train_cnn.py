@@ -181,6 +181,9 @@ def main() -> int:
     ap.add_argument("--select", choices=("final", "best-f1"), default="final",
                     help="체크포인트 선택. 기본 final - 홀드아웃으로 고르면 평가셋이 "
                          "모델 선택을 겸해 보고 숫자가 편향된다 (12.9.9절)")
+    ap.add_argument("--snapshot-every", type=int, default=50,
+                    help="N epoch 마다 results/snapshots/ 에 중간 체크포인트 저장 (0=끄기). "
+                         "중단 대비 + 나중에 epoch 수가 적당했는지 사후 판정용")
     ap.add_argument("--per-state-scale", dest="per_state_scale",
                     action=argparse.BooleanOptionalAction, default=True,
                     help="손실 척도를 (기기,상태)별로 (12.9.9절). --no-per-state-scale 로 끈다")
@@ -269,6 +272,15 @@ def main() -> int:
                                          block_windows=a.block_windows):
             yield tuple(torch.from_numpy(x) for x in arrays)
 
+    def save_ckpt(path: Path, ep_saved: int) -> None:
+        """프라이어 설정도 함께 저장한다. 빠뜨리면 재평가가 kappa=0 으로 모델을
+        되살려 **학습과 다른 모델을 채점한다** (12.9.8절)."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({"model": model.state_dict(), "appliances": apps,
+                    "width": a.width, "epoch": ep_saved,
+                    "prior_kappa": a.prior_kappa, "prior_beta": a.prior_beta,
+                    "select": a.select}, path)
+
     hist, best = [], None
     t_all = time.time()
     for ep in range(1, a.epochs + 1):
@@ -295,6 +307,12 @@ def main() -> int:
         agg = {k: float(v) / max(nb, 1) for k, v in agg.items()}
         t_train = time.time() - t0
 
+        # 중간 스냅샷. 두 가지를 준다 — 중단되면 잃는 것이 최대 N epoch 이고,
+        # 나중에 "epoch 수가 적당했는가" 를 재학습 없이 사후 판정할 수 있다.
+        # 최종 체크포인트(`{tag}.pt`)와 섞이지 않게 하위 디렉터리에 둔다.
+        if a.snapshot_every > 0 and ep % a.snapshot_every == 0 and ep != a.epochs:
+            save_ckpt(Path(a.out) / "snapshots" / f"{a.tag}_ep{ep:04d}.pt", ep)
+
         if ep % a.eval_every and ep != a.epochs:
             print(f"  ep{ep:>3d}  loss {agg['total']:.4f} (pw {agg['power']:.4f} "
                   f"harm {agg['harm']:.4f})  [{t_train:.0f}s, "
@@ -317,14 +335,7 @@ def main() -> int:
         if best is None or row["f1"] > best["f1"]:
             best = row
         if a.select == "best-f1" and best is row:
-            # 프라이어 설정도 함께 저장한다. 빠뜨리면 재평가가 kappa=0 으로
-            # 모델을 되살려 **학습과 다른 모델을 채점한다** (12.9.8절).
-            ep_saved = ep
-            torch.save({"model": model.state_dict(), "appliances": apps,
-                        "width": a.width, "epoch": ep_saved,
-                        "prior_kappa": a.prior_kappa, "prior_beta": a.prior_beta,
-                        "select": a.select},
-                       Path(a.out) / f"{a.tag}.pt")
+            save_ckpt(Path(a.out) / f"{a.tag}.pt", ep)
 
     if a.select == "final":
         # **홀드아웃으로 체크포인트를 고르지 않는다** (12.9.9절).
@@ -332,12 +343,7 @@ def main() -> int:
         # 낙관 쪽으로 편향된다. 4.3절이 실측에는 봉인까지 두면서 합성 홀드아웃의
         # 이 오염은 방치돼 있었다. cosine 이 마지막 epoch 에서 0 으로 떨어지고
         # 12.9.6절에서 곡선이 ep210 부터 평평한 것을 확인했으므로 마지막을 쓴다.
-        ep_saved = a.epochs
-        torch.save({"model": model.state_dict(), "appliances": apps,
-                    "width": a.width, "epoch": ep_saved,
-                    "prior_kappa": a.prior_kappa, "prior_beta": a.prior_beta,
-                    "select": a.select},
-                   Path(a.out) / f"{a.tag}.pt")
+        save_ckpt(Path(a.out) / f"{a.tag}.pt", a.epochs)
         if best is not None and best["epoch"] != a.epochs:
             print(f"  [참고] 최고 F1 은 ep{best['epoch']} ({best['f1']:.4f}, "
                   f"MAE {best['mae']:.2f}W) 였다. 저장한 것은 마지막 ep{a.epochs} 이다.")

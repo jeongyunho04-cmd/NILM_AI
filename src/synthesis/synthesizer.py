@@ -64,7 +64,13 @@ SUSTAINED_WINDOW_S = 2.0
 # 돌입 전류를 쓸 수 없다 - 드라이기 냉간저항 시정수가 0.15초(9사이클)이고
 # 스위칭 과도는 그보다 뒤에 온다.
 # 60사이클(1초)을 남기면 돌입·정착 과도를 전부 포함하면서 지연은 1초에 머문다.
-DEFAULT_TARGET_LOOKAHEAD_CYCLES = 60
+# 2026-08-22: 60(1초) -> 360(6초). 12.9.12절 참조 — 오븐+핫플 동시 발열을
+# 전기포트로 오인하는 실패를 고치려면 타깃 **이후**의 오븐 전이를 봐야 한다.
+# 앞 1초로는 그 전이를 5% 밖에 못 잡고, 6초면 약 50% 를 잡는다.
+# **`src/model/inputs.py` 의 TARGET_LOOKAHEAD 와 반드시 같아야 한다** —
+# 두 곳이 어긋나면 라벨 시점과 입력 시점이 달라져 조용히 틀린다 (11.2절).
+# 회귀 테스트로 일치를 고정해 두었다.
+DEFAULT_TARGET_LOOKAHEAD_CYCLES = 360
 
 
 def window_target_index(
@@ -751,6 +757,58 @@ class LoadSynthesizer:
             target_biased_placement=True,
             target_lookahead_cycles=target_lookahead_cycles,
         )
+
+    def synthesize_resistive_overlap_window(
+        self,
+        window_size_cycles: int = 600,
+        compute_gt_harmonics: Optional[bool] = None,
+        target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
+        min_heat_w: float = 300.0,
+        max_tries: int = 20,
+    ) -> SyntheticLoadSample:
+        """저항 발열 부하 **2대가 타깃 시점에 동시 통전**하는 윈도우.
+
+        0.2절 마지막 문단: *"저항성끼리 겹칠 때가 진짜 시험대이며, 그것은 학습에서
+        확인해야 한다."* 그런데 **그 시험을 칠 데이터가 없었다.** 홀드아웃 8,000창에서
+        오븐+핫플 동시 발열이 6창(0.07%), 저항 2종 이상 동시 발열이 76창(0.95%) 뿐이다.
+
+        그 공백이 실측에서 그대로 드러난다. `test_4`(오븐+핫플 동시 가동)에서 모델이
+        1,600W 저항 덩어리를 **전기포트(정격 1533W)로 읽는 환각**이 창의 4.5% 에서 나고
+        최대 1,550W 까지 간다. 합성 홀드아웃의 오븐→포트 오인은 0/166 으로 완벽한데도 그렇다.
+
+        **2대를 켜는 것만으로는 부족하다.** 오븐은 히터 통전율이 25%, 핫플레이트는 45% 라
+        둘 다 켜 두어도 타깃 시점에 동시 통전할 확률이 11% 밖에 안 된다. 그래서
+        `high_power_resistive` 가 40% 확률로 2대를 켜는데도 실제 동시 발열은 1% 미만이다.
+        여기서는 **타깃 시점의 발열 여부를 확인하고 아니면 다시 뽑는다.**
+        """
+        resistive = [a for a in self.known_appliances if a in set(get_resistive_appliances())]
+        if len(resistive) < 2:
+            return self.synthesize_random_window(
+                window_size_cycles=window_size_cycles,
+                compute_gt_harmonics=compute_gt_harmonics,
+            )
+        ti = window_target_index(window_size_cycles, target_lookahead_cycles)
+        # **쌍은 루프 밖에서 한 번만 뽑는다.** 재시도마다 다시 뽑으면 동시 통전이
+        # 쉬운 쌍이 채택을 독식한다 - 포트·드라이기는 켜지면 연속 통전이라 바로
+        # 통과하고, 정작 겨냥한 오븐(통전율 25%)+핫플(45%)은 계속 기각돼 밀려난다.
+        # 첫 판(2026-08-22, cnn_v13)이 그 버그로 실패했다: 포트 양성률이 10.2 ->
+        # 14.5% 로 뛰고 오븐은 10.2 -> 11.7% 에 그쳐, 실측 포트 환각이 8.0 -> 13.6%
+        # 로 **늘었다**. 사전확률을 올려 놓고 "환각이 줄었나" 를 물은 셈이었다.
+        pair = list(np.random.choice(resistive, 2, replace=False))
+        sample = None
+        for _ in range(max_tries):
+            sample = self.synthesize_random_window(
+                window_size_cycles=window_size_cycles,
+                force_active=pair,
+                force_plugged_all=True,
+                compute_gt_harmonics=compute_gt_harmonics,
+                target_biased_placement=True,
+                target_lookahead_cycles=target_lookahead_cycles,
+            )
+            if all(sample.gt_target_power_w[a][ti] >= min_heat_w for a in pair):
+                return sample
+        # 다 실패하면 마지막 것을 그대로 쓴다. 그래도 2대가 켜져는 있다.
+        return sample
 
     def synthesize_high_power_window(
         self,

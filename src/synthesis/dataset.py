@@ -40,14 +40,28 @@ from .synthesizer import (
 # 반대로 균등하게만 뽑으면 사전확률이 틀려 실제 집에서 오탐이 늘어난다.
 # 둘을 섞어 커버리지와 보정을 동시에 잡는다.
 DEFAULT_RECIPE_MIX: Dict[str, float] = {
-    "random_realistic": 0.18,        # 기기별 사용률대로 각자 독립적으로 켜짐
-    "random_uniform": 0.15,          # 균등 추첨 - 희귀 기기 학습 표본 확보
+    "random_realistic": 0.16,        # 기기별 사용률대로 각자 독립적으로 켜짐
+    "random_uniform": 0.14,          # 균등 추첨 - 희귀 기기 학습 표본 확보
     "standby_only": 0.16,            # 대기전력만 - 저부하 오탐 방지
     "low_load_among_standby": 0.20,  # 대기전력 속 저부하 1대
-    "high_power_resistive": 0.12,    # 고전력 저항 부하 1~2대 - 아래 설명 참조
+    "high_power_resistive": 0.10,    # 고전력 저항 부하 1~2대 - 아래 설명 참조
     "high_low_mixed": 0.14,          # 고부하 + 저부하 동시 - 오차 전가 방지, 아래 참조
+    "resistive_overlap": 0.05,       # 저항 2종이 타깃 시점에 **동시 통전** - 아래 참조
     "unplugged_baseline": 0.05,
 }
+
+# resistive_overlap 를 따로 둔 이유 (2026-08-22)
+# 0.2절이 "저항성끼리 겹칠 때가 진짜 시험대" 라고 했는데 그 시험을 칠 데이터가 없었다.
+# 홀드아웃 8,000창에서 오븐+핫플 동시 발열이 6창(0.07%) 뿐이다.
+# high_power_resistive 가 40% 확률로 2대를 켜는데도 그렇다 - 오븐 통전율 25%,
+# 핫플 45% 라 둘 다 켜 두어도 타깃 시점 동시 통전은 11% 이기 때문이다.
+# 그래서 이 레시피는 타깃 시점의 발열을 확인하고 아니면 다시 뽑는다.
+# 실측 test_4 의 전기포트 환각(창의 4.5%, 최대 1,550W)이 이 공백에서 나온다.
+#
+# 비중을 0.05 로 낮춘 이유: 이 레시피는 창마다 저항 2종을 강제로 켜므로 저항 4종의
+# 사전확률을 함께 밀어 올린다. 0.10 이면 각각 +5%p 라 포트가 10.2 -> 15.2% 가 되어
+# 환각을 오히려 키운다 (cnn_v13). 0.05 면 +2.5%p 이고, 오븐+핫플 겹침은
+# 0.05 x 1/6 x 75%(기각률) ~ 0.6% 로 v13 이 실제로 얻은 0.75% 와 비슷하다.
 
 # high_low_mixed 를 따로 둔 이유
 # 고부하와 저부하가 같이 켜진 창에서 둘의 크기 차이가 31배다 (1139W vs 37W).
@@ -128,6 +142,11 @@ class NILMBatchGenerator:
             )
         elif recipe == "high_power_resistive":
             sample = self.synthesizer.synthesize_high_power_window(
+                self.window_size, compute_gt_harmonics=gt_h,
+                target_lookahead_cycles=self.target_lookahead_cycles,
+            )
+        elif recipe == "resistive_overlap":
+            sample = self.synthesizer.synthesize_resistive_overlap_window(
                 self.window_size, compute_gt_harmonics=gt_h,
                 target_lookahead_cycles=self.target_lookahead_cycles,
             )

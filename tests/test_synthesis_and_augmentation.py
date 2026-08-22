@@ -568,17 +568,37 @@ def test_synthesized_periodic_duty_matches_measurement(synthesizer):
     )
 
 
-def test_target_index_is_causal_not_centered():
-    """seq2point 타깃은 창 중앙이 아니라 끝쪽이어야 한다.
+def test_lookahead_constants_agree_across_modules():
+    """`synthesizer` 와 `model.inputs` 의 lookahead 상수가 같아야 한다.
 
-    중앙이면 추론할 때 창 절반만큼의 미래가 필요해 실시간 스트리밍이 성립하지 않는다.
+    두 곳에 따로 선언돼 있는데 지금까지 일치를 강제하는 검사가 없었다.
+    어긋나면 **라벨을 읽는 시점과 입력을 자르는 시점이 달라져 조용히 틀린다**
+    (11.2절이 세 곳을 하나로 묶은 것과 같은 종류의 결함이다).
+    """
+    from src.model.inputs import TARGET_LOOKAHEAD, fine_target_index, target_index
+
+    assert TARGET_LOOKAHEAD == DEFAULT_TARGET_LOOKAHEAD_CYCLES
+    assert target_index(3600) == window_target_index(3600)
+    # 세밀 갈래(뒤 600사이클) 안에서의 타깃도 같은 lookahead 를 따라야 한다
+    assert 600 - 1 - fine_target_index() == TARGET_LOOKAHEAD
+
+
+def test_target_index_is_causal_not_centered():
+    """타깃은 선언된 lookahead 만큼만 미래를 요구해야 한다.
+
+    2026-08-22: 지연을 1초 -> 6초로 늘렸다 (12.9.12절). 오븐+핫플 동시 발열을
+    전기포트로 오인하는 실패를 고치려면 타깃 **이후**의 오븐 전이를 봐야 하는데,
+    앞 1초로는 5%, 6초면 약 50% 를 잡는다.
+
+    **그래도 중앙은 아니다.** 60초 창의 중앙 타깃이면 30초 지연이라 5.1절의
+    실시간 동선이 무너진다. 운영 창(3600)에서 타깃이 뒤 20% 안에 있는지 본다.
     """
     for w in (600, 3600, 7200):
         idx = window_target_index(w)
-        future = w - 1 - idx
-        assert future == DEFAULT_TARGET_LOOKAHEAD_CYCLES
-        assert future <= 60, f"창 {w}: 미래 {future} 사이클이 필요합니다"
-        assert idx > w * 0.8, f"창 {w}: 타깃 {idx} 가 창 중앙 쪽에 있습니다"
+        assert w - 1 - idx == DEFAULT_TARGET_LOOKAHEAD_CYCLES
+    assert DEFAULT_TARGET_LOOKAHEAD_CYCLES <= 600, "지연 10초를 넘으면 시연이 안 된다"
+    w = 3600
+    assert window_target_index(w) > w * 0.8, "60초 창 타깃이 중앙 쪽으로 밀렸다"
 
 
 def test_generator_and_cache_use_the_same_target_index(segment_pool, tmp_path):

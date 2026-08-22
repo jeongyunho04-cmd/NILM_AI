@@ -15,6 +15,7 @@ from .real_events import (
     format_event_table,
     load_events,
     score_events,
+    score_absent,
     score_on_off,
 )
 from .sealing import SealedDatasetError, assert_not_sealed, filter_sealed, seal_status, unseal

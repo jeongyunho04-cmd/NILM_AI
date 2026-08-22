@@ -26,6 +26,8 @@ import time
 
 import numpy as np
 
+from src.synthesis.synthesizer import DEFAULT_TARGET_LOOKAHEAD_CYCLES
+
 from src.baseline.features import extract, feature_names
 
 # 워커마다 한 번씩 만들어 재사용한다 (풀 적재가 2.5초라 매번 만들면 안 된다)
@@ -110,7 +112,7 @@ def build_training_set(
     seed: int = 0,
     n_workers: int = 11,
     chunk: int = 500,
-    target_lookahead_cycles: int = 60,
+    target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
     degrade_fine_cycles: int = 0,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
     """학습용 (특징, 전력, on/off) 를 만든다."""

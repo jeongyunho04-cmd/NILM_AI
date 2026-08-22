@@ -193,7 +193,7 @@ class NILMLoss(torch.nn.Module):
 
     def unlabeled(self, out: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor],
                   w_cons: float = 0.4, w_harm: float = 0.1,
-                  w_over: float = 0.0) -> Dict[str, torch.Tensor]:
+                  w_over: float = 0.0, w_hedge: float = 0.0) -> Dict[str, torch.Tensor]:
         """**기기별 라벨이 없는 실측 창**용 손실 (4.2절 2단계).
 
         실측 복합 부하에는 기기별 정답이 없다. 라벨이 필요 없는 항만 쓴다.
@@ -227,6 +227,23 @@ class NILMLoss(torch.nn.Module):
         excess = torch.relu(recon - tgt["p_observed"])
         parts["over"] = (excess / tgt["p_observed"].clamp(min=10.0)).mean()
 
+        # ── 헤지 벌점 (12.9.13절) ─────────────────────────────────────────
+        # `P̂ = σ(on)·p` 라 게이트가 중간에 머물면 **물리적으로 불가능한 중간 전력**이
+        # 나온다. 실측에서 오븐+핫플이 겹칠 때 모델이 정확히 그렇게 한다:
+        #
+        #   포트  p_raw 1233W (정격) x σ(on) 0.381 -> 469W
+        #   핫플  p_raw  397W (정격) x σ(on) 0.004 ->   2W
+        #                                      합 471W ~ 참값 468W
+        #
+        # 크기는 둘 다 맞게 알면서 **어느 쪽인지 결정을 못 해** 헤지하고, 합이 맞으니
+        # 보존 손실도 만족된다. 1단계에는 라벨이 있어 BCE 가 확신을 강제하지만
+        # (합성 저항3종 1.000), 실측에는 라벨이 없어 이 압력이 없다.
+        #
+        # 그래서 라벨 없이 확신을 요구하는 항을 둔다 — 이진 엔트로피다.
+        # p=0.5 에서 최대, p in {0,1} 에서 0.
+        q = torch.sigmoid(out["on_logit"]).clamp(1e-6, 1 - 1e-6)
+        parts["hedge"] = (-(q * q.log() + (1 - q) * (1 - q).log())).mean()
+
         parts["total"] = (w_cons * parts["cons"] + w_harm * parts["harm"]
-                          + w_over * parts["over"])
+                          + w_over * parts["over"] + w_hedge * parts["hedge"])
         return parts

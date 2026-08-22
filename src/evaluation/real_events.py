@@ -104,6 +104,51 @@ def score_on_off(
     return out
 
 
+def score_absent(
+    pred_power: np.ndarray,          # (n, K) 기기별 예측 전력 (창 단위여도 된다)
+    stem: str,
+    appliances: Sequence[str],
+    pred_on: Optional[np.ndarray] = None,    # (n, K) bool
+    s_i: Optional[Dict[str, float]] = None,
+    events: Optional[dict] = None,
+) -> dict:
+    """**그 파일에 없던 기기에 붙인 전력** — 라벨 없이 잴 수 있는 오귀속 지표.
+
+    12.4절 표는 "기기별 FA 는 실측에서 못 잰다 (라벨 없음)" 고 적었는데,
+    **그 파일에 없는 기기는 정답이 0 으로 확정이다.** `appliances_present` 가
+    어느 기기가 없었는지 알려주므로 FA 를 정확히 계산할 수 있다.
+
+    이것이 2단계(4.2절)의 주 판정 지표다. `L_cons` 는 합만 보므로 오귀속을
+    전혀 못 본다 (12.5절). 실제로 1차 적응에서 모자란 합을 채우라고 시키자
+    모델이 이미 틀린 기기(핫플레이트)에 16.8W 를 더 붙였다.
+    """
+    assert_not_sealed(stem)
+    files = events if events is not None else load_events()
+    present = set(files[stem]["appliances_present"])
+    p = np.asarray(pred_power, dtype=np.float64)
+    rows, total = {}, 0.0
+    for j, app in enumerate(appliances):
+        if app in present:
+            continue
+        mu = float(p[:, j].mean())
+        total += mu
+        rows[app] = {
+            "mean_w": mu,
+            "p95_w": float(np.percentile(p[:, j], 95)),
+            "max_w": float(p[:, j].max()),
+            "on_rate": float(np.asarray(pred_on)[:, j].mean()) if pred_on is not None else float("nan"),
+            "fa_rel": mu / s_i[app] if s_i and app in s_i else float("nan"),
+        }
+    tot_pred = float(p.sum(1).mean())
+    return {
+        "absent": rows,
+        "absent_sum_w": total,
+        "pred_total_w": tot_pred,
+        "absent_share": total / tot_pred if tot_pred > 0 else float("nan"),
+        "n_absent": len(rows),
+    }
+
+
 def score_events(
     pred_power: np.ndarray,          # (n_cycles, K) 기기별 예측 전력
     stem: str,
