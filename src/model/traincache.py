@@ -61,11 +61,13 @@ _GEN = None
 
 def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int) -> None:
     global _GEN
-    import os
+    import multiprocessing as mp
     from src.synthesis.dataset import NILMBatchGenerator
     from src.synthesis.segment_pool import SegmentPool
     from src.synthesis.synthesizer import LoadSynthesizer
-    np.random.seed((seed * 7919 + os.getpid()) % (2 ** 31))
+    # PID 대신 워커 번호를 쓴다 (src/baseline/train.py 의 _init_worker 주석 참조).
+    ident = mp.current_process()._identity
+    np.random.seed((seed * 7919 + (ident[0] if ident else 0)) % (2 ** 31))
     pool = SegmentPool(npz_dir=npz_dir, time_split=time_split)
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,

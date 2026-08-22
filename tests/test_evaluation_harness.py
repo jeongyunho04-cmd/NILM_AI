@@ -218,12 +218,29 @@ def test_summary_reports_target_pass(toy):
 
 # ── 실측 이벤트 ─────────────────────────────────────────────────────────────
 def test_real_events_file_is_wellformed():
+    """봉인 파일이 섞이지 않았는가 + 각 항목이 채점 가능한 형태인가.
+
+    **정확한 집합 일치로 쓰면 안 된다.** 앞선 판은 `set(ev) == {"test.2", "test3"}`
+    였는데, 검증용 복합 부하를 하나 추가할 때마다(2026-08-22 `test_4`) 봉인과 무관하게
+    깨졌다. 실제로 지켜야 할 불변식은 '봉인된 것이 없다' 하나다.
+    """
+    from src.evaluation import sealing
+
     ev = load_events()
-    assert set(ev) == {"test.2", "test3"}, "봉인된 test.csv 가 들어 있으면 안 됩니다"
+    assert ev, "real_events.json 이 비어 있습니다"
+    sealed = [stem for stem in ev if sealing.is_sealed(stem)]
+    assert not sealed, f"봉인된 파일이 들어 있습니다: {sealed} (설계 문서 4.3절)"
     for stem, spec in ev.items():
         assert spec["duration_s"] > 0
+        assert spec["cycles"] > 0
         for e in spec["events"]:
             assert e["appliance"] and e["kind"] in ("on", "off", "mode")
+        # 구간은 파일 길이 안에 있고 순서가 맞아야 한다
+        for app, iv in spec["intervals"].items():
+            for key in ("on", "uncertain"):
+                for t0, t1 in iv.get(key, []):
+                    assert 0 <= t0 < t1 <= spec["duration_s"], (
+                        f"{stem}/{app}/{key} 구간이 파일 범위를 벗어납니다: [{t0}, {t1}]")
 
 
 def test_uncertain_regions_are_not_scored():
@@ -314,32 +331,45 @@ def test_lookahead_reaches_the_placement_logic(pools):
     이 배선이 끊겨 있으면 lookahead 를 바꿔도 활성화는 기본값(끝-1초) 자리를
     계속 겨냥한다. 창 크기·타깃 위치 스윕이 통째로 무의미해지는데,
     지표는 그럴듯하게 나오므로 **조용히 틀린다.**
+
+    [활성 구간의 '중심' 으로 재면 안 된다 - 2026-08-22 에 고쳤다]
+    앞선 판은 on-mask 중심의 중앙값을 두 설정에서 비교해 30 사이클 이상 벌어지길
+    요구했다. 그런데 창을 통째로 덮는 활성화가 35~40% 라 그쪽 중심은 항상 299.5 에
+    고정되고(정보 없음), 남은 표본이 어느 활성화를 뽑았느냐에 따라 중앙값이 흔들린다.
+    실제로 풀에 파일 3개를 추가하자 격차가 30.7 -> 20.9 로 떨어져 테스트가 깨졌는데,
+    **배선은 멀쩡했다.** 옛 풀에서도 여유가 0.7 사이클(2%)뿐이었다.
+
+    대신 **각 설정이 자기 타깃 인덱스를 덮는 빈도**를 직접 본다. 배치 편향이 겨냥하는
+    것이 바로 그 지점이라 포화되지 않고, 풀 구성이 바뀌어도 0.87~0.90 으로 일정하다
+    (남의 타깃은 0.68~0.78). 측정한 여유는 최소 0.09 다.
     """
     from src.synthesis.dataset import NILMBatchGenerator
 
     pool = pools["train"]
-    marks = {}
-    for la in (60, 299):
+    targets = {la: 600 - 1 - la for la in (60, 299)}
+    hits = {}
+    for la, tgt in targets.items():
         np.random.seed(3)
         g = NILMBatchGenerator(
             segment_pool=pool, window_size_cycles=600, target_lookahead_cycles=la,
             recipe_mix={"high_power_resistive": 1.0})
-        assert g.target_index == 600 - 1 - la
-        # 이 레시피는 target_biased_placement 를 쓰므로, 활성 구간의 중심이
-        # 타깃 쪽으로 쏠려야 한다.
-        centers = []
-        for _ in range(120):
+        assert g.target_index == tgt
+        own = other = 0
+        other_idx = targets[299 if la == 60 else 60]
+        for _ in range(400):
             smp, _ = g._synthesize_window()
             on = np.zeros(600, bool)
             for a in smp.appliance_types:
                 on |= smp.gt_is_on[a].astype(bool)
-            if on.any():
-                centers.append(float(np.mean(np.where(on)[0])))
-        marks[la] = float(np.median(centers))
+            own += int(on[tgt]); other += int(on[other_idx])
+        hits[la] = (own / 400, other / 400)
 
-    # 타깃이 300 인 쪽의 활성 구간 중심이 타깃 539 인 쪽보다 확실히 앞에 있어야 한다
-    assert marks[299] < marks[60] - 30, (
-        f"lookahead 를 바꿔도 배치가 따라오지 않습니다: {marks}")
+    # 두 설정 모두 '자기 타깃' 을 '남의 타깃' 보다 자주 덮어야 한다.
+    # 배선이 끊기면 둘 다 기본값(539)만 겨냥하므로 la=299 에서 부호가 뒤집힌다.
+    for la, (own, other) in hits.items():
+        assert own > other + 0.04, (
+            f"lookahead={la} (타깃 {targets[la]}) 배치가 따라오지 않습니다: "
+            f"자기 타깃 {own:.3f} vs 남의 타깃 {other:.3f} | 전체 {hits}")
 
 
 def test_lookahead_flows_through_training_set_builder():

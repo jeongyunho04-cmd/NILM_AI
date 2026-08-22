@@ -1,0 +1,151 @@
+"""
+실측 복합 부하 창 로더 (2단계 준지도 적응용)
+==============================================
+설계 문서 4.2절. **기기별 정답이 없는** 실측 복합 부하에서 창을 뽑는다.
+라벨이 필요 없는 두 항(`L_cons`, `L_harm`)만 걸어 sim-to-real 편차를 교정한다.
+
+    from src.model.realdata import RealWindows
+    rw = RealWindows()                     # 봉인 파일은 자동 제외
+    b = rw.batch(idx)                      # fine, wide, p_observed, obs_harm, p_noise
+
+[봉인]
+`test.csv` 는 최종 평가 전용이라 `sealing` 이 막는다. 여기서는 아예 목록에서 뺀다 —
+`assert_not_sealed` 를 통과시키는 우회로를 만들지 않는다 (4.3절).
+
+[왜 창을 미리 다 만들어 두는가]
+실측 전체가 26.4분(약 95,000 사이클)뿐이라 변환 결과가 stride 60 기준 약 70MB 다.
+매 스텝 memmap 을 훑는 것보다 한 번 만들어 RAM 에 두는 편이 단순하고 빠르다.
+
+[p_noise 를 상수로 두는 이유]
+합성에서는 `p_noise_w` 가 시점별로 있지만 실측에는 없다. 계측계 자체 소비는
+파일 전체에서 거의 일정하다 — `power_features[:,0] - p_denoised_w` 가 세 파일 모두
+1.4W 근처다 (`file_registry.NOISE_FLOOR_EXTERNAL_W`). 그 상수를 쓴다.
+"""
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+import numpy as np
+
+from src.evaluation.sealing import is_sealed
+from src.model.inputs import build_inputs, target_index
+from src.preprocessing import load_nilm_npz
+from src.preprocessing.file_registry import NOISE_FLOOR_EXTERNAL_W
+
+DEFAULT_DIR = "processed_data/composite_eval"
+WINDOW_CYCLES = 3600
+SAMPLING_HZ = 60.0
+
+
+class RealWindows:
+    """실측 복합 부하에서 뽑은 창 묶음. 기기별 라벨은 없다."""
+
+    def __init__(
+        self,
+        npz_dir: str = DEFAULT_DIR,
+        stems: Optional[Sequence[str]] = None,
+        window_cycles: int = WINDOW_CYCLES,
+        stride: int = 60,
+        require_valid: bool = True,
+    ):
+        d = Path(npz_dir)
+        found = sorted(p.stem for p in d.glob("*.npz"))
+        if stems is None:
+            stems = [s for s in found if not is_sealed(s)]
+        else:
+            bad = [s for s in stems if is_sealed(s)]
+            if bad:
+                raise ValueError(f"봉인된 파일은 적응에 쓸 수 없습니다: {bad} (4.3절)")
+        self.window_cycles = int(window_cycles)
+        self.target_in_window = target_index(self.window_cycles)
+
+        F, W, P, H, S, C = [], [], [], [], [], []
+        self.per_file: Dict[str, int] = {}
+        for stem in stems:
+            raw = load_nilm_npz(str(d / f"{stem}.npz"))
+            x = self._to_33ch(raw)
+            n = x.shape[1]
+            lo = self.target_in_window
+            hi = n - (self.window_cycles - 1 - self.target_in_window)
+            if hi <= lo:
+                continue
+            targets = np.arange(lo, hi, stride, dtype=np.int64)
+            if require_valid:
+                iv = np.asarray(raw["is_valid"]).astype(bool)
+                keep = [t for t in targets
+                        if iv[t - self.target_in_window:
+                               t - self.target_in_window + self.window_cycles].all()]
+                targets = np.asarray(keep, dtype=np.int64)
+            if not len(targets):
+                continue
+            fine, wide = self._windows(x, targets)
+            F.append(fine); W.append(wide)
+            P.append(np.asarray(raw["power_features"])[targets, 0].astype(np.float32))
+            H.append(np.asarray(raw["harmonics_ri"])[targets].astype(np.float32))
+            S += [stem] * len(targets)
+            C.append(targets)
+            self.per_file[stem] = len(targets)
+
+        if not F:
+            raise RuntimeError(f"실측 창을 하나도 못 만들었습니다: {npz_dir}")
+        self.fine = np.concatenate(F)
+        self.wide = np.concatenate(W)
+        self.p_observed = np.concatenate(P)
+        self.obs_harm = np.concatenate(H)
+        self.target_cycle = np.concatenate(C)
+        self.stem = np.asarray(S)
+        self.p_noise = np.full(len(self.fine), NOISE_FLOOR_EXTERNAL_W, np.float32)
+
+    # ── 내부 ────────────────────────────────────────────────────────────
+    @staticmethod
+    def _to_33ch(raw: dict) -> np.ndarray:
+        """npz -> (33, N). 합성기가 주는 배치와 같은 채널 배열로 맞춘다."""
+        hr = np.asarray(raw["harmonics_ri"], np.float32)          # (N,15,2)
+        pf = np.asarray(raw["power_features"], np.float32)        # (N,6) p,q,s,pf,v,thd
+        n = hr.shape[0]
+        x = np.empty((33, n), np.float32)
+        x[0:15] = hr[:, :, 0].T
+        x[15:30] = hr[:, :, 1].T
+        x[30], x[31], x[32] = pf[:, 0], pf[:, 1], pf[:, 4]        # P, Q, V
+        return x
+
+    def _windows(self, x: np.ndarray, targets: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        w = self.window_cycles
+        off = self.target_in_window
+        cut = np.stack([x[:, t - off:t - off + w] for t in targets])   # (n,33,W)
+        return build_inputs(cut)
+
+    # ── 사용 ────────────────────────────────────────────────────────────
+    def __len__(self) -> int:
+        return len(self.fine)
+
+    def batch(self, idx: np.ndarray) -> Tuple[np.ndarray, ...]:
+        i = np.asarray(idx)
+        return (self.fine[i], self.wide[i], self.p_observed[i],
+                self.obs_harm[i], self.p_noise[i])
+
+    def describe(self) -> str:
+        rows = [f"  {k:8s} {v:>6,}창" for k, v in sorted(self.per_file.items())]
+        return (f"실측 창 {len(self):,}개 (창 {self.window_cycles}, 타깃 {self.target_in_window})\n"
+                + "\n".join(rows))
+
+
+def dense_targets(stem: str, npz_dir: str = DEFAULT_DIR,
+                  window_cycles: int = WINDOW_CYCLES, stride: int = 30) -> RealWindows:
+    """파일 하나를 촘촘히(기본 0.5초 간격) 잘라 낸다. 실측 채점용."""
+    return RealWindows(npz_dir=npz_dir, stems=[stem],
+                       window_cycles=window_cycles, stride=stride, require_valid=False)
+
+
+def upsample_to_cycles(values: np.ndarray, targets: np.ndarray, n_cycles: int) -> np.ndarray:
+    """stride 로 띄엄띄엄 낸 예측을 사이클 단위로 펴 준다 (계단 보간).
+
+    `score_on_off` / `score_events` 가 (n_cycles, K) 를 요구하는데, 창을 사이클마다
+    만들면 파일당 9만 창이라 비현실적이다. 0.5초 간격 예측을 앞으로 채운다 —
+    타임라인 자체가 초 단위라 잃는 것이 없다.
+    """
+    values = np.asarray(values)
+    out = np.zeros((n_cycles,) + values.shape[1:], values.dtype)
+    if not len(targets):
+        return out
+    idx = np.searchsorted(targets, np.arange(n_cycles), side="right") - 1
+    idx = np.clip(idx, 0, len(targets) - 1)
+    return values[idx]

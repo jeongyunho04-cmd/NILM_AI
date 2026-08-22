@@ -62,12 +62,20 @@ def _init_worker(npz_dir: str, window_cycles: int, time_split: str, seed_base: i
                  target_lookahead_cycles: int, degrade_fine_cycles: int = 0) -> None:
     global _GEN, _DEGRADE
     _DEGRADE = int(degrade_fine_cycles)
-    import os
+    import multiprocessing as mp
     from src.synthesis.dataset import NILMBatchGenerator
     from src.synthesis.segment_pool import SegmentPool
     from src.synthesis.synthesizer import LoadSynthesizer
 
-    np.random.seed((seed_base + os.getpid()) % (2 ** 31))
+    # 워커마다 다른 시드를 줘야 11개가 같은 창을 만들지 않는다. 다만 **PID 를 쓰면
+    # 안 된다** - 실행마다 달라져 `seed` 인자가 무력해진다. 그 탓에 같은 명령을 두 번
+    # 돌린 GBM 이 MAE 0.02W / 오븐→포트 2.2%p 씩 흔들렸고(설계문서 12.7절),
+    # 라벨 시점 회귀 테스트가 pytest 프로세스의 PID 에 따라 간헐적으로 깨졌다.
+    # `_identity` 는 풀 생성 순서대로 1..N 이 붙으므로 실행 간 재현된다
+    # (메인 프로세스에서는 비어 있어 0 이 된다).
+    ident = mp.current_process()._identity
+    worker_index = ident[0] if ident else 0
+    np.random.seed((seed_base * 7919 + worker_index) % (2 ** 31))
     pool = SegmentPool(npz_dir=npz_dir, time_split=time_split)
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,

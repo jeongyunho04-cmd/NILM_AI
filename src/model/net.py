@@ -46,9 +46,28 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.model.inputs import FINE_CHANNELS, FINE_CYCLES, WIDE_CHANNELS, fine_target_index
+from src.model.inputs import (
+    FINE_CHANNELS, FINE_CYCLES, POWER_SCALE, WIDE_CHANNELS, fine_target_index,
+)
 
 MAX_STATES = 5
+P_CH_FINE = 30      # 세밀 갈래의 asinh(P/100) 채널 (1.2절)
+P_CH_WIDE = 0       # 광역 갈래의 asinh(P/100) 채널 (1.3절)
+WINDOW_STATS = 4    # 헤드에 직접 잇는 원시 창 통계 (아래 forward 참조)
+
+# 기기가 켜져 있는 창에서 **그 기기 자신의 창 최대 전력** 5백분위 (W).
+# 12.9.8절 — on 게이트의 물리 프라이어에 쓴다. 1,200창 측정 (2026-08-22).
+#
+# **p10 이 아니라 p05 를 쓴다.** 오븐은 히터가 꺼져도 팬/조명(16W)이 `is_on=1` 이라
+# p10 이 987.5W 로 튄다. 그 값으로 막으면 팬/조명 구간이 통째로 미탐이 된다.
+# p05 는 15.5W 라 오븐에서 프라이어가 사실상 꺼진다 - 그것이 옳은 동작이다.
+# 에어컨도 송풍(14.5W)이 있어 16.5W 로 낮다. 프라이어가 실제로 무는 기기는
+# 핫플레이트(428.8) / 드라이기(443.0) / 전기포트(1156.5) 셋뿐이다.
+MIN_ON_W: Dict[str, float] = {
+    "electiric_kettle": 1156.5, "hair_dryer": 443.0, "hotplate": 428.8,
+    "laptop_charger": 61.3, "beam_projector": 44.9, "fan": 20.3,
+    "air_conditioner": 16.5, "oven": 15.5, "minipc": 11.4,
+}
 
 
 def _blk(cin: int, cout: int, k: int, d: int, groups: int = 8) -> nn.Sequential:
@@ -69,10 +88,22 @@ class NILMNet(nn.Module):
         width: int = 1,
         dropout: float = 0.1,
         on_bias_init: float = 2.0,
+        prior_kappa: float = 0.0,
+        prior_beta: float = 0.5,
+        min_on_w: Optional[Sequence[float]] = None,
     ):
         super().__init__()
         self.appliances = list(appliances)
         k = len(self.appliances)
+        # 물리 프라이어 (12.9.8절). kappa=0 이면 완전히 꺼진다.
+        self.prior_kappa = float(prior_kappa)
+        self.prior_beta = float(prior_beta)
+        w_on = ([MIN_ON_W.get(a, 0.0) for a in self.appliances]
+                if min_on_w is None else list(min_on_w))
+        self.register_buffer(
+            "on_threshold_asinh",
+            torch.asinh(torch.tensor(w_on, dtype=torch.float32) * self.prior_beta / POWER_SCALE),
+        )
         self.register_buffer(
             "state_mask",
             torch.tensor([[1.0 if s < n else 0.0 for s in range(MAX_STATES)]
@@ -91,21 +122,36 @@ class NILMNet(nn.Module):
         w1, w2 = int(32 * width), int(64 * width)
         self.wide = nn.Sequential(_blk(WIDE_CHANNELS, w1, 5, 1), _blk(w1, w1, 5, 2), _blk(w1, w2, 5, 4))
 
-        # 전역 평균 + 전역 최대 + 깊은 층 타깃 + 얕은 층 타깃 2개 + 원본 타깃 + 광역 평균
-        trunk_in = c2 * 2 + c2 + (c1 + c1) + FINE_CHANNELS + w2
+        # 전역 평균 + 전역 최대 + 깊은 층 타깃 + 얕은 층 타깃 2개 + 원본 타깃
+        # + 광역 평균 + **원시 창 전력 통계 4개**
+        trunk_in = c2 * 2 + c2 + (c1 + c1) + FINE_CHANNELS + w2 + WINDOW_STATS
         h = int(256 * width)
         self.trunk = nn.Sequential(
             nn.Linear(trunk_in, h), nn.GELU(), nn.Dropout(dropout),
             nn.Linear(h, h), nn.GELU(),
         )
-        # 기기별 헤드: power(1) + state(5) + on(1) + plugged(1) + standby(1) = 9
-        self.heads = nn.ModuleList([nn.Linear(h, 9) for _ in range(k)])
+        # 기기별 헤드 (12.9.10절): power 를 **상태 수만큼** 낸다.
+        #   power(5) + state(5) + on(1) + plugged(1) + standby(1) = 13
+        #
+        # 전력 출력이 1개이던 시절, 한 헤드가 2자릿수 떨어진 두 상태를 동시에
+        # 맡아야 했다 (오븐 팬/조명 15W ↔ 히터 1150W). 상태별 손실 척도를 켜자
+        # 유효 가중이 208배 벌어져 히터가 68W 로 무너졌다 (12.9.9절 v10).
+        # 상태마다 출력을 따로 두면 두 기울기가 **서로 다른 파라미터로** 간다.
+        self.n_pow = MAX_STATES
+        self.heads = nn.ModuleList([nn.Linear(h, MAX_STATES + MAX_STATES + 3)
+                                    for _ in range(k)])
+        self.i_state = MAX_STATES              # state 로짓 시작
+        self.i_on = 2 * MAX_STATES             # on / plugged / standby
         for hd in self.heads:
             nn.init.zeros_(hd.bias)
             # on 로짓 바이어스를 양수로. 초기에 sigmoid(on)~0.5 면 전력이 절반으로
             # 눌려 수렴이 느려진다 (2.4절).
             with torch.no_grad():
-                hd.bias[6] = on_bias_init
+                hd.bias[self.i_on] = on_bias_init
+        # 전력 혼합에서 state 0(OFF_STANDBY)은 뺀다 — 켜진 상태들만 섞어야 한다.
+        on_states = self.state_mask.clone()
+        on_states[:, 0] = 0.0
+        self.register_buffer("power_mix_mask", on_states)
 
     def forward(self, fine: torch.Tensor, wide: torch.Tensor) -> Dict[str, torch.Tensor]:
         t = self.target_pos
@@ -118,20 +164,46 @@ class NILMNet(nn.Module):
                 feats.append(h[:, :, t])
         feats += [h.mean(-1), h.amax(-1), h[:, :, t]]   # 전역 요약 + 깊은 층 타깃
         feats.append(self.wide(wide).mean(-1))
+
+        # 원시 창 전력 통계. **conv 도 GroupNorm 도 거치지 않는다.**
+        # 지금까지 헤드가 받는 원시 값은 타깃 시점(fine[:,:,t]) 하나뿐이었고,
+        # 창 전체의 최대/최소는 *학습된 특징* 의 amax 로만 있었다(h.amax(-1)).
+        # 12.9.8절 측정: 총전력을 1/10 로 줄여도 핫플 on 로짓이 0.09 밖에 안 움직였다.
+        fp, wp = fine[:, P_CH_FINE], wide[:, P_CH_WIDE]        # asinh(P/100)
+        fp_max, wp_max = fp.amax(-1), wp.amax(-1)
+        feats.append(torch.stack([fp_max, fp.amin(-1), wp_max, wp.mean(-1)], dim=1))
         z = self.trunk(torch.cat(feats, dim=1))
 
-        o = torch.stack([hd(z) for hd in self.heads], dim=1)   # (B, K, 9)
-        on_logit = o[..., 6]
-        p_raw = F.softplus(o[..., 0])
-        state = o[..., 1:6].masked_fill(self.state_mask[None] == 0, -1e4)
+        o = torch.stack([hd(z) for hd in self.heads], dim=1)   # (B, K, 13)
+        on_logit = o[..., self.i_on]
+
+        # ── 물리 프라이어 (12.9.8절) ──────────────────────────────────────
+        # 기기는 **창 최대 총전력이 자기 최소 ON 전력보다 작으면** 켜져 있을 수 없다.
+        # 21.8W 창에 428W 핫플레이트는 물리적으로 불가능하다.
+        #
+        # 타깃 시점이 아니라 **창 최대**를 쓴다. 핫플레이트는 2초 주기로 끊기고
+        # 휴지 구간도 is_on=1 이라(11.1절), 순시 전력으로 막으면 휴지마다 미탐이 난다.
+        # 세밀(60Hz 뒤 10초)과 광역(2Hz 전체 60초)의 최대를 함께 본다.
+        if self.prior_kappa > 0:
+            p_max = torch.maximum(fp_max, wp_max)              # (B,) asinh(P/100)
+            gap = p_max[:, None] - self.on_threshold_asinh[None]
+            on_logit = on_logit + F.logsigmoid(self.prior_kappa * gap)
+        state = o[..., self.i_state:self.i_state + MAX_STATES].masked_fill(
+            self.state_mask[None] == 0, -1e4)
+
+        # 상태별 전력을 상태 확률로 섞는다. 켜진 상태들만 대상이라 OFF 는 빠진다.
+        p_states = F.softplus(o[..., 0:MAX_STATES])                     # (B,K,S)
+        mix = state.masked_fill(self.power_mix_mask[None] == 0, -1e4).softmax(-1)
+        p_raw = (mix * p_states).sum(-1)                                 # (B,K)
         return {
             # 전력은 on/off 로 게이팅한다. 게이팅이 없으면 꺼진 기기에도 전력이 샌다.
             "power": torch.sigmoid(on_logit) * p_raw,
             "power_raw": p_raw,
+            "power_states": p_states,
             "state": state,
             "on_logit": on_logit,
-            "plugged_logit": o[..., 7],
-            "standby": F.softplus(o[..., 8]),
+            "plugged_logit": o[..., self.i_on + 1],
+            "standby": F.softplus(o[..., self.i_on + 2]),
         }
 
 

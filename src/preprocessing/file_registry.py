@@ -73,6 +73,7 @@ class DeviceSpec:
 DEVICE_FILES: Dict[str, DeviceSpec] = {
     "air_conditioner":  DeviceSpec("air_conditioner",  LoadClass.MOTOR,     daily_usage_hours=4.0),
     "beam_projector":   DeviceSpec("beam_projector",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=2.0),
+    "beam_projector_2": DeviceSpec("beam_projector",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=2.0),
     "electiric_kettle": DeviceSpec("electiric_kettle", LoadClass.RESISTIVE, daily_usage_hours=0.15),
     "fan_1":            DeviceSpec("fan",              LoadClass.MOTOR,     low_load=True,  daily_usage_hours=5.0),
     "fan_2":            DeviceSpec("fan",              LoadClass.MOTOR,     low_load=True,  daily_usage_hours=5.0),
@@ -86,8 +87,13 @@ DEVICE_FILES: Dict[str, DeviceSpec] = {
     "laptop_charger_2": DeviceSpec("laptop_charger",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=8.0),
     "minipc_1":         DeviceSpec("minipc",           LoadClass.SMPS,      low_load=True,  daily_usage_hours=10.0),
     "minipc_2":         DeviceSpec("minipc",           LoadClass.SMPS,      low_load=True,  daily_usage_hours=10.0),
+    # minipc_3: CPU 부하 구간 측정 (2026-08-21). 7.2절 1순위였던 28W 대역 보강용.
+    "minipc_3":         DeviceSpec("minipc",           LoadClass.SMPS,      low_load=True,  daily_usage_hours=10.0),
     # 오븐은 히터가 꺼져도 팬/조명 약 17W 가 남아 서모스탯 주기가 전력에 그대로 드러난다.
     "oven":             DeviceSpec("oven",             LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
+    # oven_2: 다른 목표온도 측정 (2026-08-21). 7.2절이 지적한 "듀티비가 온도의 함수인데
+    # 1점만 있다" 와 12.3절의 "오븐 독립 활성화 2개" 를 함께 겨냥한다.
+    "oven_2":           DeviceSpec("oven",             LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
 }
 
 

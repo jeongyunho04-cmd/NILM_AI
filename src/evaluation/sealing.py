@@ -46,7 +46,7 @@ def _normalize(stem: Union[str, Path]) -> str:
 
 
 def is_sealed(stem: Union[str, Path]) -> bool:
-    """이 파일이 봉인 대상인가. `test.2` / `test3` 는 아니다."""
+    """이 파일이 봉인 대상인가. `test.2` / `test3` / `test_4` 는 아니다."""
     return _normalize(stem).lower() in {s.lower() for s in SEALED_STEMS}
 
 
@@ -57,7 +57,7 @@ def assert_not_sealed(stem: Union[str, Path]) -> None:
         return
     raise SealedDatasetError(
         f"'{name}' 은 최종 평가 전용으로 봉인되어 있습니다 (설계 문서 4.3절).\n"
-        f"  - 검증에는 test.2 / test3 을 쓰십시오.\n"
+        f"  - 검증에는 test.2 / test3 / test_4 를 쓰십시오.\n"
         f"  - 정말 최종 평가라면 sealing.unseal('사유') 블록 안에서 접근하십시오.\n"
         f"  - 개봉은 되돌릴 수 없습니다. 개봉 후에는 하이퍼파라미터를 바꾸지 마십시오."
     )

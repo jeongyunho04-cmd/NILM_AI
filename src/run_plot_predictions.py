@@ -33,7 +33,7 @@ from src.evaluation import load_holdout
 from src.evaluation.real_events import SAMPLING_HZ, load_events
 from src.model.inputs import build_inputs
 from src.model.net import NILMNet, appliance_state_counts
-from src.run_baseline import S_I
+from src.run_baseline import S_I, baseline_reference
 
 WINDOW = 3600
 KO = {"air_conditioner": "에어컨", "beam_projector": "빔프로젝터", "electiric_kettle": "전기포트",
@@ -56,7 +56,9 @@ def _font():
 def load_model(ckpt: str, dev: str):
     ck = torch.load(ckpt, map_location=dev, weights_only=False)
     apps = ck["appliances"]
-    m = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0)).to(dev)
+    m = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0),
+                prior_kappa=ck.get("prior_kappa", 0.0),
+                prior_beta=ck.get("prior_beta", 0.5)).to(dev)
     m.load_state_dict(ck["model"]); m.eval()
     return m, apps, ck.get("epoch", -1)
 
@@ -190,11 +192,12 @@ def main() -> int:
         h = json.loads(jp.read_text(encoding="utf-8"))["history"]
         e = [r["epoch"] for r in h]
         fig, axs = plt.subplots(1, 4, figsize=(17, 3.6))
+        ref = baseline_reference()
         for axx, key, lab, base in [
-                (axs[0], "mae", "기기 평균 MAE (W)", 1.43),
-                (axs[1], "f1", "F1 평균", 0.952),
-                (axs[2], "resistive_acc", "저항3종 정확도", 0.968),
-                (axs[3], "resid_abs", "총전력 잔차 (W)", 12.64)]:
+                (axs[0], "mae", "기기 평균 MAE (W)", ref["mae"]),
+                (axs[1], "f1", "F1 평균", ref["f1"]),
+                (axs[2], "resistive_acc", "저항3종 정확도", ref["resistive_acc"]),
+                (axs[3], "resid_abs", "총전력 잔차 (W)", ref["resid_abs"])]:
             axx.plot(e, [r[key] for r in h], "o-", ms=3, color=COL(0))
             axx.axhline(base, color="crimson", ls="--", lw=1.2, label="Phase1 GBM")
             axx.set_xlabel("epoch"); axx.set_title(lab, fontsize=10)

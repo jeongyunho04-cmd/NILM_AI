@@ -38,13 +38,41 @@ from src.evaluation import (
     total_power_residual,
 )
 
-# 3.1절의 기기별 정격 스케일 (양성 창 p90). FA_rel 계산에 쓴다.
+# 3.1절의 기기별 정격 스케일 (양성 창 p90). 손실 정규화와 FA_rel 계산에 쓴다.
+#
+# **데이터가 바뀌면 다시 재야 한다.** 2026-08-21 minipc_3/oven_2/beam_projector_2 를
+# 추가한 뒤 1,500창으로 재측정한 결과, 미니PC 만 17.6 -> 21.7 (+23%) 로 움직였고
+# 나머지는 전부 ±5% 안이라 측정 잡음과 구분되지 않았다. 그래서 미니PC 만 갱신한다.
+# 미니PC 가 움직인 것은 minipc_3 이 24~34W 대역을 0.02% -> 5.65% 로 채웠기 때문이다
+# (0.6절이 지적한 실측 28.4W vs 합성 17.6W 격차). 21.7 은 실측의 76% 로, 62% 에서 올랐다.
 S_I = {
     "electiric_kettle": 1533.0, "oven": 1209.0, "hair_dryer": 967.0,
     "air_conditioner": 775.0, "hotplate": 548.0, "laptop_charger": 66.1,
-    "beam_projector": 50.6, "fan": 38.3, "minipc": 17.6,
+    "beam_projector": 50.6, "fan": 38.3, "minipc": 21.7,
 }
 LOW_LOAD = ("beam_projector", "laptop_charger", "fan", "minipc")
+
+# Phase 3·시각화가 "이것을 이겼는가" 를 찍을 때 쓰는 기준선.
+# **상수로 박아 두면 안 된다.** 12.7절대로 `--seed` 를 줘도 워커 시드에 PID 가 섞여
+# 재학습마다 MAE 가 0.02W 움직이고, 무엇보다 12.9.1절의 지표 수정 전에 박아 둔
+# 저항3종 0.968 은 **결함 지표 값**이라 CNN 의 수정 지표 값과 나란히 놓으면 비교가
+# 통째로 틀린다. 그래서 파일에서 읽고, 못 읽을 때만 아래로 떨어진다.
+BASELINE_FALLBACK = {"mae": 1.45, "f1": 0.951, "resistive_acc": 0.990, "resid_abs": 13.25}
+
+
+def baseline_reference(path="results/baseline_gbm.json") -> dict:
+    """Phase 1 GBM 기준선을 읽는다. 결함 지표로 잰 파일이면 쓰지 않는다."""
+    try:
+        d = json.loads(Path(path).read_text(encoding="utf-8"))
+        cm = d.get("resistive_confusion") or {}
+        if float(cm.get("min_true_w", 0)) <= 0:      # 12.9.1절 이전 파일
+            return dict(BASELINE_FALLBACK)
+        return {"mae": float(d["summary"]["mae_w_mean"]),
+                "f1": float(d["summary"]["f1_mean"]),
+                "resistive_acc": float(cm["accuracy"]),
+                "resid_abs": float(d["total_power_residual"]["mean_abs_w"])}
+    except (OSError, KeyError, TypeError, ValueError):
+        return dict(BASELINE_FALLBACK)
 
 
 def main() -> int:

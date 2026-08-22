@@ -7,7 +7,8 @@ Phase 3 — 2갈래 CNN 학습 (1단계: 합성 사전학습)
     타깃 = 60초 창의 끝-1초 (인덱스 3539)  ->  추론 지연 1초
 
 **이 모델은 Phase 1 baseline 을 이겨야 의미가 있다** (4.1절, 10절).
-기준선: 평균 MAE 1.43W / F1 0.952 / 저항3종 0.968 / 오븐→포트 9%
+기준선은 `results/baseline_gbm.json` 에서 읽는다 (`baseline_reference()`).
+2026-08-21 기준 평균 MAE 1.45W / F1 0.951 / 저항3종 0.990 / 오븐→포트 8.1%
 
 # 기본
 python -m src.run_train_cnn
@@ -39,12 +40,12 @@ from src.evaluation import (
 )
 from src.model.inputs import build_inputs
 from src.model.traincache import CachedWindows
-from src.model.losses import LossWeights, NILMLoss
+from src.model.losses import LossWeights, NILMLoss, build_state_scales
 from src.model.net import (
     NILMNet, appliance_state_counts, harmonic_scales, harmonic_signatures,
     noise_signature, standby_signatures,
 )
-from src.run_baseline import LOW_LOAD, S_I
+from src.run_baseline import LOW_LOAD, S_I, baseline_reference
 
 WINDOW_CYCLES = 3600          # 60초. 광역 갈래가 이 전체를 2Hz 로 본다
 HOLDOUT_DIR = "processed_data/holdout60"
@@ -72,11 +73,14 @@ class SynthBatchDataset(Dataset):
     def _ensure(self):
         if self.gen is not None:
             return
-        import os
+        import torch.utils.data as tud
         from src.synthesis.dataset import NILMBatchGenerator
         from src.synthesis.segment_pool import SegmentPool
         from src.synthesis.synthesizer import LoadSynthesizer
-        np.random.seed((self.seed * 7919 + os.getpid()) % (2 ** 31))
+        # PID 가 아니라 DataLoader 가 매기는 워커 번호를 쓴다 (실행 간 재현된다).
+        # 이유는 src/baseline/train.py 의 _init_worker 주석 참조.
+        info = tud.get_worker_info()
+        np.random.seed((self.seed * 7919 + (info.id if info else 0)) % (2 ** 31))
         pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
         self.gen = NILMBatchGenerator(
             segment_pool=pool, window_size_cycles=WINDOW_CYCLES,
@@ -169,7 +173,17 @@ def main() -> int:
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
     ap.add_argument("--w-over", type=float, default=0.1,
                     help="물리 상한 힌지. 예측 합이 관측 총전력을 넘을 때만 벌한다")
+    ap.add_argument("--prior-kappa", type=float, default=8.0,
+                    help="on 게이트 물리 프라이어 세기 (12.9.8절). 0 이면 끈다")
+    ap.add_argument("--prior-beta", type=float, default=0.5,
+                    help="최소 ON 전력에 곱하는 안전 여유. 작을수록 느슨하다")
     ap.add_argument("--eval-every", type=int, default=1, help="N epoch 마다 홀드아웃 평가")
+    ap.add_argument("--select", choices=("final", "best-f1"), default="final",
+                    help="체크포인트 선택. 기본 final - 홀드아웃으로 고르면 평가셋이 "
+                         "모델 선택을 겸해 보고 숫자가 편향된다 (12.9.9절)")
+    ap.add_argument("--per-state-scale", dest="per_state_scale",
+                    action=argparse.BooleanOptionalAction, default=True,
+                    help="손실 척도를 (기기,상태)별로 (12.9.9절). --no-per-state-scale 로 끈다")
     ap.add_argument("--block-windows", type=int, default=24_000,
                     help="캐시 블록 셔플 단위. 작을수록 메모리가 덜 든다 (24000 = 약 1.1GB)")
     ap.add_argument("--cache", default="cache/train60",
@@ -203,7 +217,8 @@ def main() -> int:
     h_scale = harmonic_scales(pool, apps)
     del pool
 
-    model = NILMNet(apps, appliance_state_counts(apps), width=a.width).to(dev)
+    model = NILMNet(apps, appliance_state_counts(apps), width=a.width,
+                    prior_kappa=a.prior_kappa, prior_beta=a.prior_beta).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
     crit = NILMLoss(
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
@@ -212,6 +227,8 @@ def main() -> int:
         noise_sig=torch.from_numpy(nz_sig),
         harm_scale=torch.from_numpy(h_scale),
         weights=LossWeights(harm=a.w_harm, cons=a.w_cons, over=a.w_over),
+        s_state=(build_state_scales(apps, [S_I[x] for x in apps])
+                 if a.per_state_scale else None),
     ).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd)
     steps = a.epochs * max(1, a.epoch_windows // a.batch)
@@ -265,10 +282,17 @@ def main() -> int:
             parts["total"].backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step(); sched.step()
+            # 손실 항은 **GPU 텐서로** 누적한다. 여기서 `float(v)` 를 부르면 항마다
+            # 스트림 동기화가 걸려(9개 항 x 매 스텝) CPU 가 다음 배치를 미리 읽지
+            # 못하고 GPU 앞에서 멈춰 선다. 캐시 읽기 24.5ms 가 GPU 유휴 시간에
+            # 통째로 노출되어, 실측에서 79.4 -> 59.3 ms/배치 (6,451 -> 8,639 win/s,
+            # +34%) 의 차이가 났다. 12.9.7절 참조.
             for k, v in parts.items():
-                agg[k] = agg.get(k, 0.0) + float(v.detach())
+                d = v.detach()
+                agg[k] = d if k not in agg else agg[k] + d
             nb += 1
-        agg = {k: v / max(nb, 1) for k, v in agg.items()}
+        # epoch 이 끝난 뒤 한 번만 CPU 로 가져온다.
+        agg = {k: float(v) / max(nb, 1) for k, v in agg.items()}
         t_train = time.time() - t0
 
         if ep % a.eval_every and ep != a.epochs:
@@ -292,9 +316,31 @@ def main() -> int:
               f"{a.epoch_windows/max(t_train,1e-9):,.0f} win/s]", flush=True)
         if best is None or row["f1"] > best["f1"]:
             best = row
+        if a.select == "best-f1" and best is row:
+            # 프라이어 설정도 함께 저장한다. 빠뜨리면 재평가가 kappa=0 으로
+            # 모델을 되살려 **학습과 다른 모델을 채점한다** (12.9.8절).
+            ep_saved = ep
             torch.save({"model": model.state_dict(), "appliances": apps,
-                        "width": a.width, "epoch": ep},
+                        "width": a.width, "epoch": ep_saved,
+                        "prior_kappa": a.prior_kappa, "prior_beta": a.prior_beta,
+                        "select": a.select},
                        Path(a.out) / f"{a.tag}.pt")
+
+    if a.select == "final":
+        # **홀드아웃으로 체크포인트를 고르지 않는다** (12.9.9절).
+        # 고르면 홀드아웃이 모델 선택과 성능 보고를 겸하게 되어 보고 숫자가
+        # 낙관 쪽으로 편향된다. 4.3절이 실측에는 봉인까지 두면서 합성 홀드아웃의
+        # 이 오염은 방치돼 있었다. cosine 이 마지막 epoch 에서 0 으로 떨어지고
+        # 12.9.6절에서 곡선이 ep210 부터 평평한 것을 확인했으므로 마지막을 쓴다.
+        ep_saved = a.epochs
+        torch.save({"model": model.state_dict(), "appliances": apps,
+                    "width": a.width, "epoch": ep_saved,
+                    "prior_kappa": a.prior_kappa, "prior_beta": a.prior_beta,
+                    "select": a.select},
+                   Path(a.out) / f"{a.tag}.pt")
+        if best is not None and best["epoch"] != a.epochs:
+            print(f"  [참고] 최고 F1 은 ep{best['epoch']} ({best['f1']:.4f}, "
+                  f"MAE {best['mae']:.2f}W) 였다. 저장한 것은 마지막 ep{a.epochs} 이다.")
 
     pred, onp = evaluate(model, prep, dev)
     sc, summ, cm, resid = report(pred, onp, hs)
@@ -309,10 +355,12 @@ def main() -> int:
     print(f"  총전력 잔차 절대 평균 {resid['mean_abs_w']:.2f}W")
 
     print(f"\n  {'':22s}{'Phase1 GBM':>14s}{'Phase3 CNN':>14s}")
-    for lab, base, got in [("기기 평균 MAE (W)", 1.43, summ["mae_w_mean"]),
-                           ("F1 평균", 0.952, summ["f1_mean"]),
-                           ("저항3종 정확도", 0.968, cm["accuracy"] if cm else float("nan")),
-                           ("총전력 잔차 (W)", 12.64, resid["mean_abs_w"])]:
+    ref = baseline_reference()
+    for lab, base, got in [("기기 평균 MAE (W)", ref["mae"], summ["mae_w_mean"]),
+                           ("F1 평균", ref["f1"], summ["f1_mean"]),
+                           ("저항3종 정확도", ref["resistive_acc"],
+                            cm["accuracy"] if cm else float("nan")),
+                           ("총전력 잔차 (W)", ref["resid_abs"], resid["mean_abs_w"])]:
         better = "승" if (got < base if "MAE" in lab or "잔차" in lab else got > base) else "패"
         print(f"  {lab:22s}{base:>14.3f}{got:>14.3f}   {better}")
 

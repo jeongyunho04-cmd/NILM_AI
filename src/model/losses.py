@@ -41,9 +41,50 @@ PF≈1 구간에서 `Q = √(S²−P²)` 는 조건수가 나쁘다. 입력에�
 예측되던 것 (오탐 277건 중 198건, 전부 '꽂혀 있는' 창). 12.10절 참조.
 """
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence
 import torch
 import torch.nn.functional as F
+
+# ── 상태별 전력 척도 (12.9.9절) ──────────────────────────────────────────────
+# 3.1절의 `s_i` 는 **기기 단위** p90 이다. 그런데 한 기기 안에서 상태가 2자릿수
+# 차이 나면(오븐 팬/조명 15W ↔ 히터 1150W) 저전력 상태가 손실에서 사라진다.
+#
+#   L_power = Huber(P̂/s_i, P/s_i, δ=0.1)
+#   오븐 팬/조명을 129% 틀려도 벌점 0.000124  <- 12% 틀린 선풍기(0.006773)의 1/55
+#
+# 실측(v9 홀드아웃)에서 `s_i/참값` 이 2.3 이하인 상태 15개는 전부 오차 12% 이내였고,
+# 9.6 이상인 상태 4개는 전부 66~234% 로 실패했다. 경계가 완벽하게 갈린다.
+#
+# 아래는 타깃 시점 상태별 p90 (12,000창 측정, 2026-08-22). state_id 0(OFF_STANDBY)은
+# 참값이 0 이라 척도가 정의되지 않으므로 기기 척도 `s_i` 를 그대로 쓴다.
+#
+# **하한 10W 를 둔다.** 프로젝터 예열은 p90 이 4.5W 인데, 계측계 바닥 노이즈가
+# 1.4~2.4W(file_registry) 라 그 아래로 척도를 내리면 잡음을 학습시키게 된다.
+MIN_STATE_SCALE_W = 10.0
+
+S_STATE: Dict[str, Dict[int, float]] = {
+    "air_conditioner": {1: 16.4, 2: 263.6, 3: 549.6, 4: 794.0},
+    "beam_projector": {1: MIN_STATE_SCALE_W, 2: 50.6},   # 1 은 p90 4.5 -> 하한
+    "electiric_kettle": {1: 1534.5},
+    "fan": {1: 23.2, 2: 31.1, 3: 39.7},
+    "hair_dryer": {1: 529.2, 2: 1022.5},
+    "hotplate": {1: 549.6},
+    "laptop_charger": {1: 36.4, 2: 68.0},
+    "minipc": {1: 10.7, 2: 25.0},
+    "oven": {1: 16.8, 2: 1357.1},
+}
+
+
+def build_state_scales(appliances: Sequence[str], s_i: Sequence[float],
+                       max_states: int = 5) -> torch.Tensor:
+    """(K, max_states) 상태별 척도. 미정의 상태는 기기 척도로 채운다."""
+    out = torch.zeros(len(appliances), max_states, dtype=torch.float32)
+    for i, a in enumerate(appliances):
+        out[i] = float(s_i[i])                       # 기본값 = 기기 척도
+        for sid, w in S_STATE.get(a, {}).items():
+            if 0 <= sid < max_states:
+                out[i, sid] = max(float(w), MIN_STATE_SCALE_W)
+    return out
 
 
 @dataclass
@@ -75,9 +116,13 @@ class NILMLoss(torch.nn.Module):
         weights: Optional[LossWeights] = None,
         power_delta: float = 0.1,
         standby_delta: float = 1.0,
+        s_state: Optional[torch.Tensor] = None,      # (K, MAX_STATES) 상태별 척도
     ):
         super().__init__()
         self.register_buffer("s_i", s_i.clamp(min=1e-3))
+        self.use_state_scale = s_state is not None
+        self.register_buffer("s_state", (s_state.clamp(min=1e-3) if s_state is not None
+                                         else s_i[:, None].clamp(min=1e-3).repeat(1, 5)))
         h = signatures.shape[1] if signatures is not None else 15
         self.register_buffer("sig", signatures if signatures is not None
                              else torch.zeros(len(s_i), h, 2))
@@ -92,7 +137,14 @@ class NILMLoss(torch.nn.Module):
         self.standby_delta = standby_delta
 
     def forward(self, out: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        s = self.s_i[None]
+        # 12.9.9절 — 정답 상태에 맞는 척도를 쓴다. 손실은 학습 라벨을 봐도 되고,
+        # 이렇게 해야 '고전력 기기의 저전력 상태' 가 손실에서 지워지지 않는다.
+        if self.use_state_scale and tgt.get("y_state") is not None:
+            idx = tgt["y_state"].long().clamp(0, self.s_state.shape[1] - 1)   # (B,K)
+            s = torch.gather(self.s_state[None].expand(idx.shape[0], -1, -1),
+                             2, idx[..., None]).squeeze(-1)                   # (B,K)
+        else:
+            s = self.s_i[None]
         parts: Dict[str, torch.Tensor] = {}
 
         # 3.1절 — 스케일 정규화 전력 회귀. 절대 W 를 쓰면 오븐 60W 와 프로젝터 60W 가
@@ -137,4 +189,44 @@ class NILMLoss(torch.nn.Module):
 
         total = sum(getattr(self.w, n) * v for n, v in parts.items())
         parts["total"] = total
+        return parts
+
+    def unlabeled(self, out: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor],
+                  w_cons: float = 0.4, w_harm: float = 0.1,
+                  w_over: float = 0.0) -> Dict[str, torch.Tensor]:
+        """**기기별 라벨이 없는 실측 창**용 손실 (4.2절 2단계).
+
+        실측 복합 부하에는 기기별 정답이 없다. 라벨이 필요 없는 항만 쓴다.
+
+            L_adapt(실측) = w_cons · |Σ P̂ + Σ Ŝ + P_noise − P_관측|
+                          + w_harm · ‖Σ P̂·sig + 대기 + 계측계 − 관측 고조파‖
+
+        **`L_harm` 을 빼면 안 된다.** `L_cons` 는 합이 얼마나 어긋났는지만 알고
+        어느 기기 몫인지는 모른다 (3.3절). 실측에는 기기별 라벨이 아예 없으므로,
+        `L_harm` 이 없으면 배분이 미결정인 채 아무 기기에나 붙는다.
+        **이 두 항이 2단계의 분해를 통째로 떠받친다** (3.4절, 4.2절).
+
+        `w_cons` 기본 0.4 는 4.2절 값이다. 1단계의 ~0 에서 올린다 — 1단계에서는
+        보존 항이 개별 전력 감독보다 35~3,000배 강해 "합만 맞추는 해" 로 빠지지만
+        (3.3절, 12.9절 v4/v5 붕괴), 2단계에는 경쟁할 개별 전력 감독이 없다.
+        """
+        parts: Dict[str, torch.Tensor] = {}
+        recon = out["power"].sum(1) + out["standby"].sum(1) + tgt["p_noise"]
+        parts["cons"] = (recon - tgt["p_observed"]).abs().mean()
+
+        if tgt.get("obs_harm") is not None:
+            pred = torch.einsum("bk,khc->bhc", out["power"], self.sig)
+            idle = torch.sigmoid(out["plugged_logit"]) * (1.0 - torch.sigmoid(out["on_logit"]))
+            pred = pred + torch.einsum("bk,khc->bhc", idle, self.standby_sig)
+            pred = pred + self.noise_sig[None]
+            parts["harm"] = ((pred - tgt["obs_harm"]).abs()
+                             / self.harm_scale[None, :, None]).mean()
+        else:
+            parts["harm"] = out["power"].sum() * 0.0
+
+        excess = torch.relu(recon - tgt["p_observed"])
+        parts["over"] = (excess / tgt["p_observed"].clamp(min=10.0)).mean()
+
+        parts["total"] = (w_cons * parts["cons"] + w_harm * parts["harm"]
+                          + w_over * parts["over"])
         return parts
