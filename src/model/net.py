@@ -55,6 +55,39 @@ P_CH_FINE = 30      # 세밀 갈래의 asinh(P/100) 채널 (1.2절)
 P_CH_WIDE = 0       # 광역 갈래의 asinh(P/100) 채널 (1.3절)
 WINDOW_STATS = 4    # 헤드에 직접 잇는 원시 창 통계 (아래 forward 참조)
 
+# 주기성 특징 (12.19.4 후보 2). 자기상관을 볼 지연.
+#   세밀 60Hz 10초  -> 0.5~5초. 핫플 릴레이 주기 2.0초가 여기 든다
+#   광역 2Hz 60초   -> 1~20초.  오븐 히터 펄스 주기가 여기 든다
+PERIOD_LAGS_FINE = (30, 45, 60, 90, 120, 180, 240, 300)
+PERIOD_LAGS_WIDE = (2, 4, 6, 8, 12, 20, 30, 40)
+N_PERIOD = len(PERIOD_LAGS_FINE) + len(PERIOD_LAGS_WIDE) + 2   # + 평균 교차율 2개
+
+
+def _autocorr(x: torch.Tensor, lags: Sequence[int]) -> torch.Tensor:
+    """(B,T) -> (B,len(lags)). 평균 제거 후 정규화 자기상관.
+
+    **왜 필요한가 (12.19절).** 전력도 고조파도 동점인 저항 부하를 가르는 축은
+    시간 구조뿐인데(12.15.3), 지금 그 정보가 헤드에 닿는 경로가 없다. 광역 갈래는
+    `mean(-1)` 로 뭉개지므로 듀티 50%/주기 2초와 듀티 50%/주기 20초가 구분되지 않는다.
+
+    12.9.13 이 리플 *채널* 을 넣었다가 실패한 것과 다른 점: (i) 여기서는 conv 도
+    GroupNorm 도 안 거치고 헤드 직전에 붙는다 — 12.9.8 의 `원시 창통계` 와 같은 경로,
+    (ii) 모델이 스스로 주기성을 추출할 필요가 없다. 이미 계산된 값이다.
+    """
+    x = x - x.mean(-1, keepdim=True)
+    denom = (x * x).sum(-1, keepdim=True).clamp_min(1e-6)
+    return torch.stack([(x[:, l:] * x[:, :-l]).sum(-1) for l in lags], dim=1) / denom
+
+
+def _crossing_rate(x: torch.Tensor) -> torch.Tensor:
+    """(B,T) -> (B,). 창 평균선을 오르내린 횟수의 비율.
+
+    핫플(주기 2초)은 높고 포트(연속)는 0 이다. 자기상관이 못 잡는 비주기적
+    on/off 도 여기서 잡힌다.
+    """
+    c = (x - x.mean(-1, keepdim=True)) > 0
+    return (c[:, 1:] ^ c[:, :-1]).float().mean(-1)
+
 # 기기가 켜져 있는 창에서 **그 기기 자신의 창 최대 전력** 5백분위 (W).
 # 12.9.8절 — on 게이트의 물리 프라이어에 쓴다. 1,200창 측정 (2026-08-22).
 #
@@ -90,6 +123,8 @@ class NILMNet(nn.Module):
         on_bias_init: float = 2.0,
         prior_kappa: float = 0.0,
         prior_beta: float = 0.5,
+        wide_summary: bool = False,
+        periodicity: bool = False,
         min_on_w: Optional[Sequence[float]] = None,
     ):
         super().__init__()
@@ -98,6 +133,9 @@ class NILMNet(nn.Module):
         # 물리 프라이어 (12.9.8절). kappa=0 이면 완전히 꺼진다.
         self.prior_kappa = float(prior_kappa)
         self.prior_beta = float(prior_beta)
+        # 12.19.4 의 후보 1 / 2. 서로 독립이라 따로 켜서 귀속한다.
+        self.wide_summary = bool(wide_summary)     # 광역에도 amax + 창끝 슬라이스
+        self.periodicity = bool(periodicity)       # 자기상관 + 교차율
         w_on = ([MIN_ON_W.get(a, 0.0) for a in self.appliances]
                 if min_on_w is None else list(min_on_w))
         self.register_buffer(
@@ -125,6 +163,10 @@ class NILMNet(nn.Module):
         # 전역 평균 + 전역 최대 + 깊은 층 타깃 + 얕은 층 타깃 2개 + 원본 타깃
         # + 광역 평균 + **원시 창 전력 통계 4개**
         trunk_in = c2 * 2 + c2 + (c1 + c1) + FINE_CHANNELS + w2 + WINDOW_STATS
+        if self.wide_summary:
+            trunk_in += w2 * 2          # 광역 amax + 창 끝 슬라이스 (후보 1)
+        if self.periodicity:
+            trunk_in += N_PERIOD        # 후보 2
         h = int(256 * width)
         self.trunk = nn.Sequential(
             nn.Linear(trunk_in, h), nn.GELU(), nn.Dropout(dropout),
@@ -163,7 +205,12 @@ class NILMNet(nn.Module):
             if i in self.tap_layers:                # 얕은 층의 타깃 슬라이스
                 feats.append(h[:, :, t])
         feats += [h.mean(-1), h.amax(-1), h[:, :, t]]   # 전역 요약 + 깊은 층 타깃
-        feats.append(self.wide(wide).mean(-1))
+        hw = self.wide(wide)
+        feats.append(hw.mean(-1))
+        if self.wide_summary:
+            # 세밀은 전역평균·전역최대·타깃슬라이스 세 갈래로 오는데 광역은 평균
+            # 하나뿐이었다 (12.19.1절). 비대칭을 없앤다.
+            feats += [hw.amax(-1), hw[:, :, -1]]
 
         # 원시 창 전력 통계. **conv 도 GroupNorm 도 거치지 않는다.**
         # 지금까지 헤드가 받는 원시 값은 타깃 시점(fine[:,:,t]) 하나뿐이었고,
@@ -172,6 +219,13 @@ class NILMNet(nn.Module):
         fp, wp = fine[:, P_CH_FINE], wide[:, P_CH_WIDE]        # asinh(P/100)
         fp_max, wp_max = fp.amax(-1), wp.amax(-1)
         feats.append(torch.stack([fp_max, fp.amin(-1), wp_max, wp.mean(-1)], dim=1))
+
+        if self.periodicity:
+            # 시간 구조를 **직접** 준다 (`_autocorr` 주석). conv 를 안 거친다.
+            feats.append(torch.cat([
+                _autocorr(fp, PERIOD_LAGS_FINE), _autocorr(wp, PERIOD_LAGS_WIDE),
+                _crossing_rate(fp)[:, None], _crossing_rate(wp)[:, None],
+            ], dim=1))
         z = self.trunk(torch.cat(feats, dim=1))
 
         o = torch.stack([hd(z) for hd in self.heads], dim=1)   # (B, K, 13)

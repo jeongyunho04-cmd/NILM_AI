@@ -171,6 +171,10 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--w-harm", type=float, default=0.1)
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
+    ap.add_argument("--wide-summary", action="store_true",
+                    help="광역 갈래에도 amax + 창끝 슬라이스를 준다 (12.19.4 후보 1)")
+    ap.add_argument("--periodicity", action="store_true",
+                    help="자기상관·교차율을 헤드 직전에 직접 준다 (12.19.4 후보 2)")
     ap.add_argument("--w-over", type=float, default=0.1,
                     help="물리 상한 힌지. 예측 합이 관측 총전력을 넘을 때만 벌한다")
     ap.add_argument("--prior-kappa", type=float, default=8.0,
@@ -221,6 +225,7 @@ def main() -> int:
     del pool
 
     model = NILMNet(apps, appliance_state_counts(apps), width=a.width,
+                    wide_summary=a.wide_summary, periodicity=a.periodicity,
                     prior_kappa=a.prior_kappa, prior_beta=a.prior_beta).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
     crit = NILMLoss(
@@ -279,6 +284,7 @@ def main() -> int:
         torch.save({"model": model.state_dict(), "appliances": apps,
                     "width": a.width, "epoch": ep_saved,
                     "prior_kappa": a.prior_kappa, "prior_beta": a.prior_beta,
+                    "wide_summary": a.wide_summary, "periodicity": a.periodicity,
                     "select": a.select}, path)
 
     hist, best = [], None

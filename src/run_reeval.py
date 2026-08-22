@@ -105,6 +105,8 @@ def predict_cnn(tag: str, hs, dev: str, prep) -> tuple:
     # 프라이어 설정을 체크포인트에서 그대로 되살린다. 빠뜨리면 평가가 학습과
     # 다른 모델이 된다 (kappa 기본값이 0 이라 프라이어가 조용히 꺼진다).
     model = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0),
+                    wide_summary=ck.get("wide_summary", False),
+                    periodicity=ck.get("periodicity", False),
                     prior_kappa=ck.get("prior_kappa", 0.0),
                     prior_beta=ck.get("prior_beta", 0.5)).to(dev)
     model.load_state_dict(ck["model"])       # 구조가 다르면 여기서 걸린다

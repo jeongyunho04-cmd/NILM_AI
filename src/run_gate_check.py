@@ -53,6 +53,8 @@ def load_model(ckpt_path: str, dev: str):
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     apps = ck["appliances"]
     model = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0),
+                    wide_summary=ck.get("wide_summary", False),
+                    periodicity=ck.get("periodicity", False),
                     prior_kappa=ck.get("prior_kappa", 0.0),
                     prior_beta=ck.get("prior_beta", 0.5)).to(dev)
     model.load_state_dict(ck["model"])
