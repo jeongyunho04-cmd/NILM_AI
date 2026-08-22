@@ -60,7 +60,8 @@ _GEN = None
 _SEED_BASE = 0
 
 
-def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int) -> None:
+def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
+          exclude_files_json: str = "") -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.dataset import NILMBatchGenerator
     from src.synthesis.segment_pool import SegmentPool
@@ -68,7 +69,11 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int) -> None:
     # 시드는 여기서 걸지 않는다. 워커 번호로 걸면 어느 워커가 어느 청크를 집어 가느냐에
     # 따라 결과가 달라진다 (`chunk_seed` 주석). 청크마다 `_chunk` 안에서 건다.
     _SEED_BASE = int(seed)
-    pool = SegmentPool(npz_dir=npz_dir, time_split=time_split)
+    # 녹화 단위 홀드아웃 (설계 문서 12.18절). JSON 문자열로 넘기는 이유는
+    # `spawn` 워커에 dict 를 그대로 보내면 피클 경계에서 다루기 번거로워서다.
+    excl = json.loads(exclude_files_json) if exclude_files_json else None
+    pool = SegmentPool(npz_dir=npz_dir, time_split=time_split,
+                       exclude_activation_files=excl)
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False),
@@ -116,12 +121,15 @@ def build_cache(
     seed: int = 0,
     n_workers: int = 11,
     chunk: int = 250,
+    exclude_activation_files: Optional[Dict[str, List[str]]] = None,
 ) -> dict:
     """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다."""
     import multiprocessing as mp
 
     from src.synthesis.segment_pool import SegmentPool
-    apps = SegmentPool(npz_dir=npz_dir, time_split=time_split).get_appliance_types()
+    excl_json = json.dumps(exclude_activation_files) if exclude_activation_files else ""
+    apps = SegmentPool(npz_dir=npz_dir, time_split=time_split,
+                       exclude_activation_files=exclude_activation_files).get_appliance_types()
     k = len(apps)
     n_wide = window_cycles // 30
 
@@ -148,7 +156,7 @@ def build_cache(
     t0 = time.time(); pos = 0
     ctx = mp.get_context("spawn")
     with ctx.Pool(n_workers, initializer=_init,
-                  initargs=(npz_dir, window_cycles, time_split, seed)) as pool:
+                  initargs=(npz_dir, window_cycles, time_split, seed, excl_json)) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -165,6 +173,7 @@ def build_cache(
 
     meta = {"n_windows": int(pos), "window_cycles": window_cycles, "appliances": apps,
             "time_split": time_split, "seed": seed, "n_wide": n_wide,
+            "exclude_activation_files": exclude_activation_files,
             "fine_shape": [FINE_CHANNELS, FINE_CYCLES], "bytes": int(total),
             "build_seconds": round(time.time() - t0, 1),
             "positive_rate": {a: float((mm["y_on"][:pos, j] > 0).mean())

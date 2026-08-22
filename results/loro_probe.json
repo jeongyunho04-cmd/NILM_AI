@@ -1,0 +1,35 @@
+{
+  "models": {
+    "seen": "results/cnn_v17.pt",
+    "unseen": "results/cnn_v18_nohp2.pt"
+  },
+  "평가1 hotplate_2 (unseen 이 처음 봄)": {
+    "seen": {
+      "hotplate_on": 0.992,
+      "kettle_on": 0.008,
+      "oven_on": 0.998,
+      "hotplate_gate_median": 0.999220609664917
+    },
+    "unseen": {
+      "hotplate_on": 0.996,
+      "kettle_on": 0.002,
+      "oven_on": 0.986,
+      "hotplate_gate_median": 0.999220609664917
+    }
+  },
+  "평가2 hotplate_1 (둘 다 봤음, 대조군)": {
+    "seen": {
+      "hotplate_on": 0.996,
+      "kettle_on": 0.006,
+      "oven_on": 0.99,
+      "hotplate_gate_median": 0.9994966983795166
+    },
+    "unseen": {
+      "hotplate_on": 0.994,
+      "kettle_on": 0.014,
+      "oven_on": 0.988,
+      "hotplate_gate_median": 0.9996646642684937
+    }
+  },
+  "verdict": "**암기 아님** — 녹화를 안 봐도 같은 성능이다"
+}

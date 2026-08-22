@@ -26,7 +26,7 @@ NILM 모델이 가장 자주 저지르는 오답이 "여러 기기의 대기전�
 """
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 
 from src.preprocessing.numpy_exporter import load_nilm_npz
@@ -132,6 +132,8 @@ class SegmentPool:
         strict_role_check: bool = True,
         time_split: str = "all",
         holdout_frac: float = 0.2,
+        exclude_activation_files: Optional[Dict[str, Sequence[str]]] = None,
+        only_activation_files: Optional[Dict[str, Sequence[str]]] = None,
     ):
         """
         Args:
@@ -150,6 +152,21 @@ class SegmentPool:
 
         그래서 시간축으로 나눈다. 각 녹화의 뒤 20% 는 학습에 쓰지 않고,
         테스트 셋은 그 구간으로만 만든다. 9종 전부에 대해 안 본 파형이 생긴다.
+
+        [녹화 단위 홀드아웃 - 12.16 이후 추가]
+        위 논리에 구멍이 있다. **시간축 분할은 파형 암기를 탐지하지 못한다.** 홀드아웃이
+        같은 녹화의 뒤 20% 라 같은 기기·같은 세션·같은 파형이기 때문이다. 실제로 저항
+        3종 정확도 1.000 과 실측 실패가 공존했다 (12.16.3절).
+
+        전역 파일 분할은 여전히 불가능하지만(원본 1개짜리 기기가 있다), **기기 하나를
+        골라 그 녹화만 빼는 것**은 된다. 핫플은 녹화가 2개라 가능하다.
+
+            학습:  SegmentPool(time_split="train",
+                               exclude_activation_files={"hotplate": ["hotplate_2"]})
+            평가:  SegmentPool(only_activation_files={"hotplate": ["hotplate_2"]})
+
+        `exclude_activation_files` / `only_activation_files` 는 {가전: [녹화 stem]} 이고,
+        표에 없는 가전은 건드리지 않는다.
         """
         if time_split not in ("all", "train", "holdout"):
             raise ValueError(f"time_split 은 all/train/holdout 중 하나여야 합니다: {time_split!r}")
@@ -175,6 +192,30 @@ class SegmentPool:
         self.noise_power: Optional[np.ndarray] = None
 
         self.load_all_npz_files()
+        self._filter_activation_files(exclude_activation_files, only_activation_files)
+
+    def _filter_activation_files(
+        self,
+        exclude: Optional[Dict[str, Sequence[str]]],
+        only: Optional[Dict[str, Sequence[str]]],
+    ) -> None:
+        """녹화 단위로 활성화를 걸러 낸다 (`__init__` 주석 참조)."""
+        if not exclude and not only:
+            return
+        for app, files in (only or {}).items():
+            keep = set(files)
+            acts = self.appliance_activations.get(app, [])
+            self.appliance_activations[app] = [a for a in acts if a.source_file in keep]
+        for app, files in (exclude or {}).items():
+            drop = set(files)
+            acts = self.appliance_activations.get(app, [])
+            self.appliance_activations[app] = [a for a in acts if a.source_file not in drop]
+        for app in set((exclude or {})) | set((only or {})):
+            if not self.appliance_activations.get(app):
+                raise ValueError(
+                    f"'{app}' 의 활성화가 전부 걸러졌습니다. "
+                    f"exclude={(exclude or {}).get(app)} only={(only or {}).get(app)}"
+                )
 
     # ── 적재 ────────────────────────────────────────────────────────────────
     def load_all_npz_files(self):
