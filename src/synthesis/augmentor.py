@@ -37,11 +37,18 @@ class DataAugmentor:
         phase_jitter_max_deg: float = 4.0,
         switching_inrush_jitter: bool = True,
         max_stretch: float = 3.0,
+        duty_on_scale_range: Tuple[float, float] = (0.5, 2.0),
+        duty_off_scale_range: Tuple[float, float] = (0.5, 2.0),
+        randomize_duty: bool = True,
     ):
         self.duration_scale_range = duration_scale_range
         self.power_scale_std = power_scale_std
         self.phase_jitter_max_deg = phase_jitter_max_deg
         self.switching_inrush_jitter = switching_inrush_jitter
+        # 주기 부하의 통전/휴지 **길이** 를 흔든다 (`_retime_duty` 주석).
+        self.duty_on_scale_range = duty_on_scale_range
+        self.duty_off_scale_range = duty_off_scale_range
+        self.randomize_duty = bool(randomize_duty)
         # 원본보다 이 배율 이상으로는 늘이지 않는다. 0.5초짜리 동작을 30초로 늘이면
         # 60배 느려진 파형이 되어 실제로는 존재할 수 없는 기기가 만들어진다.
         # 한도를 넘으면 늘이는 대신 그 길이에서 동작이 끝난 것으로 처리한다.
@@ -81,14 +88,16 @@ class DataAugmentor:
             aug_target_p = act.target_power_w.copy()
             aug_on = act.is_on.copy()
         elif act.periodic_duty:
-            # 서모스탯 주기를 보존해야 한다 - 늘이면 순환 이어붙이기, 줄이면 잘라내기
-            aug_c, aug_pow, aug_state, aug_target_p, aug_on = self._tile_or_crop(
+            # 파형은 그대로 두고 통전/휴지 **길이** 만 흔든 뒤, 길이를 맞춘다.
+            src = self._retime_duty(
                 act.net_harmonics_complex,
                 act.net_power_features,
                 act.state_id,
                 act.target_power_w,
                 act.is_on,
-                target_len=new_len,
+            )
+            aug_c, aug_pow, aug_state, aug_target_p, aug_on = self._tile_or_crop(
+                *src, target_len=new_len,
             )
             includes_onset = False
         elif new_len < orig_len:
@@ -176,6 +185,73 @@ class DataAugmentor:
         )
 
     # ── 주기 부하: 잘라내기 / 순환 이어붙이기 ───────────────────────────────
+    def _retime_duty(
+        self,
+        c_series: np.ndarray,
+        pow_series: np.ndarray,
+        state_series: np.ndarray,
+        target_p: np.ndarray,
+        on_series: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """통전/휴지 **구간 길이**를 흔든다. 파형은 리샘플링하지 않는다.
+
+        [왜 이것이 필요한가 - 설계 문서 12.16절]
+        학습 풀의 핫플 활성화는 3개, 포트는 13개(녹화 1개)뿐이고 합성기는 그것을
+        그대로 재생한다. 그래서 합성 창에는 풀 파형의 글자 그대로의 복사본이 들어가고,
+        모델은 *"이 파형이 있는가"* 만 맞추면 된다 - **듀티를 볼 이유가 없다.**
+        실제로 60초 내내 연속 통전한 창에서도 검출이 1.000 이었다 (12.16.2절 ①).
+        그런데 실측에서는 그 복사본이 없으므로 듀티라도 써야 하는데, 학습에서 쓸 일이
+        없었으니 안 배웠다.
+
+        [왜 리샘플링이 아니라 구간 길이인가]
+        이 모듈 서두가 주기 부하를 리샘플링하지 말라고 못박은 이유는 *파형* 왜곡이다 -
+        10초 히터 펄스를 2.2배로 늘이면 22초짜리, 실재하지 않는 기기가 된다.
+        **여기서는 파형을 늘이지 않는다.** 통전 구간 안에서 사이클을 순환 반복해
+        릴레이가 더 오래/짧게 닫혀 있게만 한다. 서모스탯 부하에서 통전 길이와 주기는
+        **기기의 성질이 아니라 설정·주위 온도·부하의 함수**다. 실측이 그것을 보여 준다:
+
+            핫플 통전율   51.3% / 57.8% / 35.8%   (활성화 3개, 12.13.1절)
+            오븐 듀티     22 / 28 / 39 / 46 / 81%  (활성화 5개, 12.11절)
+
+        같은 기기가 실제로 이만큼 흔들린다. 기본 배율 (0.5, 2.0) 은 그 범위를 덮는다.
+
+        [한계]
+        통전 구간 안에서 사이클을 반복하므로 승온에 따른 저항 드리프트가 평평해진다.
+        저항 부하의 정상상태에서는 작고, `_tile_or_crop` 이 구간 사이에서 이미 하고
+        있는 가정과 같은 종류다.
+        """
+        state = np.asarray(state_series)
+        tp = np.asarray(target_p, dtype=np.float64)
+        if not self.randomize_duty or state.size < 2:
+            return c_series, pow_series, state_series, target_p, on_series
+
+        # **구간은 `state_id` 로 나눈다.** `is_on` 으로 나누면 오븐이 빠진다 -
+        # 오븐의 `is_on` 은 활성화 단위라 내내 1 이고, 히터 펄스는 state 에만 있다
+        # (state 2=히터 / 1=팬·조명, 듀티 0.206~0.808 로 12.11절의 22~81% 와 맞는다).
+        # 핫플은 state 0/1 이 릴레이와 같이 간다.
+        edges = np.flatnonzero(np.diff(state)) + 1
+        if edges.size == 0:
+            return c_series, pow_series, state_series, target_p, on_series
+        starts = np.concatenate(([0], edges))
+        stops = np.concatenate((edges, [state.size]))
+
+        # 어느 구간이 "통전" 인지는 상태 번호가 아니라 **전력** 으로 정한다.
+        # 기기마다 상태 번호의 의미가 다르기 때문이다.
+        hot = tp > 0.5 * np.percentile(tp, 99)
+        on_scale = float(np.random.uniform(*self.duty_on_scale_range))
+        off_scale = float(np.random.uniform(*self.duty_off_scale_range))
+
+        idx = []
+        for a, b in zip(starts, stops):
+            run = b - a
+            scale = on_scale if hot[a:b].mean() >= 0.5 else off_scale
+            new_run = max(1, int(round(run * scale)))
+            # 구간 **안에서** 순환한다. 구간을 넘어가지 않으므로 통전/휴지가 안 섞인다.
+            idx.append(a + (np.arange(new_run) % run))
+        idx = np.concatenate(idx)
+        return (c_series[idx].copy(), pow_series[idx].copy(), state_series[idx].copy(),
+                target_p[idx].copy(), np.asarray(on_series)[idx].copy())
+
     def _tile_or_crop(
         self,
         c_series: np.ndarray,

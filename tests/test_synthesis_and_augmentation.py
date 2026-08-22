@@ -873,3 +873,80 @@ def test_cache_weights_sum_to_one(tmp_path):
     negative = on.sum(axis=1) == 0
     assert negative.sum() > 80
     assert abs(w[negative].sum() - 0.2) < 1e-6, "전부 꺼진 창의 몫이 지정값과 다릅니다"
+
+
+def test_duty_period_is_not_frozen_across_augmented_samples():
+    """주기 부하의 **주기**가 증강 표본마다 흔들려야 한다 (설계 문서 12.16절).
+
+    이 검사가 없을 때 핫플레이트의 릴레이 주기는 증강을 거쳐도 10~90% 구간이
+    [1.97, 2.03]초로 사실상 **상수**였다. 학습 활성화가 3개뿐인데 그 셋이 모두
+    같은 주기를 내면, 모델은 듀티를 볼 필요 없이 파형을 대조해 맞힐 수 있다 -
+    실제로 60초 내내 연속 통전한 창에서도 검출이 1.000 이었다 (12.16.2절).
+
+    서모스탯 부하에서 통전 길이와 주기는 기기의 성질이 아니라 설정·주위 온도·
+    부하의 함수다. 실측이 그 폭을 보여 준다 (핫플 통전율 0.358~0.578,
+    오븐 듀티 0.22~0.81).
+    """
+    import numpy as np
+    from src.synthesis.augmentor import DataAugmentor
+    from src.synthesis.segment_pool import SegmentPool
+
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+    acts = pool.appliance_activations.get("hotplate", [])
+    if len(acts) < 1:
+        pytest.skip("핫플레이트 활성화가 없습니다")
+
+    def spread(randomize: bool):
+        aug = DataAugmentor(randomize_duty=randomize)
+        np.random.seed(0)
+        periods = []
+        for i in range(120):
+            a = acts[i % len(acts)]
+            b = aug.augment_activation(a, target_duration_cycles=3600)
+            tp = np.asarray(b.target_power_w)
+            hot = tp > 0.5 * np.percentile(tp, 99)
+            n_tr = int(np.abs(np.diff(hot.astype(int))).sum())
+            periods.append(3600 / max(n_tr, 1) * 2)
+        p = np.asarray(periods)
+        return float(np.percentile(p, 90) - np.percentile(p, 10))
+
+    frozen, varied = spread(False), spread(True)
+    assert varied > 2 * frozen, (
+        f"듀티 주기가 충분히 흔들리지 않습니다: 10~90% 폭 {varied:.1f} vs 고정 {frozen:.1f} 사이클"
+    )
+    assert varied > 30, f"주기 폭이 0.5초에도 못 미칩니다: {varied:.1f} 사이클"
+
+
+def test_duty_retiming_never_mixes_on_and_off_waveforms():
+    """구간 길이를 흔들되 통전/휴지 파형이 섞이면 안 된다.
+
+    `_retime_duty` 는 구간 **안에서만** 순환한다. 섞이면 릴레이가 반쯤 닫힌,
+    실재하지 않는 상태가 만들어진다.
+    """
+    import numpy as np
+    from src.synthesis.augmentor import DataAugmentor
+    from src.synthesis.segment_pool import SegmentPool
+
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+    acts = pool.appliance_activations.get("hotplate", [])
+    if not acts:
+        pytest.skip("핫플레이트 활성화가 없습니다")
+
+    # `_retime_duty` 를 직접 본다. `augment_activation` 은 이 뒤에 전력 스케일(±15%)
+    # 과 위상 지터를 걸므로 값 범위가 원본을 벗어나는 것이 정상이다.
+    aug = DataAugmentor(randomize_duty=True)
+    src = acts[0]
+    original = set(np.asarray(src.target_power_w).tolist())
+    np.random.seed(3)
+    for _ in range(20):
+        _, _, state, tp, on = aug._retime_duty(
+            src.net_harmonics_complex, src.net_power_features,
+            src.state_id, src.target_power_w, src.is_on,
+        )
+        tp = np.asarray(tp)
+        # 리타이밍은 원본 사이클을 **골라 쓰기만** 한다. 새 값을 만들면 안 된다.
+        assert set(tp.tolist()) <= original, "원본에 없던 전력이 생겼습니다"
+        # 통전/휴지 구분이 살아 있어야 한다
+        hot = tp > 0.5 * np.percentile(tp, 99)
+        assert 0.05 < hot.mean() < 0.95, f"통전/휴지 구분이 사라졌습니다: {hot.mean():.3f}"
+        assert len(state) == len(tp) == len(on), "배열 길이가 어긋났습니다"
