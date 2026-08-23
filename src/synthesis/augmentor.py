@@ -40,6 +40,8 @@ class DataAugmentor:
         duty_on_scale_range: Tuple[float, float] = (0.5, 2.0),
         duty_off_scale_range: Tuple[float, float] = (0.5, 2.0),
         randomize_duty: bool = True,
+        load_stratified: bool = True,
+        load_strata_candidates: int = 16,
     ):
         self.duration_scale_range = duration_scale_range
         self.power_scale_std = power_scale_std
@@ -49,6 +51,10 @@ class DataAugmentor:
         self.duty_on_scale_range = duty_on_scale_range
         self.duty_off_scale_range = duty_off_scale_range
         self.randomize_duty = bool(randomize_duty)
+        # 긴 활성화에서 창을 자를 때 **자르는 지점을 전력으로 계층화**한다
+        # (`_crop_window` 주석). 12.34.6 의 미니PC 문제 대응이다.
+        self.load_stratified = bool(load_stratified)
+        self.load_strata_candidates = max(2, int(load_strata_candidates))
         # 원본보다 이 배율 이상으로는 늘이지 않는다. 0.5초짜리 동작을 30초로 늘이면
         # 60배 느려진 파형이 되어 실제로는 존재할 수 없는 기기가 만들어진다.
         # 한도를 넘으면 늘이는 대신 그 길이에서 동작이 끝난 것으로 처리한다.
@@ -298,6 +304,20 @@ class DataAugmentor:
         어디를 자르느냐에 따라 보이는 과도현상이 달라지므로 세 위치를 섞는다.
         한쪽만 쓰면 그 기기의 특정 전이만 학습하게 된다.
 
+        [정상 운전 구간은 전력으로 계층화해 뽑는다] (12.34.6)
+        시간 균등으로 뽑으면 **그 기기가 그 상태로 오래 있었던 만큼** 뽑힌다.
+        미니PC 가 그 예다 - 33.9분짜리 활성화 안에서 CPU 부하가 걸린 구간이
+        6.7% 뿐이라, 풀 전체에서 20W 이상인 사이클이 13.9% 밖에 안 된다.
+        실측 미니PC 단독은 30.3W 인데 합성 60초 창의 최대가 27.9W 였다.
+
+        노출 현실성과 동작 범위 커버리지는 다른 요구다. 학습에는 후자가 필요하다.
+        후보를 여러 개 뽑아 각자의 통전 전력을 재고, **전력 범위에서 균등하게**
+        목표를 정해 가장 가까운 후보를 고른다. 전력이 평평한 활성화(프로젝터)에서는
+        저절로 무작위 추출과 같아진다.
+
+        듀티 부하(오븐·핫플)는 여기 오지 않는다 - `augment_activation` 이 앞에서
+        `_tile_or_crop` 으로 보낸다. 그쪽은 통전/휴지 비율이 물리라 건드리면 안 된다.
+
         Returns:
             잘라낸 배열 4개와, 그 구간이 '켜지는 순간'을 포함하는지 여부
         """
@@ -309,7 +329,7 @@ class DataAugmentor:
         elif r < 0.50:
             start = span                                # 꺼지는 순간 포함
         else:
-            start = int(np.random.randint(0, span + 1))  # 정상 운전 중간
+            start = self._stratified_start(target_p, on_series, target_len, span)
 
         sl = slice(start, start + target_len)
         return (
@@ -320,6 +340,31 @@ class DataAugmentor:
             on_series[sl].copy(),
             start == 0,
         )
+
+    def _stratified_start(
+        self, target_p: np.ndarray, on_series: np.ndarray, target_len: int, span: int
+    ) -> int:
+        """정상 운전 구간의 자를 지점을 전력 계층으로 고른다 (`_crop_window` 주석).
+
+        후보마다 창 전체의 중앙값을 내면 300,000창 x 후보수 만큼 들어 비싸다.
+        창 안에서 균등 간격으로 24점만 찍어 통전 평균을 낸다 - 순위를 매기는 데는
+        충분하고 비용은 후보당 24회 조회다.
+        """
+        n = self.load_strata_candidates
+        if not self.load_stratified or span < target_len // 4 or n < 2:
+            return int(np.random.randint(0, span + 1))
+        starts = np.random.randint(0, span + 1, size=n)
+        off = np.linspace(0, target_len - 1, 24).astype(np.int64)
+        idx = starts[:, None] + off[None, :]
+        m = on_series[idx].astype(bool)
+        lvl = np.where(m.any(1),
+                       (target_p[idx] * m).sum(1) / np.maximum(m.sum(1), 1),
+                       0.0)
+        lo, hi = float(lvl.min()), float(lvl.max())
+        if hi - lo < 1e-6:                 # 전력이 평평하다 - 계층이 의미 없다
+            return int(starts[np.random.randint(0, n)])
+        want = lo + np.random.rand() * (hi - lo)
+        return int(starts[int(np.argmin(np.abs(lvl - want)))])
 
     # ── 일반 부하: 돌입 구간 보존 리샘플링 ──────────────────────────────────
     def _warp_time_series(

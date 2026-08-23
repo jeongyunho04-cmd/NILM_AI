@@ -950,3 +950,71 @@ def test_duty_retiming_never_mixes_on_and_off_waveforms():
         hot = tp > 0.5 * np.percentile(tp, 99)
         assert 0.05 < hot.mean() < 0.95, f"통전/휴지 구분이 사라졌습니다: {hot.mean():.3f}"
         assert len(state) == len(tp) == len(on), "배열 길이가 어긋났습니다"
+
+
+def test_load_stratified_crop_covers_rare_high_load():
+    """긴 활성화에서 드문 고부하 구간이 시간 비율보다 자주 뽑혀야 한다 (12.34.6).
+
+    미니PC 가 그 예다. 33.9분짜리 활성화 안에서 CPU 부하가 걸린 구간이 6.7% 뿐이라
+    시간 균등으로 자르면 풀 전체의 >=20W 가 13.9% 밖에 안 된다. 실측 미니PC 단독은
+    30.3W 인데 합성 60초 창의 최대가 27.9W 였다 (분포 밖).
+
+    여기서는 90% 가 10W, 10% 가 30W 인 활성화를 만들어, 계층 추출이 고부하 창을
+    시간 비율(10%)보다 확실히 자주 고르는지 본다.
+    """
+    n, win = 60_000, 3_600
+    target_p = np.full(n, 10.0, np.float32)
+    target_p[-6_000:] = 30.0                      # 마지막 10% 만 고부하
+    on = np.ones(n, np.int8)
+    aug_on = DataAugmentor(load_stratified=True)
+    aug_off = DataAugmentor(load_stratified=False)
+
+    def high_share(aug, trials=400):
+        rng = np.random.RandomState(0)
+        np.random.seed(0)
+        hits = 0
+        for _ in range(trials):
+            s = aug._stratified_start(target_p, on, win, n - win)
+            if float(np.median(target_p[s:s + win])) > 20.0:
+                hits += 1
+        return hits / trials
+
+    off, onr = high_share(aug_off), high_share(aug_on)
+    assert onr > off * 1.8, f"계층 추출이 고부하를 더 뽑지 못했습니다: {off:.3f} -> {onr:.3f}"
+    assert onr > 0.20, f"고부하 창 비율이 여전히 낮습니다: {onr:.3f}"
+
+
+def test_load_stratified_crop_is_noop_on_flat_activation():
+    """전력이 평평한 기기(프로젝터)에서는 계층 추출이 무작위와 같아야 한다."""
+    n, win = 20_000, 3_600
+    target_p = np.full(n, 47.5, np.float32)
+    on = np.ones(n, np.int8)
+    aug = DataAugmentor(load_stratified=True)
+    np.random.seed(0)
+    starts = [aug._stratified_start(target_p, on, win, n - win) for _ in range(300)]
+    # 한쪽으로 몰리면 안 된다 - 시작 위치가 전 구간에 퍼져 있어야 한다
+    span = n - win
+    assert min(starts) < span * 0.15 and max(starts) > span * 0.85, (
+        f"평평한 활성화인데 자르는 지점이 몰렸습니다: {min(starts)}~{max(starts)} / {span}")
+
+
+def test_duty_appliances_never_reach_stratified_crop():
+    """듀티 부하는 `_crop_window` 에 오지 않아야 한다 (통전율이 물리다).
+
+    오븐은 팬/조명만 도는 활성화와 히터 활성화가 섞여 있어(통전중앙 14/14/15/1160W),
+    전력으로 계층화하면 히터 노출이 줄어든다. `augment_activation` 이 앞에서
+    `_tile_or_crop` 으로 보내는지 확인한다.
+    """
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+    aug = DataAugmentor(load_stratified=True)
+    called = []
+    orig = aug._stratified_start
+    aug._stratified_start = lambda *a, **k: (called.append(1), orig(*a, **k))[1]
+    for app in ("oven", "hotplate"):
+        acts = pool.appliance_activations.get(app, [])
+        if not acts:
+            pytest.skip(f"{app} 활성화가 없습니다")
+        np.random.seed(0)
+        for _ in range(20):
+            aug.augment_activation(pool.sample_activation(app), target_duration_cycles=3600)
+    assert not called, "듀티 부하가 전력 계층 자르기를 탔습니다"
