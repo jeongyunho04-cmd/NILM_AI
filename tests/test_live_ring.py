@@ -1,0 +1,170 @@
+"""실시간 입력 버퍼 회귀 테스트 — 순서 뒤바뀜을 견디는가
+
+펌웨어는 선택적 재전송을 하므로 CSV 안에서 행이 `37 -> 28 -> 38 -> 29` 처럼
+거꾸로 온다 (`nilm_receiver.py` 의 `REORDER_MAX` 주석). 옛 `run_live` 는
+파일 순서대로 deque 에 append 해서 **4.5초 전 사이클을 '가장 최근' 자리에**
+앉혔다. 세밀 갈래는 뒤 10초만 보고 타깃은 그 안의 539번째라(`inputs.py`)
+오염되는 자리가 정확히 타깃 근방이었다.
+
+12.21.4 의 교훈대로 회귀 테스트를 박아 둔다. 이 성질이 조용히 깨지면
+지표는 멀쩡해 보이는데 입력이 틀려 있게 된다.
+"""
+import numpy as np
+import pytest
+
+from src.run_live import CYCLE_HZ, CycleRing
+
+
+def cycle(v: float) -> np.ndarray:
+    """채널 전체가 같은 값인 사이클. 자리만 확인하면 되므로 이걸로 충분하다."""
+    return np.full(33, v, np.float32)
+
+
+def fill(ring: CycleRing, ks) -> None:
+    for k in ks:
+        ring.push(cycle(float(k)), k / CYCLE_HZ)
+
+
+def test_in_order_window_is_time_ordered():
+    r = CycleRing(size=10)
+    fill(r, range(10))
+    assert r.ready()
+    np.testing.assert_allclose(r.window()[0], np.arange(10, dtype=np.float32))
+
+
+def test_out_of_order_row_lands_in_its_own_slot():
+    """늦게 온 행이 제 시각 자리에 들어가고 머리를 밀지 않는다."""
+    r = CycleRing(size=10)
+    fill(r, [0, 1, 2, 3, 6, 7])          # 4, 5 가 아직 안 왔다
+    assert r.push(cycle(4.0), 4 / CYCLE_HZ) == "backfill"
+    assert r.push(cycle(5.0), 5 / CYCLE_HZ) == "backfill"
+    assert r.k_head == 7                  # 되꽂아도 머리는 그대로
+    fill(r, [8, 9])
+    np.testing.assert_allclose(r.window()[0], np.arange(10, dtype=np.float32))
+
+
+def test_shuffled_input_gives_the_same_window_as_clean_input():
+    """이 파일의 핵심. 순서를 섞어도 창이 **동일**해야 한다."""
+    n = 60
+    clean = CycleRing(size=n)
+    fill(clean, range(n))
+
+    order = list(range(n))
+    for i in range(0, n - 9, 7):          # 펌웨어 재전송 흉내: 9칸 뒤로 미룬다
+        order.remove(i)
+        order.insert(order.index(i + 9), i)
+    shuffled = CycleRing(size=n)
+    fill(shuffled, order)
+
+    assert shuffled.stats()["n_backfill"] > 0, "테스트가 실제로 순서를 안 섞었다"
+    np.testing.assert_allclose(shuffled.window(), clean.window())
+
+
+def test_row_older_than_the_window_is_dropped():
+    """창 밖으로 밀려난 행은 버린다. 새 자리에 덮어쓰면 미래를 오염시킨다."""
+    r = CycleRing(size=10)
+    fill(r, range(10, 20))
+    assert r.push(cycle(-1.0), 3 / CYCLE_HZ) == "stale"
+    assert r.stats()["n_stale"] == 1
+    assert not np.any(r.window() == -1.0)
+
+
+def test_gap_is_filled_with_the_previous_valid_cycle():
+    """유실로 빈 자리는 직전 유효값으로 채운다 (전처리의 60Hz 보간에 해당)."""
+    r = CycleRing(size=10, min_fill=0.5)
+    fill(r, [0, 1, 2, 5, 6, 7, 8, 9])     # 3, 4 유실
+    assert r.ready()
+    w = r.window()[0]
+    assert w[3] == 2.0 and w[4] == 2.0    # 앞으로 끌고 온다
+    np.testing.assert_allclose(w[[0, 1, 2, 5, 6, 7, 8, 9]],
+                               np.array([0, 1, 2, 5, 6, 7, 8, 9], np.float32))
+
+
+def test_advancing_the_head_clears_the_slot_it_reuses():
+    """한 바퀴 돌아 재사용하는 자리에 옛 값이 남으면 60초 전 사이클이 섞인다."""
+    r = CycleRing(size=4)
+    fill(r, [0, 1, 2, 3])
+    r.push(cycle(4.0), 4 / CYCLE_HZ)      # 자리 0 을 재사용한다
+    np.testing.assert_allclose(r.window()[0], np.array([1, 2, 3, 4], np.float32))
+
+
+def test_falls_back_to_arrival_order_without_time():
+    """`--no-reorder` 와 t_s 결측 시의 옛 동작. 회귀 비교용으로 살려 둔다."""
+    r = CycleRing(size=5, use_time=False)
+    for v in [3.0, 1.0, 2.0]:             # 시각을 무시하고 온 순서대로 쌓는다
+        r.push(cycle(v), None)
+    assert r.k_head == 2
+    assert r.stats()["n_backfill"] == 0
+
+
+def test_ready_requires_a_nearly_full_window():
+    """예열이 안 끝났는데 예측을 내면 빈 자리가 0 으로 들어간다."""
+    r = CycleRing(size=100, min_fill=0.98)
+    fill(r, range(50))
+    assert not r.ready()
+    fill(r, range(50, 100))
+    assert r.ready()
+
+
+@pytest.mark.parametrize("shift", [1, 9, 32])
+def test_stats_report_the_worst_reversal(shift):
+    """되꽂은 폭을 보고해야 '이 세션의 입력이 얼마나 온전했나' 를 알 수 있다."""
+    r = CycleRing(size=200)
+    fill(r, range(100))
+    r.push(cycle(0.0), (99 - shift) / CYCLE_HZ)
+    s = r.stats()
+    assert s["max_backfill_cycles"] == shift
+    assert s["max_backfill_s"] == pytest.approx(shift / CYCLE_HZ)
+
+
+# ── 세션 이어붙임 (보드 리셋) ──────────────────────────────────────────────
+# 실측 데이터에서 실제로 일어난다: test.2.csv 2회, test3.csv 1회,
+# oven_1 / hotplate_1 / noise_selfpower / beam_projector_2 각 1회.
+# 되감긴 행을 '늦은 행' 으로 버리면 k_head 가 영영 안 내려가 **리셋 이후
+# 전부를 잃는다** — 옛 append 동작보다 나쁘다. 그래서 이 테스트가 필요하다.
+#
+# 머리가 창 밖으로 충분히 나가 있어야 리셋과 되꽂음이 구별된다. 실제로도
+# 리셋은 긴 녹화 뒤에 일어나므로(t_s 가 수백 초에서 0 으로) 이 조건이 맞다.
+
+def test_board_reset_restarts_the_buffer_instead_of_dropping_everything():
+    r = CycleRing(size=100, reset_after=5)
+    fill(r, range(300))                    # 머리를 창 밖으로 보낸다
+    assert r.ready()
+    fill(r, range(0, 100))                 # t_s 가 0 으로 되감긴다
+    assert r.stats()["n_seam"] == 1
+    assert r.k_head == 99                  # 새 세션의 머리를 잡았다
+    assert r.ready()
+    np.testing.assert_allclose(r.window()[0], np.arange(100, dtype=np.float32))
+
+
+def test_window_never_spans_two_sessions():
+    """이어붙인 자리에서 창이 두 세션에 걸치면 60초가 통째로 거짓이 된다."""
+    r = CycleRing(size=100, reset_after=5)
+    fill(r, range(300))
+    fill(r, range(0, 40))                  # 새 세션이 40 사이클만 쌓였다
+    assert not r.ready(), "예열이 안 끝났는데 예측을 내면 옛 세션이 섞인다"
+    fill(r, range(40, 100))
+    assert r.ready()
+    assert not np.any(r.window()[0] > 99)  # 옛 세션(100~299)이 한 칸도 없다
+
+
+def test_a_single_stray_row_does_not_trigger_a_reset():
+    """한 줄짜리 이상값에 60초 버퍼를 버리면 안 된다."""
+    r = CycleRing(size=100, reset_after=5)
+    fill(r, range(300))
+    assert r.push(cycle(-1.0), 0.0) == "stale"
+    fill(r, [300])                         # 정상 행이 이어진다
+    assert r.stats()["n_seam"] == 0
+    assert r.k_head == 300
+    assert not np.any(r.window() == -1.0)
+
+
+def test_rows_held_during_reset_detection_are_replayed_not_lost():
+    """리셋 판정 전까지 들고 있던 행도 새 세션의 데이터다. 버리면 안 된다."""
+    r = CycleRing(size=100, reset_after=5)
+    fill(r, range(300))
+    fill(r, range(0, 5))                   # 정확히 reset_after 개
+    assert r.stats()["n_seam"] == 1
+    assert r.k_head == 4
+    np.testing.assert_allclose(r.window()[0][-5:], np.arange(5, dtype=np.float32))
+    assert r.stats()["n_stale"] == 0       # 되살렸으므로 버린 것으로 세지 않는다

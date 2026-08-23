@@ -1,0 +1,238 @@
+{
+ "_comment": [
+  "test_5.csv 정답 — 스위치를 누른 사람이 기록한 것. 신호 추론이 아니다.",
+  "원본은 수신기 콘솔의 seq(0.5초/줄) 단위였다.  t_s = seq x 0.5.",
+  "seq 840 (충전기 OFF)는 종이에만 있고 txt 에서 누락됐다. 신호가 421.5s 에서",
+  "  dI3 -275.7mA 로 독립 확인했다 (다른 충전기 OFF 2회와 4% 이내).",
+  "SMPS 12개 전이는 I3 계단으로 시각을 정밀화했다 (오차 +-2s).",
+  "오븐/핫플은 정밀화하지 않았다 — 둘 다 듀티 부하라 P 이동평균이 서로를 잡는다.",
+  "  사람 시각을 그대로 두고 uncertainty_s=5 로 표시한다.",
+  "미니PC OFF(seq 960)는 I3 계단으로 못 찾았다. 사람 시각 유지."
+ ],
+ "files": {
+  "test_5": {
+   "duration_s": 569.5,
+   "appliances_present": [
+    "laptop_charger",
+    "beam_projector",
+    "minipc",
+    "oven",
+    "hotplate"
+   ],
+   "label_source": "human_switching_log",
+   "intervals": {
+    "laptop_charger": {
+     "on": [
+      [
+       0.0,
+       168.5
+      ],
+      [
+       227.5,
+       421.5
+      ],
+      [
+       438.5,
+       495.5
+      ]
+     ]
+    },
+    "beam_projector": {
+     "on": [
+      [
+       40.5,
+       289.0
+      ],
+      [
+       404.0,
+       541.0
+      ]
+     ]
+    },
+    "minipc": {
+     "on": [
+      [
+       81.0,
+       321.0
+      ],
+      [
+       345.0,
+       480.0
+      ]
+     ]
+    },
+    "oven": {
+     "on": [
+      [
+       120.5,
+       505.0
+      ]
+     ]
+    },
+    "hotplate": {
+     "on": [
+      [
+       143.5,
+       519.0
+      ]
+     ]
+    }
+   },
+   "transitions": [
+    {
+     "seq": 79,
+     "t_user_s": 39.5,
+     "t_s": 40.5,
+     "appliance": "beam_projector",
+     "edge": "on",
+     "refined_by": "signal_i3",
+     "uncertainty_s": 2.0
+    },
+    {
+     "seq": 164,
+     "t_user_s": 82.0,
+     "t_s": 81.0,
+     "appliance": "minipc",
+     "edge": "on",
+     "refined_by": "signal_i3",
+     "uncertainty_s": 2.0
+    },
+    {
+     "seq": 241,
+     "t_user_s": 120.5,
+     "t_s": 120.5,
+     "appliance": "oven",
+     "edge": "on",
+     "refined_by": "human_only",
+     "uncertainty_s": 5.0
+    },
+    {
+     "seq": 287,
+     "t_user_s": 143.5,
+     "t_s": 143.5,
+     "appliance": "hotplate",
+     "edge": "on",
+     "refined_by": "human_only",
+     "uncertainty_s": 5.0
+    },
+    {
+     "seq": 340,
+     "t_user_s": 170.0,
+     "t_s": 168.5,
+     "appliance": "laptop_charger",
+     "edge": "off",
+     "refined_by": "signal_i3",
+     "uncertainty_s": 2.0
+    },
+    {
+     "seq": 450,
+     "t_user_s": 225.0,
+     "t_s": 227.5,
+     "appliance": "laptop_charger",
+     "edge": "on",
+     "refined_by": "signal_i3",
+     "uncertainty_s": 2.0
+    },
+    {
+     "seq": 568,
+     "t_user_s": 284.0,
+     "t_s": 289.0,
+     "appliance": "beam_projector",
+     "edge": "off",
+     "refined_by": "signal_i3",
+     "uncertainty_s": 2.0
+    },
+    {
+     "seq": 640,
+     "t_user_s": 320.0,
+     "t_s": 321.0,
+     "appliance": "minipc",
+     "edge": "off",
+     "refined_by": "signal_i3",
+     "uncertainty_s": 2.0
+    },
+    {
+     "seq": 690,
+     "t_user_s": 345.0,
+     "t_s": 345.0,
+     "appliance": "minipc",
+     "edge": "on",
+     "refined_by": "signal_i3",
+     "uncertainty_s": 2.0
+    },
+    {
+     "seq": 815,
+     "t_user_s": 407.5,
+     "t_s": 404.0,
+     "appliance": "beam_projector",
+     "edge": "on",
+     "refined_by": "signal_i3",
+     "uncertainty_s": 2.0
+    },
+    {
+     "seq": 840,
+     "t_user_s": 420.0,
+     "t_s": 421.5,
+     "appliance": "laptop_charger",
+     "edge": "off",
+     "refined_by": "signal_i3",
+     "uncertainty_s": 2.0
+    },
+    {
+     "seq": 875,
+     "t_user_s": 437.5,
+     "t_s": 438.5,
+     "appliance": "laptop_charger",
+     "edge": "on",
+     "refined_by": "signal_i3",
+     "uncertainty_s": 2.0
+    },
+    {
+     "seq": 960,
+     "t_user_s": 480.0,
+     "t_s": 480.0,
+     "appliance": "minipc",
+     "edge": "off",
+     "refined_by": "human_only",
+     "uncertainty_s": 5.0
+    },
+    {
+     "seq": 988,
+     "t_user_s": 494.0,
+     "t_s": 495.5,
+     "appliance": "laptop_charger",
+     "edge": "off",
+     "refined_by": "signal_i3",
+     "uncertainty_s": 2.0
+    },
+    {
+     "seq": 1010,
+     "t_user_s": 505.0,
+     "t_s": 505.0,
+     "appliance": "oven",
+     "edge": "off",
+     "refined_by": "human_only",
+     "uncertainty_s": 5.0
+    },
+    {
+     "seq": 1038,
+     "t_user_s": 519.0,
+     "t_s": 519.0,
+     "appliance": "hotplate",
+     "edge": "off",
+     "refined_by": "human_only",
+     "uncertainty_s": 5.0
+    },
+    {
+     "seq": 1078,
+     "t_user_s": 539.0,
+     "t_s": 541.0,
+     "appliance": "beam_projector",
+     "edge": "off",
+     "refined_by": "signal_i3",
+     "uncertainty_s": 2.0
+    }
+   ]
+  }
+ }
+}
