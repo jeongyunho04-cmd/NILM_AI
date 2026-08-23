@@ -161,6 +161,11 @@ def score_events(
 
     타임라인이 "이벤트 시각과 ΔP 는 정확하다" 고 밝힌 부분만 쓴다 (4.2절).
     전이 앞뒤 `settle_s` 구간의 중앙값 차이를 예측 ΔP 로 본다.
+
+    **`delta_p_w` 가 없는 이벤트는 건너뛴다.** test_6 / test_7 은 스위치를 누른
+    사람이 전이 **시각**만 기록했고 ΔP 는 적지 않았다 (`_note` 에 ΔI3 가 mA 로만
+    있다). 참값이 없으면 이 지표는 정의되지 않으므로 세지 않는다 — 0 으로 두면
+    맞게 예측한 것이 큰 오차로 잡힌다. 시각은 `score_on_off` 가 이미 쓴다.
     """
     assert_not_sealed(stem)
     files = events if events is not None else load_events()
@@ -175,6 +180,8 @@ def score_events(
         app = ev["appliance"]
         if app not in appliances:
             continue
+        if ev.get("delta_p_w") is None:
+            continue                      # 참 ΔP 가 없는 전이 (위 docstring)
         j = list(appliances).index(app)
         c = int(ev["t_s"] * SAMPLING_HZ)
         pre = pred_power[max(0, c - tol - w):max(1, c - tol), j]

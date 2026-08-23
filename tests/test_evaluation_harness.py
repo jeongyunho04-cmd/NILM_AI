@@ -417,6 +417,7 @@ def test_real_event_labels_are_physically_possible():
     MIN_W = {"minipc": 7.0, "beam_projector": 35.0, "laptop_charger": 15.0,
              "hotplate": 300.0, "oven": 10.0, "electiric_kettle": 800.0,
              "hair_dryer": 300.0, "fan": 15.0, "air_conditioner": 10.0}
+    GUARD_CYCLES = 15          # 0.25초. 라벨 시각 해상도(0.5초)의 절반
 
     bad = []
     for stem, spec in files.items():
@@ -431,7 +432,14 @@ def test_real_event_labels_are_physically_possible():
                 continue
             m = np.zeros(n, bool)
             for a, b in iv["on"]:
-                m[int(a * 60):int(b * 60)] = True
+                i0, i1 = int(a * 60), int(b * 60)
+                # 라벨 시각은 seq 기준이라 **0.5초 양자화**돼 있다 (t_s = seq x 0.5).
+                # 핫플 통전 펄스는 중앙 1.5초라, 경계가 반 칸만 어긋나도 펄스의
+                # 10% 넘게 통전 밖 사이클이 섞인다. 실제로 test_5 는 가드 없이
+                # 10.85%, 0.25초 가드로 0.53% 다 — 라벨 오류가 아니라 해상도다.
+                # 가드는 펄스 길이의 1/4 를 넘지 않게 해 짧은 펄스를 지우지 않는다.
+                guard = min(GUARD_CYCLES, max(0, (i1 - i0) // 4))
+                m[i0 + guard:max(i0 + guard, i1 - guard)] = True
             for a, b in iv.get("uncertain", []):
                 m[int(a * 60):int(b * 60)] = False
             if not m.any():
