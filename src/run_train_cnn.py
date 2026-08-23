@@ -171,6 +171,10 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--w-harm", type=float, default=0.1)
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
+    ap.add_argument("--w-state-power", type=float, default=0.0, metavar="W",
+                    help="상태별 전력 출력을 그 상태의 실제 전력에 묶는 항 (12.35). "
+                         "0 이면 끈다 - 그러면 전력 손실이 섞인 뒤에만 걸려 "
+                         "충전기·미니PC 의 상태별 출력이 붕괴한다 (분화비 1.02 / 1.16).")
     ap.add_argument("--fine-dropout", type=float, default=0.0,
                     help="학습 중 세밀 갈래를 통째로 가릴 확률 (12.21절). 합성에서 학습한 "
                          "선형 probe 가 실측에서 세밀은 AUC 0.32 로 뒤집히고 광역은 0.69 를 "
@@ -246,7 +250,8 @@ def main() -> int:
         standby_sig=torch.from_numpy(sb_sig),
         noise_sig=torch.from_numpy(nz_sig),
         harm_scale=torch.from_numpy(h_scale),
-        weights=LossWeights(harm=a.w_harm, cons=a.w_cons, over=a.w_over),
+        weights=LossWeights(harm=a.w_harm, cons=a.w_cons, over=a.w_over,
+                            state_power=a.w_state_power),
         s_state=(build_state_scales(apps, [S_I[x] for x in apps])
                  if a.per_state_scale else None),
     ).to(dev)

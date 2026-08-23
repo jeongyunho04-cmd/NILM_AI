@@ -91,6 +91,12 @@ def build_state_scales(appliances: Sequence[str], s_i: Sequence[float],
 class LossWeights:
     power: float = 1.0
     state: float = 0.3
+    # 상태별 전력 출력을 그 상태의 실제 전력에 직접 묶는다 (12.35).
+    # **기본 0 — 반증됐다.** 항 자체는 의도대로 동작하지만(충전기 상태별 출력이
+    # 참값과 일치) 목적을 달성하지 못한다. 부하 상태는 독립적인 정보원이 아니라
+    # 모델이 스스로 추론해야 하는 값이라, 귀속(그 W 가 누구 것인가)에는 안 듣는다.
+    # 측정: test_7 전이 8/13 -> 7/13, 유령 42.1W -> 86.9W (12.35.3).
+    state_power: float = 0.0
     on: float = 0.3
     plugged: float = 0.1
     standby: float = 0.1
@@ -158,6 +164,28 @@ class NILMLoss(torch.nn.Module):
         b, k, c = out["state"].shape
         parts["state"] = F.cross_entropy(out["state"].reshape(b * k, c),
                                          tgt["y_state"].reshape(b * k).long())
+
+        # 3.1절의 전력 손실은 **섞인 뒤**의 out["power"] 에만 걸린다. 그래서 상태별
+        # 전력 출력이 서로 달라야 할 이유가 손실에 없다. 참 전력비가 큰 기기는
+        # 평균 하나로 못 맞히니 어쩔 수 없이 분화하는데, 비가 작은 기기는 붕괴한다.
+        # cnn_ph1 측정 (홀드아웃, 상태별 전력 출력의 비 / 참 비):
+        #     오븐 71.9 / 75.7      에어컨 35.1 / 31.0     드라이기 2.04 / 1.95
+        #     미니PC 1.16 / 1.67    **충전기 1.02 / 1.37**  <- 34.00W vs 33.25W
+        # 붕괴하면 p_raw = Σ mix·p_states 가 상태와 무관해지고, 저부하 SMPS 를
+        # 가르는 데 쓸 수 있는 유일한 축(부하 상태)이 학습된 모델 안에서 사라진다.
+        # 12.35 가 잰 대로 SMPS 3종은 **부하를 고정하면** 갈린다 (분리비 1.1~1.4
+        # -> 2.2~4.2). 그 조건을 모델이 쓰게 하려면 이 항이 필요하다.
+        if self.w.state_power > 0 and out.get("power_states") is not None:
+            ps_all = out["power_states"]
+            idx2 = tgt["y_state"].long().clamp(0, ps_all.shape[-1] - 1)
+            ps = torch.gather(ps_all, 2, idx2[..., None]).squeeze(-1)      # (B,K)
+            # 켜져 있을 때만. 꺼진 창의 상태별 출력은 감독할 대상이 아니다
+            # (게이트가 어차피 0 으로 곱한다).
+            m = tgt["y_on"] > 0.5
+            d = _huber(ps / s, tgt["y_power"] / s, self.power_delta) * m
+            parts["state_power"] = d.sum() / m.sum().clamp(min=1.0)
+        else:
+            parts["state_power"] = out["power"].sum() * 0.0
 
         if self.w.harm > 0 and tgt.get("obs_harm") is not None:
             # 관측 고조파 = Σ(활성 기기) + Σ(꽂힌 채 꺼진 기기의 대기 전류) + 계측계 전류.

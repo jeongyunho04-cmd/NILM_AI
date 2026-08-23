@@ -28,7 +28,7 @@ WIDE_BLOCK = int(60 / WIDE_HZ)   # 30 사이클 = 0.5초
 TARGET_LOOKAHEAD = 360       # 창 끝에서 6초 안쪽 (12.9.12절)
 
 N_HARM = 15
-FINE_CHANNELS = 44           # 36 + 추세 제거 전력 2 + 고조파 위상 6 (아래 참조)
+FINE_CHANNELS = 48           # 36 + 추세 제거 2 + 위상 8 + 역률·고차비 2 (아래 참조)
 WIDE_CHANNELS = 12
 
 # 고조파 위상 불변량의 크기 게이트 (A). |I_h| 가 이 값 근처 아래로 내려가면
@@ -147,13 +147,34 @@ def build_fine(x: np.ndarray) -> np.ndarray:
     # 잡음이므로 크기 게이트를 곱해 0 으로 죽인다.
     if FINE_CHANNELS >= 44:
         z1 = (re[:, 0] + 1j * im[:, 0]) / i1        # I1 의 단위 페이저
-        for slot, h in ((38, 3), (40, 5), (42, 7)):
+        orders = ((38, 3), (40, 5), (42, 7)) + (((44, 9),) if FINE_CHANNELS >= 48 else ())
+        for slot, h in orders:
             j = h - 1
             u = (re[:, j] + 1j * im[:, j]) * np.conj(z1) ** h
             a = np.abs(u) + 1e-12
             w = mag[:, j] / (mag[:, j] + PHASE_GATE_A)
             out[:, slot] = w * (u.real / a)
             out[:, slot + 1] = w * (u.imag / a)
+
+    # ── 역률과 고차 형상 (2026-08-24, 12.36절) ──────────────────────────
+    # 후보 60개를 전수 훑어 **부하 전 구간 통합** 최소 쌍 d' 로 순위를 매겼다.
+    # 단일로는 φ3 이 2.15 로 최고고 나머지는 2 아래다. 그런데 종류가 서로 달라
+    # 조합이 든다. 탐욕 전진 선택 결과 (최악 쌍 = 프로젝터↔충전기):
+    #     |I9|/|I3| 만          최소 d' 1.73   최악 쌍 1.97
+    #     + φ3                  최소 d' 3.25   최악 쌍 3.25
+    #     + PF                  최소 d' 3.77   최악 쌍 3.79
+    # 원시 와트당 고조파 벡터의 최악 쌍이 1.12 였으니 3.4배다. 계속 맞바뀌던
+    # 프로젝터↔충전기가 확실히 갈리는 영역에 들어간다.
+    #
+    # **PF 는 입력에 아예 없었다.** 33채널이 `15 Re + 15 Im + P + Q + V` 라
+    # power_features 의 S·PF·THD 열을 버린다. 다만 있는 것만으로 정확히
+    # 복원된다 (상관 0.9975~1.0000, 보정 후 오차 0.001) - 상류를 안 건드린다.
+    if FINE_CHANNELS >= 48:
+        i_rms = np.sqrt((mag ** 2).sum(axis=1))
+        out[:, 46] = np.clip(p / np.maximum(v * i_rms, 1e-6), 0.0, 1.2)
+        # 분모 바닥 0.1mA. 계측 바닥의 |I3| 가 4.3mA 라 정상 구간은 안 건드리고
+        # 기기가 다 꺼졌을 때의 폭주만 막는다. arcsinh 가 한 번 더 눌러 준다.
+        out[:, 47] = np.arcsinh(mag[:, 8] / (mag[:, 2] + 1e-4) * RATIO_SCALE)
     return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
 
