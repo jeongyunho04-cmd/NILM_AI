@@ -36,6 +36,7 @@ import torch
 from src.evaluation.real_events import load_events
 from src.evaluation.sealing import is_sealed
 from src.run_gate_check import forward_file, load_model
+from src.run_live import SMPS_GROUP
 
 KOR = {"oven": "오븐", "hotplate": "핫플레이트", "electiric_kettle": "전기포트",
        "hair_dryer": "헤어드라이기", "minipc": "미니PC", "beam_projector": "빔프로젝터",
@@ -67,8 +68,18 @@ def _spans(mask: np.ndarray, t: np.ndarray):
 
 
 def plot_file(model, apps, stem: str, ev: dict, dev: str, out_dir: Path, tag: str,
-              stride: int = 15) -> Path:
+              stride: int = 15, model_smps=None) -> Path:
+    """`model_smps` 를 주면 SMPS 3종만 그 체크포인트에서 가져온다.
+
+    `run_live --ckpt-smps` 와 같은 구성이다 (12.31.5). 운영에서 실제로 도는 것이
+    두 체크포인트의 조합이므로, 그림도 그 조합으로 그려야 실물과 맞는다.
+    """
     d = forward_file(model, stem, dev, stride=stride)
+    if model_smps is not None:
+        ds = forward_file(model_smps, stem, dev, stride=stride)
+        six = [apps.index(x) for x in SMPS_GROUP if x in apps]
+        for k in ("gate", "p_raw", "standby"):
+            d[k][:, six] = ds[k][:, six]
     t = d["targets"] / 60.0
     P = d["gate"] * d["p_raw"]
     on = d["gate"] > 0.5
@@ -141,6 +152,8 @@ def plot_file(model, apps, stem: str, ev: dict, dev: str, out_dir: Path, tag: st
 def main() -> int:
     ap = argparse.ArgumentParser(description="실측 예측 타임라인 플롯")
     ap.add_argument("--ckpt", default="results/adapt_v17.pt")
+    ap.add_argument("--ckpt-smps", default=None, metavar="PT",
+                    help="SMPS 3종만 이 체크포인트로 예측한다 (run_live --ckpt-smps 와 동일)")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--stride", type=int, default=15)
     ap.add_argument("--out", default="results/plots")
@@ -149,12 +162,20 @@ def main() -> int:
     _korean_font()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     model, apps, ck = load_model(a.ckpt, dev)
-    tag = a.tag or Path(a.ckpt).stem
+    model_s = None
+    if a.ckpt_smps:
+        model_s, apps_s, ck_s = load_model(a.ckpt_smps, dev)
+        if list(apps_s) != list(apps):
+            raise SystemExit("두 체크포인트의 가전 목록이 다릅니다")
+        print(f"  SMPS 3종은 {a.ckpt_smps} 에서 가져옵니다 -> {', '.join(SMPS_GROUP)}")
+    tag = a.tag or (Path(a.ckpt).stem if not a.ckpt_smps
+                    else f"{Path(a.ckpt).stem}+{Path(a.ckpt_smps).stem}")
     ev = load_events()
     for stem in sorted(ev):
         if is_sealed(stem):
             continue
-        p = plot_file(model, apps, stem, ev, dev, Path(a.out), tag, stride=a.stride)
+        p = plot_file(model, apps, stem, ev, dev, Path(a.out), tag,
+                      stride=a.stride, model_smps=model_s)
         print(f"  저장 {p}")
     return 0
 
