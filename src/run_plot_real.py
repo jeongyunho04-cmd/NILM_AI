@@ -34,6 +34,7 @@ import torch
 
 from src.evaluation.real_events import load_events
 from src.evaluation.sealing import is_sealed
+from src.model.inputs import LEGACY_FINE_CHANNELS
 from src.model.net import NILMNet, appliance_state_counts
 from src.model.realdata import dense_targets
 from src.preprocessing import load_nilm_npz
@@ -62,7 +63,8 @@ def load_model(ckpt: str, dev: str):
     apps = ck["appliances"]
     m = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0),
                 prior_kappa=ck.get("prior_kappa", 0.0),
-                prior_beta=ck.get("prior_beta", 0.5)).to(dev)
+                prior_beta=ck.get("prior_beta", 0.5),
+                fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
     m.load_state_dict(ck["model"]); m.eval()
     return m, apps, ck
 

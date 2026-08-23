@@ -186,34 +186,97 @@ def test_trunk_input_layout_is_frozen():
     **뒤섞인 입력**을 받았다. 형상이 맞고 오류도 안 나서 `cnn_v17` 의 test_4
     정답률이 1.2% -> 0.0% 로 떨어진 것을 성능 변화로 읽을 뻔했다.
 
-    여기서는 각 구간이 무엇인지 고정한다. 순서를 바꿔야 할 이유가 생기면 이
-    테스트가 먼저 깨지고, 그때 옛 체크포인트를 어떻게 할지 결정하게 된다.
+    12.34 에서 고조파 위상 6채널을 **뒤에** 붙여 38 -> 44 가 되었다. 새 채널을
+    뒤에 붙이는 한 `fine_channels=38` 로 만든 모델의 배치는 한 칸도 안 움직인다.
+    그것을 여기서 못 박는다 — 옛 체크포인트가 계속 도는 근거가 이 단언이다.
     """
-    import torch
-    from src.model.inputs import FINE_CHANNELS
+    from src.model.inputs import FINE_CHANNELS, LEGACY_FINE_CHANNELS
     from src.model.net import NILMNet
 
-    m = NILMNet(["a", "b"], [2, 2])
     c1, c2, w2 = 64, 128, 64
-    # [원본타깃, tap0, tap1, 깊은평균, 깊은최대, 깊은타깃, 광역평균, 창통계4]
-    expected = [FINE_CHANNELS, c1, c1, c2, c2, c2, w2, 4]
-    assert m.trunk[0].in_features == sum(expected) == 618
+    for n_ch, want_trunk, want_fine in ((LEGACY_FINE_CHANNELS, 618, 552),
+                                        (FINE_CHANNELS, 618 + FINE_CHANNELS - 38,
+                                         552 + FINE_CHANNELS - 38)):
+        m = NILMNet(["a", "b"], [2, 2], fine_channels=n_ch)
+        # [원본타깃, tap0, tap1, 깊은평균, 깊은최대, 깊은타깃, 광역평균, 창통계4]
+        expected = [n_ch, c1, c1, c2, c2, c2, w2, 4]
+        assert m.trunk[0].in_features == sum(expected) == want_trunk, (
+            f"fine_channels={n_ch}: trunk 입력이 {m.trunk[0].in_features} 다")
 
-    # 세밀 유래 차원은 앞에서부터 연속이고, 창통계의 앞 2개가 추가로 세밀이다.
-    mask = m.fine_dim_mask
-    n_fine_conv = FINE_CHANNELS + c1 + c1 + c2 + c2 + c2      # 552 - 2 = 550
-    assert mask[:n_fine_conv].sum() == n_fine_conv, "세밀 conv 구간이 앞에 연속이 아닙니다"
-    assert mask[n_fine_conv:n_fine_conv + w2].sum() == 0, "광역 평균 자리가 어긋났습니다"
-    assert list(mask[-4:]) == [1.0, 1.0, 0.0, 0.0], (
-        "창통계 순서가 (fp_max, fp_min, wp_max, wp_mean) 이 아닙니다"
-    )
-    assert int(mask.sum()) == 552
+        # 세밀 유래 차원은 앞에서부터 연속이고, 창통계의 앞 2개가 추가로 세밀이다.
+        mask = m.fine_dim_mask
+        n_fine_conv = n_ch + c1 + c1 + c2 + c2 + c2
+        assert mask[:n_fine_conv].sum() == n_fine_conv, "세밀 conv 구간이 앞에 연속이 아닙니다"
+        assert mask[n_fine_conv:n_fine_conv + w2].sum() == 0, "광역 평균 자리가 어긋났습니다"
+        assert list(mask[-4:]) == [1.0, 1.0, 0.0, 0.0], (
+            "창통계 순서가 (fp_max, fp_min, wp_max, wp_mean) 이 아닙니다"
+        )
+        assert int(mask.sum()) == want_fine
 
-    # 버퍼가 state_dict 에 들어가면 옛 체크포인트 로딩이 깨진다
-    assert "fine_dim_mask" not in m.state_dict(), (
-        "fine_dim_mask 는 persistent=False 여야 합니다 (옛 체크포인트 호환)"
-    )
+        # 버퍼가 state_dict 에 들어가면 옛 체크포인트 로딩이 깨진다
+        assert "fine_dim_mask" not in m.state_dict(), (
+            "fine_dim_mask 는 persistent=False 여야 합니다 (옛 체크포인트 호환)"
+        )
 
+
+def test_legacy_checkpoint_sees_identical_leading_channels():
+    """새 채널은 **뒤에만** 붙어야 한다. 38채널 모델이 44채널 입력을 받아도
+    앞 38채널만 쓰므로, 옛 체크포인트의 입력이 한 칸도 안 움직인다."""
+    import numpy as np
+    import torch
+    from src.model.inputs import FINE_CHANNELS, LEGACY_FINE_CHANNELS, build_fine
+    from src.model.net import NILMNet
+
+    rng = np.random.default_rng(0)
+    x = rng.normal(0, 0.3, (2, 33, 3600)).astype(np.float32)
+    fine = build_fine(x)
+    assert fine.shape[1] == FINE_CHANNELS
+
+    # 상수만 38 로 되돌려 만든 것과 앞 38채널이 같아야 한다
+    import src.model.inputs as I
+    keep = I.FINE_CHANNELS
+    try:
+        I.FINE_CHANNELS = LEGACY_FINE_CHANNELS
+        legacy = I.build_fine(x)
+    finally:
+        I.FINE_CHANNELS = keep
+    assert legacy.shape[1] == LEGACY_FINE_CHANNELS
+    np.testing.assert_allclose(fine[:, :LEGACY_FINE_CHANNELS], legacy, rtol=0, atol=0)
+
+    # 38채널 모델이 44채널 입력을 그대로 먹는다
+    m = NILMNet(["a", "b"], [2, 2], fine_channels=LEGACY_FINE_CHANNELS).eval()
+    f = torch.from_numpy(fine)
+    w = torch.randn(2, 12, 120)
+    with torch.no_grad():
+        o44 = m(f, w)["on_logit"]
+        o38 = m(f[:, :LEGACY_FINE_CHANNELS], w)["on_logit"]
+    torch.testing.assert_close(o44, o38)
+
+
+def test_phase_channels_are_load_invariant_and_gated():
+    """고조파 위상 채널(38~43)은 크기를 키워도 안 변하고, 신호가 없으면 0 이다."""
+    import numpy as np
+    from src.model.inputs import FINE_CHANNELS, build_fine
+    if FINE_CHANNELS < 44:
+        return
+    rng = np.random.default_rng(1)
+    x = np.zeros((1, 33, 3600), np.float32)
+    for h, amp, ph in ((1, 0.30, 0.4), (3, 0.25, -1.1), (5, 0.20, 2.0), (7, 0.15, -2.6)):
+        x[0, h - 1] = amp * np.cos(ph)
+        x[0, 15 + h - 1] = amp * np.sin(ph)
+    a = build_fine(x)[0, 38:44, -1]
+    b = build_fine(x * 3.0)[0, 38:44, -1]          # 크기만 3배
+    # 게이트는 차수마다 다르므로 **쌍별 각도**로 본다. 그 각도가 φ_h 자체다.
+    for k in range(3):
+        ang_a = np.arctan2(a[2 * k + 1], a[2 * k])
+        ang_b = np.arctan2(b[2 * k + 1], b[2 * k])
+        d = abs((ang_a - ang_b + np.pi) % (2 * np.pi) - np.pi)
+        assert d < 1e-4, f"h={2*k+3}: 크기를 바꿨더니 위상이 {np.degrees(d):.3f}도 움직였다"
+    # 게이트는 크기를 따라 커져야 한다 (신호가 클수록 위상을 신뢰한다)
+    assert np.linalg.norm(b) > np.linalg.norm(a)
+
+    z = build_fine(np.zeros((1, 33, 3600), np.float32))[0, 38:44]
+    assert np.abs(z).max() < 1e-6, "신호가 없으면 위상 채널은 0 이어야 한다"
 
 def test_fine_dropout_is_off_at_inference_and_masks_only_fine():
     """드롭아웃은 학습에서만 걸리고, 광역 차원은 건드리지 않아야 한다."""
@@ -221,7 +284,8 @@ def test_fine_dropout_is_off_at_inference_and_masks_only_fine():
     from src.model.net import NILMNet
 
     m = NILMNet(["a", "b"], [2, 2], fine_dropout=1.0)   # 항상 가린다
-    f, w = torch.randn(4, 38, 600), torch.randn(4, 12, 120)
+    from src.model.inputs import FINE_CHANNELS
+    f, w = torch.randn(4, FINE_CHANNELS, 600), torch.randn(4, 12, 120)
 
     m.eval()
     with torch.no_grad():

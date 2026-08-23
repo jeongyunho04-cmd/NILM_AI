@@ -42,6 +42,7 @@ from src.evaluation import load_holdout, resistive_confusion, score_appliances, 
 from src.evaluation.real_events import load_events, score_absent, score_events, score_on_off
 from src.evaluation.sealing import is_sealed
 from src.model.losses import LossWeights, NILMLoss, build_state_scales
+from src.model.inputs import LEGACY_FINE_CHANNELS
 from src.model.net import (
     NILMNet, appliance_state_counts, harmonic_scales, harmonic_signatures,
     noise_signature, standby_signatures,
@@ -194,7 +195,8 @@ def main() -> int:
                     periodicity=ck.get("periodicity", False),
                     fine_dropout=ck.get("fine_dropout", 0.0),
                     prior_kappa=ck.get("prior_kappa", 0.0),
-                    prior_beta=ck.get("prior_beta", 0.5)).to(dev)
+                    prior_beta=ck.get("prior_beta", 0.5),
+                    fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
     model.load_state_dict(ck["model"])
     print(f"1단계 체크포인트: {a.init} (ep{ck.get('epoch')}, width {ck.get('width')})")
 
@@ -283,6 +285,7 @@ def main() -> int:
                 "wide_summary": ck.get("wide_summary", False),
                 "periodicity": ck.get("periodicity", False),
                 "fine_dropout": ck.get("fine_dropout", 0.0),
+                "fine_channels": model.fine_channels,
                 "select": "final", "stage": 2, "init": a.init},
                out / f"{a.tag}.pt")
 

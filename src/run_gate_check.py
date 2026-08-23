@@ -41,6 +41,7 @@ import torch
 
 from src.evaluation.real_events import load_events, score_absent, score_on_off
 from src.evaluation.sealing import is_sealed
+from src.model.inputs import LEGACY_FINE_CHANNELS
 from src.model.net import NILMNet, appliance_state_counts
 from src.model.realdata import dense_targets, upsample_to_cycles
 from src.run_baseline import S_I
@@ -57,7 +58,8 @@ def load_model(ckpt_path: str, dev: str):
                     periodicity=ck.get("periodicity", False),
                     fine_dropout=ck.get("fine_dropout", 0.0),
                     prior_kappa=ck.get("prior_kappa", 0.0),
-                    prior_beta=ck.get("prior_beta", 0.5)).to(dev)
+                    prior_beta=ck.get("prior_beta", 0.5),
+                    fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
     model.load_state_dict(ck["model"])
     model.eval()
     return model, apps, ck

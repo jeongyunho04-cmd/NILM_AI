@@ -95,6 +95,7 @@ def predict_cnn(tag: str, hs, dev: str, prep) -> tuple:
     """`prep` 은 홀드아웃 입력 변환 결과다. 모델마다 다시 만들면 3.8GB memmap 을
     매번 훑어 24초씩 낭비한다 — 한 번 만들어 모든 체크포인트가 공유한다."""
     import torch
+    from src.model.inputs import LEGACY_FINE_CHANNELS
     from src.model.net import NILMNet, appliance_state_counts
     from src.run_train_cnn import evaluate
 
@@ -109,7 +110,8 @@ def predict_cnn(tag: str, hs, dev: str, prep) -> tuple:
                     periodicity=ck.get("periodicity", False),
                     fine_dropout=ck.get("fine_dropout", 0.0),
                     prior_kappa=ck.get("prior_kappa", 0.0),
-                    prior_beta=ck.get("prior_beta", 0.5)).to(dev)
+                    prior_beta=ck.get("prior_beta", 0.5),
+                    fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
     model.load_state_dict(ck["model"])       # 구조가 다르면 여기서 걸린다
     p, on_prob = evaluate(model, prep, dev)
     return p, on_prob > 0.5

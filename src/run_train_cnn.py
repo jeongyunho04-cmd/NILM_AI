@@ -199,6 +199,12 @@ def main() -> int:
                     help="캐시 블록 셔플 단위. 작을수록 메모리가 덜 든다 (24000 = 약 1.1GB)")
     ap.add_argument("--cache", default="cache/train60",
                     help="학습 캐시 경로. 'none' 이면 실시간 합성 (12.8.2절 참조)")
+    ap.add_argument("--fine-channels", type=int, default=None, metavar="N",
+                    help="세밀 갈래가 쓸 채널 수 (기본: inputs.FINE_CHANNELS). "
+                         "캐시는 그대로 두고 앞에서부터 N 개만 쓴다. "
+                         "12.34 의 고조파 위상 6채널을 빼고 대조군을 학습할 때 "
+                         "--fine-channels 38 로 준다. 캐시가 같으므로 채널 수 "
+                         "말고는 아무것도 안 달라진다.")
     ap.add_argument("--tag", default="cnn")
     ap.add_argument("--out", default="results")
     a = ap.parse_args()
@@ -231,7 +237,8 @@ def main() -> int:
     model = NILMNet(apps, appliance_state_counts(apps), width=a.width,
                     wide_summary=a.wide_summary, periodicity=a.periodicity,
                     fine_dropout=a.fine_dropout,
-                    prior_kappa=a.prior_kappa, prior_beta=a.prior_beta).to(dev)
+                    prior_kappa=a.prior_kappa, prior_beta=a.prior_beta,
+                    fine_channels=a.fine_channels).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
     crit = NILMLoss(
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
@@ -291,6 +298,9 @@ def main() -> int:
                     "prior_kappa": a.prior_kappa, "prior_beta": a.prior_beta,
                     "wide_summary": a.wide_summary, "periodicity": a.periodicity,
                     "fine_dropout": a.fine_dropout,
+                    # 세밀 채널 수를 반드시 남긴다. 12.34 에서 38 -> 44 로
+                    # 늘었고, 이 키가 없는 체크포인트는 38 로 간주된다.
+                    "fine_channels": model.fine_channels,
                     "select": a.select}, path)
 
     hist, best = [], None

@@ -47,7 +47,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.model.inputs import (
-    FINE_CHANNELS, FINE_CYCLES, POWER_SCALE, WIDE_CHANNELS, fine_target_index,
+    FINE_CHANNELS, FINE_CYCLES, LEGACY_FINE_CHANNELS, POWER_SCALE,
+    WIDE_CHANNELS, fine_target_index,
 )
 
 MAX_STATES = 5
@@ -127,8 +128,18 @@ class NILMNet(nn.Module):
         periodicity: bool = False,
         fine_dropout: float = 0.0,
         min_on_w: Optional[Sequence[float]] = None,
+        fine_channels: Optional[int] = None,
     ):
         super().__init__()
+        # 세밀 갈래가 실제로 쓸 채널 수. 입력은 항상 FINE_CHANNELS 개로 오지만
+        # **앞에서부터** 이만큼만 쓴다. 12.34 에서 고조파 위상 6채널을 뒤에 붙였고
+        # (38 -> 44), 그 전에 학습한 체크포인트를 계속 채점하려면 38 로 잘라야 한다.
+        # 새 채널을 뒤에 붙이는 규약 덕분에 슬라이스 한 줄로 끝난다.
+        self.fine_channels = int(fine_channels or FINE_CHANNELS)
+        if self.fine_channels > FINE_CHANNELS:
+            raise ValueError(
+                f"fine_channels={self.fine_channels} 인데 build_fine 은 "
+                f"{FINE_CHANNELS} 채널만 만든다")
         self.appliances = list(appliances)
         k = len(self.appliances)
         # 물리 프라이어 (12.9.8절). kappa=0 이면 완전히 꺼진다.
@@ -162,7 +173,7 @@ class NILMNet(nn.Module):
         c1, c2 = int(64 * width), int(128 * width)
         # Sequential 이 아니라 ModuleList 다. 중간 층의 타깃 슬라이스를 뽑아야 한다.
         self.fine = nn.ModuleList([
-            _blk(FINE_CHANNELS, c1, 7, 1), _blk(c1, c1, 7, 2), _blk(c1, c2, 7, 4),
+            _blk(self.fine_channels, c1, 7, 1), _blk(c1, c1, 7, 2), _blk(c1, c2, 7, 4),
             _blk(c2, c2, 7, 8), _blk(c2, c2, 7, 16),
         ])
         # 타깃 슬라이스를 뽑을 층 (0-based). 0 -> 7사이클, 1 -> 19사이클
@@ -172,7 +183,7 @@ class NILMNet(nn.Module):
 
         # 전역 평균 + 전역 최대 + 깊은 층 타깃 + 얕은 층 타깃 2개 + 원본 타깃
         # + 광역 평균 + **원시 창 전력 통계 4개**
-        trunk_in = c2 * 2 + c2 + (c1 + c1) + FINE_CHANNELS + w2 + WINDOW_STATS
+        trunk_in = c2 * 2 + c2 + (c1 + c1) + self.fine_channels + w2 + WINDOW_STATS
         if self.wide_summary:
             trunk_in += w2 * 2          # 광역 amax + 창 끝 슬라이스 (후보 1)
         if self.periodicity:
@@ -203,7 +214,7 @@ class NILMNet(nn.Module):
         # 세밀 유래 차원 표식. **연결 순서를 바꾸지 않고** 마스킹만 한다.
         # 순서를 바꾸면 이전 체크포인트가 뒤섞인 입력을 받는다 (실제로 한 번 겪었다).
         fine_flags: List[int] = (
-            [1] * FINE_CHANNELS + [1] * c1 + [1] * c1 + [1] * c2 + [1] * c2 + [1] * c2
+            [1] * self.fine_channels + [1] * c1 + [1] * c1 + [1] * c2 + [1] * c2 + [1] * c2
             + [0] * w2                                        # 광역 평균
             + ([0] * (w2 * 2) if self.wide_summary else [])   # 광역 amax + 창끝
             + [1, 1, 0, 0]                                    # fp_max, fp_min, wp_max, wp_mean
@@ -224,6 +235,12 @@ class NILMNet(nn.Module):
 
     def forward(self, fine: torch.Tensor, wide: torch.Tensor) -> Dict[str, torch.Tensor]:
         t = self.target_pos
+        # 이 체크포인트가 학습된 채널 수만 쓴다 (`self.fine_channels` 주석 참조).
+        if fine.shape[1] < self.fine_channels:
+            raise ValueError(
+                f"세밀 입력 채널이 모자랍니다: {fine.shape[1]} < {self.fine_channels}")
+        if fine.shape[1] > self.fine_channels:
+            fine = fine[:, :self.fine_channels]
         # 원본 입력의 타깃 샘플. 수용영역 1 - 어떤 conv 로도 뭉갤 수 없는 순시 값이다.
         feats = [fine[:, :, t]]
         h = fine

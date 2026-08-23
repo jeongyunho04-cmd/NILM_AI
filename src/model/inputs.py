@@ -28,8 +28,17 @@ WIDE_BLOCK = int(60 / WIDE_HZ)   # 30 사이클 = 0.5초
 TARGET_LOOKAHEAD = 360       # 창 끝에서 6초 안쪽 (12.9.12절)
 
 N_HARM = 15
-FINE_CHANNELS = 38           # 36 + 추세 제거 전력 2채널 (아래 참조)
+FINE_CHANNELS = 44           # 36 + 추세 제거 전력 2 + 고조파 위상 6 (아래 참조)
 WIDE_CHANNELS = 12
+
+# 고조파 위상 불변량의 크기 게이트 (A). |I_h| 가 이 값 근처 아래로 내려가면
+# 위상이 잡음이라 채널을 0 으로 죽인다. 계측 바닥의 |I3| 가 0.0043A 이므로
+# 그보다 위, 미니PC 의 |I3| ~0.1A 보다는 한참 아래로 잡는다.
+PHASE_GATE_A = 0.01
+
+# 12.34 이전 체크포인트가 학습된 세밀 채널 수. 그때는 FINE_CHANNELS 가 38 이었다.
+# 체크포인트에 `fine_channels` 키가 없으면 이 값으로 본다.
+LEGACY_FINE_CHANNELS = 38
 
 # 추세 제거 전력 채널의 스케일. P 자체(POWER_SCALE=100)보다 작게 잡아야
 # 수백 W 리플이 해상된다.
@@ -67,10 +76,14 @@ def _movavg(a: np.ndarray, half: int) -> np.ndarray:
 
 
 def build_fine(x: np.ndarray) -> np.ndarray:
-    """(B, 33, W) -> (B, 36, 600). 창의 **뒤 10초**만 쓴다.
+    """(B, 33, W) -> (B, FINE_CHANNELS, 600). 창의 **뒤 10초**만 쓴다.
 
-    33채널(15 Re + 15 Im + P + Q + V)에 1.2절의 고조파비 3개를 더해 36채널로 만든다.
+    33채널(15 Re + 15 Im + P + Q + V)에 1.2절의 고조파비 3개를 더해 36채널,
+    추세 제거 전력 2채널로 38채널, 고조파 위상 6채널로 44채널이 된다.
     비율은 크기와 무관한 지문이라 여러 기기가 겹쳐도 형태 정보가 남는다.
+
+    **새 채널은 반드시 뒤에 붙인다.** 앞 38채널이 그대로 남아야 옛 체크포인트가
+    `fine[:, :38]` 슬라이스만으로 계속 돈다 (net.NILMNet.fine_channels).
     """
     x = np.asarray(x, dtype=np.float32)
     if x.ndim == 2:
@@ -114,6 +127,33 @@ def build_fine(x: np.ndarray) -> np.ndarray:
     if FINE_CHANNELS >= 38:
         out[:, 36] = np.arcsinh((p - _movavg(p, RIPPLE_HALF_SHORT)) / RIPPLE_SCALE)
         out[:, 37] = np.arcsinh((p - _movavg(p, RIPPLE_HALF_LONG)) / RIPPLE_SCALE)
+
+    # ── 고조파 위상 불변량 (2026-08-23, 12.34절) ────────────────────────
+    # φ_h = arg(I_h) − h·arg(I_1). 계통 전압 위상과 부하 크기에 따라 도는 절대
+    # 위상을 제거하고 **정류기 도통각만 남긴** 값이다.
+    #
+    # 왜 필요한가: 크기 비율(|I3|/|I1| 등)은 SMPS 3종이 전부 겹친다. 부하 3분위로
+    # 재면 기기간 최소 간격이 I3/I1 −0.026, I5/I3 −0.021, I7/I3 −0.029, I9/I3
+    # −0.017 로 **넷 다 음수(겹침)** 다. φ3 만 +14.1° 로 양수다:
+    #     미니PC −119.2 ~ −58.4  |  프로젝터 −27.1 ~ −26.9  |  충전기 −12.8 ~ −9.2
+    # 미니PC 는 부하 따라 60.8° 움직이면서도 남의 영역을 넘지 않는다. 같은 |I1|
+    # 에서 비교해도 미니PC 와 충전기가 27~44° 벌어지므로 크기 아티팩트가 아니다.
+    #
+    # Re/Im 채널(0~29)에 위상이 들어 있긴 하지만 **절대 프레임**이라 부하와 함께
+    # 돈다. φ_h 는 arctan 두 번 + h배 곱 + 차의 비선형 조합이라 conv 가 그것을
+    # 합성하기를 기대할 근거가 없다. 그래서 직접 준다.
+    #
+    # 감김 불연속을 피하려고 cos/sin 쌍으로 넣고, |I_h| 가 작을 때는 위상이
+    # 잡음이므로 크기 게이트를 곱해 0 으로 죽인다.
+    if FINE_CHANNELS >= 44:
+        z1 = (re[:, 0] + 1j * im[:, 0]) / i1        # I1 의 단위 페이저
+        for slot, h in ((38, 3), (40, 5), (42, 7)):
+            j = h - 1
+            u = (re[:, j] + 1j * im[:, j]) * np.conj(z1) ** h
+            a = np.abs(u) + 1e-12
+            w = mag[:, j] / (mag[:, j] + PHASE_GATE_A)
+            out[:, slot] = w * (u.real / a)
+            out[:, slot + 1] = w * (u.imag / a)
     return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
 

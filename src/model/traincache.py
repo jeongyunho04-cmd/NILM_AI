@@ -196,6 +196,16 @@ class CachedWindows:
                 f"학습 캐시가 없습니다: {d.resolve()}\n"
                 f"  python -m src.run_build_traincache 를 먼저 실행하십시오.")
         self.meta = json.loads(mp_.read_text(encoding="utf-8"))
+        # 캐시는 build_fine 의 산출물을 그대로 담는다. 채널 수가 바뀌면
+        # (12.34: 38 -> 44) 옛 캐시는 못 쓴다. memmap 은 모양을 안 검사하므로
+        # 여기서 막지 않으면 엉뚱한 축으로 reshape 되어 조용히 틀린다.
+        want = [FINE_CHANNELS, FINE_CYCLES]
+        got = list(self.meta.get("fine_shape", want))
+        if got != want:
+            raise ValueError(
+                "학습 캐시의 세밀 채널이 다릅니다: "
+                f"캐시 {got} vs 현재 코드 {want}  ({d.resolve()}).  "
+                "python -m src.run_build_traincache 로 다시 만드십시오.")
         self.n = self.meta["n_windows"]
         self.appliances = self.meta["appliances"]
         self.arr = {name: np.load(d / f"{name}.npy", mmap_mode="r") for name in _SPEC}
