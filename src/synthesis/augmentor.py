@@ -45,6 +45,8 @@ class DataAugmentor:
         harmonic_dither_amp: float = 0.0,
         harmonic_dither_phase_deg: float = 0.0,
         harmonic_dither_ref_order: int = 9,
+        harmonic_dither_even_amp: float = 0.0,
+        harmonic_dither_even_phase_deg: float = 0.0,
         level_scramble: Optional[dict] = None,
     ):
         self.duration_scale_range = duration_scale_range
@@ -73,6 +75,13 @@ class DataAugmentor:
         self.harmonic_dither_amp = max(0.0, float(harmonic_dither_amp))
         self.harmonic_dither_phase_deg = max(0.0, float(harmonic_dither_phase_deg))
         self.harmonic_dither_ref_order = max(2, int(harmonic_dither_ref_order))
+        # 짝수차 전용 진폭 (12.69절). 0 이면 위의 차수 비례 법칙을 그대로 따른다.
+        # **12.62.2 가 짝수차를 '계측 바닥' 이라며 크기 결정에서 뺐는데 그것이
+        # 오류였다** — 12.65.3 이 프로젝터↔충전기를 가르는 유일한 비율이
+        # |I2|/|I1| (0.008 vs 0.033, 4.1배, 겹침 0) 임을 절제로 확정했다.
+        # 짝수차는 반주기 비대칭에서 나오므로 한 무리로 묶어 흔드는 것이 옳다.
+        self.harmonic_dither_even_amp = max(0.0, float(harmonic_dither_even_amp))
+        self.harmonic_dither_even_phase_deg = max(0.0, float(harmonic_dither_even_phase_deg))
 
     def augment_activation(
         self,
@@ -257,15 +266,24 @@ class DataAugmentor:
         `1 + N(0, σ)` 는 σ 가 0.8 쯤 되면 음수가 나와 위상이 180° 뒤집힌다.
         """
         amp, ph = self.harmonic_dither_amp, self.harmonic_dither_phase_deg
-        if amp <= 0.0 and ph <= 0.0:
+        e_amp, e_ph = self.harmonic_dither_even_amp, self.harmonic_dither_even_phase_deg
+        if amp <= 0.0 and ph <= 0.0 and e_amp <= 0.0 and e_ph <= 0.0:
             return aug_c
         n_h = aug_c.shape[1]
         if n_h < 2:
             return aug_c
         k = np.arange(2, n_h + 1, dtype=np.float64)          # 2..15
         rel = k / float(self.harmonic_dither_ref_order)
-        g = np.random.normal(0.0, np.maximum(amp * rel, 1e-12))
-        psi = np.random.normal(0.0, np.maximum(np.radians(ph) * rel, 1e-12))
+        sig_g = amp * rel
+        sig_p = np.radians(ph) * rel
+        # 짝수차는 차수 비례를 쓰지 않는다 — 판별을 지는 것이 2차 하나라 (12.65.3)
+        # 차수로 키우면 정작 2차가 가장 약하게 흔들린다. 무리 전체에 같은 σ 를 건다.
+        if e_amp > 0.0 or e_ph > 0.0:
+            even = (k % 2 == 0)
+            sig_g = np.where(even, e_amp, sig_g)
+            sig_p = np.where(even, np.radians(e_ph), sig_p)
+        g = np.random.normal(0.0, np.maximum(sig_g, 1e-12))
+        psi = np.random.normal(0.0, np.maximum(sig_p, 1e-12))
         f = (np.exp(g) * np.exp(1j * psi)).astype(np.complex64)
         out = aug_c.copy()
         out[:, 1:] = out[:, 1:] * f[np.newaxis, :]

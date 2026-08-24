@@ -277,3 +277,50 @@ def test_pair_accuracy_isolates_discrimination_not_detection():
     assert abs(r["acc"] - 2/3) < 1e-9, r
     assert abs(r["acc_proj"] - 0.5) < 1e-9, r
     assert abs(r["acc_chg"] - 1.0) < 1e-9, r
+
+
+def test_even_dither_targets_even_orders_only():
+    """짝수차 지터가 홀수차를 건드리지 않아야 한다 (12.69절)."""
+    import numpy as np
+    from src.synthesis.augmentor import DataAugmentor
+
+    c = np.ones((50, 15), np.complex64)
+    aug = DataAugmentor(harmonic_dither_even_amp=1.4)
+    np.random.seed(0)
+    out = np.asarray(aug._apply_harmonic_dither(c))
+    dev = np.abs(np.abs(out[0]) - 1.0)
+    # 1차는 언제나 불변, 홀수차(3,5,...)도 이 설정에서는 불변
+    for k in (1, 3, 5, 7, 9, 11, 13, 15):
+        assert dev[k - 1] < 1e-6, f"{k}차가 움직였다: {dev[k-1]}"
+    assert dev[1] > 1e-3, "2차가 안 움직였다"
+
+
+def test_even_dither_merges_the_pair_ratio():
+    """even_amp 1.4 가 프로젝터↔충전기 |I2|/|I1| 을 실제로 겹치게 해야 한다."""
+    import numpy as np
+    from src.synthesis.segment_pool import SegmentPool
+    from src.synthesis.augmentor import DataAugmentor
+
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train", holdout_frac=0.2)
+
+    def dp(aug):
+        vals = {}
+        for app in ("beam_projector", "laptop_charger"):
+            np.random.seed(5)
+            acts = pool.appliance_activations[app]
+            v = []
+            for _ in range(120):
+                g = aug.augment_activation(acts[np.random.randint(len(acts))])
+                m = np.abs(np.asarray(g.net_harmonics_complex))
+                tp = np.asarray(g.target_power_w)
+                on = tp > 0.5 * tp.max()
+                if on.sum() >= 30:
+                    v.append(np.median(m[on, 1] / (m[on, 0] + 1e-9)))
+            vals[app] = np.log(np.array(v))
+        a, b = vals["beam_projector"], vals["laptop_charger"]
+        return abs(b.mean() - a.mean()) / np.sqrt((a.var() + b.var()) / 2)
+
+    base = dp(DataAugmentor())
+    dith = dp(DataAugmentor(harmonic_dither_even_amp=1.4))
+    assert base > 3.0, f"기준 d' 이 이미 낮다: {base:.2f}"
+    assert dith < 1.5, f"지터 뒤 d' 이 안 내려갔다: {dith:.2f}"
