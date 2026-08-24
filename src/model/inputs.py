@@ -22,10 +22,10 @@
 from typing import Tuple
 import numpy as np
 
-FINE_CYCLES = 600            # 세밀 갈래 길이 (10초 @ 60Hz)
+FINE_CYCLES = 780            # 세밀 갈래 길이 (13초 @ 60Hz). 12.45 에서 600->780
 WIDE_HZ = 2.0                # 광역 갈래 해상도
 WIDE_BLOCK = int(60 / WIDE_HZ)   # 30 사이클 = 0.5초
-TARGET_LOOKAHEAD = 360       # 창 끝에서 6초 안쪽 (12.9.12절)
+TARGET_LOOKAHEAD = 540       # 창 끝에서 9초 안쪽 (12.45. 이전 360=6초)
 
 N_HARM = 15
 # 48 이다. 과도 3채널(48~50)은 12.37 에서 만들고 **반증됐다** - 모델이 실제로

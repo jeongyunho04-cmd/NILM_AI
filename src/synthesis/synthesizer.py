@@ -67,10 +67,13 @@ SUSTAINED_WINDOW_S = 2.0
 # 2026-08-22: 60(1초) -> 360(6초). 12.9.12절 참조 — 오븐+핫플 동시 발열을
 # 전기포트로 오인하는 실패를 고치려면 타깃 **이후**의 오븐 전이를 봐야 한다.
 # 앞 1초로는 그 전이를 5% 밖에 못 잡고, 6초면 약 50% 를 잡는다.
-# **`src/model/inputs.py` 의 TARGET_LOOKAHEAD 와 반드시 같아야 한다** —
-# 두 곳이 어긋나면 라벨 시점과 입력 시점이 달라져 조용히 틀린다 (11.2절).
-# 회귀 테스트로 일치를 고정해 두었다.
-DEFAULT_TARGET_LOOKAHEAD_CYCLES = 360
+# **`src/model/inputs.py` 의 TARGET_LOOKAHEAD 가 정본이다 — 여기서 가져온다.**
+# 2026-08-24: 두 곳에 따로 적어 두고 회귀 테스트로만 묶어 뒀더니, 12.45 에서
+# 입력 쪽만 540 으로 바꾸고 이쪽을 잊었다. 라벨은 3239, 입력은 3059 를 가리키는
+# 캐시가 16분에 걸쳐 만들어졌다 (학습 직전 가드가 잡았다). 테스트는 돌려야 잡고
+# import 는 안 돌려도 잡는다. **한 곳에서만 정한다.**
+# `model.inputs` 는 numpy 만 import 하므로 순환하지 않는다.
+from src.model.inputs import TARGET_LOOKAHEAD as DEFAULT_TARGET_LOOKAHEAD_CYCLES
 
 
 def window_target_index(

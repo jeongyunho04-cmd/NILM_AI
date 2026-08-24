@@ -575,12 +575,17 @@ def test_lookahead_constants_agree_across_modules():
     어긋나면 **라벨을 읽는 시점과 입력을 자르는 시점이 달라져 조용히 틀린다**
     (11.2절이 세 곳을 하나로 묶은 것과 같은 종류의 결함이다).
     """
-    from src.model.inputs import TARGET_LOOKAHEAD, fine_target_index, target_index
+    from src.model.inputs import (FINE_CYCLES, TARGET_LOOKAHEAD,
+                                  fine_target_index, target_index)
 
     assert TARGET_LOOKAHEAD == DEFAULT_TARGET_LOOKAHEAD_CYCLES
     assert target_index(3600) == window_target_index(3600)
-    # 세밀 갈래(뒤 600사이클) 안에서의 타깃도 같은 lookahead 를 따라야 한다
-    assert 600 - 1 - fine_target_index() == TARGET_LOOKAHEAD
+    # 세밀 갈래 안에서의 타깃도 같은 lookahead 를 따라야 한다.
+    # **길이를 하드코딩하지 않는다** — 12.45 에서 FINE_CYCLES 를 600 -> 780 으로
+    # 올렸고, 그때 이 줄이 룩어헤드와 무관한 이유로 깨졌다.
+    assert FINE_CYCLES - 1 - fine_target_index() == TARGET_LOOKAHEAD
+    # 세밀 갈래가 타깃 이후를 전부 덮어야 한다 (덮지 못하면 룩어헤드가 헛돈다)
+    assert fine_target_index() >= 0, "타깃이 세밀 갈래 밖으로 나갔습니다"
 
 
 def test_target_index_is_causal_not_centered():
