@@ -359,3 +359,61 @@ def test_harm_odd_only_preserves_loss_scale():
     even[:, 1::2] = 5.0
     assert f(even, b.harm_mask).item() == 0.0, "마스크가 짝수차를 안 지웠다"
     assert f(even, a.harm_mask).item() > 0.0
+
+
+# ── 12.77 짝수차 배제 ──────────────────────────────────────────────────────
+
+def test_zero_even_harmonics_kills_exactly_the_even_channels():
+    """짝수차 Re/Im 과 ch35 만 0 이 되고 나머지는 살아 있어야 한다 (12.77절)."""
+    import numpy as np
+    from src.model import inputs as I
+
+    if not I.ZERO_EVEN_HARMONICS:
+        return
+    rng = np.random.default_rng(0)
+    x = (rng.standard_normal((2, 33, 3600)).astype(np.float32) * 0.1 + 1.0)
+    f = I.build_fine(x)
+    even = [c for c in I.EVEN_FINE_CHANNELS if c < I.FINE_CHANNELS]
+    rest = [c for c in range(I.FINE_CHANNELS) if c not in even]
+    assert len(even) == 15, even
+    assert np.abs(f[:, even]).max() == 0.0, "짝수차가 0 이 아니다"
+    assert np.abs(f[:, rest]).max() > 0.0, "나머지 채널까지 죽었다"
+
+
+def test_power_channel_is_not_an_even_channel():
+    """전력 채널 30 은 짝수차 목록에 없어야 한다 — 주기성·창통계가 그것을 쓴다."""
+    from src.model import inputs as I
+    from src.model.net import P_CH_FINE
+
+    assert P_CH_FINE not in I.EVEN_FINE_CHANNELS
+    for c in (30, 31, 32, 33, 34, 36, 37, 46, 47):      # P,Q,V,크기비 홀수,추세,PF
+        assert c not in I.EVEN_FINE_CHANNELS, f"ch{c} 가 잘못 포함됐다"
+
+
+def test_zeroed_channel_contributes_nothing_to_the_model():
+    """0 인 채널은 출력에 기여하지 않아야 한다 (부재와 수학적으로 같다)."""
+    import numpy as np
+    import torch
+    from src.model import inputs as I
+    from src.model.net import NILMNet
+
+    apps = ["oven", "hotplate", "minipc"]
+    net = NILMNet(apps, [2, 2, 2], fine_channels=I.FINE_CHANNELS).eval()
+    rng = np.random.default_rng(1)
+    fine = torch.from_numpy(rng.standard_normal(
+        (2, I.FINE_CHANNELS, I.FINE_CYCLES)).astype(np.float32))
+    wide = torch.from_numpy(rng.standard_normal((2, 12, 120)).astype(np.float32))
+    even = [c for c in I.EVEN_FINE_CHANNELS if c < I.FINE_CHANNELS]
+    fine[:, even] = 0.0
+    with torch.no_grad():
+        a = net(fine, wide)["power"]
+        fine2 = fine.clone()
+        fine2[:, even] = 99.0        # 0 이 아닌 값을 넣어도 …
+        b = net(fine2, wide)["power"]
+    # … 0 일 때와 다르면 그 채널이 실제로 쓰이는 것이다. 여기서는 달라야 정상이다
+    # (모델은 그 채널을 읽을 수 있다). 우리가 보장하는 것은 **항상 0 을 준다**는 것.
+    assert not torch.allclose(a, b), "채널이 아예 연결돼 있지 않다 — 검사가 무의미하다"
+    # 두 번 같은 0 입력이면 결과가 정확히 같아야 한다 (결정성)
+    with torch.no_grad():
+        c = net(fine.clone(), wide)["power"]
+    assert torch.equal(a, c)

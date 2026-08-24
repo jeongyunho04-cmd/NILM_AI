@@ -38,7 +38,7 @@ from src.evaluation import (
     format_table, load_holdout, resistive_confusion,
     score_appliances, summarize, total_power_residual,
 )
-from src.model.inputs import FINE_CYCLES, TARGET_LOOKAHEAD, build_inputs
+from src.model.inputs import ZERO_EVEN_HARMONICS, FINE_CYCLES, TARGET_LOOKAHEAD, build_inputs
 from src.synthesis.dataset import chunk_seed
 from src.model.traincache import CachedWindows
 from src.model.losses import LossWeights, NILMLoss, build_state_scales
@@ -328,6 +328,8 @@ def main() -> int:
                     # 어긋나면 입력과 라벨이 다른 순간을 가리켜 조용히 틀린다.
                     "target_lookahead": TARGET_LOOKAHEAD,
                     "fine_cycles": FINE_CYCLES,
+                    # 짝수차 배제 (12.77). 학습과 추론이 짝을 이뤄야 한다.
+                    "zero_even_harmonics": ZERO_EVEN_HARMONICS,
                     "select": a.select}, path)
 
     hist, best = [], None

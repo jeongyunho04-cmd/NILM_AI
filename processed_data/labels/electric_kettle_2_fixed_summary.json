@@ -1,0 +1,55 @@
+{
+  "raw_rows": 24240,
+  "cleaned_rows": 24330,
+  "duration_s": 405.5,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 0,
+  "invalid_samples_dropped": 0,
+  "invalid_samples_interpolated": 0,
+  "interpolated_cycles": 90,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "noise_floor_applied_w": 1.4,
+  "source_file": "electric_kettle_2_fixed.csv",
+  "file_role": "device",
+  "appliance_type": "electiric_kettle",
+  "load_class": "resistive",
+  "classification_reason": "등록된 단일 가전 'electiric_kettle'",
+  "output_file": null,
+  "feature_columns_count": 122,
+  "v_ref_v": 214.69,
+  "p_mean": 1038.29,
+  "p_max": 1303.82,
+  "irms_mean": 4.8467,
+  "korean_name": "전기포트",
+  "total_samples": 24330,
+  "on_percentage": 80.92,
+  "state_distribution": {
+    "OFF": {
+      "state_id": 0,
+      "description": "전원 꺼짐 / 대기 상태",
+      "count": 4642,
+      "percentage": 19.08,
+      "duration_min": 1.29
+    },
+    "BOILING_HEATING": {
+      "state_id": 1,
+      "description": "히터 발열 및 물 끓임 동작",
+      "count": 19688,
+      "percentage": 80.92,
+      "duration_min": 5.47
+    }
+  },
+  "events_summary": {
+    "total_events": 12,
+    "on_events": 6,
+    "off_events": 6,
+    "mode_change_events": 0,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\electric_kettle_2_fixed_annotated.csv",
+  "npz_file": "processed_data\\npz\\electric_kettle_2_fixed.npz",
+  "events_json": "processed_data\\labels\\electric_kettle_2_fixed_events.json"
+}

@@ -1,0 +1,62 @@
+{
+  "raw_rows": 38970,
+  "cleaned_rows": 38970,
+  "duration_s": 649.5,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 30,
+  "invalid_samples_dropped": 0,
+  "invalid_samples_interpolated": 30,
+  "interpolated_cycles": 30,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 1,
+  "noise_floor_applied_w": 1.4,
+  "source_file": "beam_projector_3_fixed.csv",
+  "file_role": "device",
+  "appliance_type": "beam_projector",
+  "load_class": "smps",
+  "classification_reason": "등록된 단일 가전 'beam_projector'",
+  "output_file": null,
+  "feature_columns_count": 122,
+  "v_ref_v": 223.96,
+  "p_mean": 37.75,
+  "p_max": 238.31,
+  "irms_mean": 0.3087,
+  "korean_name": "빔프로젝터",
+  "total_samples": 38970,
+  "on_percentage": 79.96,
+  "state_distribution": {
+    "OFF_STANDBY": {
+      "state_id": 0,
+      "description": "대기 전원 상태",
+      "count": 7808,
+      "percentage": 20.04,
+      "duration_min": 2.17
+    },
+    "WARMUP_COOLDOWN": {
+      "state_id": 1,
+      "description": "부팅 예열 또는 전원 끈 후 팬 냉각",
+      "count": 1631,
+      "percentage": 4.19,
+      "duration_min": 0.45
+    },
+    "LAMP_ON": {
+      "state_id": 2,
+      "description": "램프 점등 및 정상 화면 투사",
+      "count": 29531,
+      "percentage": 75.78,
+      "duration_min": 8.2
+    }
+  },
+  "events_summary": {
+    "total_events": 21,
+    "on_events": 7,
+    "off_events": 7,
+    "mode_change_events": 7,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\beam_projector_3_fixed_annotated.csv",
+  "npz_file": "processed_data\\npz\\beam_projector_3_fixed.npz",
+  "events_json": "processed_data\\labels\\beam_projector_3_fixed_events.json"
+}

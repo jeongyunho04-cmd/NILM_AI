@@ -1,0 +1,52 @@
+
+================================================================================
+[NILM AI] Starting Preprocessing, Multi-Tier Labeling & NumPy Binary Export
+[NILM AI] Input: 34 CSV files
+[NILM AI]   - Single-appliance (segment pool): 23
+[NILM AI]   - Baseline noise                 : 2
+[NILM AI]   - Composite eval (POOL-EXCLUDED) : 9  -> test.2, test, test3, test_4, test_5, test_6, test_7, test_8, test_9
+================================================================================
+
+[ 1/25] Processing: air_conditioner.csv    ... DONE | Rows: 226770 ( 63.0min) | ON:  87.7% | V_ref:  233.6V
+[ 2/25] Processing: beam_projector.csv     ... DONE | Rows:  42720 ( 11.9min) | ON:  88.7% | V_ref:  223.1V
+[ 3/25] Processing: beam_projector_2.csv   ... DONE | Rows:  40860 ( 11.3min) | ON:  80.2% | V_ref:  223.5V
+[ 4/25] Processing: beam_projector_3_fixed.csv ... DONE | Rows:  38970 ( 10.8min) | ON:  80.0% | V_ref:  224.0V
+[ 5/25] Processing: electiric_kettle.csv   ... DONE | Rows:  29370 (  8.2min) | ON:  71.1% | V_ref:  212.5V
+[ 6/25] Processing: electric_kettle_2_fixed.csv ... DONE | Rows:  24330 (  6.8min) | ON:  80.9% | V_ref:  214.7V
+[ 7/25] Processing: fan_1.csv              ... DONE | Rows:  79140 ( 22.0min) | ON:  94.5% | V_ref:  233.7V
+[ 8/25] Processing: fan_2.csv              ... DONE | Rows:  35490 (  9.9min) | ON:  96.9% | V_ref:  235.6V
+[ 9/25] Processing: fan_3.csv              ... DONE | Rows:  52980 ( 14.7min) | ON:  95.7% | V_ref:  236.0V
+[10/25] Processing: hair_dryer_1.csv       ... DONE | Rows:   7470 (  2.1min) | ON:  78.1% | V_ref:  234.2V
+[11/25] Processing: hair_dryer_2.csv       ... DONE | Rows:  11190 (  3.1min) | ON:  72.8% | V_ref:  235.3V
+[12/25] Processing: hotplate_1.csv         ... DONE | Rows:  49350 ( 13.7min) | ON:  45.3% | V_ref:  219.0V
+[13/25] Processing: hotplate_2.csv         ... DONE | Rows:  35490 (  9.9min) | ON:  30.4% | V_ref:  221.3V
+[14/25] Processing: hotplate_3_fixed.csv   ... DONE | Rows:  36360 ( 10.1min) | ON:  20.0% | V_ref:  224.5V
+[15/25] Processing: laptop_charger_1.csv   ... DONE | Rows: 174750 ( 48.5min) | ON:  98.6% | V_ref:  221.9V
+[16/25] Processing: laptop_charger_2.csv   ... DONE | Rows:  12060 (  3.4min) | ON:  51.6% | V_ref:  222.8V | GATED: 1410
+[17/25] Processing: laptop_charger_3_fixed.csv ... DONE | Rows:  46950 ( 13.0min) | ON:  88.5% | V_ref:  220.8V
+[18/25] Processing: minipc_1.csv           ... DONE | Rows:  48540 ( 13.5min) | ON:  85.0% | V_ref:  221.4V
+[19/25] Processing: minipc_2.csv           ... DONE | Rows: 152400 ( 42.3min) | ON:  98.4% | V_ref:  221.9V
+[20/25] Processing: minipc_3.csv           ... DONE | Rows:  76860 ( 21.4min) | ON:  96.2% | V_ref:  223.8V
+[21/25] Processing: oven.csv               ... DONE | Rows: 129000 ( 35.8min) | ON:  97.6% | V_ref:  223.3V
+[22/25] Processing: oven_2.csv             ... DONE | Rows:  57330 ( 15.9min) | ON:  90.8% | V_ref:  223.1V
+[23/25] Processing: oven_3_fixed.csv       ... DONE | Rows:  53790 ( 14.9min) | ON:  88.2% | V_ref:  221.3V
+[24/25] Processing: noise_noselfpower.csv  ... DONE | Rows:  61440 ( 17.1min) | ON:   0.0% | V_ref:  222.2V
+[25/25] Processing: noise_selfpower.csv    ... DONE | Rows:  40140 ( 11.2min) | ON:   0.0% | V_ref:  221.9V
+[eval] Composite load: test.2.csv             ... DONE | Rows:  27960 | V_ref:  222.6V | (세그먼트 풀 제외)
+[eval] Composite load: test.csv               ... DONE | Rows:  72660 | V_ref:  233.6V | (세그먼트 풀 제외)
+[eval] Composite load: test3.csv              ... DONE | Rows:  24780 | V_ref:  221.6V | (세그먼트 풀 제외)
+[eval] Composite load: test_4.csv             ... DONE | Rows:  42090 | V_ref:  219.4V | (세그먼트 풀 제외)
+[eval] Composite load: test_5.csv             ... DONE | Rows:  34170 | V_ref:  218.4V | (세그먼트 풀 제외)
+[eval] Composite load: test_6.csv             ... DONE | Rows:  47430 | V_ref:  220.3V | (세그먼트 풀 제외)
+[eval] Composite load: test_7.csv             ... DONE | Rows:  40530 | V_ref:  222.6V | (세그먼트 풀 제외)
+[eval] Composite load: test_8.csv             ... DONE | Rows:  38730 | V_ref:  222.8V | (세그먼트 풀 제외)
+[eval] Composite load: test_9.csv             ... DONE | Rows:  20220 | V_ref:  217.0V | (세그먼트 풀 제외)
+
+================================================================================
+[NILM AI] Preprocessing & NPZ Export Completed in 118.99s
+[NILM AI] Total Cleaned Samples: 1,563,750 cycles (7.24 hours)
+[NILM AI] Total Events Detected: 2,317
+[NILM AI] NPZ Binary Directory: C:\Users\yunho\Documents\NILM_train\NILM_AI-main\processed_data\npz
+[NILM AI] Composite Eval (pool-excluded): C:\Users\yunho\Documents\NILM_train\NILM_AI-main\processed_data\composite_eval
+================================================================================
+

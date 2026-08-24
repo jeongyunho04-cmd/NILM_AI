@@ -94,6 +94,17 @@ DEVICE_FILES: Dict[str, DeviceSpec] = {
     # oven_2: 다른 목표온도 측정 (2026-08-21). 7.2절이 지적한 "듀티비가 온도의 함수인데
     # 1점만 있다" 와 12.3절의 "오븐 독립 활성화 2개" 를 함께 겨냥한다.
     "oven_2":           DeviceSpec("oven",             LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
+    # ── 펌웨어 수정 후 재측정 (2026-08-25, 설계 문서 12.72) ──────────────────
+    # 레인지 전환 오프셋 단차를 고친 펌웨어로 다시 잡은 녹화다. **짝수차 고조파가
+    # 절반이 된다** (충전기 |I2|/|I1| 0.0551 -> 0.0253). 홀수차는 불변이므로
+    # (0.9281 -> 0.9261) 기존 녹화와 **같은 풀에 섞어 쓴다** — 어차피 짝수차는
+    # 입력·손실 양쪽에서 배제하는 방향이라(12.74, 12.75) 무해하고, 두 펌웨어의
+    # 짝수차가 섞이면 그 채널에 대한 강건성이 오히려 는다.
+    "beam_projector_3_fixed":  DeviceSpec("beam_projector",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=2.0),
+    "electric_kettle_2_fixed": DeviceSpec("electiric_kettle", LoadClass.RESISTIVE, daily_usage_hours=0.15),
+    "hotplate_3_fixed":        DeviceSpec("hotplate",         LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
+    "laptop_charger_3_fixed":  DeviceSpec("laptop_charger",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=8.0),
+    "oven_3_fixed":            DeviceSpec("oven",             LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
 }
 
 

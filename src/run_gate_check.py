@@ -41,7 +41,7 @@ import torch
 
 from src.evaluation.real_events import load_events, score_absent, score_on_off
 from src.evaluation.sealing import is_sealed
-from src.model.inputs import (FINE_CYCLES, LEGACY_FINE_CHANNELS,
+from src.model.inputs import (FINE_CYCLES, LEGACY_FINE_CHANNELS, ZERO_EVEN_HARMONICS,
                               LEGACY_FINE_CYCLES, LEGACY_TARGET_LOOKAHEAD,
                               TARGET_LOOKAHEAD)
 from src.model.net import NILMNet, appliance_state_counts
@@ -62,6 +62,18 @@ def assert_target_config(ck: dict, ckpt_path: str) -> None:
     2026-08-24: 이 검사가 없어서 룩어헤드를 9초로 올린 채로 6초 체크포인트를
     채점할 뻔했다. 같은 부류의 결함이 세 번째다 (11.2절, 12.45.3).
     """
+    # 짝수차 배제 (12.77). **이것이 어긋나면 조용히 틀린다** — 12.74 에서 지터 없이
+    # 학습한 모델의 짝수차를 추론에서만 껐더니 충전기가 0.937 -> 0.868 로 무너졌다.
+    # 기본값 False 는 이 필드가 없던 시절의 체크포인트가 전부 짝수차를 쓰기 때문이다.
+    ck_ze = bool(ck.get("zero_even_harmonics", False))
+    if ck_ze != ZERO_EVEN_HARMONICS:
+        raise SystemExit(
+            f"체크포인트의 짝수차 구성이 현재 코드와 다릅니다: {ckpt_path}" + chr(10)
+            + f"  체크포인트  zero_even_harmonics={ck_ze}" + chr(10)
+            + f"  현재 코드    ZERO_EVEN_HARMONICS={ZERO_EVEN_HARMONICS}" + chr(10)
+            + "  src/model/inputs.py 의 ZERO_EVEN_HARMONICS 를 체크포인트 값으로"
+            + " 맞춘 뒤 다시 실행하십시오 (그 값으로 만든 캐시도 함께 써야 합니다).")
+
     got = (int(ck.get("target_lookahead", LEGACY_TARGET_LOOKAHEAD)),
            int(ck.get("fine_cycles", LEGACY_FINE_CYCLES)))
     want = (TARGET_LOOKAHEAD, FINE_CYCLES)

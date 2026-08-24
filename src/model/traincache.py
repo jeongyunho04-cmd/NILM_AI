@@ -40,7 +40,7 @@ import time
 
 import numpy as np
 
-from src.model.inputs import FINE_CHANNELS, FINE_CYCLES, WIDE_CHANNELS, build_inputs
+from src.model.inputs import ZERO_EVEN_HARMONICS, FINE_CHANNELS, FINE_CYCLES, WIDE_CHANNELS, build_inputs
 
 # (이름, dtype, 창당 모양)
 _SPEC = {
@@ -198,6 +198,7 @@ def build_cache(
             "dither_even_amp": float(dither_even_amp),
             "dither_even_phase_deg": float(dither_even_phase_deg),
             "fine_shape": [FINE_CHANNELS, FINE_CYCLES], "bytes": int(total),
+            "zero_even_harmonics": bool(ZERO_EVEN_HARMONICS),
             "build_seconds": round(time.time() - t0, 1),
             "positive_rate": {a: float((mm["y_on"][:pos, j] > 0).mean())
                               for j, a in enumerate(apps)}}

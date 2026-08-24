@@ -1,0 +1,55 @@
+{
+  "raw_rows": 36360,
+  "cleaned_rows": 36360,
+  "duration_s": 606.0,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 60,
+  "invalid_samples_dropped": 0,
+  "invalid_samples_interpolated": 60,
+  "interpolated_cycles": 60,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "noise_floor_applied_w": 1.4,
+  "source_file": "hotplate_3_fixed.csv",
+  "file_role": "device",
+  "appliance_type": "hotplate",
+  "load_class": "resistive",
+  "classification_reason": "등록된 단일 가전 'hotplate'",
+  "output_file": null,
+  "feature_columns_count": 122,
+  "v_ref_v": 224.5,
+  "p_mean": 112.73,
+  "p_max": 490.33,
+  "irms_mean": 0.5147,
+  "korean_name": "핫플레이트",
+  "total_samples": 36360,
+  "on_percentage": 20.03,
+  "state_distribution": {
+    "OFF_STANDBY": {
+      "state_id": 0,
+      "description": "대기 상태 또는 서모스탯 OFF 주기",
+      "count": 29078,
+      "percentage": 79.97,
+      "duration_min": 8.08
+    },
+    "HEATING_ACTIVE": {
+      "state_id": 1,
+      "description": "히터 통전 발열 주기",
+      "count": 7282,
+      "percentage": 20.03,
+      "duration_min": 2.02
+    }
+  },
+  "events_summary": {
+    "total_events": 358,
+    "on_events": 179,
+    "off_events": 179,
+    "mode_change_events": 0,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\hotplate_3_fixed_annotated.csv",
+  "npz_file": "processed_data\\npz\\hotplate_3_fixed.npz",
+  "events_json": "processed_data\\labels\\hotplate_3_fixed_events.json"
+}

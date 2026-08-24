@@ -290,6 +290,8 @@ def main() -> int:
                 "wide_summary": ck.get("wide_summary", False),
                 "periodicity": ck.get("periodicity", False),
                 "fine_dropout": ck.get("fine_dropout", 0.0),
+                # 짝수차 배제 (12.77). 부모 체크포인트 값을 그대로 물려받는다.
+                "zero_even_harmonics": ck.get("zero_even_harmonics", False),
                 "fine_channels": model.fine_channels,
                 "target_lookahead": TARGET_LOOKAHEAD, "fine_cycles": FINE_CYCLES,
                 "select": "final", "stage": 2, "init": a.init},
