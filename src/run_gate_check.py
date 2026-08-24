@@ -226,6 +226,9 @@ def main() -> int:
     ap.add_argument("--ckpt-smps", default=None, metavar="PT",
                     help="SMPS 3종(프로젝터/충전기/미니PC)만 이 체크포인트로 채점한다. "
                          "**운영 조합으로 재는 방법이다** — 12.47/12.51.3 참조")
+    ap.add_argument("--zero-even", action="store_true",
+                    help="SMPS 체크포인트 입력의 짝수차 채널을 0 으로 (12.74절). "
+                         "짝수차는 계측 인공물이다 (12.72)")
     ap.add_argument("--stride", type=int, default=30)
     ap.add_argument("--out", default="results/gate_check.json")
     a = ap.parse_args()
@@ -245,7 +248,7 @@ def main() -> int:
         if model_smps is not None:
             if list(apps_smps) != list(apps):
                 raise SystemExit("두 체크포인트의 가전 목록이 다릅니다")
-            tag = f"{tag}+{Path(a.ckpt_smps).stem}"
+            tag = f"{tag}+{Path(a.ckpt_smps).stem}" + ("+zeroeven" if a.zero_even else "")
         print("=" * 88)
         print(f"[{tag}] stage {ck.get('stage', 1)} | {', '.join(stems)}")
         if model_smps is not None:
@@ -258,7 +261,8 @@ def main() -> int:
         for stem in stems:
             d = forward_file(model, stem, dev, stride=a.stride)
             if model_smps is not None:
-                d = merge_smps(d, forward_file(model_smps, stem, dev, stride=a.stride), apps)
+                d = merge_smps(d, forward_file(model_smps, stem, dev, stride=a.stride,
+                                               zero_ch=EVEN_CHANNELS if a.zero_even else None), apps)
             s_soft = score_one(d, gated(d, False), stem, apps, ev)
             s_hard = score_one(d, gated(d, True), stem, apps, ev)
             per_file[stem] = {"soft": s_soft, "hard": s_hard, "hedge": hedge_report(d, apps)}

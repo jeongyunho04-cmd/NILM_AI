@@ -80,10 +80,29 @@ def pair_accuracy(pred: np.ndarray, on_true: np.ndarray, apps: List[str]) -> dic
             "acc_chg": float((~picks_a[~truth_a]).mean()) if (~truth_a).any() else float("nan")}
 
 
+#: "그것만 남기기" 용 채널군. `GROUPS` 는 하나씩 빼는(marginal) 측정이라
+#: 정보가 여러 채널에 중복되면 전부 작아져 **무엇을 쓰는지** 를 못 가른다.
+#: 여기서는 반대로 그 군만 남기고 나머지를 0 으로 만들어 **충분성**을 잰다.
+KEEP_GROUPS: List[Tuple[str, List[int]]] = [
+    ("기본파 Re/Im",          [0, 15]),
+    ("P·Q·V",                 [30, 31, 32]),
+    ("크기비 홀수 33,34,47",   [33, 34, 47]),
+    ("ch35 |I2|/|I1|",        [35]),
+    ("위상불변 φ3~φ9",         list(range(38, 46))),
+    ("홀수 Re/Im",            [2, 4, 6, 8, 10, 12, 14] + [17, 19, 21, 23, 25, 27, 29]),
+    ("짝수 Re/Im",            [1, 3, 5, 7, 9, 11, 13] + [16, 18, 20, 22, 24, 26, 28]),
+    ("추세제거 ch36~37",       [36, 37]),
+    ("역률 ch46",             [46]),
+    ("다단강하 ch48~49",       [48, 49]),
+]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="쌍 판별의 입력 의존을 절제로 잰다")
     ap.add_argument("--ckpt", nargs="+", default=["results/cnn_ov1.pt"])
     ap.add_argument("--holdout", default="processed_data/holdout60")
+    ap.add_argument("--keep-only", action="store_true",
+                    help="그 채널군만 남기고 나머지를 0 으로 (충분성). 기본은 하나씩 빼기")
     ap.add_argument("--out", default="results/pair_ablation.json")
     a = ap.parse_args()
 
@@ -103,10 +122,16 @@ def main() -> int:
               f"{'프로젝터':>10s}{'충전기':>10s}")
         base_acc = None
         rows = {}
-        for name, chans, kill_wide in GROUPS:
-            use = [c for c in chans if c < nch]
-            if chans and not use:
-                continue
+        groups = ([("기준(전부)", [], False)]
+                  + [(n, c, False) for n, c in KEEP_GROUPS]) if a.keep_only else GROUPS
+        for name, chans, kill_wide in groups:
+            if a.keep_only and chans:
+                keep = set(c for c in chans if c < nch)
+                use = [c for c in range(nch) if c not in keep]     # 나머지를 죽인다
+            else:
+                use = [c for c in chans if c < nch]
+                if chans and not use:
+                    continue
             saved = fine[:, use].copy() if use else None
             if use:
                 fine[:, use] = 0.0
