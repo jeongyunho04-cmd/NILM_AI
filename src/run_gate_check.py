@@ -69,7 +69,7 @@ def load_model(ckpt_path: str, dev: str):
 def forward_file(model, stem: str, dev: str, stride: int = 30) -> dict:
     """파일 하나를 촘촘히 훑어 게이트와 원시 전력을 그대로 돌려준다."""
     rw = dense_targets(stem, stride=stride)
-    G, R, SB, PN, POBS = [], [], [], [], []
+    G, R, SB, PN, POBS, OH = [], [], [], [], [], []
     for i in range(0, len(rw), 512):
         idx = np.arange(i, min(i + 512, len(rw)))
         f, w, pobs, oh, pn = rw.batch(idx)
@@ -80,10 +80,13 @@ def forward_file(model, stem: str, dev: str, stride: int = 30) -> dict:
         G.append(torch.sigmoid(o["on_logit"]).float().cpu().numpy())
         R.append(o["power_raw"].float().cpu().numpy())
         SB.append(o["standby"].float().cpu().numpy())
-        PN.append(pn); POBS.append(pobs)
+        PN.append(pn); POBS.append(pobs); OH.append(oh)
     return {"gate": np.concatenate(G), "p_raw": np.concatenate(R),
             "standby": np.concatenate(SB), "p_noise": np.concatenate(PN),
-            "p_observed": np.concatenate(POBS), "targets": rw.target_cycle}
+            "p_observed": np.concatenate(POBS), "targets": rw.target_cycle,
+            # 관측 고조파 (n,15,2) Re/Im. 12.40 의 전이 스냅이 |I3| 를 쓴다 —
+            # 저항 부하는 3차를 거의 안 흘려서 SMPS 계단만 남는다 (12.37.2).
+            "obs_harm": np.concatenate(OH)}
 
 
 def gated(d: dict, hard: bool) -> np.ndarray:
