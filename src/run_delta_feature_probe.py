@@ -284,6 +284,92 @@ def audit(half=5.0, guard=1.0, n_null=150):
             "tr_sig": tr_sig, "tr_null": tr_null}
 
 
+def audit_synth(half=5.0, guard=1.0, n_windows=400, window_cycles=3600, seed=0):
+    """[C-합성] 같은 자를 **합성 복합**에 댄다 (12.66절).
+
+    12.65.5 가 세운 가설: 합성 복합이 실측보다 2차 고조파에서 조용해서
+    |I2| 단서(판별 신호 6.1 mA)가 합성에서만 살아 있다.
+
+    **`audit()` 과 기하를 글자 그대로 공유한다** — pre=[c-half, c-guard],
+    post=[c+guard, c+half], 후보 간격 2.0초, 전이에서 12초 이상. 다른 것은
+    전이의 출처뿐이다: 실측은 사람이 기록한 라벨, 합성은 `gt_is_on` 의 변화점.
+
+    ⚠ **동시 활성 기기 수를 함께 찍는다.** 널의 꼬리는 계측 잡음이 아니라 다른
+    기기의 움직임이 만든다 (`audit` 서두). 두 집단의 활성 기기 수가 다르면
+    널 차이의 일부는 모델링이 아니라 구성 탓이다 — 6절 1번 규칙.
+    """
+    from src.synthesis.dataset import DEFAULT_RECIPE_MIX, NILMBatchGenerator
+    from src.synthesis.segment_pool import SegmentPool
+    from src.synthesis.synthesizer import LoadSynthesizer
+
+    rng = np.random.default_rng(seed)
+    np.random.seed(seed)
+    pool = SegmentPool(npz_dir=str(DEV_DIR), time_split="train", holdout_frac=0.2)
+    syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False)
+    # **모델이 실제로 학습하는 분포로 뽑아야 한다.** 처음에 `synthesize_random_window`
+    # 기본값으로 뽑았더니 창당 활성 기기가 중앙 1.0 이었다 — 캐시·홀드아웃은
+    # `DEFAULT_RECIPE_MIX` 를 쓰므로 그것과 다른 분포를 잰 것이었다 (12.66.1).
+    gen = NILMBatchGenerator(segment_pool=pool, window_size_cycles=window_cycles,
+                             recipe_mix=DEFAULT_RECIPE_MIX, synthesizer=syn,
+                             compute_gt_harmonics=False)
+
+    nulls, n_active, recipes = [], [], []
+    for _ in range(n_windows):
+        r, recipe = gen._synthesize_window()
+        recipes.append(recipe)
+        I = np.asarray(r.harmonics_complex)
+        n = len(I)
+        t = np.arange(n) / 60.0
+        # SMPS 3종의 on/off 변화점 = 실측 라벨에 대응한다
+        tt = []
+        for app in SMPS:
+            on = np.asarray(r.gt_is_on.get(app, np.zeros(n, np.int8)))
+            tt.extend(np.flatnonzero(np.diff(on) != 0) / 60.0)
+        tt = np.array(tt)
+        n_active.append(len([a for a in r.active_appliances]))
+        cand = [c for c in np.arange(half + 7, t[-1] - half - 7, 2.0)
+                if len(tt) == 0 or np.min(np.abs(tt - c)) > 12]
+        if not cand:
+            continue
+        for c in rng.choice(cand, min(2, len(cand)), replace=False):
+            pre = (t >= c - half) & (t <= c - guard)
+            post = (t >= c + guard) & (t <= c + half)
+            if pre.sum() < 30 or post.sum() < 30:
+                continue
+            nulls.append(np.abs((np.median(I[post].real, 0) + 1j * np.median(I[post].imag, 0))
+                                - (np.median(I[pre].real, 0) + 1j * np.median(I[pre].imag, 0))))
+    return {"null": np.array(nulls), "n_active": np.array(n_active),
+            "recipes": recipes}
+
+
+def print_null_compare(real_au, syn_au):
+    nr, ns = real_au["null"], syn_au["null"]
+    print()
+    print("=" * 96)
+    print("[C-합성] 복합 널 — 실측 vs 합성 (같은 기하, 12.66절)")
+    print("=" * 96)
+    print(f"  표본  실측 {len(nr):,}  |  합성 {len(ns):,}")
+    na = syn_au["n_active"]
+    print(f"  합성 창당 활성 기기 수  중앙 {np.median(na):.1f}  평균 {na.mean():.2f}  "
+          + " ".join(f"{k}개:{100*(na==k).mean():.0f}%" for k in range(0, 4)))
+    print()
+    print("  " + "차수".ljust(8) + "실측 중앙".rjust(12) + "실측 p95".rjust(12)
+          + "합성 중앙".rjust(12) + "합성 p95".rjust(12) + "p95 비".rjust(10))
+    for h in (2, 3, 5, 9, 13):
+        j = h - 1
+        rm, rp = np.median(nr[:, j]) * 1000, np.percentile(nr[:, j], 95) * 1000
+        sm, sp = np.median(ns[:, j]) * 1000, np.percentile(ns[:, j], 95) * 1000
+        mark = "  <- 판별자" if h == 2 else ""
+        print("  " + f"|I{h}|".ljust(8) + f"{rm:>10.2f}mA" + f"{rp:>10.2f}mA"
+              + f"{sm:>10.2f}mA" + f"{sp:>10.2f}mA" + f"{rp/max(sp,1e-9):>9.1f}x" + mark)
+    print()
+    print("  판별 신호 (12.65.5): 프로젝터 |I2| 1.72 mA vs 충전기 7.82 mA -> 6.1 mA")
+    for lab, a in (("실측", nr), ("합성", ns)):
+        p95 = np.percentile(a[:, 1], 95) * 1000
+        verdict = "묻힌다" if 6.1 < p95 else "살아 있다"
+        print(f"    {lab} |ΔI2| p95 {p95:6.2f} mA  ->  6.1 mA 신호는 **{verdict}**")
+
+
 def print_audit(au):
     nl = au["null"]
     print()
@@ -321,6 +407,8 @@ def print_audit(au):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="차분 고조파 특징 검증 (12.53절)")
+    ap.add_argument("--audit-synth", action="store_true",
+                    help="같은 자를 합성 복합에 대고 실측과 나란히 찍는다 (12.66절)")
     ap.add_argument("--audit", action="store_true",
                     help="[C] 널 분포·지문 복원·과도 채널 심사 (12.53.6, 12.54)")
     ap.add_argument("--out", default="results/delta_feature_probe.json")
@@ -393,6 +481,11 @@ def main() -> int:
                 print(f"    {k:<10s}{KOR.get(x,x):>6s} vs {KOR.get(y,y):<6s}"
                       f"  {A.mean():9.4f} vs {B.mean():9.4f}  분리비 {s:5.2f}{flag}")
 
+    if a.audit_synth:
+        real = audit()
+        print_audit(real)
+        print_null_compare(real, audit_synth())
+        return 0
     if a.audit:
         print_audit(audit())
 
