@@ -241,6 +241,9 @@ def main() -> int:
     ap.add_argument("--zero-even", action="store_true",
                     help="SMPS 체크포인트 입력의 짝수차 채널을 0 으로 (12.74절). "
                          "짝수차는 계측 인공물이다 (12.72)")
+    ap.add_argument("--zero-ch", default="", metavar="LIST",
+                    help="SMPS 체크포인트 입력에서 0 으로 만들 세밀 채널 (쉼표 구분). "
+                         "예: --zero-ch 33,34,47 (비율 채널, 12.80.3)")
     ap.add_argument("--stride", type=int, default=30)
     ap.add_argument("--out", default="results/gate_check.json")
     a = ap.parse_args()
@@ -249,6 +252,11 @@ def main() -> int:
     ev = load_events()
     stems = [s for s in sorted(ev) if not is_sealed(s)]
     payload: Dict[str, dict] = {}
+
+    zch = list(EVEN_CHANNELS) if a.zero_even else []
+    if a.zero_ch:
+        zch += [int(x) for x in a.zero_ch.split(",") if x.strip()]
+    zch = sorted(set(zch)) or None
 
     model_smps = None
     if a.ckpt_smps:
@@ -260,7 +268,8 @@ def main() -> int:
         if model_smps is not None:
             if list(apps_smps) != list(apps):
                 raise SystemExit("두 체크포인트의 가전 목록이 다릅니다")
-            tag = f"{tag}+{Path(a.ckpt_smps).stem}" + ("+zeroeven" if a.zero_even else "")
+            tag = (f"{tag}+{Path(a.ckpt_smps).stem}" + ("+zeroeven" if a.zero_even else "")
+                   + (f"+z{a.zero_ch.replace(',', '_')}" if a.zero_ch else ""))
         print("=" * 88)
         print(f"[{tag}] stage {ck.get('stage', 1)} | {', '.join(stems)}")
         if model_smps is not None:
@@ -274,7 +283,7 @@ def main() -> int:
             d = forward_file(model, stem, dev, stride=a.stride)
             if model_smps is not None:
                 d = merge_smps(d, forward_file(model_smps, stem, dev, stride=a.stride,
-                                               zero_ch=EVEN_CHANNELS if a.zero_even else None), apps)
+                                               zero_ch=zch), apps)
             s_soft = score_one(d, gated(d, False), stem, apps, ev)
             s_hard = score_one(d, gated(d, True), stem, apps, ev)
             per_file[stem] = {"soft": s_soft, "hard": s_hard, "hedge": hedge_report(d, apps)}
