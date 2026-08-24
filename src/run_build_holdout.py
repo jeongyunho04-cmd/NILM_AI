@@ -51,6 +51,19 @@ def inspect(d: str) -> int:
     return 0
 
 
+def _parse_scramble(items):
+    """["beam_projector:0.64:1.42"] -> {"beam_projector": (0.64, 1.42)}"""
+    if not items:
+        return None
+    out = {}
+    for it in items:
+        parts = it.split(":")
+        if len(parts) != 3:
+            raise SystemExit(f"--level-scramble 형식은 APP:LO:HI 입니다: {it}")
+        out[parts[0]] = (float(parts[1]), float(parts[2]))
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="고정 합성 홀드아웃 평가 셋 생성")
     ap.add_argument("--out", default=str(DEFAULT_DIR))
@@ -62,6 +75,9 @@ def main() -> int:
     ap.add_argument("--ablate-pedestal", nargs="*", default=None, metavar="APP",
                     help="이 가전들의 활성화 끝 기착 구간을 잘라낸 반사실 평가 셋을 만든다 "
                          "(12.63절). 예: --ablate-pedestal beam_projector")
+    ap.add_argument("--level-scramble", nargs="*", default=None, metavar="APP:LO:HI",
+                    help="그 가전의 전력 배율을 균등분포 [LO,HI] 로 흔든 반사실 평가 셋 "
+                         "(12.64절). 예: --level-scramble beam_projector:0.64:1.42")
     a = ap.parse_args()
 
     if a.inspect:
@@ -75,7 +91,8 @@ def main() -> int:
     print("=" * 74)
     build_holdout(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                   holdout_frac=a.holdout_frac, seed=a.seed,
-                  ablate_pedestal_apps=a.ablate_pedestal)
+                  ablate_pedestal_apps=a.ablate_pedestal,
+                  level_scramble=_parse_scramble(a.level_scramble))
     return inspect(a.out)
 
 

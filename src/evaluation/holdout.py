@@ -33,6 +33,7 @@ import json
 import numpy as np
 
 from src.synthesis.dataset import DEFAULT_RECIPE_MIX, NILMBatchGenerator
+from src.synthesis.augmentor import DataAugmentor
 from src.synthesis.segment_pool import SegmentPool
 from src.synthesis.synthesizer import LoadSynthesizer
 
@@ -79,6 +80,7 @@ def build_holdout(
     recipe_mix: Optional[Dict[str, float]] = None,
     progress_every: int = 1000,
     ablate_pedestal_apps: Optional[Sequence[str]] = None,
+    level_scramble: Optional[Dict[str, tuple]] = None,
 ) -> dict:
     """홀드아웃 구간에서만 평가 셋을 만들어 저장한다."""
     out = Path(out_dir)
@@ -87,7 +89,8 @@ def build_holdout(
 
     pool = SegmentPool(npz_dir=npz_dir, time_split="holdout", holdout_frac=holdout_frac,
                        ablate_pedestal_apps=ablate_pedestal_apps)
-    syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False)
+    aug = DataAugmentor(level_scramble=level_scramble) if level_scramble else None
+    syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False, augmentor=aug)
     gen = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         recipe_mix=recipe_mix or DEFAULT_RECIPE_MIX, synthesizer=syn,
@@ -140,6 +143,7 @@ def build_holdout(
         "target_index": tgt, "seed": seed,
         "time_split": "holdout", "holdout_frac": holdout_frac,
         "ablate_pedestal_apps": list(ablate_pedestal_apps or []),
+        "level_scramble": {k: list(v) for k, v in (level_scramble or {}).items()},
         "appliances": apps,
         "channel_layout": "0:15 harmonic Real, 15:30 harmonic Imag, 30 P, 31 Q, 32 V",
         "recipe_counts": {r: rec.count(r) for r in sorted(set(rec))},

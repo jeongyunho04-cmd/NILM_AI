@@ -222,3 +222,41 @@ def test_pedestal_ablation_keeps_arrays_consistent():
         assert len(a.net_harmonics_complex) == n
         assert len(a.net_harmonics_ri) == n
         assert a.inrush_cycles <= n
+
+
+def test_level_scramble_only_touches_named_appliance():
+    """전력 준위 조작이 지목한 가전만 흔들어야 한다 (12.64절)."""
+    import numpy as np
+    from src.synthesis.segment_pool import SegmentPool
+    from src.synthesis.augmentor import DataAugmentor
+
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="holdout", holdout_frac=0.2)
+    base = DataAugmentor()
+    scr = DataAugmentor(level_scramble={"beam_projector": (0.64, 1.42)})
+    for app in ("laptop_charger", "minipc"):
+        a = pool.appliance_activations[app][0]
+        np.random.seed(3); x = base.augment_activation(a).target_power_w
+        np.random.seed(3); y = scr.augment_activation(a).target_power_w
+        assert np.array_equal(x, y), app
+
+
+def test_level_scramble_widens_the_named_appliance():
+    """프로젝터의 준위 분포가 실제로 넓어져야 한다."""
+    import numpy as np
+    from src.synthesis.segment_pool import SegmentPool
+    from src.synthesis.augmentor import DataAugmentor
+
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="holdout", holdout_frac=0.2)
+    acts = pool.appliance_activations["beam_projector"]
+    spans = []
+    for aug in (DataAugmentor(), DataAugmentor(level_scramble={"beam_projector": (0.64, 1.42)})):
+        np.random.seed(11)
+        v = []
+        for _ in range(120):
+            g = aug.augment_activation(acts[np.random.randint(len(acts))])
+            tp = np.asarray(g.target_power_w, np.float64)
+            if tp.max() > 0:
+                v.append(np.median(tp[tp > 0.5 * tp.max()]))
+        lo, hi = np.percentile(v, [10, 90])
+        spans.append(hi - lo)
+    assert spans[1] > 2.5 * spans[0], f"폭 {spans[0]:.1f} -> {spans[1]:.1f}"

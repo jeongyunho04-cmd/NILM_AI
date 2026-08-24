@@ -45,6 +45,7 @@ class DataAugmentor:
         harmonic_dither_amp: float = 0.0,
         harmonic_dither_phase_deg: float = 0.0,
         harmonic_dither_ref_order: int = 9,
+        level_scramble: Optional[dict] = None,
     ):
         self.duration_scale_range = duration_scale_range
         self.power_scale_std = power_scale_std
@@ -62,6 +63,11 @@ class DataAugmentor:
         # 60배 느려진 파형이 되어 실제로는 존재할 수 없는 기기가 만들어진다.
         # 한도를 넘으면 늘이는 대신 그 길이에서 동작이 끝난 것으로 처리한다.
         self.max_stretch = max(1.0, float(max_stretch))
+        # {가전: (lo, hi)} — 그 가전의 전력 배율을 균등분포로 크게 흔든다 (12.64절).
+        # 기본 경로(±5%, 클립 ±15%)를 **대체**한다. 라벨(target_power_w)도 함께
+        # 움직이므로 예측이 틀려지는 것이 아니라 **절대 준위라는 단서만 사라진다.**
+        # 반사실 절제이지 현실 반영이 아니다 — 실측 프로젝터 ON 은 폭 1.7W 로 일정하다.
+        self.level_scramble = dict(level_scramble or {})
         # 차수별 독립 지터 (12.62절). **0 이면 꺼진다 - 기본은 꺼짐이다.**
         # `_apply_harmonic_dither` 주석에 측정 근거가 있다.
         self.harmonic_dither_amp = max(0.0, float(harmonic_dither_amp))
@@ -141,10 +147,13 @@ class DataAugmentor:
             )
 
         # 3. 전력 / 진폭 스케일링
-        if power_scale is None:
-            p_scale = float(np.clip(1.0 + np.random.normal(0, self.power_scale_std), 0.85, 1.15))
-        else:
+        if power_scale is not None:
             p_scale = float(power_scale)
+        elif act.appliance_type in self.level_scramble:
+            lo, hi = self.level_scramble[act.appliance_type]
+            p_scale = float(np.random.uniform(lo, hi))
+        else:
+            p_scale = float(np.clip(1.0 + np.random.normal(0, self.power_scale_std), 0.85, 1.15))
 
         aug_c = aug_c * p_scale
         aug_pow = aug_pow.copy()
