@@ -324,3 +324,38 @@ def test_even_dither_merges_the_pair_ratio():
     dith = dp(DataAugmentor(harmonic_dither_even_amp=1.4))
     assert base > 3.0, f"기준 d' 이 이미 낮다: {base:.2f}"
     assert dith < 1.5, f"지터 뒤 d' 이 안 내려갔다: {dith:.2f}"
+
+
+def test_harm_odd_only_masks_even_orders():
+    """L_harm 의 짝수차 마스크가 홀수차만 남겨야 한다 (12.75절)."""
+    import torch
+    from src.model.losses import NILMLoss
+
+    off = NILMLoss(s_i=torch.ones(9), harm_scale=torch.ones(15), harm_odd_only=False)
+    on = NILMLoss(s_i=torch.ones(9), harm_scale=torch.ones(15), harm_odd_only=True)
+    assert off.harm_mask.sum().item() == 15
+    assert on.harm_mask.sum().item() == 8          # 1,3,5,7,9,11,13,15 차
+    for j in (0, 2, 4, 6, 8, 10, 12, 14):          # 홀수차 (0-based 짝수 인덱스)
+        assert on.harm_mask[j].item() == 1.0
+    for j in (1, 3, 5, 7, 9, 11, 13):              # 짝수차
+        assert on.harm_mask[j].item() == 0.0
+
+
+def test_harm_odd_only_preserves_loss_scale():
+    """마스크를 걸어도 손실 규모가 유지돼야 w_harm 의 뜻이 안 바뀐다."""
+    import torch
+    from src.model.losses import NILMLoss
+
+    a = NILMLoss(s_i=torch.ones(9), harm_scale=torch.ones(15), harm_odd_only=False)
+    b = NILMLoss(s_i=torch.ones(9), harm_scale=torch.ones(15), harm_odd_only=True)
+    def f(e, m):
+        return (e * m[None, :, None]).mean() / m.mean().clamp(min=1e-6)
+
+    flat = torch.full((4, 15, 2), 3.0)         # 모든 차수의 오차가 같은 인공 입력
+    assert torch.allclose(f(flat, a.harm_mask), torch.tensor(3.0))
+    assert torch.allclose(f(flat, b.harm_mask), torch.tensor(3.0)), "마스크가 규모를 바꿨다"
+
+    even = torch.zeros(4, 15, 2)               # 짝수차에만 오차가 있는 입력
+    even[:, 1::2] = 5.0
+    assert f(even, b.harm_mask).item() == 0.0, "마스크가 짝수차를 안 지웠다"
+    assert f(even, a.harm_mask).item() > 0.0

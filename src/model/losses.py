@@ -119,6 +119,7 @@ class NILMLoss(torch.nn.Module):
         standby_sig: Optional[torch.Tensor] = None,  # (K, H, 2) 대기 상태 페이저
         noise_sig: Optional[torch.Tensor] = None,    # (H, 2) 계측계 페이저
         harm_scale: Optional[torch.Tensor] = None,   # (H,) 차수별 정규화
+        harm_odd_only: bool = False,                # 짝수차를 L_harm 에서 뺀다 (12.75)
         weights: Optional[LossWeights] = None,
         power_delta: float = 0.1,
         standby_delta: float = 1.0,
@@ -138,6 +139,27 @@ class NILMLoss(torch.nn.Module):
                              else torch.zeros(h, 2))
         self.register_buffer("harm_scale", harm_scale if harm_scale is not None
                              else torch.ones(h))
+        # 짝수차 제외 마스크 (12.75절).
+        #
+        # [왜] 12.72 가 짝수차를 **계측 인공물**로 확정했다 — 두 증폭 경로의 DC
+        # 오프셋이 개별 보정되지 않아 레인지 전환마다 단차가 생기고, 그 1/h
+        # 스펙트럼에 `s_rc_gain[h] ∝ h` 보상이 곱해져 모든 차수에서 평평한 바닥이
+        # 된다. 부하의 물리량이 아니고 **같은 기기의 녹화 사이에서 1.3~1.8배씩
+        # 흔들린다** (12.72.4).
+        #
+        # [왜 그냥 두면 안 되나] `harm_scale` 의 2차가 3.56 mA 로 작아서 **정규화
+        # 뒤 2차가 가장 큰 항이 된다** (12.70.3). 손실이 가장 큰 가중을 인공물에
+        # 걸고 있었다. 12.74 가 **입력** 짝수차를 0 으로 만들어 전이 귀속을
+        # 21->24/41 로 올렸는데, 손실의 **타깃**(`obs_harm`)과 **지문**(`sig`)에는
+        # 짝수차가 그대로 남아 있다. 여기서 나머지 절반을 막는다.
+        #
+        # `unlabeled()`(2단계 적응)도 같은 버퍼를 쓴다. 2단계가 실측에서 도는
+        # 것이므로 오히려 그쪽이 더 중요하다.
+        mask = torch.ones(h)
+        if harm_odd_only:
+            mask[1::2] = 0.0          # 0-based 라 인덱스 1,3,5.. 가 2,4,6..차다
+        self.register_buffer("harm_mask", mask)
+        self.harm_odd_only = bool(harm_odd_only)
         self.w = weights or LossWeights()
         self.power_delta = power_delta
         self.standby_delta = standby_delta
@@ -197,8 +219,11 @@ class NILMLoss(torch.nn.Module):
             pred = pred + self.noise_sig[None]
             # 차수별로 같은 무게를 준다. 정규화하지 않으면 I1 이 전부 지배해
             # 고조파 제약이 전력 제약과 같아진다.
-            parts["harm"] = ((pred - tgt["obs_harm"]).abs()
-                             / self.harm_scale[None, :, None]).mean()
+            err = (pred - tgt["obs_harm"]).abs() / self.harm_scale[None, :, None]
+            # 마스크를 걸어도 손실 규모가 유지되도록 마스크 평균으로 나눈다.
+            # 그래야 `w_harm=0.1` 이 이전과 같은 뜻을 갖는다.
+            parts["harm"] = ((err * self.harm_mask[None, :, None]).mean()
+                             / self.harm_mask.mean().clamp(min=1e-6))
         else:
             parts["harm"] = out["power"].sum() * 0.0
 
@@ -247,8 +272,11 @@ class NILMLoss(torch.nn.Module):
             idle = torch.sigmoid(out["plugged_logit"]) * (1.0 - torch.sigmoid(out["on_logit"]))
             pred = pred + torch.einsum("bk,khc->bhc", idle, self.standby_sig)
             pred = pred + self.noise_sig[None]
-            parts["harm"] = ((pred - tgt["obs_harm"]).abs()
-                             / self.harm_scale[None, :, None]).mean()
+            err = (pred - tgt["obs_harm"]).abs() / self.harm_scale[None, :, None]
+            # 마스크를 걸어도 손실 규모가 유지되도록 마스크 평균으로 나눈다.
+            # 그래야 `w_harm=0.1` 이 이전과 같은 뜻을 갖는다.
+            parts["harm"] = ((err * self.harm_mask[None, :, None]).mean()
+                             / self.harm_mask.mean().clamp(min=1e-6))
         else:
             parts["harm"] = out["power"].sum() * 0.0
 

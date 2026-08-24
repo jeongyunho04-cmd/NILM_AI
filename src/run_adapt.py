@@ -134,6 +134,8 @@ def main() -> int:
     # (w_cons 0.4 / w_harm 0.1 / w_hedge 0)은 **스윕 6개 조합 중 최악**이었다
     # (12.12.2절: L_cons 가 L_harm 보다 38.8배 강해 배분을 결정하지 못한다).
     # 기본값으로 남겨 두면 아무 옵션 없이 돌린 사람이 그 조합을 얻는다.
+    ap.add_argument("--harm-odd-only", action="store_true",
+                    help="L_harm 에서 짝수차를 뺀다 (12.75절). **2단계가 실측에서 도는 것이므로 1단계보다 이쪽이 더 중요하다**")
     ap.add_argument("--init", default="results/cnn_v17.pt",
                     help="1단계 체크포인트. v17 은 듀티 주기 무작위화로 다시 학습한 것이고 "
                          "1단계만으로 v15 의 2단계 결과를 앞선다 (12.17절)")
@@ -206,6 +208,7 @@ def main() -> int:
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
         signatures=torch.from_numpy(sig), standby_sig=torch.from_numpy(sb),
         noise_sig=torch.from_numpy(nz), harm_scale=torch.from_numpy(hsc),
+        harm_odd_only=a.harm_odd_only,
         weights=LossWeights(harm=0.1, cons=0.0, over=0.0),
         s_state=build_state_scales(apps, [S_I[x] for x in apps]),
     ).to(dev)

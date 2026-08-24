@@ -201,6 +201,9 @@ def main() -> int:
                     help="손실 척도를 (기기,상태)별로 (12.9.9절). --no-per-state-scale 로 끈다")
     ap.add_argument("--block-windows", type=int, default=24_000,
                     help="캐시 블록 셔플 단위. 작을수록 메모리가 덜 든다 (24000 = 약 1.1GB)")
+    ap.add_argument("--harm-odd-only", action="store_true",
+                    help="L_harm 에서 짝수차를 뺀다 (12.75절). 짝수차는 계측 인공물이라 "
+                         "(12.72) 손실이 가장 큰 가중을 그것에 걸고 있었다 (12.70.3)")
     ap.add_argument("--holdout", default=HOLDOUT_DIR, metavar="DIR",
                     help="합성 홀드아웃 디렉터리. TARGET_LOOKAHEAD 를 바꾸면 라벨 시점이 "
                          "달라지므로 홀드아웃도 그 값으로 다시 만들어야 한다 (12.45)")
@@ -264,6 +267,7 @@ def main() -> int:
         standby_sig=torch.from_numpy(sb_sig),
         noise_sig=torch.from_numpy(nz_sig),
         harm_scale=torch.from_numpy(h_scale),
+        harm_odd_only=a.harm_odd_only,
         weights=LossWeights(harm=a.w_harm, cons=a.w_cons, over=a.w_over,
                             state_power=a.w_state_power),
         s_state=(build_state_scales(apps, [S_I[x] for x in apps])
