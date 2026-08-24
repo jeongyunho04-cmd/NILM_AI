@@ -11,7 +11,8 @@
   3) **타임라인** — 기기마다 두 줄. 위=정답, 아래=예측.
      정답의 판정보류(`uncertain`) 구간은 빗금으로 표시하고 채점에서 빠진다 (12.25절).
 
-    python -m src.run_plot_timeline --ckpt results/adapt_v17.pt
+    python -m src.run_plot_timeline                      # 운영 조합이 기본값
+    python -m src.run_plot_timeline --stride 6           # 핫플 펄스(1초)를 보려면
 
 [정답이 없는 기기는 어떻게 그리나]
 `appliances_present` 에 없는 기기는 **정답이 0 으로 확정**이다 (12.12.1절).
@@ -151,9 +152,10 @@ def plot_file(model, apps, stem: str, ev: dict, dev: str, out_dir: Path, tag: st
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="실측 예측 타임라인 플롯")
-    ap.add_argument("--ckpt", default="results/adapt_v17.pt")
-    ap.add_argument("--ckpt-smps", default=None, metavar="PT",
-                    help="SMPS 3종만 이 체크포인트로 예측한다 (run_live --ckpt-smps 와 동일)")
+    ap.add_argument("--ckpt", default="results/adapt_ph1.pt")
+    ap.add_argument("--ckpt-smps", default="results/cnn_ov1.pt", metavar="PT",
+                    help="SMPS 3종만 이 체크포인트로 예측한다 (run_live --ckpt-smps 와 동일). "
+                         "빈 문자열을 주면 --ckpt 단독")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--stride", type=int, default=15)
     ap.add_argument("--out", default="results/plots")

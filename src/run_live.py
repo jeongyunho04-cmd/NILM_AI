@@ -66,6 +66,19 @@ HARMONICS = 15
 #
 # **이것은 임시 조치다.** 근본 해결은 적응에서 SMPS 게이트를 얼리거나,
 # 충전기의 충전 상태 궤적을 합성기 세그먼트 풀에 넣는 것이다 (12.30.6).
+#
+# [기본값 근거 — 2026-08-24, 12.52 절의 재채점]
+# 위 수치는 `adapt_v17`/`cnn_v17` 시절의 것이다. 운영점이 그 뒤 바뀌었고,
+# 최근접 보간 + stride 6 으로 네 조합을 나란히 재채점한 결과가 기본값을 정했다:
+#
+#   조합                        유령W  잔차W  미니PC 프로젝터 충전기  핫플   오븐
+#   adapt_v17 단독 (옛 기본값)   9.56  14.50  0.389  0.792  0.861  0.980  0.931
+#   adapt_ph1 단독              6.50   5.86  0.359  0.830  0.917  0.980  0.925
+#   adapt_ph1 + cnn_ov1 (기본값) 7.90  11.49  0.805  0.841  0.937  0.980  0.925
+#
+# 하이브리드가 잔차(5.86 -> 11.49)를 내주고 미니PC(0.359 -> 0.805)를 산다.
+# 충전기만은 `cnn_v17` 이 0.955 로 아직 최고다 (기본값 0.937).
+# `--ckpt-smps ""` 로 단독 동작을 되돌릴 수 있다.
 SMPS_GROUP = ("beam_projector", "laptop_charger", "minipc")
 KOR = {"oven": "오븐", "hotplate": "핫플", "electiric_kettle": "포트",
        "hair_dryer": "드라이기", "minipc": "미니PC", "beam_projector": "프로젝터",
@@ -277,10 +290,11 @@ def main() -> int:
     ap.add_argument("--csv", default="data/live.csv", help="수신기가 쓰는 CSV")
     ap.add_argument("--replay", default=None, help="기존 CSV 를 재생해 검증한다")
     ap.add_argument("--speed", type=float, default=20.0, help="재생 배속 (0=최대)")
-    ap.add_argument("--ckpt", default="results/adapt_v17.pt")
-    ap.add_argument("--ckpt-smps", default=None, metavar="PT",
+    ap.add_argument("--ckpt", default="results/adapt_ph1.pt")
+    ap.add_argument("--ckpt-smps", default="results/cnn_ov1.pt", metavar="PT",
                     help="SMPS 3종(프로젝터/충전기/미니PC)만 이 체크포인트로 예측한다. "
-                         "권장: results/cnn_v17.pt (SMPS_GROUP 주석의 측정 근거 참조)")
+                         "빈 문자열(--ckpt-smps \"\")을 주면 --ckpt 단독으로 돈다. "
+                         "SMPS_GROUP 주석의 측정 근거 참조")
     ap.add_argument("--every", type=int, default=30, help="추론 간격 (사이클). 30=0.5초")
     ap.add_argument("--log", default="results/live_log.jsonl")
     ap.add_argument("--no-reorder", action="store_true",
