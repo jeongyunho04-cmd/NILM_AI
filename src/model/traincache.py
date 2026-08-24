@@ -61,8 +61,10 @@ _SEED_BASE = 0
 
 
 def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
-          exclude_files_json: str = "") -> None:
+          exclude_files_json: str = "", dither_amp: float = 0.0,
+          dither_phase_deg: float = 0.0) -> None:
     global _GEN, _SEED_BASE
+    from src.synthesis.augmentor import DataAugmentor
     from src.synthesis.dataset import NILMBatchGenerator
     from src.synthesis.segment_pool import SegmentPool
     from src.synthesis.synthesizer import LoadSynthesizer
@@ -74,9 +76,13 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
     excl = json.loads(exclude_files_json) if exclude_files_json else None
     pool = SegmentPool(npz_dir=npz_dir, time_split=time_split,
                        exclude_activation_files=excl)
+    # 차수별 지터 (12.62절). 0 이면 `DataAugmentor` 기본과 같다.
+    aug = DataAugmentor(harmonic_dither_amp=float(dither_amp),
+                        harmonic_dither_phase_deg=float(dither_phase_deg))
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
-        synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False),
+        synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
+                                    augmentor=aug),
         compute_gt_harmonics=False)
 
 
@@ -122,6 +128,8 @@ def build_cache(
     n_workers: int = 11,
     chunk: int = 250,
     exclude_activation_files: Optional[Dict[str, List[str]]] = None,
+    dither_amp: float = 0.0,
+    dither_phase_deg: float = 0.0,
 ) -> dict:
     """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다."""
     import multiprocessing as mp
@@ -156,7 +164,8 @@ def build_cache(
     t0 = time.time(); pos = 0
     ctx = mp.get_context("spawn")
     with ctx.Pool(n_workers, initializer=_init,
-                  initargs=(npz_dir, window_cycles, time_split, seed, excl_json)) as pool:
+                  initargs=(npz_dir, window_cycles, time_split, seed, excl_json,
+                            dither_amp, dither_phase_deg)) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -174,6 +183,7 @@ def build_cache(
     meta = {"n_windows": int(pos), "window_cycles": window_cycles, "appliances": apps,
             "time_split": time_split, "seed": seed, "n_wide": n_wide,
             "exclude_activation_files": exclude_activation_files,
+            "dither_amp": float(dither_amp), "dither_phase_deg": float(dither_phase_deg),
             "fine_shape": [FINE_CHANNELS, FINE_CYCLES], "bytes": int(total),
             "build_seconds": round(time.time() - t0, 1),
             "positive_rate": {a: float((mm["y_on"][:pos, j] > 0).mean())

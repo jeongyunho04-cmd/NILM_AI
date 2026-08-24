@@ -24,14 +24,26 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--exclude-activation-files", default="",
                     help='녹화 단위 홀드아웃 (12.18절). JSON 딕셔너리, {가전: [녹화 stem]}')
+    # 차수별 지터 (12.62절). 지정한 값이 **홀수 차수의 중앙값**이 되고 차수에
+    # 비례해 커진다. 실측 산포는 A 녹화내부 21.4%/10.3°, B 녹화간 6.6%/1.7°,
+    # C 실측복합 53.3%/15.1° 다 (`run_fingerprint_spread_probe`).
+    # A 는 모델이 이미 보는 변동이므로 그 아래로 주면 효과가 없다.
+    ap.add_argument("--dither-amp", type=float, default=0.0,
+                    help="고조파 진폭 지터 (로그정규 σ, 홀수차 중앙값). 예: 0.50")
+    ap.add_argument("--dither-phase-deg", type=float, default=0.0,
+                    help="고조파 위상 지터 (도, 홀수차 중앙값). 예: 15")
     a = ap.parse_args()
     print("=" * 78); print("[NILM AI] 학습용 독립 창 캐시"); print("=" * 78)
     excl = json.loads(a.exclude_activation_files) if a.exclude_activation_files else None
     if excl:
         print(f"  ** 녹화 단위 홀드아웃: {excl} - 이 녹화의 활성화는 학습에서 뺀다 **")
+    if a.dither_amp > 0 or a.dither_phase_deg > 0:
+        print(f"  ** 차수별 지터: 진폭 σ={a.dither_amp:.2f} / 위상 {a.dither_phase_deg:.1f}° "
+              f"(홀수차 중앙값, 차수 비례) **")
     build_cache(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                 time_split=a.split, seed=a.seed, n_workers=a.workers,
-                exclude_activation_files=excl)
+                exclude_activation_files=excl,
+                dither_amp=a.dither_amp, dither_phase_deg=a.dither_phase_deg)
     return 0
 
 

@@ -1023,3 +1023,130 @@ def test_duty_appliances_never_reach_stratified_crop():
         for _ in range(20):
             aug.augment_activation(pool.sample_activation(app), target_duration_cycles=3600)
     assert not called, "듀티 부하가 전력 계층 자르기를 탔습니다"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 차수별 지문 지터 (12.62절)
+# ─────────────────────────────────────────────────────────────────────────
+
+def _odd_median_spread(acts):
+    """활성화 목록 -> (홀수차 진폭 상대산포 중앙값 %, 위상 원형산포 중앙값 도)."""
+    from src.run_fingerprint_spread_probe import circ_spread, rel_spread, signature
+
+    sigs = []
+    for r in acts:
+        c = r.net_harmonics_complex
+        v = np.median(c.real, 0) + 1j * np.median(c.imag, 0)
+        if abs(v[0]) > 1e-6:
+            sigs.append(signature(v))
+    assert len(sigs) > 30
+    g = rel_spread(np.array([s[0] for s in sigs]))
+    psi = circ_spread(np.array([s[1] for s in sigs]))
+    odd = [k - 2 for k in range(3, 16, 2)]
+    return float(np.nanmedian(g[odd])), float(np.nanmedian(psi[odd]))
+
+
+def test_기존_증강은_지문을_바꾸지_못한다():
+    """12.62 의 출발점. 이것이 깨지면 지터의 근거가 사라진다.
+
+    공통 배율은 |I_k|/|I_1| 을, k차 위상 회전은 ∠I_k − k∠I_1 을 정확히
+    불변으로 남긴다. 그래서 같은 활성화를 몇 번 증강해도 정규화 지문이 안 움직인다.
+    """
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+    if "beam_projector" not in pool.get_appliance_types():
+        pytest.skip("프로젝터 활성화가 없습니다")
+    aug = DataAugmentor()
+    np.random.seed(0)
+    a0 = pool.sample_activation("beam_projector")
+    np.random.seed(1)
+    g, psi = _odd_median_spread([aug.augment_activation(a0) for _ in range(120)])
+    assert g < 5.0, f"진폭 지문이 {g:.1f}% 움직였습니다 - 증강이 바뀌었습니까"
+    assert psi < 3.0, f"위상 지문이 {psi:.1f}도 움직였습니다"
+
+
+def test_지터가_요청한_크기로_지문을_흔든다():
+    """지정한 값이 **홀수차 중앙값**이 되고 차수에 비례해 커져야 한다."""
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+    if "beam_projector" not in pool.get_appliance_types():
+        pytest.skip("프로젝터 활성화가 없습니다")
+    aug = DataAugmentor(harmonic_dither_amp=0.50, harmonic_dither_phase_deg=15.0)
+    np.random.seed(0)
+    a0 = pool.sample_activation("beam_projector")
+    np.random.seed(1)
+    outs = [aug.augment_activation(a0) for _ in range(300)]
+    g, psi = _odd_median_spread(outs)
+    assert 35.0 < g < 75.0, f"진폭 지터 중앙값이 {g:.1f}% 입니다 (목표 50%)"
+    assert 10.0 < psi < 22.0, f"위상 지터 중앙값이 {psi:.1f}도 입니다 (목표 15도)"
+
+    # 차수 비례 — k=15 가 k=3 보다 뚜렷하게 커야 한다
+    from src.run_fingerprint_spread_probe import rel_spread, signature
+    A = np.array([signature(np.median(r.net_harmonics_complex.real, 0)
+                            + 1j * np.median(r.net_harmonics_complex.imag, 0))[0]
+                  for r in outs])
+    gk = rel_spread(A)
+    assert gk[13] > 2.5 * gk[1], f"차수 비례가 아닙니다: k=3 {gk[1]:.1f}% / k=15 {gk[13]:.1f}%"
+
+
+def test_지터는_기본파와_전력라벨을_건드리지_않는다():
+    """k=1 과 P·Q 를 두면 전력 라벨이 정확히 유효하게 남는다."""
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+    if "beam_projector" not in pool.get_appliance_types():
+        pytest.skip("프로젝터 활성화가 없습니다")
+    np.random.seed(0)
+    a0 = pool.sample_activation("beam_projector")
+
+    off = DataAugmentor()
+    on = DataAugmentor(harmonic_dither_amp=0.50, harmonic_dither_phase_deg=15.0)
+    np.random.seed(7)
+    r_off = off.augment_activation(a0, duration_scale=1.0, power_scale=1.0,
+                                   phase_jitter_deg=0.0)
+    np.random.seed(7)
+    r_on = on.augment_activation(a0, duration_scale=1.0, power_scale=1.0,
+                                 phase_jitter_deg=0.0)
+    np.testing.assert_allclose(r_on.net_harmonics_complex[:, 0],
+                               r_off.net_harmonics_complex[:, 0], rtol=0, atol=0)
+    np.testing.assert_allclose(r_on.net_power_features, r_off.net_power_features,
+                               rtol=0, atol=0)
+    np.testing.assert_allclose(r_on.target_power_w, r_off.target_power_w, rtol=0, atol=0)
+    # 그런데 고차는 실제로 달라져 있어야 한다
+    assert not np.allclose(r_on.net_harmonics_complex[:, 2],
+                           r_off.net_harmonics_complex[:, 2])
+
+
+def test_다단_강하_채널이_기착을_짚는다():
+    """12.62 의 다단 강하 2채널. 프로젝터 팬 기착이 있고 충전기는 없다.
+
+    긴 탭(5.5초)이 기착 1~5초 전부에서 발화하고, 기착이 없으면 0 이어야 한다.
+    짧은 탭(3.0초)은 짧은 기착에서만 발화해 **기착 길이**를 준다.
+    """
+    from src.model.inputs import (DROP_TAPS, RIPPLE_SCALE, build_fine,
+                                 fine_target_index)
+
+    T = 3600
+    tgt = T - 1 - 360                       # 창 전체의 타깃 시점
+    ti = fine_target_index()
+    assert DROP_TAPS[1] > DROP_TAPS[0]
+
+    def drop_w(pedestal_s: float):
+        prof = np.zeros(T, np.float32)
+        prof[:tgt] = 45.0
+        n = int(pedestal_s * 60)
+        prof[tgt:tgt + n] = 4.0
+        x = np.zeros((1, 33, T), np.float32)
+        x[0, 30] = prof
+        x[0, 32] = 220.0
+        f = build_fine(x)
+        return [float(np.sinh(f[0, 48 + i, ti]) * RIPPLE_SCALE) for i in range(2)]
+
+    # 충전기 — 기착 없음. 두 탭 다 0
+    short, long = drop_w(0.0)
+    assert abs(short) < 0.1 and abs(long) < 0.1, f"기착이 없는데 {short:.2f}/{long:.2f}W"
+
+    # 프로젝터 — 기착 1~5초. 긴 탭이 언제나 발화한다 (12.60.1 의 실측·합성 범위)
+    for ped in (1.0, 2.0, 3.0, 4.0, 5.0):
+        short, long = drop_w(ped)
+        assert long > 3.0, f"기착 {ped}초에서 긴 탭이 {long:.2f}W 입니다"
+
+    # 짧은 탭은 기착이 짧을 때만 — 그래서 둘이 함께 길이를 준다
+    assert drop_w(2.0)[0] > 3.0
+    assert abs(drop_w(5.0)[0]) < 0.1

@@ -42,6 +42,9 @@ class DataAugmentor:
         randomize_duty: bool = True,
         load_stratified: bool = True,
         load_strata_candidates: int = 16,
+        harmonic_dither_amp: float = 0.0,
+        harmonic_dither_phase_deg: float = 0.0,
+        harmonic_dither_ref_order: int = 9,
     ):
         self.duration_scale_range = duration_scale_range
         self.power_scale_std = power_scale_std
@@ -59,6 +62,11 @@ class DataAugmentor:
         # 60배 느려진 파형이 되어 실제로는 존재할 수 없는 기기가 만들어진다.
         # 한도를 넘으면 늘이는 대신 그 길이에서 동작이 끝난 것으로 처리한다.
         self.max_stretch = max(1.0, float(max_stretch))
+        # 차수별 독립 지터 (12.62절). **0 이면 꺼진다 - 기본은 꺼짐이다.**
+        # `_apply_harmonic_dither` 주석에 측정 근거가 있다.
+        self.harmonic_dither_amp = max(0.0, float(harmonic_dither_amp))
+        self.harmonic_dither_phase_deg = max(0.0, float(harmonic_dither_phase_deg))
+        self.harmonic_dither_ref_order = max(2, int(harmonic_dither_ref_order))
 
     def augment_activation(
         self,
@@ -165,7 +173,10 @@ class DataAugmentor:
             aug_c[0] *= np.exp(1j * contact_angle_rad)
             aug_c[1] *= np.exp(1j * contact_angle_rad * 0.5)
 
-        # 6. Real / Imag 2채널 배열 재구성
+        # 6. 차수별 독립 지터 (12.62절) - 켜져 있을 때만
+        aug_c = self._apply_harmonic_dither(aug_c)
+
+        # 7. Real / Imag 2채널 배열 재구성
         actual_len = len(aug_c)
         aug_ri = np.zeros((actual_len, aug_c.shape[1], 2), dtype=np.float32)
         aug_ri[:, :, 0] = np.real(aug_c)
@@ -189,6 +200,67 @@ class DataAugmentor:
             v_ref_v=act.v_ref_v,
             periodic_duty=act.periodic_duty,
         )
+
+    def _apply_harmonic_dither(self, aug_c: np.ndarray) -> np.ndarray:
+        """차수별 독립 지터. **활성화당 1회** 뽑아 그 활성화 전체에 건다.
+
+        [무엇을 고치는가 - 12.62절]
+        이 클래스의 다른 증강 네 가지는 **지문을 하나도 바꾸지 못한다.**
+
+            공통 전력 배율   ->  |I_k|/|I_1| 을 **정확히** 불변으로 남긴다
+            k차 위상 회전    ->  ∠I_k − k·∠I_1 을 **정확히** 불변으로 남긴다
+                                (k·θ − k·θ = 0. 순수한 시간 이동이니 당연하다)
+            시간 신축·듀티    ->  길이만 바꾼다
+            돌입 접점각       ->  첫 2주기만
+
+        그래서 합성 창에 들어가는 **정규화된 15차 복소 지문은 원본 녹화의 바이트
+        그대로의 복사본**이다. 그것은 판별이 아니라 **조회**다. 12.58 이 "합성은
+        어떤 조건에서도 프로젝터↔충전기를 푼다(F1 0.985~1.000)" 를 발견한 것과
+        12.3 이 "충전기 녹화 2개, 프로젝터 2개뿐" 이라 적은 것이 여기서 만난다.
+
+        [크기를 어떻게 정했나 - `run_fingerprint_spread_probe` 의 실측]
+        증강이 불변으로 남기는 그 두 양의 산포를 세 층으로 쟀다
+        (홀수 차수 3~15 중앙값. 짝수는 |I_k|/|I_1| 이 0.4~8.9% 인 계측 바닥이라
+        상대산포가 74% 로 뜨므로 크기 결정에서 뺐다):
+
+            A 녹화 내부    g 21.4%   ψ 10.3°   <- 모델이 **이미 보는** 변동
+            B 녹화 간      g  6.6%   ψ  1.7°   <- 이중 하한 (n=2, 중심 대 중심)
+            C 실측 복합    g 53.3%   ψ 15.1°   <- 실제로 건너야 하는 격차
+
+        **A 를 넘지 않으면 새 압력이 0 이다** - 창마다 활성화의 다른 구간을 뽑아
+        쓰므로 A 는 이미 학습에 들어 있다. 그래서 C 수준으로 잡는다.
+        가장 극적인 수치: 프로젝터의 `|I3|/|I1|` 이 서로 다른 두 녹화에서
+        **0.4% / 0.4° 로 재현된다.** 그 정밀도가 외울 수 있는 키다.
+
+        [차수 비례]
+        산포가 차수와 함께 자란다 (k=3 에서 0.4~6.4%, k=13 에서 2.5~70.8%).
+        그래서 `σ_k = amp · k / ref` 로 재진 모양을 따르고, 지정한 값이
+        **홀수 차수의 중앙값**이 되도록 `ref = 9` 로 정규화한다
+        (3,5,7,9,11,13,15 의 중앙값이 9 다).
+
+        [기본파와 P·Q 는 건드리지 않는다]
+        k=1 을 두면 전력 라벨이 **정확히** 유효하게 남는다 (P 는 기본파가 지배한다).
+        그리고 위 두 불변량이 1차를 기준으로 정의되므로, k>=2 만 흔들면 σ_k 가
+        측정한 산포에 **1:1 로** 대응한다 - 재진 값을 그대로 인수로 쓸 수 있다.
+
+        [로그정규를 쓴다]
+        산포를 로그에서 쟀으므로(`rel_spread`) 뽑는 것도 로그에서 뽑아야 한다.
+        `1 + N(0, σ)` 는 σ 가 0.8 쯤 되면 음수가 나와 위상이 180° 뒤집힌다.
+        """
+        amp, ph = self.harmonic_dither_amp, self.harmonic_dither_phase_deg
+        if amp <= 0.0 and ph <= 0.0:
+            return aug_c
+        n_h = aug_c.shape[1]
+        if n_h < 2:
+            return aug_c
+        k = np.arange(2, n_h + 1, dtype=np.float64)          # 2..15
+        rel = k / float(self.harmonic_dither_ref_order)
+        g = np.random.normal(0.0, np.maximum(amp * rel, 1e-12))
+        psi = np.random.normal(0.0, np.maximum(np.radians(ph) * rel, 1e-12))
+        f = (np.exp(g) * np.exp(1j * psi)).astype(np.complex64)
+        out = aug_c.copy()
+        out[:, 1:] = out[:, 1:] * f[np.newaxis, :]
+        return out
 
     # ── 주기 부하: 잘라내기 / 순환 이어붙이기 ───────────────────────────────
     def _retime_duty(
