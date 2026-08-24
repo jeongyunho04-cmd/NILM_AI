@@ -154,16 +154,29 @@ def dense_targets(stem: str, npz_dir: str = DEFAULT_DIR,
 
 
 def upsample_to_cycles(values: np.ndarray, targets: np.ndarray, n_cycles: int) -> np.ndarray:
-    """stride 로 띄엄띄엄 낸 예측을 사이클 단위로 펴 준다 (계단 보간).
+    """stride 로 띄엄띄엄 낸 예측을 사이클 단위로 펴 준다 (**최근접**).
 
     `score_on_off` / `score_events` 가 (n_cycles, K) 를 요구하는데, 창을 사이클마다
-    만들면 파일당 9만 창이라 비현실적이다. 0.5초 간격 예측을 앞으로 채운다 —
-    타임라인 자체가 초 단위라 잃는 것이 없다.
+    만들면 파일당 9만 창이라 비현실적이다.
+
+    [⚠ 앞으로 채우면 안 된다 — 12.52 절]
+    처음에는 앞으로 채웠고("타임라인 자체가 초 단위라 잃는 것이 없다") 그 전제가
+    **핫플레이트에서 깨진다.** 릴레이 펄스가 1.0~1.3초인데 stride 30(0.5초)을 앞으로
+    채우면 모든 펄스가 평균 0.25초씩 **뒤로 밀린다** — 편향된 오차다.
+
+        adapt_ph1 핫플 F1   앞으로 채움 0.838  vs  stride 6(0.1초) 0.965
+
+    다른 기기는 전이가 드물어 영향이 없다 (유령 6.49->6.50, 오븐 0.925 불변).
+    **최근접**은 오차가 절반이고 편향이 없다. 창을 더 만들지 않고 고칠 수 있는
+    부분은 여기까지다 — 남는 것은 stride 를 줄여야 한다.
     """
     values = np.asarray(values)
     out = np.zeros((n_cycles,) + values.shape[1:], values.dtype)
     if not len(targets):
         return out
-    idx = np.searchsorted(targets, np.arange(n_cycles), side="right") - 1
-    idx = np.clip(idx, 0, len(targets) - 1)
-    return values[idx]
+    c = np.arange(n_cycles)
+    hi = np.searchsorted(targets, c, side="left")
+    lo = np.clip(hi - 1, 0, len(targets) - 1)
+    hi = np.clip(hi, 0, len(targets) - 1)
+    take_hi = np.abs(targets[hi] - c) < np.abs(c - targets[lo])
+    return values[np.where(take_hi, hi, lo)]
