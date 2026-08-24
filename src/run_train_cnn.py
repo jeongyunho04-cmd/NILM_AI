@@ -201,6 +201,9 @@ def main() -> int:
                     help="손실 척도를 (기기,상태)별로 (12.9.9절). --no-per-state-scale 로 끈다")
     ap.add_argument("--block-windows", type=int, default=24_000,
                     help="캐시 블록 셔플 단위. 작을수록 메모리가 덜 든다 (24000 = 약 1.1GB)")
+    ap.add_argument("--holdout", default=HOLDOUT_DIR, metavar="DIR",
+                    help="합성 홀드아웃 디렉터리. TARGET_LOOKAHEAD 를 바꾸면 라벨 시점이 "
+                         "달라지므로 홀드아웃도 그 값으로 다시 만들어야 한다 (12.45)")
     ap.add_argument("--cache", default="cache/train60",
                     help="학습 캐시 경로. 'none' 이면 실시간 합성 (12.8.2절 참조)")
     ap.add_argument("--fine-channels", type=int, default=None, metavar="N",
@@ -221,12 +224,23 @@ def main() -> int:
     print(f"[Phase 3] 2갈래 CNN — 세밀 10초@60Hz + 광역 60초@2Hz, 타깃 끝-1초")
     print("=" * 84)
 
-    hs = load_holdout(HOLDOUT_DIR)
+    hs = load_holdout(a.holdout)
     apps = hs.appliances
     prep = prepare_holdout_inputs(hs)
     # 변환이 끝나면 3.8GB 원시 memmap 은 더 필요 없다. 놓아 주어야
     # 그 페이지가 작업집합에 남지 않는다.
     hs.X = np.zeros((len(prep[0]), 1, 1), np.float32)
+    from src.model.inputs import target_index as _tgt_idx
+    want_tgt = _tgt_idx(int(hs.meta["window_cycles"]))
+    if int(hs.meta["target_index"]) != want_tgt:
+        # TARGET_LOOKAHEAD 를 바꾸면 라벨 시점이 옮겨간다. 안 막으면 조용히 틀린다.
+        raise SystemExit(
+            "홀드아웃의 타깃 시점이 현재 코드와 다릅니다: "
+            f"{hs.meta['target_index']} vs {want_tgt}  ({a.holdout})" + chr(10)
+            + "  TARGET_LOOKAHEAD 를 바꿨다면 홀드아웃도 다시 만드십시오:" + chr(10)
+            + f"  python -m src.run_build_holdout --out <새 디렉터리> "
+            + f"--window-cycles {hs.meta['window_cycles']} "
+            + f"--windows {hs.meta['n_windows']} --seed {hs.meta['seed']}")
     print(f"평가: 홀드아웃 {len(hs):,}창 (뒤 {hs.meta['holdout_frac']:.0%}) "
           f"| sha {hs.meta['content_sha256']} | 타깃 {hs.meta['target_index']}/{hs.meta['window_cycles']}")
 
