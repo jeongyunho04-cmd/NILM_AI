@@ -1,0 +1,54 @@
+{
+  "n_windows": 8000,
+  "window_cycles": 3600,
+  "target_index": 3059,
+  "seed": 20260821,
+  "time_split": "holdout",
+  "holdout_frac": 0.2,
+  "appliances": [
+    "air_conditioner",
+    "beam_projector",
+    "electiric_kettle",
+    "fan",
+    "hair_dryer",
+    "hotplate",
+    "laptop_charger",
+    "minipc",
+    "oven"
+  ],
+  "channel_layout": "0:15 harmonic Real, 15:30 harmonic Imag, 30 P, 31 Q, 32 V",
+  "recipe_counts": {
+    "high_low_mixed": 1173,
+    "high_power_resistive": 799,
+    "low_load_among_standby": 1625,
+    "random_realistic": 1242,
+    "random_uniform": 1106,
+    "resistive_overlap": 403,
+    "standby_only": 1244,
+    "unplugged_baseline": 408
+  },
+  "positive_rate": {
+    "air_conditioner": 0.03725,
+    "beam_projector": 0.1605,
+    "electiric_kettle": 0.10475,
+    "fan": 0.1745,
+    "hair_dryer": 0.088125,
+    "hotplate": 0.06,
+    "laptop_charger": 0.191,
+    "minipc": 0.197625,
+    "oven": 0.137875
+  },
+  "pool_holdout_minutes": {
+    "air_conditioner": 12.12,
+    "beam_projector": 4.26,
+    "electiric_kettle": 1.56,
+    "fan": 9.03,
+    "hair_dryer": 0.76,
+    "hotplate": 1.28,
+    "laptop_charger": 9.93,
+    "minipc": 14.38,
+    "oven": 9.96
+  },
+  "content_sha256": "92db1dfee4dabbdd",
+  "bytes": 3803232000
+}
