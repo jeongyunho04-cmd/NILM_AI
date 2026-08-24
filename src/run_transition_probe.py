@@ -13,10 +13,17 @@
 [무엇을 세는가]
 정답의 `on` 구간 경계마다 앞뒤 창의 기기별 예측 전력 중앙값 차 `Δ_j` 를 잰다.
 
-    정확 = |Δ| 가 가장 큰 기기가 실제로 바뀐 기기이고, 부호도 맞다
+    정확   |Δ| 가 가장 큰 기기가 실제로 바뀐 기기이고, 부호도 맞다
+    오귀속 가장 큰 |Δ| 가 `--min-delta` 이상인데 엉뚱한 기기다
+    미검출 가장 큰 |Δ| 가 `--min-delta` 미만이다 — 아무것도 안 움직였다
 
-12.35.2 가 손으로 낸 `test_7` 8/13 이 이 정의다. 이 파일은 그것을 재현 가능하게
-만든 것이다 — 12.40.2 ② 가 이 수를 판정 기준으로 쓴다.
+12.35.2 가 손으로 낸 `test_7` 8/13 이 (미검출 구분 없는) 이 정의다.
+12.40.2 ② 가 이 수를 판정 기준으로 쓴다.
+
+> **미검출을 갈라내는 이유.** 실측 실패 19개 중 4개는 모든 기기의 |Δ| 가 1W 도
+> 안 되는 창이다. 거기서 argmax 는 잡음에 대한 동전 던지기다. 그것을 '엉뚱한
+> 기기로 귀속했다' 로 세면 12.33~12.36 이 좁혀 온 **맞바꿈**과 뒤섞인다.
+> 둘은 원인도 처방도 다르다 — 하나는 감도, 하나는 판별이다.
 
 [⚠ 기본이 SMPS 3종인 이유]
 핫플·오븐의 정답은 **통전 단위**라 전이가 파일당 100개를 넘고, 그 전이는 사람이
@@ -113,7 +120,8 @@ def _snap(t: np.ndarray, sig: np.ndarray, t0: float, half: float, guard: float,
 
 def probe_file(d: dict, stem: str, apps_model: List[str], ev: dict,
                apps: List[str], half: float, guard: float,
-               edge_guard: float, snap: float, snap_on: str) -> dict:
+               edge_guard: float, snap: float, snap_on: str,
+               min_delta: float) -> dict:
     """전이마다 어느 기기가 얼마나 움직였는지."""
     P = d["gate"] * d["p_raw"]
     t = d["targets"] / CYCLES_PER_S
@@ -139,20 +147,33 @@ def probe_file(d: dict, stem: str, apps_model: List[str], ev: dict,
         delta = {a: float(np.median(P[post, j]) - np.median(P[pre, j]))
                  for a, j in js.items()}
         picked = max(delta, key=lambda a: abs(delta[a]))
+        if abs(delta[picked]) < min_delta:
+            verdict = "미검출"
+        elif picked == app and np.sign(delta[picked]) == sign:
+            verdict = "정확"
+        else:
+            verdict = "오귀속"
         rows.append({
             "t_s": t_lab, "t_snapped_s": t0, "snap_s": t0 - t_lab,
             "true_app": app, "sign": sign,
             "delta_w": delta,
             "picked": picked,
             "picked_delta_w": delta[picked],
-            "correct": bool(picked == app and np.sign(delta[picked]) == sign),
+            "correct": verdict == "정확",
+            "verdict": verdict,
             "obs_delta_w": float(np.median(d["p_observed"][post])
                                  - np.median(d["p_observed"][pre])),
             "obs_delta_i3_ma": float(np.median(i3[post]) - np.median(i3[pre])),
             "snapped_on": "i3" if use_i3 else "p",
         })
     n_ok = sum(r["correct"] for r in rows)
-    return {"n": len(rows), "n_correct": n_ok,
+    n_miss = sum(r["verdict"] == "미검출" for r in rows)
+    n_wrong = sum(r["verdict"] == "오귀속" for r in rows)
+    # 맞바꿈: 실제 기기와 고른 기기가 둘 다 SMPS 3종이고 서로 다르다
+    n_swap = sum(1 for r in rows if r["verdict"] == "오귀속"
+                 and r["true_app"] in SMPS_GROUP and r["picked"] in SMPS_GROUP)
+    return {"n": len(rows), "n_correct": n_ok, "n_wrong": n_wrong,
+            "n_undetected": n_miss, "n_swap": n_swap,
             "accuracy": n_ok / len(rows) if rows else float("nan"),
             "n_skipped": len(skipped), "skipped": skipped,
             "apps": present, "rows": rows}
@@ -160,19 +181,23 @@ def probe_file(d: dict, stem: str, apps_model: List[str], ev: dict,
 
 def print_file(stem: str, res: dict) -> None:
     apps = res["apps"]
-    print(f"\n  [{stem}]  {res['n_correct']}/{res['n']} 정확"
-          f"  ({', '.join(KOR.get(a, a) for a in apps)})")
-    head = (f"    {'t(s)':>8s}  {'실제':<14s}{'관측ΔW':>9s}" +
-            "".join(f"{KOR.get(a, a):>10s}" for a in apps) + "   판정")
+    skip = f", 못 잼 {res['n_skipped']}" if res["n_skipped"] else ""
+    print()
+    print(f"  [{stem}]  {res['n_correct']}/{res['n']} 정확"
+          f"  (오귀속 {res['n_wrong']} · 미검출 {res['n_undetected']}{skip})"
+          f"  {', '.join(KOR.get(a, a) for a in apps)}")
+    head = (f"    {'t(s)':>8s}{'스냅':>6s}  {'실제':<14s}{'관측ΔW':>9s}{'ΔI3mA':>8s}"
+            + "".join(f"{KOR.get(a, a):>10s}" for a in apps) + "   판정")
     print(head)
     print("    " + "-" * (len(head) - 4))
     for r in res["rows"]:
         lab = f"{KOR.get(r['true_app'], r['true_app'])} {'on' if r['sign'] > 0 else 'off'}"
-        mark = "정확" if r["correct"] else f"-> {KOR.get(r['picked'], r['picked'])}"
-        print(f"    {r['t_s']:>8.1f}{r['snap_s']:>+7.1f}  {lab:<14s}"
-              f"{r['obs_delta_w']:>9.1f}{r['obs_delta_i3_ma']:>8.0f}" +
-              "".join(f"{r['delta_w'][a]:>10.1f}" for a in apps) +
-              f"   {mark}")
+        mark = ("정확" if r["correct"] else "미검출" if r["verdict"] == "미검출"
+                else f"-> {KOR.get(r['picked'], r['picked'])}")
+        print(f"    {r['t_s']:>8.1f}{r['snap_s']:>+6.1f}  {lab:<14s}"
+              f"{r['obs_delta_w']:>9.1f}{r['obs_delta_i3_ma']:>8.0f}"
+              + "".join(f"{r['delta_w'][a]:>10.1f}" for a in apps)
+              + f"   {mark}")
 
 
 def main() -> int:
@@ -192,6 +217,8 @@ def main() -> int:
                     help="라벨 시각을 관측 계단으로 옮기는 최대 거리(초). 0=끄기")
     ap.add_argument("--snap-on", choices=("auto", "p", "i3"), default="auto",
                     help="스냅에 쓸 관측 신호. auto=SMPS 3종은 i3, 나머지는 p")
+    ap.add_argument("--min-delta", type=float, default=5.0, metavar="W",
+                    help="가장 큰 |Δ| 가 이 아래면 '미검출' 로 센다. 잡음 argmax 제외")
     ap.add_argument("--out", default="results/transition_probe.json")
     a = ap.parse_args()
 
@@ -215,7 +242,7 @@ def main() -> int:
     print("=" * 84)
 
     out: Dict[str, dict] = {}
-    tot = ok = 0
+    tot = ok = wrong = miss = swap = 0
     for stem in stems:
         d = forward_file(model, stem, dev, stride=a.stride)
         if model_s is not None:
@@ -224,14 +251,19 @@ def main() -> int:
             for k in ("gate", "p_raw", "standby"):
                 d[k][:, six] = ds[k][:, six]
         res = probe_file(d, stem, apps_model, ev, a.apps, a.half, a.guard,
-                         a.edge_guard, a.snap, a.snap_on)
+                         a.edge_guard, a.snap, a.snap_on, a.min_delta)
         out[stem] = res
         print_file(stem, res)
-        tot += res["n"]; ok += res["n_correct"]
+        tot += res["n"]; ok += res["n_correct"]; wrong += res["n_wrong"]
+        miss += res["n_undetected"]; swap += res["n_swap"]
 
-    print(f"\n  합계 {ok}/{tot} = {ok / tot if tot else float('nan'):.3f}")
+    print()
+    print(f"  합계 {ok}/{tot} = {ok / tot if tot else float('nan'):.3f} 정확"
+          f"  |  오귀속 {wrong} (그중 SMPS 맞바꿈 {swap})  |  미검출 {miss}")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(a.out).write_text(json.dumps({tag: {"total": {"n": tot, "n_correct": ok}, **out}},
+    Path(a.out).write_text(json.dumps({tag: {"total": {
+                               "n": tot, "n_correct": ok, "n_wrong": wrong,
+                               "n_undetected": miss, "n_swap": swap}, **out}},
                                       ensure_ascii=False, indent=2, default=float),
                            encoding="utf-8")
     print(f"저장: {a.out}")
