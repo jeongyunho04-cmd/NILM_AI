@@ -114,6 +114,23 @@ def forward_file(model, stem: str, dev: str, stride: int = 30) -> dict:
             "obs_harm": np.concatenate(OH)}
 
 
+def merge_smps(d: dict, d_smps: dict, apps: List[str]) -> dict:
+    """SMPS 3종만 두 번째 체크포인트의 값으로 바꾼다 (`run_live --ckpt-smps` 와 동일).
+
+    **운영에서 실제로 도는 것은 두 체크포인트의 조합이다** (12.31.5). 1단계 지표로
+    문제를 고르면 안 된다는 것이 12.47·12.50·12.51.3 의 결론이므로, 채점도 운영
+    조합으로 해야 한다. 12.52 의 네 조합 표를 만든 스크립트가 임시 폴더에 있다가
+    사라져 재현이 끊겼었다 — 그래서 여기에 넣는다.
+    """
+    from src.run_live import SMPS_GROUP
+    six = [apps.index(x) for x in SMPS_GROUP if x in apps]
+    out = dict(d)
+    for k in ("gate", "p_raw", "standby"):
+        out[k] = d[k].copy()
+        out[k][:, six] = d_smps[k][:, six]
+    return out
+
+
 def gated(d: dict, hard: bool) -> np.ndarray:
     g = (d["gate"] > 0.5).astype(np.float32) if hard else d["gate"]
     return g * d["p_raw"]
@@ -198,6 +215,9 @@ def oven_on_breakdown(d: dict, apps: List[str], ev: dict) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description="게이트 진단 — 소프트 vs 하드 (12.9.14절)")
     ap.add_argument("--ckpt", nargs="+", default=["results/cnn_v15.pt", "results/hedge_0.2.pt"])
+    ap.add_argument("--ckpt-smps", default=None, metavar="PT",
+                    help="SMPS 3종(프로젝터/충전기/미니PC)만 이 체크포인트로 채점한다. "
+                         "**운영 조합으로 재는 방법이다** — 12.47/12.51.3 참조")
     ap.add_argument("--stride", type=int, default=30)
     ap.add_argument("--out", default="results/gate_check.json")
     a = ap.parse_args()
@@ -207,16 +227,30 @@ def main() -> int:
     stems = [s for s in sorted(ev) if not is_sealed(s)]
     payload: Dict[str, dict] = {}
 
+    model_smps = None
+    if a.ckpt_smps:
+        model_smps, apps_smps, ck_smps = load_model(a.ckpt_smps, dev)
+
     for ckpt in a.ckpt:
         model, apps, ck = load_model(ckpt, dev)
         tag = Path(ckpt).stem
+        if model_smps is not None:
+            if list(apps_smps) != list(apps):
+                raise SystemExit("두 체크포인트의 가전 목록이 다릅니다")
+            tag = f"{tag}+{Path(a.ckpt_smps).stem}"
         print("=" * 88)
         print(f"[{tag}] stage {ck.get('stage', 1)} | {', '.join(stems)}")
+        if model_smps is not None:
+            from src.run_live import SMPS_GROUP
+            print(f"  SMPS 3종은 {a.ckpt_smps} (stage {ck_smps.get('stage', 1)}) "
+                  f"에서 가져옵니다 -> {', '.join(SMPS_GROUP)}")
         print("=" * 88)
 
         per_file, rows = {}, {"soft": [], "hard": []}
         for stem in stems:
             d = forward_file(model, stem, dev, stride=a.stride)
+            if model_smps is not None:
+                d = merge_smps(d, forward_file(model_smps, stem, dev, stride=a.stride), apps)
             s_soft = score_one(d, gated(d, False), stem, apps, ev)
             s_hard = score_one(d, gated(d, True), stem, apps, ev)
             per_file[stem] = {"soft": s_soft, "hard": s_hard, "hedge": hedge_report(d, apps)}
