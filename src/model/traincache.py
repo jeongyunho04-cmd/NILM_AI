@@ -62,7 +62,7 @@ _SEED_BASE = 0
 
 def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           exclude_files_json: str = "", dither_amp: float = 0.0,
-          dither_phase_deg: float = 0.0) -> None:
+          dither_phase_deg: float = 0.0, recipe_mix_json: str = "") -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.augmentor import DataAugmentor
     from src.synthesis.dataset import NILMBatchGenerator
@@ -74,6 +74,8 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
     # 녹화 단위 홀드아웃 (설계 문서 12.18절). JSON 문자열로 넘기는 이유는
     # `spawn` 워커에 dict 를 그대로 보내면 피클 경계에서 다루기 번거로워서다.
     excl = json.loads(exclude_files_json) if exclude_files_json else None
+    # 레시피 믹스 (12.67절). 빈 문자열이면 `DEFAULT_RECIPE_MIX` 다.
+    mix = json.loads(recipe_mix_json) if recipe_mix_json else None
     pool = SegmentPool(npz_dir=npz_dir, time_split=time_split,
                        exclude_activation_files=excl)
     # 차수별 지터 (12.62절). 0 이면 `DataAugmentor` 기본과 같다.
@@ -83,7 +85,7 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
         segment_pool=pool, window_size_cycles=window_cycles,
         synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
                                     augmentor=aug),
-        compute_gt_harmonics=False)
+        recipe_mix=mix, compute_gt_harmonics=False)
 
 
 def _chunk(task: Tuple[int, int]) -> Dict[str, np.ndarray]:
@@ -130,12 +132,14 @@ def build_cache(
     exclude_activation_files: Optional[Dict[str, List[str]]] = None,
     dither_amp: float = 0.0,
     dither_phase_deg: float = 0.0,
+    recipe_mix: Optional[Dict[str, float]] = None,
 ) -> dict:
     """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다."""
     import multiprocessing as mp
 
     from src.synthesis.segment_pool import SegmentPool
     excl_json = json.dumps(exclude_activation_files) if exclude_activation_files else ""
+    mix_json = json.dumps(recipe_mix) if recipe_mix else ""
     apps = SegmentPool(npz_dir=npz_dir, time_split=time_split,
                        exclude_activation_files=exclude_activation_files).get_appliance_types()
     k = len(apps)
@@ -165,7 +169,7 @@ def build_cache(
     ctx = mp.get_context("spawn")
     with ctx.Pool(n_workers, initializer=_init,
                   initargs=(npz_dir, window_cycles, time_split, seed, excl_json,
-                            dither_amp, dither_phase_deg)) as pool:
+                            dither_amp, dither_phase_deg, mix_json)) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -184,6 +188,7 @@ def build_cache(
             "time_split": time_split, "seed": seed, "n_wide": n_wide,
             "exclude_activation_files": exclude_activation_files,
             "dither_amp": float(dither_amp), "dither_phase_deg": float(dither_phase_deg),
+            "recipe_mix": recipe_mix,
             "fine_shape": [FINE_CHANNELS, FINE_CYCLES], "bytes": int(total),
             "build_seconds": round(time.time() - t0, 1),
             "positive_rate": {a: float((mm["y_on"][:pos, j] > 0).mean())
