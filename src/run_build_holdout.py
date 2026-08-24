@@ -51,6 +51,18 @@ def inspect(d: str) -> int:
     return 0
 
 
+def _parse_mix(spec):
+    """프리셋 이름 또는 JSON -> dict. 합이 1 이 아니면 거부한다."""
+    if not spec:
+        return None
+    import json as _json
+    from src.run_recipe_mix_probe import PRESETS
+    mix = PRESETS[spec] if spec in PRESETS else _json.loads(spec)
+    if abs(sum(mix.values()) - 1.0) > 1e-6:
+        raise SystemExit(f"레시피 믹스 합이 1 이 아닙니다: {sum(mix.values()):.4f}")
+    return mix
+
+
 def _parse_scramble(items):
     """["beam_projector:0.64:1.42"] -> {"beam_projector": (0.64, 1.42)}"""
     if not items:
@@ -75,6 +87,10 @@ def main() -> int:
     ap.add_argument("--ablate-pedestal", nargs="*", default=None, metavar="APP",
                     help="이 가전들의 활성화 끝 기착 구간을 잘라낸 반사실 평가 셋을 만든다 "
                          "(12.63절). 예: --ablate-pedestal beam_projector")
+    ap.add_argument("--recipe-mix", default="", metavar="NAME|JSON",
+                    help="레시피 믹스. 프리셋 이름(half/full) 또는 JSON (12.67절). "
+                         "학습 믹스를 바꿨으면 평가 셋도 같은 믹스로 만들어야 "
+                         "합성 F1 이 분포 어긋남과 교락되지 않는다")
     ap.add_argument("--level-scramble", nargs="*", default=None, metavar="APP:LO:HI",
                     help="그 가전의 전력 배율을 균등분포 [LO,HI] 로 흔든 반사실 평가 셋 "
                          "(12.64절). 예: --level-scramble beam_projector:0.64:1.42")
@@ -92,7 +108,8 @@ def main() -> int:
     build_holdout(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                   holdout_frac=a.holdout_frac, seed=a.seed,
                   ablate_pedestal_apps=a.ablate_pedestal,
-                  level_scramble=_parse_scramble(a.level_scramble))
+                  level_scramble=_parse_scramble(a.level_scramble),
+                  recipe_mix=_parse_mix(a.recipe_mix))
     return inspect(a.out)
 
 

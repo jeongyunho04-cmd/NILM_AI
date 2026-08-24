@@ -143,6 +143,7 @@ def build_holdout(
         "target_index": tgt, "seed": seed,
         "time_split": "holdout", "holdout_frac": holdout_frac,
         "ablate_pedestal_apps": list(ablate_pedestal_apps or []),
+        "recipe_mix": recipe_mix,
         "level_scramble": {k: list(v) for k, v in (level_scramble or {}).items()},
         "appliances": apps,
         "channel_layout": "0:15 harmonic Real, 15:30 harmonic Imag, 30 P, 31 Q, 32 V",
