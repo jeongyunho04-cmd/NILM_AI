@@ -26,7 +26,7 @@
 재학습 없이 끝난다.
 """
 from pathlib import Path
-from typing import Dict, List
+from typing import Optional, Dict, List
 import argparse
 import json
 import sys
@@ -90,14 +90,22 @@ def load_model(ckpt_path: str, dev: str):
     return model, apps, ck
 
 
+#: 짝수 차수(2,4..14)의 Re/Im 채널과 |I2|/|I1|. 12.72 가 계측 인공물로 확정했다.
+EVEN_CHANNELS = [1, 3, 5, 7, 9, 11, 13] + [16, 18, 20, 22, 24, 26, 28] + [35]
+
+
 @torch.no_grad()
-def forward_file(model, stem: str, dev: str, stride: int = 30) -> dict:
+def forward_file(model, stem: str, dev: str, stride: int = 30,
+                 zero_ch: Optional[List[int]] = None) -> dict:
     """파일 하나를 촘촘히 훑어 게이트와 원시 전력을 그대로 돌려준다."""
     rw = dense_targets(stem, stride=stride)
     G, R, SB, PN, POBS, OH = [], [], [], [], [], []
     for i in range(0, len(rw), 512):
         idx = np.arange(i, min(i + 512, len(rw)))
         f, w, pobs, oh, pn = rw.batch(idx)
+        if zero_ch:
+            f = f.copy()
+            f[:, [c for c in zero_ch if c < f.shape[1]]] = 0.0
         ft = torch.from_numpy(np.ascontiguousarray(f)).to(dev)
         wt = torch.from_numpy(np.ascontiguousarray(w)).to(dev)
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):

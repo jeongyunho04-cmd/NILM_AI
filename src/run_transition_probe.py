@@ -70,7 +70,7 @@ import torch
 
 from src.evaluation.real_events import load_events
 from src.evaluation.sealing import is_sealed
-from src.run_gate_check import forward_file, load_model
+from src.run_gate_check import EVEN_CHANNELS, forward_file, load_model
 from src.run_live import KOR, SMPS_GROUP
 
 CYCLES_PER_S = 60.0
@@ -205,6 +205,9 @@ def main() -> int:
     ap.add_argument("--ckpt", default="results/adapt_ph1.pt")
     ap.add_argument("--ckpt-smps", default=None, metavar="PT",
                     help="SMPS 3종만 이 체크포인트로 (운영 조합)")
+    ap.add_argument("--zero-even", action="store_true",
+                    help="SMPS 체크포인트 입력의 짝수차 채널을 0 으로 (12.74절). "
+                         "짝수차는 계측 인공물이다 (12.72)")
     ap.add_argument("--stems", nargs="*", default=None,
                     help="기본: 사람 기록 파일 전부")
     ap.add_argument("--apps", nargs="*", default=list(SMPS_GROUP))
@@ -246,7 +249,8 @@ def main() -> int:
     for stem in stems:
         d = forward_file(model, stem, dev, stride=a.stride)
         if model_s is not None:
-            ds = forward_file(model_s, stem, dev, stride=a.stride)
+            ds = forward_file(model_s, stem, dev, stride=a.stride,
+                              zero_ch=EVEN_CHANNELS if a.zero_even else None)
             six = [apps_model.index(x) for x in SMPS_GROUP if x in apps_model]
             for k in ("gate", "p_raw", "standby"):
                 d[k][:, six] = ds[k][:, six]
