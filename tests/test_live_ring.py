@@ -260,3 +260,20 @@ def test_level_scramble_widens_the_named_appliance():
         lo, hi = np.percentile(v, [10, 90])
         spans.append(hi - lo)
     assert spans[1] > 2.5 * spans[0], f"폭 {spans[0]:.1f} -> {spans[1]:.1f}"
+
+
+def test_pair_accuracy_isolates_discrimination_not_detection():
+    """쌍 정확도는 둘 중 하나만 켜진 창만 보고, 더 큰 쪽을 고른다 (12.65절)."""
+    import numpy as np
+    from src.run_pair_ablation import pair_accuracy
+
+    apps = ["beam_projector", "laptop_charger", "minipc"]
+    # 창 0: 프로젝터만 (맞음) / 1: 충전기만 (맞음) / 2: 프로젝터만 (틀림)
+    # 창 3: 둘 다 ON -> 표본에서 빠져야 한다 / 4: 둘 다 OFF -> 빠져야 한다
+    on = np.array([[1,0,0],[0,1,0],[1,0,0],[1,1,0],[0,0,1]], np.int8)
+    pred = np.array([[40.,1.,0.],[1.,40.,0.],[1.,40.,0.],[40.,1.,0.],[0.,0.,9.]], np.float32)
+    r = pair_accuracy(pred, on, apps)
+    assert r["n"] == 3, r
+    assert abs(r["acc"] - 2/3) < 1e-9, r
+    assert abs(r["acc_proj"] - 0.5) < 1e-9, r
+    assert abs(r["acc_chg"] - 1.0) < 1e-9, r
