@@ -41,7 +41,9 @@ import torch
 
 from src.evaluation.real_events import load_events, score_absent, score_on_off
 from src.evaluation.sealing import is_sealed
-from src.model.inputs import LEGACY_FINE_CHANNELS
+from src.model.inputs import (FINE_CYCLES, LEGACY_FINE_CHANNELS,
+                              LEGACY_FINE_CYCLES, LEGACY_TARGET_LOOKAHEAD,
+                              TARGET_LOOKAHEAD)
 from src.model.net import NILMNet, appliance_state_counts
 from src.model.realdata import dense_targets, upsample_to_cycles
 from src.run_baseline import S_I
@@ -50,8 +52,31 @@ from src.run_baseline import S_I
 HEDGE_LO, HEDGE_HI = 0.05, 0.95
 
 
+def assert_target_config(ck: dict, ckpt_path: str) -> None:
+    """체크포인트가 학습된 타깃 시점 구성이 현재 코드와 같은가 (12.45.3).
+
+    **세밀 채널 수와 성격이 다르다.** 채널은 뒤에 붙는 규약이라 슬라이스로 맞출 수
+    있지만, 타깃 시점이 어긋나면 입력이 가리키는 순간과 체크포인트가 배운 순간이
+    달라진다. 맞출 방법이 없고 조용히 틀린다 — 그래서 막는다.
+
+    2026-08-24: 이 검사가 없어서 룩어헤드를 9초로 올린 채로 6초 체크포인트를
+    채점할 뻔했다. 같은 부류의 결함이 세 번째다 (11.2절, 12.45.3).
+    """
+    got = (int(ck.get("target_lookahead", LEGACY_TARGET_LOOKAHEAD)),
+           int(ck.get("fine_cycles", LEGACY_FINE_CYCLES)))
+    want = (TARGET_LOOKAHEAD, FINE_CYCLES)
+    if got != want:
+        raise SystemExit(
+            f"체크포인트의 타깃 시점 구성이 현재 코드와 다릅니다: {ckpt_path}" + chr(10)
+            + f"  체크포인트  TARGET_LOOKAHEAD={got[0]} FINE_CYCLES={got[1]}" + chr(10)
+            + f"  현재 코드    TARGET_LOOKAHEAD={want[0]} FINE_CYCLES={want[1]}" + chr(10)
+            + "  src/model/inputs.py 를 체크포인트 값으로 맞춘 뒤 다시 실행하십시오."
+            + chr(10) + "  (그 값으로 만든 캐시·홀드아웃도 함께 써야 합니다)")
+
+
 def load_model(ckpt_path: str, dev: str):
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    assert_target_config(ck, ckpt_path)
     apps = ck["appliances"]
     model = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0),
                     wide_summary=ck.get("wide_summary", False),

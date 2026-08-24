@@ -42,7 +42,8 @@ from src.evaluation import load_holdout, resistive_confusion, score_appliances, 
 from src.evaluation.real_events import load_events, score_absent, score_events, score_on_off
 from src.evaluation.sealing import is_sealed
 from src.model.losses import LossWeights, NILMLoss, build_state_scales
-from src.model.inputs import LEGACY_FINE_CHANNELS
+from src.model.inputs import FINE_CYCLES, TARGET_LOOKAHEAD, LEGACY_FINE_CHANNELS
+from src.run_gate_check import assert_target_config
 from src.model.net import (
     NILMNet, appliance_state_counts, harmonic_scales, harmonic_signatures,
     noise_signature, standby_signatures,
@@ -190,6 +191,7 @@ def main() -> int:
     del pool
 
     ck = torch.load(a.init, map_location="cpu", weights_only=False)
+    assert_target_config(ck, a.init)   # 12.45.3
     model = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0),
                     wide_summary=ck.get("wide_summary", False),
                     periodicity=ck.get("periodicity", False),
@@ -286,6 +288,7 @@ def main() -> int:
                 "periodicity": ck.get("periodicity", False),
                 "fine_dropout": ck.get("fine_dropout", 0.0),
                 "fine_channels": model.fine_channels,
+                "target_lookahead": TARGET_LOOKAHEAD, "fine_cycles": FINE_CYCLES,
                 "select": "final", "stage": 2, "init": a.init},
                out / f"{a.tag}.pt")
 

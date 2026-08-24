@@ -95,11 +95,14 @@ def predict_cnn(tag: str, hs, dev: str, prep) -> tuple:
     """`prep` 은 홀드아웃 입력 변환 결과다. 모델마다 다시 만들면 3.8GB memmap 을
     매번 훑어 24초씩 낭비한다 — 한 번 만들어 모든 체크포인트가 공유한다."""
     import torch
+
     from src.model.inputs import LEGACY_FINE_CHANNELS
+    from src.run_gate_check import assert_target_config
     from src.model.net import NILMNet, appliance_state_counts
     from src.run_train_cnn import evaluate
 
     ck = torch.load(f"results/{tag}.pt", map_location="cpu", weights_only=False)
+    assert_target_config(ck, f"results/{tag}.pt")   # 12.45.3
     apps = ck.get("appliances", hs.appliances)
     if apps != hs.appliances:
         raise RuntimeError(f"가전 순서가 다릅니다: {apps} vs {hs.appliances}")

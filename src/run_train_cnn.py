@@ -38,7 +38,7 @@ from src.evaluation import (
     format_table, load_holdout, resistive_confusion,
     score_appliances, summarize, total_power_residual,
 )
-from src.model.inputs import build_inputs
+from src.model.inputs import FINE_CYCLES, TARGET_LOOKAHEAD, build_inputs
 from src.synthesis.dataset import chunk_seed
 from src.model.traincache import CachedWindows
 from src.model.losses import LossWeights, NILMLoss, build_state_scales
@@ -320,6 +320,10 @@ def main() -> int:
                     # 세밀 채널 수를 반드시 남긴다. 12.34 에서 38 -> 44 로
                     # 늘었고, 이 키가 없는 체크포인트는 38 로 간주된다.
                     "fine_channels": model.fine_channels,
+                    # 타깃 시점 구성 (12.45). 채널 수와 달리 슬라이스로 못 맞춘다 —
+                    # 어긋나면 입력과 라벨이 다른 순간을 가리켜 조용히 틀린다.
+                    "target_lookahead": TARGET_LOOKAHEAD,
+                    "fine_cycles": FINE_CYCLES,
                     "select": a.select}, path)
 
     hist, best = [], None

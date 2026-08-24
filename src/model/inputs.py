@@ -22,10 +22,13 @@
 from typing import Tuple
 import numpy as np
 
-FINE_CYCLES = 780            # 세밀 갈래 길이 (13초 @ 60Hz). 12.45 에서 600->780
+FINE_CYCLES = 600            # 세밀 갈래 길이 (10초 @ 60Hz)
 WIDE_HZ = 2.0                # 광역 갈래 해상도
 WIDE_BLOCK = int(60 / WIDE_HZ)   # 30 사이클 = 0.5초
-TARGET_LOOKAHEAD = 540       # 창 끝에서 9초 안쪽 (12.45. 이전 360=6초)
+TARGET_LOOKAHEAD = 360       # 창 끝에서 6초 안쪽 (12.9.13절)
+# 12.45 의 9초 구성으로 되돌리려면 위 둘을 540 / 780 으로 바꾸고
+#   캐시 cache/train60_la9, 홀드아웃 processed_data/holdout60_la9 를 쓴다.
+#   체크포인트 cnn_la9 는 그 값이 아니면 load_model 이 거부한다.
 
 N_HARM = 15
 # 48 이다. 과도 3채널(48~50)은 12.37 에서 만들고 **반증됐다** - 모델이 실제로
@@ -42,6 +45,12 @@ PHASE_GATE_A = 0.01
 # 12.34 이전 체크포인트가 학습된 세밀 채널 수. 그때는 FINE_CHANNELS 가 38 이었다.
 # 체크포인트에 `fine_channels` 키가 없으면 이 값으로 본다.
 LEGACY_FINE_CHANNELS = 38
+
+# 12.45 이전 체크포인트가 학습된 타깃 시점 구성. 그 키가 없는 체크포인트는
+# 이 값으로 학습된 것으로 본다. **채널 수와 달리 이것은 슬라이스로 못 맞춘다** —
+# 타깃 시점이 어긋나면 입력과 라벨이 다른 순간을 가리키므로 조용히 틀린다.
+LEGACY_TARGET_LOOKAHEAD = 360
+LEGACY_FINE_CYCLES = 600
 
 # 추세 제거 전력 채널의 스케일. P 자체(POWER_SCALE=100)보다 작게 잡아야
 # 수백 W 리플이 해상된다.
