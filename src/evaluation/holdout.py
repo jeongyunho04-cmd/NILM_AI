@@ -27,7 +27,7 @@
 """
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Sequence, Dict, List, Optional, Union
 import hashlib
 import json
 import numpy as np
@@ -78,13 +78,15 @@ def build_holdout(
     holdout_frac: float = 0.2,
     recipe_mix: Optional[Dict[str, float]] = None,
     progress_every: int = 1000,
+    ablate_pedestal_apps: Optional[Sequence[str]] = None,
 ) -> dict:
     """홀드아웃 구간에서만 평가 셋을 만들어 저장한다."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     np.random.seed(seed)
 
-    pool = SegmentPool(npz_dir=npz_dir, time_split="holdout", holdout_frac=holdout_frac)
+    pool = SegmentPool(npz_dir=npz_dir, time_split="holdout", holdout_frac=holdout_frac,
+                       ablate_pedestal_apps=ablate_pedestal_apps)
     syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False)
     gen = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
@@ -137,6 +139,7 @@ def build_holdout(
         "n_windows": n_windows, "window_cycles": window_cycles,
         "target_index": tgt, "seed": seed,
         "time_split": "holdout", "holdout_frac": holdout_frac,
+        "ablate_pedestal_apps": list(ablate_pedestal_apps or []),
         "appliances": apps,
         "channel_layout": "0:15 harmonic Real, 15:30 harmonic Imag, 30 P, 31 Q, 32 V",
         "recipe_counts": {r: rec.count(r) for r in sorted(set(rec))},

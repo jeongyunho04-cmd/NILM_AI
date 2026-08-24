@@ -24,6 +24,7 @@ NILM 모델이 가장 자주 저지르는 오답이 "여러 기기의 대기전�
 그 결과 선풍기/전기포트처럼 기계식 스위치를 쓰는 기기는 대기전력 0W 로,
 에어컨처럼 대기 회로가 있는 기기는 약 4.7W 로 물리적으로 맞게 잡힌다.
 """
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
@@ -134,6 +135,7 @@ class SegmentPool:
         holdout_frac: float = 0.2,
         exclude_activation_files: Optional[Dict[str, Sequence[str]]] = None,
         only_activation_files: Optional[Dict[str, Sequence[str]]] = None,
+        ablate_pedestal_apps: Optional[Sequence[str]] = None,
     ):
         """
         Args:
@@ -193,6 +195,7 @@ class SegmentPool:
 
         self.load_all_npz_files()
         self._filter_activation_files(exclude_activation_files, only_activation_files)
+        self._ablate_pedestal(ablate_pedestal_apps)
 
     def _filter_activation_files(
         self,
@@ -216,6 +219,63 @@ class SegmentPool:
                     f"'{app}' 의 활성화가 전부 걸러졌습니다. "
                     f"exclude={(exclude or {}).get(app)} only={(only or {}).get(app)}"
                 )
+
+    # ── 기착(pedestal) 절제 ────────────────────────────────────────────────
+
+    #: 기착으로 인정할 최대 전력 (정상 구간 대비 비율). 프로젝터 실측이 8.0~8.7% 다.
+    PEDESTAL_MAX_FRAC = 0.25
+    #: 기착으로 인정할 최소 길이 (사이클). 0.5초. 이보다 짧은 꼬리는 스위칭
+    #: 마지막 샘플이지 기착이 아니다 — 충전기·미니PC 의 꼬리가 전부 1샘플(0.02초)이다.
+    PEDESTAL_MIN_CYCLES = 30
+
+    def _ablate_pedestal(self, apps: Optional[Sequence[str]]) -> None:
+        """활성화 끝의 저전력 기착 구간을 잘라낸다 (12.63절).
+
+        [무엇을 재고 만든 규칙인가]
+        프로젝터 활성화 8개 중 6개가 램프 소등 뒤 **3.88~3.90초 동안 3.8~4.15W**
+        (정상 47W 의 8.0~8.7%) 를 유지한다. 팬 기착이다. `is_on` 라벨이 그 구간
+        내내 1 이므로 세그먼트 풀의 활성화에 그대로 들어간다 (12.60.1).
+        충전기는 같은 규칙으로 재면 꼬리가 **0.02초(샘플 1개)** 뿐이다 — 기착이 없다.
+        그래서 "기착의 유무" 가 두 기기를 가른다 (12.59.2 의 30배·겹침 0).
+
+        [왜 0 으로 덮지 않고 잘라내는가]
+        기착 구간을 0 으로 덮으면 `is_on=1` 인데 전력이 0 인 창이 생겨 라벨이
+        모순된다. **잘라내면 그 활성화는 충전기처럼 계단 하나로 끝난다** — 그것이
+        검증하려는 반사실이다.
+        """
+        if not apps:
+            return
+        self.ablated_pedestal_apps = list(apps)
+        for app in apps:
+            acts = self.appliance_activations.get(app, [])
+            if not acts:
+                raise ValueError(f"'{app}' 의 활성화가 없습니다 — 기착 절제 대상이 잘못됐습니다")
+            cut = []
+            for a in acts:
+                tp = np.asarray(a.target_power_w, np.float64)
+                if len(tp) == 0 or tp.max() <= 0:
+                    cut.append(a); continue
+                pk = np.median(tp[tp > 0.5 * tp.max()])
+                thr = self.PEDESTAL_MAX_FRAC * pk
+                j = len(tp)
+                while j > 0 and 0.0 < tp[j - 1] < thr:
+                    j -= 1
+                n_tail = len(tp) - j
+                if n_tail < self.PEDESTAL_MIN_CYCLES or j < self.PEDESTAL_MIN_CYCLES:
+                    cut.append(a); continue
+                cut.append(dataclasses.replace(
+                    a,
+                    duration_cycles=int(j),
+                    duration_s=round(j / 60.0, 2),
+                    net_harmonics_ri=a.net_harmonics_ri[:j],
+                    net_harmonics_complex=a.net_harmonics_complex[:j],
+                    net_power_features=a.net_power_features[:j],
+                    is_on=a.is_on[:j],
+                    state_id=a.state_id[:j],
+                    target_power_w=a.target_power_w[:j],
+                    inrush_cycles=min(a.inrush_cycles, max(1, j // 3)),
+                ))
+            self.appliance_activations[app] = cut
 
     # ── 적재 ────────────────────────────────────────────────────────────────
     def load_all_npz_files(self):

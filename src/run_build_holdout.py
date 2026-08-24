@@ -59,6 +59,9 @@ def main() -> int:
     ap.add_argument("--holdout-frac", type=float, default=0.2)
     ap.add_argument("--seed", type=int, default=DEFAULT_SEED)
     ap.add_argument("--inspect", action="store_true")
+    ap.add_argument("--ablate-pedestal", nargs="*", default=None, metavar="APP",
+                    help="이 가전들의 활성화 끝 기착 구간을 잘라낸 반사실 평가 셋을 만든다 "
+                         "(12.63절). 예: --ablate-pedestal beam_projector")
     a = ap.parse_args()
 
     if a.inspect:
@@ -71,7 +74,8 @@ def main() -> int:
     print("[NILM AI] 고정 합성 홀드아웃 평가 셋 생성")
     print("=" * 74)
     build_holdout(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
-                  holdout_frac=a.holdout_frac, seed=a.seed)
+                  holdout_frac=a.holdout_frac, seed=a.seed,
+                  ablate_pedestal_apps=a.ablate_pedestal)
     return inspect(a.out)
 
 

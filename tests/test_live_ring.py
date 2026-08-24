@@ -168,3 +168,57 @@ def test_rows_held_during_reset_detection_are_replayed_not_lost():
     assert r.k_head == 4
     np.testing.assert_allclose(r.window()[0][-5:], np.arange(5, dtype=np.float32))
     assert r.stats()["n_stale"] == 0       # 되살렸으므로 버린 것으로 세지 않는다
+
+
+# ── 12.63 기착 절제 ────────────────────────────────────────────────────────
+
+def test_pedestal_ablation_only_touches_named_appliance():
+    """기착 절제가 지목한 가전만 줄이고 나머지는 바이트 그대로여야 한다."""
+    import numpy as np
+    from src.synthesis.segment_pool import SegmentPool
+
+    base = SegmentPool(npz_dir="processed_data/npz", time_split="holdout", holdout_frac=0.2)
+    abl = SegmentPool(npz_dir="processed_data/npz", time_split="holdout", holdout_frac=0.2,
+                      ablate_pedestal_apps=["beam_projector"])
+    for app in base.appliance_activations:
+        b = base.appliance_activations[app]
+        c = abl.appliance_activations[app]
+        assert len(b) == len(c), app
+        if app == "beam_projector":
+            continue
+        for x, y in zip(b, c):
+            assert np.array_equal(x.target_power_w, y.target_power_w), app
+
+
+def test_pedestal_ablation_removes_the_low_tail():
+    """프로젝터 활성화의 끝이 저전력 꼬리가 아니라 정상 구간이 돼야 한다."""
+    import numpy as np
+    from src.synthesis.segment_pool import SegmentPool
+
+    abl = SegmentPool(npz_dir="processed_data/npz", time_split="holdout", holdout_frac=0.2,
+                      ablate_pedestal_apps=["beam_projector"])
+    for a in abl.appliance_activations["beam_projector"]:
+        tp = np.asarray(a.target_power_w, np.float64)
+        pk = np.median(tp[tp > 0.5 * tp.max()])
+        # 끝값이 정상의 25% 미만인 꼬리가 0.5초 이상 남아 있으면 안 된다
+        j = len(tp)
+        while j > 0 and 0.0 < tp[j - 1] < 0.25 * pk:
+            j -= 1
+        assert len(tp) - j < 30, f"{a.source_file}: 꼬리 {(len(tp)-j)/60:.2f}s 남음"
+
+
+def test_pedestal_ablation_keeps_arrays_consistent():
+    """잘린 뒤에도 모든 배열 길이와 duration_cycles 가 맞아야 한다."""
+    from src.synthesis.segment_pool import SegmentPool
+
+    abl = SegmentPool(npz_dir="processed_data/npz", time_split="holdout", holdout_frac=0.2,
+                      ablate_pedestal_apps=["beam_projector"])
+    for a in abl.appliance_activations["beam_projector"]:
+        n = a.duration_cycles
+        assert len(a.target_power_w) == n
+        assert len(a.is_on) == n
+        assert len(a.state_id) == n
+        assert len(a.net_power_features) == n
+        assert len(a.net_harmonics_complex) == n
+        assert len(a.net_harmonics_ri) == n
+        assert a.inrush_cycles <= n
