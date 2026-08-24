@@ -765,6 +765,8 @@ class LoadSynthesizer:
         target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
         min_heat_w: float = 300.0,
         max_tries: int = 20,
+        pair: Optional[Sequence[str]] = None,
+        exclude_active: Optional[Sequence[str]] = None,
     ) -> SyntheticLoadSample:
         """저항 발열 부하 **2대가 타깃 시점에 동시 통전**하는 윈도우.
 
@@ -794,12 +796,29 @@ class LoadSynthesizer:
         # 첫 판(2026-08-22, cnn_v13)이 그 버그로 실패했다: 포트 양성률이 10.2 ->
         # 14.5% 로 뛰고 오븐은 10.2 -> 11.7% 에 그쳐, 실측 포트 환각이 8.0 -> 13.6%
         # 로 **늘었다**. 사전확률을 올려 놓고 "환각이 줄었나" 를 물은 셈이었다.
-        pair = list(np.random.choice(resistive, 2, replace=False))
+        # `pair` 를 주면 그것을 쓴다. 실측이 던지는 구성(오븐+핫플)을 겨냥할 때
+        # 필요하다 - 무작위로 뽑으면 6쌍 중 1/6 만 그 조합이라 레시피 5% 중
+        # 0.83% 밖에 안 된다 (12.38 측정: 학습 전체의 1.001%).
+        if pair is None:
+            pair = list(np.random.choice(resistive, 2, replace=False))
+        else:
+            pair = [a for a in pair if a in self.known_appliances]
+            if len(pair) < 2:
+                pair = list(np.random.choice(resistive, 2, replace=False))
+        # `exclude_active` 는 그 창에서 **활성 후보에서 뺀다.** 강제로 켜는 쌍이
+        # 아닌 기기가 곁다리로 켜지는 것을 막는다. 실측 6파일 전부 전기포트가
+        # 없으므로, 오븐+핫플 창에서 포트를 빼야 "1600W 저항 덩어리는 포트가
+        # 아니다" 를 배운다. 포트 사전확률도 함께 내려간다.
+        cand = None
+        if exclude_active:
+            drop = set(exclude_active) - set(pair)
+            cand = [a for a in self.known_appliances if a not in drop]
         sample = None
         for _ in range(max_tries):
             sample = self.synthesize_random_window(
                 window_size_cycles=window_size_cycles,
                 force_active=pair,
+                candidate_appliances=cand,
                 force_plugged_all=True,
                 compute_gt_harmonics=compute_gt_harmonics,
                 target_biased_placement=True,

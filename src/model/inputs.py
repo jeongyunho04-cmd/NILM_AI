@@ -28,7 +28,10 @@ WIDE_BLOCK = int(60 / WIDE_HZ)   # 30 사이클 = 0.5초
 TARGET_LOOKAHEAD = 360       # 창 끝에서 6초 안쪽 (12.9.12절)
 
 N_HARM = 15
-FINE_CHANNELS = 48           # 36 + 추세 제거 2 + 위상 8 + 역률·고차비 2 (아래 참조)
+# 48 이다. 과도 3채널(48~50)은 12.37 에서 만들고 **반증됐다** - 모델이 실제로
+# 가장 많이 쓰는데도(절제 민감도 2위) 실측 유령이 34.9 -> 83.5W 로 악화됐다.
+# 코드는 `>= 51` 가드 뒤에 남겨 두었으니 다시 켜려면 이 값만 51 로 올리면 된다.
+FINE_CHANNELS = 48           # 36 + 추세 2 + 위상 8 + 역률·고차비 2
 WIDE_CHANNELS = 12
 
 # 고조파 위상 불변량의 크기 게이트 (A). |I_h| 가 이 값 근처 아래로 내려가면
@@ -45,6 +48,11 @@ LEGACY_FINE_CHANNELS = 38
 RIPPLE_SCALE = 20.0
 RIPPLE_HALF_SHORT = 30       # ±0.5초 - 핫플 릴레이(주기 약 2초) 대역
 RIPPLE_HALF_LONG = 150       # ±2.5초 - 더 느린 주기
+
+# 과도 서술자가 되돌아보는 길이 (12.37). 충전기 돌입이 2.76초에 걸쳐 정착하므로
+# 그보다 길어야 첨두와 정착을 한 창에서 본다.
+TRANSIENT_LOOKBACK = 180     # 3초
+TRANSIENT_BLOCK = 30         # 0.5초. 되돌아보기 최대를 블록 단위로 계산한다
 
 # 1.2절의 asinh 스케일 상수. 배치마다 재계산하지 않는다.
 RATIO_SCALE = 50.0           # 고조파비
@@ -73,6 +81,45 @@ def _movavg(a: np.ndarray, half: int) -> np.ndarray:
     c = np.zeros((a.shape[0], pad.shape[1] + 1), np.float64)
     np.cumsum(pad, axis=1, out=c[:, 1:])
     return ((c[:, k:] - c[:, :-k]) / k).astype(np.float32)
+
+
+def _trailing_sustained(a: np.ndarray, lookback: int, block: int) -> np.ndarray:
+    """(B, T) 각 시점에서 **직전 lookback 의 절반 이상 동안 넘었던** 값.
+
+    0.5초 블록의 최대를 먼저 내고, 블록 여섯 개(3초)의 **중앙값**을 취한다.
+    시점마다 sliding window 를 돌리면 300,000창 x 600 x 180 이라 못 쓴다.
+
+    **최대값이 아니라 중앙값이어야 한다** (12.37.3). 최대값을 쓰면 한두 사이클짜리
+    스파이크가 3초간 유지돼 지속형 돌입과 구분이 안 된다. 실측이 그것을 보여준다 -
+    통전 1.5초 뒤 서술자 값이
+
+        최대값:  포트 0.979  오븐 0.881  드라이기 0.617  |  충전기 0.107  프로젝터 0.009
+        중앙값:  포트 -0.010 오븐 0.000  드라이기 0.001  |  충전기 0.034  프로젝터 -0.085
+
+    저항 부하의 |I3| 스파이크는 크지만 **0.02초**뿐이고(포트 +0.174A, 오븐 +0.023A),
+    충전기 돌입은 **2.68초** 지속된다. 최대값으로는 포트가 충전기의 9.2배가 되어
+    'SMPS 돌입' 이 아니라 '큰 저항 부하가 방금 켜졌다' 를 재게 된다.
+    중앙값으로 바꾸면 저항 오염이 사라지고 충전기(+)와 프로젝터(-)가 부호로 갈린다.
+    """
+    b, t = a.shape
+    nb = t // block
+    blk = a[:, :nb * block].reshape(b, nb, block).max(axis=2)      # (B, nb)
+    k = max(1, lookback // block)
+    lag = np.stack([np.concatenate(
+        [np.repeat(blk[:, :1], i, axis=1), blk[:, :nb - i]], axis=1) if i else blk
+        for i in range(k)], axis=0)                                # (k, B, nb)
+    agg = np.median(lag, axis=0)
+    out = np.repeat(agg, block, axis=1)
+    if out.shape[1] < t:
+        out = np.pad(out, ((0, 0), (0, t - out.shape[1])), mode="edge")
+    return out[:, :t]
+
+
+def _shift_back(a: np.ndarray, n: int) -> np.ndarray:
+    """(B, T) 를 n 샘플 과거로 민다. 창 앞은 가장자리 값으로 채운다."""
+    if n <= 0:
+        return a
+    return np.concatenate([np.repeat(a[:, :1], n, axis=1), a[:, :-n]], axis=1)
 
 
 def build_fine(x: np.ndarray) -> np.ndarray:
@@ -175,6 +222,39 @@ def build_fine(x: np.ndarray) -> np.ndarray:
         # 분모 바닥 0.1mA. 계측 바닥의 |I3| 가 4.3mA 라 정상 구간은 안 건드리고
         # 기기가 다 꺼졌을 때의 폭주만 막는다. arcsinh 가 한 번 더 눌러 준다.
         out[:, 47] = np.arcsinh(mag[:, 8] / (mag[:, 2] + 1e-4) * RATIO_SCALE)
+
+    # ── 스위칭 과도 서술자 (2026-08-24, 12.37절) ────────────────────────
+    # 프로젝터와 충전기는 **켜지는 순간이 전혀 다르다** (개별 녹화 실측):
+    #     프로젝터  첨두/정상 1.03   정착 0.00초   <- 즉시 켜지고 평평
+    #     충전기    첨두/정상 2.35   정착 2.76초   <- 72W 돌입이 30W 로 흘러내린다
+    #     미니PC    첨두/정상 1.10   정착 0.32초
+    # 12.35~12.36 이 순시 지문으로는 이 쌍을 못 가른다고 확정했으므로 남은 축이다.
+    #
+    # **창을 줄이는 것으로는 안 된다** (12.37.1). 세밀 갈래는 이미 60Hz 라 창을
+    # 줄여도 해상도가 안 오르고, 전이는 이미 창 안에 있다(타깃 앞 3.98초).
+    # 진짜 병목은 **깊은 층 타깃 슬라이스의 수용영역이 187 사이클(±1.56초)** 이라
+    # 2~4초 전 돌입이 그 밖이라는 것이다. 수용영역은 커널·dilation 이 정하지
+    # 창 길이가 정하지 않는다. 오히려 앞쪽을 2.8초 아래로 줄이면 돌입이 잘린다.
+    # 그래서 **각 샘플에 직전 3초의 요약을 미리 계산해 둔다.** 타깃 슬라이스가
+    # ±1.56초만 봐도 3초 전 정보를 읽는다 - 수용영역을 우회한다.
+    #
+    # **P 가 아니라 3차 고조파로 만든다** (12.37.2). 두 가지 이유다.
+    #
+    # (1) 복합 부하에서 P 는 묻힌다. 오븐 히터가 켜진 창에서 충전기 돌입이
+    #     관측에서 차지하는 비중:  P 2.5% / |I1| 2.6% / **|I3| 57.5%** /
+    #     |I5| 36.9% / |I7| 21.0%.  저항 부하는 3차를 거의 안 흘리므로
+    #     (오븐 히터 1156W 에서 |I3| 0.0124A) SMPS 돌입이 3차에서는 바탕을
+    #     압도한다. 23배 선명하다.
+    # (2) P 로 만들면 기존 채널과 중복이다. 실측 272창에서 P 기반 과도는
+    #     추세제거 ch37 과 r = 0.82~0.91 이다. |I3| 기반은 r = 0.06~0.13 으로
+    #     완전히 새 정보다. 격리 녹화에서도 |I3| 쪽이 낫다 - 정상 구간
+    #     프로젝터↔충전기 d' 가 P 기반 3.45 vs |I3| 기반 **4.42**.
+    if FINE_CHANNELS >= 51:
+        i3 = mag[:, 2]
+        i3s = _trailing_sustained(i3, TRANSIENT_LOOKBACK, TRANSIENT_BLOCK)
+        out[:, 48] = np.arcsinh((i3s - i3) * CURRENT_SCALE)   # 지속형 돌입 잔재
+        out[:, 49] = np.arcsinh((i3 - _shift_back(i3, TRANSIENT_LOOKBACK)) * CURRENT_SCALE)
+        out[:, 50] = np.arcsinh((i3 - _shift_back(i3, 60)) * CURRENT_SCALE)
     return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
 

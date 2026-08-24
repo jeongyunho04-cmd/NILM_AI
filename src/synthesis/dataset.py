@@ -68,6 +68,23 @@ DEFAULT_RECIPE_MIX: Dict[str, float] = {
     "unplugged_baseline": 0.05,
 }
 
+# resistive_overlap 안에서 **어느 쌍을 뽑을지** (2026-08-24, 12.38)
+# 무작위로 뽑으면 저항 4종의 6쌍 중 오븐+핫플이 1/6 이라, 레시피 5% 중 0.83%
+# 밖에 안 된다. 측정하면 학습 전체의 1.001% 다.
+#
+# 그런데 **실측 test_4/5/6 의 >1300W 구간은 전부 이 구성**이다 (포트 없음 +
+# 오븐·핫플 동시 통전). 즉 실측이 던지는 상황이 학습 신호의 1% 다.
+# 그 결과 손실은 멀쩡히 수렴하는데(합성 F1 폭 ±0.007~0.017) 실측 유령만
+# 에폭·실행마다 33~87W 를 헤맨다 - **손실이 거의 안 건드리는 방향**이라
+# 미결정으로 남기 때문이다.
+#
+# 총량을 올리면 저항 4종의 사전확률이 같이 오른다 (그래서 0.05 로 묶여 있었다).
+# 대신 **쌍 선택만 기울인다.** 총량은 그대로고 목표 구성만 늘어난다.
+# 포트는 그 창의 활성 후보에서 빼서 사전확률이 오히려 내려가게 한다.
+RESISTIVE_OVERLAP_PREFER = ("oven", "hotplate")
+RESISTIVE_OVERLAP_PREFER_P = 0.6
+RESISTIVE_OVERLAP_EXCLUDE = ("electiric_kettle",)
+
 # resistive_overlap 를 따로 둔 이유 (2026-08-22)
 # 0.2절이 "저항성끼리 겹칠 때가 진짜 시험대" 라고 했는데 그 시험을 칠 데이터가 없었다.
 # 홀드아웃 8,000창에서 오븐+핫플 동시 발열이 6창(0.07%) 뿐이다.
@@ -164,9 +181,14 @@ class NILMBatchGenerator:
                 target_lookahead_cycles=self.target_lookahead_cycles,
             )
         elif recipe == "resistive_overlap":
+            # 쌍을 실측 구성 쪽으로 기울인다 (12.38). 총량(5%)은 그대로 두므로
+            # 저항 4종의 사전확률을 통째로 밀어 올리지 않는다.
+            use = (list(RESISTIVE_OVERLAP_PREFER)
+                   if np.random.rand() < RESISTIVE_OVERLAP_PREFER_P else None)
             sample = self.synthesizer.synthesize_resistive_overlap_window(
                 self.window_size, compute_gt_harmonics=gt_h,
                 target_lookahead_cycles=self.target_lookahead_cycles,
+                pair=use, exclude_active=RESISTIVE_OVERLAP_EXCLUDE,
             )
         elif recipe == "high_low_mixed":
             sample = self.synthesizer.synthesize_high_low_mixed_window(
