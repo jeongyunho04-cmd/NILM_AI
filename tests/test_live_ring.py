@@ -417,3 +417,29 @@ def test_zeroed_channel_contributes_nothing_to_the_model():
     with torch.no_grad():
         c = net(fine.clone(), wide)["power"]
     assert torch.equal(a, c)
+
+
+def test_odd_magnitude_channels_are_hypot_of_re_im():
+    """홀수차 크기 채널이 Re/Im 의 hypot 이어야 한다 (12.80절)."""
+    import numpy as np
+    from src.model import inputs as I
+
+    if I.FINE_CHANNELS < 58:
+        return
+    rng = np.random.default_rng(3)
+    x = rng.standard_normal((2, 33, 3600)).astype(np.float32) * 0.1 + 1.0
+    f = I.build_fine(x)
+    mag = np.hypot(x[:, 0:15], x[:, 15:30])[:, :, -I.FINE_CYCLES:]
+    for slot, h in enumerate((1, 3, 5, 7, 9, 11, 13, 15)):
+        want = np.arcsinh(mag[:, h - 1] * I.CURRENT_SCALE)
+        assert np.allclose(f[:, 50 + slot], want, atol=1e-6), f"{h}차 불일치"
+
+
+def test_odd_magnitude_channels_are_appended_not_inserted():
+    """새 채널은 뒤에만 붙어야 한다 — 앞 50채널이 그대로여야 옛 체크포인트가 돈다."""
+    from src.model import inputs as I
+
+    # 짝수차 목록이 새 채널을 건드리지 않는다
+    assert max(I.EVEN_FINE_CHANNELS) < 50
+    # 홀수차 크기는 50~57 이고 짝수차 목록과 겹치지 않는다
+    assert not (set(range(50, 58)) & set(I.EVEN_FINE_CHANNELS))

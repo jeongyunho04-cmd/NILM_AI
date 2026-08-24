@@ -39,7 +39,8 @@ N_HARM = 15
 # **번호를 옮긴 이유**: `out` 이 `np.empty` 라 FINE_CHANNELS 아래의 모든 칸은
 # 반드시 채워져야 한다. 반증된 블록을 48~50 에 둔 채 새 채널을 51~52 에
 # 놓으면, FINE_CHANNELS=53 이 되어 반증된 채널 3개가 학습에 되살아난다.
-FINE_CHANNELS = 50           # 36 + 추세 2 + 위상 8 + 역률·고차비 2 + 다단 강하 2
+FINE_CHANNELS = 58           # 36 + 추세 2 + 위상 8 + 역률·고차비 2
+                             #   + 다단강하 2 (12.62) + 홀수차 크기 8 (12.80)
 WIDE_CHANNELS = 12
 
 # 고조파 위상 불변량의 크기 게이트 (A). |I_h| 가 이 값 근처 아래로 내려가면
@@ -343,6 +344,22 @@ def build_fine(x: np.ndarray) -> np.ndarray:
         out[:, 50] = np.arcsinh((i3s - i3) * CURRENT_SCALE)   # 지속형 돌입 잔재
         out[:, 51] = np.arcsinh((i3 - _shift_back(i3, TRANSIENT_LOOKBACK)) * CURRENT_SCALE)
         out[:, 52] = np.arcsinh((i3 - _shift_back(i3, 60)) * CURRENT_SCALE)
+    # ── 홀수차 고조파 **크기** (2026-08-25, 12.80절) ─────────────────────
+    # 12.79 가 확정했다: 미니PC 미검출은 비율 채널이 만든다. `|I3|/|I1|` 은
+    # 저항 부하가 켜지면 분모(오븐 I1 5320mA)가 폭발해 미니PC 지문을 0.991 ->
+    # 0.015 로 **66배 압축**한다. 정작 절대 |I3| 에서는 미니PC 가 총합의 78%다
+    # (저항 부하는 3차를 거의 안 흘린다). 실측 배경도 격리 예측과 일치하므로
+    # (오븐 19.3 vs 18.0mA) 정보는 깨끗이 있는데 형태가 그것을 지운다.
+    #
+    # **지금 입력에는 크기 자체가 없다** — Re/Im 이 따로 있을 뿐이다.
+    # `hypot(re, im)` 은 비선형 조합이라 conv 가 합성하기를 기대할 근거가 없다.
+    # 12.34 가 같은 논리로 위상 불변량 φ_h 를 직접 준 것과 같다.
+    #
+    # 짝수차는 계측 인공물이므로(12.72) 홀수차만 넣는다.
+    if FINE_CHANNELS >= 58:
+        for slot, h in enumerate((1, 3, 5, 7, 9, 11, 13, 15)):
+            out[:, 50 + slot] = np.arcsinh(mag[:, h - 1] * CURRENT_SCALE)
+
     if ZERO_EVEN_HARMONICS:
         out[:, [c for c in EVEN_FINE_CHANNELS if c < FINE_CHANNELS]] = 0.0
     return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
