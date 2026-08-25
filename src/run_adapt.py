@@ -56,6 +56,29 @@ from src.run_train_cnn import evaluate, prepare_holdout_inputs, report, to_targe
 HOLDOUT_DIR = "processed_data/holdout60"
 
 
+#: SMPS 3종이 다 켜져도 150W 를 넘지 않는다 (프로젝터 48 + 충전기 45 + 미니PC 19).
+SMPS_ONLY_W = 150.0
+
+
+def real_sample_weights(p_observed, mode: str, boost: float = 4.0):
+    """실측 창별 가중 (12.94절). 평균 1 로 정규화해 `w_cons` 의 뜻을 유지한다.
+
+    `none` 은 None 을 돌려주어 예전 경로(단순 평균)를 그대로 탄다 — 기존
+    체크포인트를 재현할 수 있어야 한다.
+    """
+    if mode == "none":
+        return None
+    p = p_observed.detach().float()
+    if mode == "inv-power":
+        w = 1.0 / p.clamp(min=SMPS_ONLY_W)
+    elif mode == "smps-boost":
+        w = torch.where(p < SMPS_ONLY_W, torch.full_like(p, float(boost)),
+                        torch.ones_like(p))
+    else:
+        raise ValueError(mode)
+    return w / w.mean().clamp(min=1e-6)
+
+
 def real_targets(b, dev):
     fine, wide, pobs, oh, pn = [torch.from_numpy(np.ascontiguousarray(x)).to(dev) for x in b]
     return fine, wide, {"p_observed": pobs, "obs_harm": oh, "p_noise": pn}
@@ -134,6 +157,15 @@ def main() -> int:
     # (w_cons 0.4 / w_harm 0.1 / w_hedge 0)은 **스윕 6개 조합 중 최악**이었다
     # (12.12.2절: L_cons 가 L_harm 보다 38.8배 강해 배분을 결정하지 못한다).
     # 기본값으로 남겨 두면 아무 옵션 없이 돌린 사람이 그 조합을 얻는다.
+    ap.add_argument("--real-weight", default="none",
+                    choices=("none", "inv-power", "smps-boost"),
+                    help="실측 창별 가중 (12.94절). 창 하나당 기울기 노름이 고부하 창에서 "
+                         "25배 크고, SMPS 만 있는 창은 개수 58%% 인데 기울기로는 10%% 미만이다. "
+                         "inv-power = w ∝ 1/max(P_관측, 150W) (스케일을 직접 상쇄), "
+                         "smps-boost = P<150W 창만 --smps-boost 배 (표본 가중과 같은 효과). "
+                         "기본 none 은 이전과 동일하다")
+    ap.add_argument("--smps-boost", type=float, default=4.0,
+                    help="--real-weight smps-boost 의 배수")
     ap.add_argument("--harm-odd-only", action="store_true",
                     help="L_harm 에서 짝수차를 뺀다 (12.75절). **2단계가 실측에서 도는 것이므로 1단계보다 이쪽이 더 중요하다**")
     ap.add_argument("--init", default="results/cnn_v17.pt",
@@ -185,6 +217,9 @@ def main() -> int:
     if held:
         print(f"  ** 실측 홀드아웃: {', '.join(held)} - 적응에 안 쓰고 채점만 한다 **")
     print(f"합성 replay: {a.cache} | λ={a.lam} | w_cons={a.w_cons} w_harm={a.w_harm}")
+    if a.real_weight != "none":
+        extra = f" x{a.smps_boost:g}" if a.real_weight == "smps-boost" else ""
+        print(f"  ** 실측 창별 가중: {a.real_weight}{extra} (12.94절) **")
 
     from src.synthesis.segment_pool import SegmentPool
     pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
@@ -256,9 +291,12 @@ def main() -> int:
         sb_ = tuple(torch.from_numpy(x) for x in cache.batch(sidx))
         sf, swd, stg = to_targets(sb_, dev)
 
+        sw = real_sample_weights(rtg["p_observed"], a.real_weight, a.smps_boost)
+
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
             rp = crit.unlabeled(model(rf, rwd), rtg, w_cons=a.w_cons,
-                                w_harm=a.w_harm, w_over=a.w_over, w_hedge=a.w_hedge)
+                                w_harm=a.w_harm, w_over=a.w_over, w_hedge=a.w_hedge,
+                                sample_w=sw)
             sp = crit(model(sf, swd), stg)
             loss = rp["total"] + a.lam * sp["total"]
         opt.zero_grad(set_to_none=True)

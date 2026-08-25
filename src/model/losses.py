@@ -222,7 +222,7 @@ class NILMLoss(torch.nn.Module):
             err = (pred - tgt["obs_harm"]).abs() / self.harm_scale[None, :, None]
             # 마스크를 걸어도 손실 규모가 유지되도록 마스크 평균으로 나눈다.
             # 그래야 `w_harm=0.1` 이 이전과 같은 뜻을 갖는다.
-            parts["harm"] = ((err * self.harm_mask[None, :, None]).mean()
+            parts["harm"] = (wmean(err * self.harm_mask[None, :, None])
                              / self.harm_mask.mean().clamp(min=1e-6))
         else:
             parts["harm"] = out["power"].sum() * 0.0
@@ -230,7 +230,7 @@ class NILMLoss(torch.nn.Module):
         if self.w.over > 0:
             recon = out["power"].sum(1) + out["standby"].sum(1) + tgt["p_noise"]
             excess = torch.relu(recon - tgt["p_observed"])
-            parts["over"] = (excess / tgt["p_observed"].clamp(min=10.0)).mean()
+            parts["over"] = wmean(excess / tgt["p_observed"].clamp(min=10.0))
         else:
             parts["over"] = out["power"].sum() * 0.0
 
@@ -246,7 +246,8 @@ class NILMLoss(torch.nn.Module):
 
     def unlabeled(self, out: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor],
                   w_cons: float = 0.4, w_harm: float = 0.1,
-                  w_over: float = 0.0, w_hedge: float = 0.0) -> Dict[str, torch.Tensor]:
+                  w_over: float = 0.0, w_hedge: float = 0.0,
+                  sample_w: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         """**기기별 라벨이 없는 실측 창**용 손실 (4.2절 2단계).
 
         실측 복합 부하에는 기기별 정답이 없다. 라벨이 필요 없는 항만 쓴다.
@@ -263,9 +264,23 @@ class NILMLoss(torch.nn.Module):
         보존 항이 개별 전력 감독보다 35~3,000배 강해 "합만 맞추는 해" 로 빠지지만
         (3.3절, 12.9절 v4/v5 붕괴), 2단계에는 경쟁할 개별 전력 감독이 없다.
         """
+        # ── 창별 가중 (12.94절) ─────────────────────────────────────────────
+        # `sample_w` 는 창마다 다른 가중이다. 기본(None)은 균등이라 이전과 같다.
+        # **왜 필요한가**: 창 하나당 기울기 노름이 고부하 창에서 25배 크다
+        # (12.94.1 측정). 그래서 SMPS 만 있는 창이 개수로 58% 인데 기울기로는
+        # 10% 미만이다. `|·|` 의 기울기는 부호뿐이라 손실 크기 탓이 아니라
+        # **기기별 전력 스케일** 탓이다 — 오븐 헤드는 1100W, 미니PC 는 10W 규모다.
+        def wmean(x: torch.Tensor) -> torch.Tensor:
+            if sample_w is None:
+                return x.mean()
+            w = sample_w.to(x.dtype)
+            while w.dim() < x.dim():
+                w = w.unsqueeze(-1)
+            return (x * w).sum() / (w.expand_as(x).sum().clamp(min=1e-6))
+
         parts: Dict[str, torch.Tensor] = {}
         recon = out["power"].sum(1) + out["standby"].sum(1) + tgt["p_noise"]
-        parts["cons"] = (recon - tgt["p_observed"]).abs().mean()
+        parts["cons"] = wmean((recon - tgt["p_observed"]).abs())
 
         if tgt.get("obs_harm") is not None:
             pred = torch.einsum("bk,khc->bhc", out["power"], self.sig)
@@ -298,7 +313,7 @@ class NILMLoss(torch.nn.Module):
         # 그래서 라벨 없이 확신을 요구하는 항을 둔다 — 이진 엔트로피다.
         # p=0.5 에서 최대, p in {0,1} 에서 0.
         q = torch.sigmoid(out["on_logit"]).clamp(1e-6, 1 - 1e-6)
-        parts["hedge"] = (-(q * q.log() + (1 - q) * (1 - q).log())).mean()
+        parts["hedge"] = wmean(-(q * q.log() + (1 - q) * (1 - q).log()))
 
         parts["total"] = (w_cons * parts["cons"] + w_harm * parts["harm"]
                           + w_over * parts["over"] + w_hedge * parts["hedge"])
