@@ -93,6 +93,27 @@ PRESETS: Dict[str, Dict[str, float]] = {
         "unplugged_baseline": 0.05,      # 고정
         "smps_overlap": 0.15,
     },
+    # 12.92.4 의 후보 (2026-08-25). smps_hi 와 같은 용량(0.26)인데 **저항 3종을
+    # 고정**한다 - adapt_smpsx 단독의 유령 13.20W 가 포트 환각이었고, 그것이
+    # 저항 레시피 축소 탓이라는 12.91.1 의 읽기를 직접 시험한다.
+    # 예산 0.26 은 random_* 에서 크게 덜고 유령 방지 계열은 최대한 남긴다.
+    "smps_hi_fix": {
+        # **에어컨은 random_realistic(15%)과 random_uniform(19%) 에서만 나온다** -
+        # 레시피별 양성률을 재 보니 나머지 일곱은 전부 0% 였다. 그래서 그 둘을
+        # 크게 깎으면 굶는다: 0.06/0.08 판에서 512창 중 6개(불균형 31.7:1)로
+        # 떨어져 저장소 가드(30:1)를 넘었다. 예산은 low_load_among_standby 에서
+        # 주로 덜어 온다 - smps_overlap 이 그 성격(대기전력 속 저부하)을 가장
+        # 많이 대체하는 레시피다. **유령 위험은 이쪽으로 옮겨간다** (판정 ②).
+        "random_realistic": 0.08,        # -0.08
+        "random_uniform": 0.14,          #  0
+        "standby_only": 0.14,            # -0.02
+        "low_load_among_standby": 0.04,  # -0.16  <- 예산의 대부분
+        "high_power_resistive": 0.10,    # 고정
+        "high_low_mixed": 0.14,          # 고정
+        "resistive_overlap": 0.05,       # 고정
+        "unplugged_baseline": 0.05,      # 고정
+        "smps_overlap": 0.26,
+    },
     "smps_hi": {
         "random_realistic": 0.10,
         "random_uniform": 0.10,
