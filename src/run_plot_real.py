@@ -130,14 +130,28 @@ def plot_file(stem, apps, t_pred, pred, standby, t_obs, obs, spec, path, title):
         for t0, t1 in iv[a].get("on", []):
             ax[3].barh(i, t1 - t0, left=t0, height=0.55,
                        color=COL(apps.index(a) % 10), alpha=.9)
-    for e in spec.get("events", []):
-        ax[3].axvline(e["t_s"], color="crimson", ls="--", lw=1.1, alpha=.8)
-        ax[3].annotate(f"{KO.get(e['appliance'], e['appliance'])} {e['kind']} "
-                       f"ΔP{e['delta_p_w']:+.0f}W", (e["t_s"], len(rows) - 0.3),
-                       fontsize=8, color="crimson", ha="left", va="top", rotation=0)
+    # 이벤트 라벨은 **세로로 쓰고 층을 번갈아 놓는다.** 가로로 쓰면 test_5/test_8
+    # 처럼 20~24개가 몰린 파일에서 글자가 서로를 덮어 아무것도 안 읽힌다.
+    # 그래도 가까운 것끼리는 겹치므로, 앞 라벨과 최소 간격을 두고 층을 올린다.
+    ev_sorted = sorted(spec.get("events", []), key=lambda e: e["t_s"])
+    span = max(t_obs[-1] - t_obs[0], 1.0) if len(t_obs) else 1.0
+    min_gap = span * 0.035          # 이보다 가까우면 다음 층으로 올린다
+    last_t, level, n_level = -1e9, 0, 3
+    for e in ev_sorted:
+        ax[3].axvline(e["t_s"], color="crimson", ls="--", lw=1.0, alpha=.55)
+        level = (level + 1) % n_level if (e["t_s"] - last_t) < min_gap else 0
+        last_t = e["t_s"]
+        # ΔP 가 없는 이벤트가 있다 (test_6/test_9 는 신호 유추라 `_note` 만 있다).
+        dp = e.get("delta_p_w")
+        ax[3].annotate(f"{KO.get(e['appliance'], e['appliance'])} {e['kind']}"
+                       + (f" {dp:+.0f}W" if dp is not None else ""),
+                       (e["t_s"], len(rows) - 0.45 - 0.16 * level),
+                       fontsize=6.5, color="crimson", ha="left", va="top",
+                       rotation=90, rotation_mode="anchor", alpha=.85)
     ax[3].set_yticks(range(len(rows)))
     ax[3].set_yticklabels([KO.get(a, a) for a in rows], fontsize=9)
-    ax[3].set_ylim(-0.6, len(rows) - 0.2)
+    # 세로 라벨이 들어갈 자리를 위쪽에 비워 둔다.
+    ax[3].set_ylim(-0.6, len(rows) + 1.1)
     ax[3].set_xlabel("시간 (초)")
     ax[3].set_ylabel("알려진 정답")
     ax[3].grid(alpha=.3, axis="x")
