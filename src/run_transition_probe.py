@@ -118,10 +118,26 @@ def _snap(t: np.ndarray, sig: np.ndarray, t0: float, half: float, guard: float,
     return best
 
 
+def _pre_state(d: dict, ev: dict, stem: str, app: str, j: int, t: np.ndarray,
+               t0: float, back: float, mode: str) -> bool:
+    """전이 **직전** 그 기기가 켜져 있었는가 (12.95절의 실현가능성 제약).
+
+    `truth`  정답 구간으로 본다 — 제약의 **상한선**이다. 배포에서는 못 쓴다.
+    `model`  모델 자신의 게이트로 본다 — 배포 가능한 값이다.
+    """
+    tp = t0 - back
+    if mode == "truth":
+        iv = ev[stem].get("intervals", {}).get(app, {})
+        return any(a <= tp <= b for a, b in iv.get("on", []))
+    k = int(np.argmin(np.abs(t - tp)))
+    return bool(d["gate"][k, j] > 0.5)
+
+
 def probe_file(d: dict, stem: str, apps_model: List[str], ev: dict,
                apps: List[str], half: float, guard: float,
                edge_guard: float, snap: float, snap_on: str,
-               min_delta: float) -> dict:
+               min_delta: float, feasible: str = "off",
+               feasible_back: float = 10.0) -> dict:
     """전이마다 어느 기기가 얼마나 움직였는지."""
     P = d["gate"] * d["p_raw"]
     t = d["targets"] / CYCLES_PER_S
@@ -146,7 +162,18 @@ def probe_file(d: dict, stem: str, apps_model: List[str], ev: dict,
             continue
         delta = {a: float(np.median(P[post, j]) - np.median(P[pre, j]))
                  for a, j in js.items()}
-        picked = max(delta, key=lambda a: abs(delta[a]))
+        cand = list(delta)
+        if feasible != "off":
+            # **이미 켜진 기기는 못 켜고, 꺼진 기기는 못 끈다** (12.95). 이 제약은
+            # 창 안에서 못 보는 긴 시간 규모를 창 **밖**에서 쓴다 - 궤적을 보는
+            # 것이 아니라 상태를 잇는 것이라 60초 창의 한계에 걸리지 않는다.
+            keep = [a for a in cand
+                    if _pre_state(d, ev, stem, a, js[a], t, t0, feasible_back,
+                                  feasible) != (sign > 0)]
+            if keep:
+                cand = keep
+        picked = max(cand, key=lambda a: abs(delta[a]) if feasible == "off"
+                     else delta[a] * (1 if sign > 0 else -1))
         if abs(delta[picked]) < min_delta:
             verdict = "미검출"
         elif picked == app and np.sign(delta[picked]) == sign:
@@ -220,6 +247,11 @@ def main() -> int:
                     help="라벨 시각을 관측 계단으로 옮기는 최대 거리(초). 0=끄기")
     ap.add_argument("--snap-on", choices=("auto", "p", "i3"), default="auto",
                     help="스냅에 쓸 관측 신호. auto=SMPS 3종은 i3, 나머지는 p")
+    ap.add_argument("--feasible", default="off", choices=("off", "truth", "model"),
+                    help="실현가능성 제약 (12.95절): 이미 켜진 기기는 못 켜고 꺼진 기기는 "
+                         "못 끈다. truth=정답 상태(상한선) / model=모델 자신의 게이트(배포 가능)")
+    ap.add_argument("--feasible-back", type=float, default=10.0,
+                    help="'직전 상태'를 전이 몇 초 전에서 볼지")
     ap.add_argument("--min-delta", type=float, default=5.0, metavar="W",
                     help="가장 큰 |Δ| 가 이 아래면 '미검출' 로 센다. 잡음 argmax 제외")
     ap.add_argument("--out", default="results/transition_probe.json")
@@ -255,7 +287,8 @@ def main() -> int:
             for k in ("gate", "p_raw", "standby"):
                 d[k][:, six] = ds[k][:, six]
         res = probe_file(d, stem, apps_model, ev, a.apps, a.half, a.guard,
-                         a.edge_guard, a.snap, a.snap_on, a.min_delta)
+                         a.edge_guard, a.snap, a.snap_on, a.min_delta, feasible=a.feasible,
+                         feasible_back=a.feasible_back)
         out[stem] = res
         print_file(stem, res)
         tot += res["n"]; ok += res["n_correct"]; wrong += res["n_wrong"]
