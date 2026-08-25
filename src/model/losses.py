@@ -222,7 +222,7 @@ class NILMLoss(torch.nn.Module):
             err = (pred - tgt["obs_harm"]).abs() / self.harm_scale[None, :, None]
             # 마스크를 걸어도 손실 규모가 유지되도록 마스크 평균으로 나눈다.
             # 그래야 `w_harm=0.1` 이 이전과 같은 뜻을 갖는다.
-            parts["harm"] = (wmean(err * self.harm_mask[None, :, None])
+            parts["harm"] = ((err * self.harm_mask[None, :, None]).mean()
                              / self.harm_mask.mean().clamp(min=1e-6))
         else:
             parts["harm"] = out["power"].sum() * 0.0
@@ -230,7 +230,7 @@ class NILMLoss(torch.nn.Module):
         if self.w.over > 0:
             recon = out["power"].sum(1) + out["standby"].sum(1) + tgt["p_noise"]
             excess = torch.relu(recon - tgt["p_observed"])
-            parts["over"] = wmean(excess / tgt["p_observed"].clamp(min=10.0))
+            parts["over"] = (excess / tgt["p_observed"].clamp(min=10.0)).mean()
         else:
             parts["over"] = out["power"].sum() * 0.0
 
@@ -290,13 +290,13 @@ class NILMLoss(torch.nn.Module):
             err = (pred - tgt["obs_harm"]).abs() / self.harm_scale[None, :, None]
             # 마스크를 걸어도 손실 규모가 유지되도록 마스크 평균으로 나눈다.
             # 그래야 `w_harm=0.1` 이 이전과 같은 뜻을 갖는다.
-            parts["harm"] = ((err * self.harm_mask[None, :, None]).mean()
+            parts["harm"] = (wmean(err * self.harm_mask[None, :, None])
                              / self.harm_mask.mean().clamp(min=1e-6))
         else:
             parts["harm"] = out["power"].sum() * 0.0
 
         excess = torch.relu(recon - tgt["p_observed"])
-        parts["over"] = (excess / tgt["p_observed"].clamp(min=10.0)).mean()
+        parts["over"] = wmean(excess / tgt["p_observed"].clamp(min=10.0))
 
         # ── 헤지 벌점 (12.9.13절) ─────────────────────────────────────────
         # `P̂ = σ(on)·p` 라 게이트가 중간에 머물면 **물리적으로 불가능한 중간 전력**이

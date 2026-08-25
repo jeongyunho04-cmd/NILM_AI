@@ -1,0 +1,28 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\yunho\Documents\NILM_train\NILM_AI-main\src\run_adapt.py", line 387, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "C:\Users\yunho\Documents\NILM_train\NILM_AI-main\src\run_adapt.py", line 251, in main
+    cache = CachedWindows(a.cache)
+  File "C:\Users\yunho\Documents\NILM_train\NILM_AI-main\src\model\traincache.py", line 229, in __init__
+    raise ValueError(
+    ...<2 lines>...
+        "python -m src.run_build_traincache ·Î ´Ù½Ã ¸¸µå½Ê½Ã¿À.")
+ValueError: ÇĞ½À Ä³½ÃÀÇ ¼¼¹Ğ Ã¤³ÎÀÌ ´Ù¸¨´Ï´Ù: Ä³½Ã [50, 600] vs ÇöÀç ÄÚµå [58, 600]  (C:\Users\yunho\Documents\NILM_train\NILM_AI-main\cache\train60_ze1).  python -m src.run_build_traincache ·Î ´Ù½Ã ¸¸µå½Ê½Ã¿À.
+====================================================================================
+[Phase 5] 2ë‹¨ê³„ ì‹¤ì¸¡ ì¤€ì§€ë„ ì ì‘ â€” ê¸°ê¸°ë³„ ë¼ë²¨ ì—†ì´ (4.2ì ˆ)
+====================================================================================
+ì‹¤ì¸¡ ì°½ 6,623ê°œ (ì°½ 3600, íƒ€ê¹ƒ 3239)
+  test.2      813ì°½
+  test3       621ì°½
+  test_4    1,044ì°½
+  test_5    1,018ì°½
+  test_6    1,462ì°½
+  test_7    1,112ì°½
+  test_9      553ì°½
+  ** ì‹¤ì¸¡ í™€ë“œì•„ì›ƒ: test_8 - ì ì‘ì— ì•ˆ ì“°ê³  ì±„ì ë§Œ í•œë‹¤ **
+í•©ì„± replay: cache/train60_ze1 | Î»=0.5 | w_cons=0.1 w_harm=4.0
+  ** ì‹¤ì¸¡ ì°½ë³„ ê°€ì¤‘: smps-boost x4 (12.94ì ˆ) **
+1ë‹¨ê³„ ì²´í¬í¬ì¸íŠ¸: results/cnn_ze1.pt (ep300, width 1.0)
