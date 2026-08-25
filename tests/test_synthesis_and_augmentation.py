@@ -750,6 +750,66 @@ def test_recipe_mix_covers_high_low_cooccurrence(segment_pool):
     )
 
 
+def test_smps_overlap_puts_two_or_three_smps_on_the_target(segment_pool):
+    """SMPS 2~3대가 **타깃 시점에** 동시에 켜져 있어야 한다 (12.88.4 의 1번).
+
+    12.81 이 미니PC 미검출의 조건을 "경쟁 SMPS 가 함께 켜져 있을 때" 로 좁혔는데
+    (경쟁 없으면 재현율 99%, 있으면 30~67%), 학습 분포에는 그 상황이 타깃 시점
+    기준 12.2% 뿐이었다. 켜 두는 것만으로는 부족하고 타깃 시점에 걸려야 한다 -
+    `resistive_overlap` 이 겪은 것과 같은 함정이다.
+    """
+    from src.model.inputs import TARGET_LOOKAHEAD
+    from src.preprocessing.file_registry import get_smps_appliances
+    from src.synthesis.synthesizer import window_target_index
+
+    smps = set(get_smps_appliances())
+    syn = LoadSynthesizer(segment_pool=segment_pool, compute_gt_harmonics=False)
+    ti = window_target_index(600, TARGET_LOOKAHEAD)
+
+    n_on_target, trio = 0, 0
+    for _ in range(20):
+        s = syn.synthesize_smps_overlap_window(600, target_lookahead_cycles=TARGET_LOOKAHEAD)
+        on = {a for a in smps if int(s.gt_is_on[a][ti]) == 1}
+        n_on_target += len(on) >= 2
+        trio += len(on) >= 3
+    assert n_on_target >= 17, f"타깃 시점에 SMPS 2대 이상인 창이 20 중 {n_on_target} 뿐입니다"
+    assert trio >= 3, f"3종 동시가 20 중 {trio} 뿐입니다 (p_trio 기본 0.5)"
+
+
+def test_smps_overlap_is_off_by_default_in_the_recipe_mix(segment_pool):
+    """기본 믹스에서는 지분이 0 이어야 한다 - 기존 캐시와 같은 분포를 유지한다."""
+    from src.synthesis.dataset import DEFAULT_RECIPE_MIX
+
+    assert DEFAULT_RECIPE_MIX["smps_overlap"] == 0.0
+    gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=600)
+    i = gen.recipe_names.index("smps_overlap")
+    assert gen.recipe_probs[i] == 0.0
+
+
+def test_smps_preset_raises_smps_cooccurrence(segment_pool):
+    """`smps_hi` 프리셋이 SMPS 동시 가동 창을 실제로 늘려야 한다.
+
+    12.68 이 **전체** 동시성을 올렸다가 실패했다. 늘어야 하는 것은 그것이 아니라
+    SMPS 끼리의 겹침이다 (측정: 기본 믹스 타깃 12.2% -> smps_hi 33.8%).
+    """
+    from src.run_recipe_mix_probe import PRESETS
+
+    def smps_pairs(mix):
+        gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=600,
+                                 recipe_mix=mix)
+        idx = [gen.appliance_list.index(a)
+               for a in ("beam_projector", "laptop_charger", "minipc")
+               if a in gen.appliance_list]
+        y = np.concatenate([gen.generate_batch_dict(32)["y_on"] for _ in range(8)])
+        return (y[:, idx].sum(1) >= 2).mean()
+
+    base = smps_pairs(None)
+    hi = smps_pairs(PRESETS["smps_hi"])
+    assert hi > base + 0.10, (
+        f"SMPS 동시 가동 창이 {100*base:.1f}% -> {100*hi:.1f}% 로 거의 안 늘었습니다"
+    )
+
+
 def test_recipe_mix_reduces_class_imbalance(segment_pool):
     """어떤 가전도 학습 표본이 사실상 0 이 되면 안 된다."""
     gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=600)

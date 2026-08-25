@@ -66,6 +66,11 @@ DEFAULT_RECIPE_MIX: Dict[str, float] = {
     "high_low_mixed": 0.14,          # 고부하 + 저부하 동시 - 오차 전가 방지, 아래 참조
     "resistive_overlap": 0.05,       # 저항 2종이 타깃 시점에 **동시 통전** - 아래 참조
     "unplugged_baseline": 0.05,
+    # SMPS 2~3종이 타깃 시점에 동시 ON (12.88.4 의 1번). **기본값은 0 이다** -
+    # 켜면 기존 캐시와 다른 분포가 되므로, 후보 믹스는 run_recipe_mix_probe 의
+    # PRESETS("smps") 로 두고 --recipe-mix 로 명시할 때만 들어간다.
+    # 0 지분은 추첨 경계를 바꾸지 않아 기존 시드 재현성도 유지된다.
+    "smps_overlap": 0.0,
 }
 
 # resistive_overlap 안에서 **어느 쌍을 뽑을지** (2026-08-24, 12.38)
@@ -84,6 +89,14 @@ DEFAULT_RECIPE_MIX: Dict[str, float] = {
 RESISTIVE_OVERLAP_PREFER = ("oven", "hotplate")
 RESISTIVE_OVERLAP_PREFER_P = 0.6
 RESISTIVE_OVERLAP_EXCLUDE = ("electiric_kettle",)
+
+# smps_overlap 에서 2대가 아니라 **3대**를 켤 확률 (2026-08-25, 12.88.4 의 1번).
+# 실측(test_5/7/8)은 SMPS≥2 가 시간의 79%, 3종 동시가 37% 다 - 겹치는 시간의
+# 절반쯤이 3종이다. 그런데 지금 학습 분포는 타깃 시점 기준 12.2% / 2.0% 라
+# 3종 쪽이 특히 비어 있다. 레시피 지분을 더 키우는 대신 이 값을 올리는 편이
+# 싸다 - 지분을 키우면 high_low_mixed·resistive_overlap 을 깎아야 하는데
+# 그것들도 각각 실측 실패를 보고 넣은 것이다 (12.38).
+SMPS_OVERLAP_TRIO_P = 0.6
 
 # resistive_overlap 를 따로 둔 이유 (2026-08-22)
 # 0.2절이 "저항성끼리 겹칠 때가 진짜 시험대" 라고 했는데 그 시험을 칠 데이터가 없었다.
@@ -189,6 +202,12 @@ class NILMBatchGenerator:
                 self.window_size, compute_gt_harmonics=gt_h,
                 target_lookahead_cycles=self.target_lookahead_cycles,
                 pair=use, exclude_active=RESISTIVE_OVERLAP_EXCLUDE,
+            )
+        elif recipe == "smps_overlap":
+            sample = self.synthesizer.synthesize_smps_overlap_window(
+                self.window_size, compute_gt_harmonics=gt_h,
+                target_lookahead_cycles=self.target_lookahead_cycles,
+                p_trio=SMPS_OVERLAP_TRIO_P,
             )
         elif recipe == "high_low_mixed":
             sample = self.synthesizer.synthesize_high_low_mixed_window(

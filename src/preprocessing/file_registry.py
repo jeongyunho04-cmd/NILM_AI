@@ -280,6 +280,19 @@ def get_resistive_appliances() -> List[str]:
     )
 
 
+def get_smps_appliances() -> List[str]:
+    """SMPS(정전력 스위칭 전원) 가전 목록.
+
+    프로젝터·충전기·미니PC 가 여기 들어간다. 12.81 이 미니PC 미검출의 조건을
+    "경쟁 SMPS 가 함께 켜져 있을 때" 로 좁혔고(경쟁 없으면 재현율 99%,
+    있으면 30~67%), 12.88.4 가 남긴 유일한 축이 그 조합을 학습에서 늘리는 것이다.
+    합성 레시피 `smps_overlap` 이 이 목록에서 뽑는다.
+    """
+    return sorted(
+        a for a, s in APPLIANCE_SPECS.items() if s.load_class == LoadClass.SMPS
+    )
+
+
 def get_usage_probability(appliance_type: str) -> float:
     """임의의 순간에 이 가전이 켜져 있을 확률 (하루 사용 시간 / 24)."""
     spec = APPLIANCE_SPECS.get(appliance_type)

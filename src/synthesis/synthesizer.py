@@ -33,6 +33,7 @@ import numpy as np
 
 from src.preprocessing.file_registry import (
     get_resistive_appliances,
+    get_smps_appliances,
     get_usage_probability,
     is_low_load,
 )
@@ -830,6 +831,82 @@ class LoadSynthesizer:
             if all(sample.gt_target_power_w[a][ti] >= min_heat_w for a in pair):
                 return sample
         # 다 실패하면 마지막 것을 그대로 쓴다. 그래도 2대가 켜져는 있다.
+        return sample
+
+    def synthesize_smps_overlap_window(
+        self,
+        window_size_cycles: int = 600,
+        compute_gt_harmonics: Optional[bool] = None,
+        target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
+        p_trio: float = 0.5,
+        p_resistive: Sequence[float] = (0.45, 0.45, 0.10),
+        max_tries: int = 20,
+    ) -> SyntheticLoadSample:
+        """SMPS **2~3대가 타깃 시점에 동시에 켜져 있는** 윈도우 (12.88.4 의 1번).
+
+        `resistive_overlap` 의 SMPS 판이다. 그쪽이 "저항끼리 겹칠 때가 진짜
+        시험대인데 그 시험을 칠 데이터가 없다" 였다면, 여기는 12.81 이 좁힌
+        조건이다 - 미니PC 는 저항 부하에 묻히지 않고 **경쟁 SMPS 에 묻힌다**:
+
+            미니PC 재현율      저부하 <200W    고부하 >600W
+            경쟁 SMPS 없음      98.2%          99.2%
+            경쟁 SMPS 있음      66.6%          30.2%
+
+        그런데 학습 분포에 그 상황이 거의 없다 (2026-08-25 측정):
+
+            타깃 시점 SMPS≥2   합성 12.2%  vs  실측 79%
+            타깃 시점 SMPS=3   합성  2.0%  vs  실측 37%
+
+        **전체 동시성을 올리는 것으로는 안 된다.** 12.68 이 그 축을 올렸다가
+        실패했고, 이번에 재 보니 `full` 프리셋도 SMPS≥2 를 12.2 -> 22.0% 로만
+        올린다 (=3 은 2.0 -> 3.0%). 저항 부하가 늘 뿐이다.
+
+        **저항 배경을 함께 켠다.** 위 표에서 가장 어려운 칸이 "고부하 + 경쟁 SMPS"
+        (30.2%) 이고, 실측 test_5/6/7 도 SMPS 3종 위에 핫플·오븐이 얹힌다.
+        SMPS 만 켠 조용한 창만 주면 그 칸을 안 배운다.
+
+        Args:
+            p_trio: 2대가 아니라 3대를 켤 확률. 실측에서 ≥2 중 3대의 비중이
+                37/79 = 0.47 이라 그것을 따랐다.
+            p_resistive: 함께 켤 저항 부하 대수(0/1/2)의 확률.
+            max_tries: 타깃 시점에 다 켜져 있지 않으면 다시 뽑는 횟수.
+                `resistive_overlap` 과 같은 이유다 - 켜 두는 것과 **타깃 시점에
+                켜져 있는 것**은 다르다. 다만 여기서는 통전율이 아니라 배치가
+                문제라 재시도가 훨씬 덜 필요하다 (SMPS 는 연속 부하다).
+        """
+        smps = [a for a in self.known_appliances if a in set(get_smps_appliances())]
+        if len(smps) < 2:
+            return self.synthesize_random_window(
+                window_size_cycles=window_size_cycles,
+                compute_gt_harmonics=compute_gt_harmonics,
+            )
+        resistive = [a for a in self.known_appliances if a in set(get_resistive_appliances())]
+        ti = window_target_index(window_size_cycles, target_lookahead_cycles)
+
+        # **조합은 루프 밖에서 한 번만 뽑는다** - 12.38 이 겪은 버그다. 재시도마다
+        # 다시 뽑으면 타깃 시점에 걸리기 쉬운 조합이 채택을 독식해, 정작 겨냥한
+        # 조합(3종 동시)의 사전확률이 도리어 낮아진다.
+        n_smps = 3 if (len(smps) >= 3 and np.random.rand() < p_trio) else 2
+        chosen = list(np.random.choice(smps, min(n_smps, len(smps)), replace=False))
+        n_res = int(np.random.choice(len(p_resistive), p=np.asarray(p_resistive, float)
+                                     / float(np.sum(p_resistive))))
+        if n_res and resistive:
+            chosen += list(np.random.choice(resistive, min(n_res, len(resistive)), replace=False))
+
+        sample = None
+        for _ in range(max_tries):
+            sample = self.synthesize_random_window(
+                window_size_cycles=window_size_cycles,
+                force_active=chosen,
+                force_plugged_all=True,
+                compute_gt_harmonics=compute_gt_harmonics,
+                target_biased_placement=True,
+                target_lookahead_cycles=target_lookahead_cycles,
+            )
+            # 판정은 SMPS 쪽만 본다. 저항 배경은 켜져 있으면 되고 타깃 시점의
+            # 히터 통전 여부까지 강제하면 (resistive_overlap 처럼) 기각률이 치솟는다.
+            if all(int(sample.gt_is_on[a][ti]) == 1 for a in chosen[:n_smps]):
+                return sample
         return sample
 
     def synthesize_high_power_window(
