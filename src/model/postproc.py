@@ -61,3 +61,81 @@ def cap_power(P: np.ndarray, apps: Sequence[str], gate: Optional[np.ndarray] = N
         sub = sub + add
     out[:, cols] = sub
     return out
+
+
+#: 게이트를 켤 문턱 — 격리 통전 중앙값의 40% (2026-08-25 측정 48.8 / 51.9 / 14.5W).
+GATE_ON_W: Dict[str, float] = {
+    "beam_projector": 19.5, "laptop_charger": 20.8, "minipc": 5.8,
+}
+
+
+def _causal_floor(x: np.ndarray, win: int) -> np.ndarray:
+    """과거 `win` 표본 안의 최솟값 — 그 시점까지 **지속된** 성분이다.
+
+    전이 직후에는 0 에 머물다가 창이 다 차면 올라온다. 그래서 "전이 순간은
+    건드리지 않고 정상 상태만 옮긴다" 가 된다. 미래를 안 보므로 `run_live`
+    에서도 같은 값이 나온다.
+    """
+    n = len(x)
+    out = np.empty_like(x)
+    from collections import deque
+    dq: "deque[int]" = deque()
+    for i in range(n):
+        while dq and x[dq[-1]] >= x[i]:
+            dq.pop()
+        dq.append(i)
+        while dq[0] <= i - win:
+            dq.popleft()
+        out[i] = x[dq[0]]
+    return out
+
+
+def cap_power_v2(P: np.ndarray, apps: Sequence[str], gate: np.ndarray,
+                 caps: Optional[Dict[str, float]] = None,
+                 sustain_win: int = 0, sync_gate: bool = False,
+                 gate_on_w: Optional[Dict[str, float]] = None):
+    """`cap_power` 의 확장 (12.101절). 지속 성분만 넘기고, 게이트도 맞춘다.
+
+    Args:
+        sustain_win: 0 이면 초과분 전부를 넘긴다 (12.100 과 동일).
+            >0 이면 **과거 그만큼의 표본에서 지속된 초과분만** 넘긴다.
+            전이 순간의 초과분은 원래 기기에 남으므로 그 기기의 전이 귀속을
+            깎지 않는다 (12.100.5 가 지목한 손실).
+        sync_gate: 넘겨받아 문턱을 넘은 기기의 게이트를 켠다. 전력만 옮기면
+            on/off F1 이 안 변한다 (게이트를 안 건드리므로).
+
+    Returns:
+        (P_new, gate_new)
+    """
+    caps = caps or PHYSICAL_CAP_W
+    thr = gate_on_w or GATE_ON_W
+    out = np.array(P, dtype=np.float64, copy=True)
+    g = np.array(gate, dtype=np.float64, copy=True)
+    idx = [(j, a) for j, a in enumerate(apps) if a in caps]
+    if not idx:
+        return out, g
+    cols = np.array([j for j, _ in idx])
+    lim = np.array([caps[a] for _, a in idx], dtype=np.float64)
+
+    sub = out[:, cols]
+    excess = np.clip(sub - lim[None, :], 0.0, None)
+    if sustain_win > 0:
+        moved = np.stack([_causal_floor(excess[:, k], sustain_win)
+                          for k in range(excess.shape[1])], 1)
+    else:
+        moved = excess
+    sub = sub - moved                      # 안 옮긴 초과분은 그대로 둔다
+
+    head = np.clip(lim[None, :] - np.minimum(sub, lim[None, :]), 0.0, None)
+    w = head * np.clip(g[:, cols], 1e-6, None)
+    tot = moved.sum(1, keepdims=True)
+    wsum = w.sum(1, keepdims=True)
+    add = np.minimum(np.divide(w, np.where(wsum > 0, wsum, 1.0)) * tot, head)
+    sub = sub + add
+    out[:, cols] = sub
+
+    if sync_gate:
+        for k, (j, a) in enumerate(idx):
+            on = sub[:, k] >= thr.get(a, 1e9)
+            g[:, j] = np.where(on, np.maximum(g[:, j], 0.5 + 1e-6), g[:, j])
+    return out, g
