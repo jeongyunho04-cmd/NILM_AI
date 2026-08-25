@@ -1,141 +1,94 @@
-"""추론 후처리 — 물리 전력 상한 (12.100절)
+"""추론 후처리 — 물리 전력 상한과 게이트 동기 (12.100~12.102절)
 
-프로젝터는 격리에서 **48.5~49.3W (p5~p95), 최대 49.6W** 다. 폭이 ±0.5W 인
-기기인데 복합 실측에서 100W 넘게 예측된다 (12.100.1). 그 초과분은 물리적으로
-불가능하므로 잘라내고, 잘라낸 만큼을 다른 SMPS 에 넘길 수 있다.
+**무엇을 고치는가.** 프로젝터는 격리에서 48.5~49.3W (p5~p95), 최대 49.6W 로
+폭이 ±0.5W 인 기기다. 그런데 2단계 단독 모델은 복합 실측에서 중앙 73.5W, 최대
+137W 를 붙이고 **창의 74.6%** 가 물리 상한을 넘는다 (12.100.1). 그 초과분은
+다른 SMPS 의 몫이고, 그래서 충전기가 전이에서 5/23 밖에 안 맞았다.
 
-**12.87.2 와 무엇이 다른가.** 그쪽은 같은 사전을 **학습 손실**에 넣어 고조파가
-나빠졌다. 여기서는 **추론 뒤**에 자르므로 학습에 되먹임이 없다. 12.85 의 HMM
-후처리와 같은 자리(후처리)이나, 그쪽은 게이트의 지속성 사전이었고 이쪽은
-전력 크기의 물리 상한이다.
+**어떻게 고치는가.** 추론 뒤에 상한을 넘는 만큼을 잘라 **다른 SMPS 로 넘긴다.**
 
-**상한은 관대하게 잡는다.** 격리 최대에 여유를 얹는다 — 실측 전압대가 다르고
-(4.3절) 개체차도 있다. 자르는 것이 목적이 아니라 **명백히 불가능한 값**만
-막는 것이다.
+    P_proj > cap 이면  초과분을 게이트 가중으로 다른 SMPS 에 분배
+    넘겨받아 문턱을 넘은 기기는 게이트도 켠다 (gate_sync)
+
+**세 가지를 측정으로 정했다** (12.102):
+
+- **상한은 프로젝터에만 건다.** 충전기·미니PC 는 상한을 넘는 창이 0.0%/0.4% 라
+  걸 이유가 없고, 걸면 **받을 자리가 좁아져 오히려 나빠진다** (44/59 -> 39/59)
+- **상한값은 둔감하다.** 55 / 60 / 70W 가 모두 44/59 다. 격리 최대(49.6W)에
+  여유를 얹은 55W 를 쓴다 — 튜닝 잔향이 아니라는 근거다
+- **초과분은 전부 즉시 넘긴다.** "정상 상태만 넘기고 전이 순간은 남긴다" 를
+  시험했으나 **반대로 갔다** (12.101.2) — 재배분은 바로 그 전이 순간에 작동해
+  효과를 낸다
+
+**하이브리드에는 걸지 않는다.** 1단계에서 SMPS 를 가져오는 조합은 프로젝터
+초과가 44.9% 로 덜하고, 충전기가 이미 20/23 이라 상한이 프로젝터만 깎는다
+(41/59 -> 36/59). `run_gate_check --postproc` 는 그래서 기본이 꺼져 있다.
 """
-from typing import Dict, Optional, Sequence
+from typing import Dict, Optional, Sequence, Tuple
 import numpy as np
 
-#: 격리 통전 중 60초 창 평균의 최대값에 여유를 얹은 값 (2026-08-25 측정).
-#:     프로젝터 최대 49.6 / 충전기 70.3 / 미니PC 26.9
-PHYSICAL_CAP_W: Dict[str, float] = {
-    "beam_projector": 55.0,      # 최대 49.6 + 11%
-    "laptop_charger": 78.0,      # 최대 70.3 + 11%
-    "minipc": 30.0,              # 최대 26.9 + 11%
+#: 이 기기들 사이에서만 전력을 옮긴다 (저항 부하는 건드리지 않는다).
+SMPS_GROUP: Tuple[str, ...] = ("beam_projector", "laptop_charger", "minipc")
+
+#: 격리 통전 중 60초 창 평균의 최대값 (2026-08-25 측정).
+ISOLATED_MAX_W: Dict[str, float] = {
+    "beam_projector": 49.6, "laptop_charger": 70.3, "minipc": 26.9,
 }
 
+#: 상한을 거는 기기와 그 값. 격리 최대 + 11%.
+CAP_W: Dict[str, float] = {"beam_projector": 55.0}
 
-def cap_power(P: np.ndarray, apps: Sequence[str], gate: Optional[np.ndarray] = None,
-              caps: Optional[Dict[str, float]] = None,
-              redistribute: bool = False) -> np.ndarray:
-    """물리 상한을 넘는 예측을 자른다. `redistribute` 면 초과분을 다른 SMPS 로.
-
-    Args:
-        P: (n, K) 기기별 예측 전력 (게이트가 이미 곱해진 것)
-        apps: 기기 목록 (P 의 열 순서)
-        gate: (n, K) 게이트 확률. 재배분 가중에 쓴다
-        caps: 기기별 상한. 기본은 `PHYSICAL_CAP_W`
-        redistribute: 초과분을 상한에 여유가 있는 다른 SMPS 로 넘긴다.
-            **넘길 곳이 없으면 버린다** — 총합이 줄어 잔차가 늘어난다.
-            그것이 정직하다. 없는 곳에 억지로 넣으면 오귀속이 는다.
-    """
-    caps = caps or PHYSICAL_CAP_W
-    out = np.array(P, dtype=np.float64, copy=True)
-    idx = [(j, a) for j, a in enumerate(apps) if a in caps]
-    if not idx:
-        return out
-    cols = np.array([j for j, _ in idx])
-    lim = np.array([caps[a] for _, a in idx], dtype=np.float64)
-
-    sub = out[:, cols]
-    excess = np.clip(sub - lim[None, :], 0.0, None)
-    sub = np.minimum(sub, lim[None, :])
-
-    if redistribute and excess.sum() > 0:
-        head = np.clip(lim[None, :] - sub, 0.0, None)          # 남은 여유
-        w = head if gate is None else head * np.clip(gate[:, cols], 1e-6, None)
-        tot_ex = excess.sum(1, keepdims=True)
-        wsum = w.sum(1, keepdims=True)
-        share = np.divide(w, np.where(wsum > 0, wsum, 1.0))
-        add = np.minimum(share * tot_ex, head)
-        sub = sub + add
-    out[:, cols] = sub
-    return out
-
-
-#: 게이트를 켤 문턱 — 격리 통전 중앙값의 40% (2026-08-25 측정 48.8 / 51.9 / 14.5W).
+#: 게이트를 켤 문턱 — 격리 통전 중앙값(48.8 / 51.9 / 14.5W)의 20%.
+#: 20% 와 40% 가 튜닝셋에서 각각 미니PC F1 +0.079 / +0.055 였고 홀드아웃에서는
+#: 둘 다 −0.01 이다. 이득이 파일에 따라 갈리므로 **기본은 끔** (12.102.2).
 GATE_ON_W: Dict[str, float] = {
-    "beam_projector": 19.5, "laptop_charger": 20.8, "minipc": 5.8,
+    "beam_projector": 9.8, "laptop_charger": 10.4, "minipc": 2.9,
 }
 
 
-def _causal_floor(x: np.ndarray, win: int) -> np.ndarray:
-    """과거 `win` 표본 안의 최솟값 — 그 시점까지 **지속된** 성분이다.
-
-    전이 직후에는 0 에 머물다가 창이 다 차면 올라온다. 그래서 "전이 순간은
-    건드리지 않고 정상 상태만 옮긴다" 가 된다. 미래를 안 보므로 `run_live`
-    에서도 같은 값이 나온다.
-    """
-    n = len(x)
-    out = np.empty_like(x)
-    from collections import deque
-    dq: "deque[int]" = deque()
-    for i in range(n):
-        while dq and x[dq[-1]] >= x[i]:
-            dq.pop()
-        dq.append(i)
-        while dq[0] <= i - win:
-            dq.popleft()
-        out[i] = x[dq[0]]
-    return out
-
-
-def cap_power_v2(P: np.ndarray, apps: Sequence[str], gate: np.ndarray,
-                 caps: Optional[Dict[str, float]] = None,
-                 sustain_win: int = 0, sync_gate: bool = False,
-                 gate_on_w: Optional[Dict[str, float]] = None):
-    """`cap_power` 의 확장 (12.101절). 지속 성분만 넘기고, 게이트도 맞춘다.
+def apply_postproc(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
+                   caps: Optional[Dict[str, float]] = None,
+                   gate_sync: bool = False,
+                   gate_on_w: Optional[Dict[str, float]] = None,
+                   ) -> Tuple[np.ndarray, np.ndarray]:
+    """물리 상한을 넘는 예측을 잘라 다른 SMPS 로 넘긴다.
 
     Args:
-        sustain_win: 0 이면 초과분 전부를 넘긴다 (12.100 과 동일).
-            >0 이면 **과거 그만큼의 표본에서 지속된 초과분만** 넘긴다.
-            전이 순간의 초과분은 원래 기기에 남으므로 그 기기의 전이 귀속을
-            깎지 않는다 (12.100.5 가 지목한 손실).
-        sync_gate: 넘겨받아 문턱을 넘은 기기의 게이트를 켠다. 전력만 옮기면
-            on/off F1 이 안 변한다 (게이트를 안 건드리므로).
+        P: (n, K) 기기별 예측 전력 (게이트가 곱해진 값)
+        gate: (n, K) 게이트 확률
+        apps: 기기 목록 (열 순서)
+        caps: {기기: 상한W}. 기본 `CAP_W` (프로젝터만)
+        gate_sync: 넘겨받아 문턱을 넘은 기기의 게이트를 켠다
+        gate_on_w: 게이트 문턱. 기본 `GATE_ON_W`
 
     Returns:
-        (P_new, gate_new)
+        (P_new, gate_new). 총합은 보존된다 — 받을 기기가 있는 한 버리지 않는다.
     """
-    caps = caps or PHYSICAL_CAP_W
-    thr = gate_on_w or GATE_ON_W
+    caps = CAP_W if caps is None else caps
+    thr = GATE_ON_W if gate_on_w is None else gate_on_w
     out = np.array(P, dtype=np.float64, copy=True)
     g = np.array(gate, dtype=np.float64, copy=True)
-    idx = [(j, a) for j, a in enumerate(apps) if a in caps]
-    if not idx:
+
+    recv = [j for j, a in enumerate(apps) if a in SMPS_GROUP]
+    capped = [(j, caps[a]) for j, a in enumerate(apps) if a in caps]
+    if not capped or not recv:
         return out, g
-    cols = np.array([j for j, _ in idx])
-    lim = np.array([caps[a] for _, a in idx], dtype=np.float64)
 
-    sub = out[:, cols]
-    excess = np.clip(sub - lim[None, :], 0.0, None)
-    if sustain_win > 0:
-        moved = np.stack([_causal_floor(excess[:, k], sustain_win)
-                          for k in range(excess.shape[1])], 1)
-    else:
-        moved = excess
-    sub = sub - moved                      # 안 옮긴 초과분은 그대로 둔다
+    for j, lim in capped:
+        excess = np.clip(out[:, j] - lim, 0.0, None)
+        if not excess.any():
+            continue
+        out[:, j] -= excess
+        others = [k for k in recv if k != j]
+        if not others:
+            continue
+        w = np.clip(g[:, others], 1e-6, None)
+        share = w / w.sum(1, keepdims=True)
+        out[:, others] += share * excess[:, None]
 
-    head = np.clip(lim[None, :] - np.minimum(sub, lim[None, :]), 0.0, None)
-    w = head * np.clip(g[:, cols], 1e-6, None)
-    tot = moved.sum(1, keepdims=True)
-    wsum = w.sum(1, keepdims=True)
-    add = np.minimum(np.divide(w, np.where(wsum > 0, wsum, 1.0)) * tot, head)
-    sub = sub + add
-    out[:, cols] = sub
-
-    if sync_gate:
-        for k, (j, a) in enumerate(idx):
-            on = sub[:, k] >= thr.get(a, 1e9)
-            g[:, j] = np.where(on, np.maximum(g[:, j], 0.5 + 1e-6), g[:, j])
+    if gate_sync:
+        for j, a in enumerate(apps):
+            if a in SMPS_GROUP and a in thr:
+                g[:, j] = np.where(out[:, j] >= thr[a],
+                                   np.maximum(g[:, j], 0.5 + 1e-6), g[:, j])
     return out, g

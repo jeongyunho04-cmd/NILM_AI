@@ -141,10 +141,10 @@ def probe_file(d: dict, stem: str, apps_model: List[str], ev: dict,
     """전이마다 어느 기기가 얼마나 움직였는지."""
     P = d["gate"] * d["p_raw"]
     if cap != "off":
-        # 물리 전력 상한 후처리 (12.100). 프로젝터가 상한을 넘는 창이 74.6% 인데
-        # 그 초과분이 전이 Δ 에도 실려 승자독식을 키울 수 있다.
-        from src.model.postproc import cap_power
-        P = cap_power(P, apps_model, gate=d["gate"], redistribute=(cap == "redist"))
+        # 물리 전력 상한 후처리 (12.100~12.102). 프로젝터가 상한을 넘는 창이
+        # 74.6% 이고 그 초과분이 전이 Δ 에도 실려 승자독식을 키운다.
+        from src.model.postproc import apply_postproc
+        P, _ = apply_postproc(P, d["gate"], apps_model, gate_sync=(cap == "sync"))
     t = d["targets"] / CYCLES_PER_S
     i3 = _i3_ma(d["obs_harm"])
     info = ev[stem]
@@ -252,9 +252,10 @@ def main() -> int:
                     help="라벨 시각을 관측 계단으로 옮기는 최대 거리(초). 0=끄기")
     ap.add_argument("--snap-on", choices=("auto", "p", "i3"), default="auto",
                     help="스냅에 쓸 관측 신호. auto=SMPS 3종은 i3, 나머지는 p")
-    ap.add_argument("--cap", default="off", choices=("off", "cap", "redist"),
-                    help="물리 전력 상한 후처리 (12.100절). cap=초과분 버림, "
-                         "redist=여유 있는 다른 SMPS 로 넘김")
+    ap.add_argument("--cap", default="off", choices=("off", "on", "sync"),
+                    help="물리 전력 상한 후처리 (12.102절). on=프로젝터 초과분을 다른 "
+                         "SMPS 로 넘김, sync=게이트까지 맞춤. **2단계 단독에만 건다** — "
+                         "하이브리드는 41/59 -> 36/59 로 나빠진다")
     ap.add_argument("--feasible", default="off", choices=("off", "truth", "model"),
                     help="실현가능성 제약 (12.95절): 이미 켜진 기기는 못 켜고 꺼진 기기는 "
                          "못 끈다. truth=정답 상태(상한선) / model=모델 자신의 게이트(배포 가능)")

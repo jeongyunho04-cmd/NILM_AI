@@ -249,6 +249,11 @@ def main() -> int:
     ap.add_argument("--zero-ch", default="", metavar="LIST",
                     help="SMPS 체크포인트 입력에서 0 으로 만들 세밀 채널 (쉼표 구분). "
                          "예: --zero-ch 33,34,47 (비율 채널, 12.80.3)")
+    ap.add_argument("--postproc", default="off", choices=("off", "on", "sync"),
+                    help="물리 전력 상한 후처리 (12.102절). 프로젝터가 상한(55W)을 넘는 "
+                         "만큼을 다른 SMPS 로 넘긴다. sync 는 게이트도 맞춘다. "
+                         "**2단계 단독에서만 이득이다** (44/59 vs 27/59). 하이브리드는 "
+                         "41 -> 36/59 로 나빠지므로 기본은 꺼 둔다")
     ap.add_argument("--stride", type=int, default=30)
     ap.add_argument("--out", default="results/gate_check.json")
     a = ap.parse_args()
@@ -275,6 +280,8 @@ def main() -> int:
                 raise SystemExit("두 체크포인트의 가전 목록이 다릅니다")
             tag = (f"{tag}+{Path(a.ckpt_smps).stem}" + ("+zeroeven" if a.zero_even else "")
                    + (f"+z{a.zero_ch.replace(',', '_')}" if a.zero_ch else ""))
+        if a.postproc != "off":
+            tag = f"{tag}+pp{'sync' if a.postproc == 'sync' else ''}"
         print("=" * 88)
         print(f"[{tag}] stage {ck.get('stage', 1)} | {', '.join(stems)}")
         if model_smps is not None:
@@ -289,8 +296,17 @@ def main() -> int:
             if model_smps is not None:
                 d = merge_smps(d, forward_file(model_smps, stem, dev, stride=a.stride,
                                                zero_ch=zch), apps)
-            s_soft = score_one(d, gated(d, False), stem, apps, ev)
-            s_hard = score_one(d, gated(d, True), stem, apps, ev)
+            d_soft, d_hard = d, d
+            P_soft, P_hard = gated(d, False), gated(d, True)
+            if a.postproc != "off":
+                from src.model.postproc import apply_postproc
+                sync = a.postproc == "sync"
+                P_soft, g_soft = apply_postproc(P_soft, d["gate"], apps, gate_sync=sync)
+                P_hard, g_hard = apply_postproc(P_hard, d["gate"], apps, gate_sync=sync)
+                d_soft = dict(d, gate=g_soft)
+                d_hard = dict(d, gate=g_hard)
+            s_soft = score_one(d_soft, P_soft, stem, apps, ev)
+            s_hard = score_one(d_hard, P_hard, stem, apps, ev)
             per_file[stem] = {"soft": s_soft, "hard": s_hard, "hedge": hedge_report(d, apps)}
             rows["soft"].append(s_soft); rows["hard"].append(s_hard)
             if stem == "test_4":

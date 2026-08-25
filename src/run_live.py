@@ -290,11 +290,18 @@ def main() -> int:
     ap.add_argument("--csv", default="data/live.csv", help="수신기가 쓰는 CSV")
     ap.add_argument("--replay", default=None, help="기존 CSV 를 재생해 검증한다")
     ap.add_argument("--speed", type=float, default=20.0, help="재생 배속 (0=최대)")
-    ap.add_argument("--ckpt", default="results/adapt_ph1.pt")
-    ap.add_argument("--ckpt-smps", default="results/cnn_ov1.pt", metavar="PT",
+    # 12.77.1 의 가드 때문에 옛 체크포인트(adapt_ph1 / cnn_ov1)는 못 돈다 —
+    # `zero_even_harmonics` 기록이 없다. 현행 운영점으로 바꾼다 (HANDOFF 5.4).
+    ap.add_argument("--ckpt", default="results/adapt_ze1.pt")
+    ap.add_argument("--ckpt-smps", default="results/cnn_ze1.pt", metavar="PT",
                     help="SMPS 3종(프로젝터/충전기/미니PC)만 이 체크포인트로 예측한다. "
                          "빈 문자열(--ckpt-smps \"\")을 주면 --ckpt 단독으로 돈다. "
                          "SMPS_GROUP 주석의 측정 근거 참조")
+    ap.add_argument("--postproc", default="off", choices=("off", "on", "sync"),
+                    help="물리 전력 상한 후처리 (12.102절). 프로젝터가 상한(55W)을 넘는 "
+                         "만큼을 다른 SMPS 로 넘긴다. sync 는 게이트도 맞춘다. "
+                         "**2단계 단독(--ckpt-smps \"\")에서만 이득이다** — 전이 귀속 "
+                         "27 -> 44/59. 하이브리드에서는 41 -> 36/59 로 나빠진다")
     ap.add_argument("--every", type=int, default=30, help="추론 간격 (사이클). 30=0.5초")
     ap.add_argument("--log", default="results/live_log.jsonl")
     ap.add_argument("--no-reorder", action="store_true",
@@ -398,6 +405,13 @@ def main() -> int:
                                   torch.from_numpy(wide).to(dev))
                 gate[smps_ix] = torch.sigmoid(os_["on_logit"])[0].float().cpu().numpy()[smps_ix]
                 power[smps_ix] = os_["power"][0].float().cpu().numpy()[smps_ix]
+            if a.postproc != "off":
+                # 물리 전력 상한 후처리 (12.102). 프로젝터가 상한을 넘는 만큼을
+                # 다른 SMPS 로 넘긴다. **오프라인 채점과 같은 함수**를 쓴다.
+                from src.model.postproc import apply_postproc
+                pp, gg = apply_postproc(power[None, :], gate[None, :], list(apps),
+                                        gate_sync=(a.postproc == "sync"))
+                power, gate = pp[0], gg[0]
             standby = float(o["standby"][0].sum())
             p_obs = float(win[0, 30, ti])
             n_infer += 1

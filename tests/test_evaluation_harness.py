@@ -449,3 +449,41 @@ def test_real_event_labels_are_physically_possible():
                 bad.append(f"{stem}/{app}: ON 구간의 {100*share:.1f}% 에서 "
                            f"총전력이 {floor}W 미만 (최소 {p[m].min():.2f}W)")
     assert not bad, "정답이 신호와 모순됩니다: " + " | ".join(bad)
+
+def test_후처리는_상한을_지키고_총합을_보존한다():
+    """물리 전력 상한 후처리 (12.102절).
+
+    프로젝터는 격리에서 폭 ±0.5W 인데 단독 모델이 137W 까지 붙인다. 초과분을
+    잘라 다른 SMPS 로 넘기되 **총합은 보존해야 한다** — 버리면 잔차가
+    8.88 -> 22.86W 로 무너진다 (12.100.2).
+    """
+    import numpy as np
+    from src.model.postproc import CAP_W, apply_postproc
+
+    apps = ["beam_projector", "laptop_charger", "minipc", "oven"]
+    P = np.array([[120.0, 5.0, 2.0, 500.0], [48.0, 60.0, 20.0, 0.0]])
+    g = np.array([[0.9, 0.3, 0.6, 1.0], [1.0, 1.0, 1.0, 0.0]])
+    Pn, gn = apply_postproc(P, g, apps)
+
+    assert Pn[:, 0].max() <= CAP_W["beam_projector"] + 1e-9
+    assert np.allclose(Pn.sum(1), P.sum(1)), "총합이 보존되지 않았습니다"
+    assert Pn[0, 3] == P[0, 3], "저항 부하는 건드리면 안 됩니다"
+    # 상한 아래인 창은 그대로다
+    assert np.allclose(Pn[1], P[1])
+
+
+def test_게이트_동기는_넘겨받은_기기만_켠다():
+    """전력만 옮기면 on/off F1 이 안 변한다 (게이트를 안 건드리므로, 12.101.1)."""
+    import numpy as np
+    from src.model.postproc import GATE_ON_W, apply_postproc
+
+    apps = ["beam_projector", "laptop_charger", "minipc"]
+    P = np.array([[150.0, 1.0, 0.5]])
+    g = np.array([[0.9, 0.05, 0.05]])
+    _, g_off = apply_postproc(P, g, apps, gate_sync=False)
+    Pn, g_on = apply_postproc(P, g, apps, gate_sync=True)
+
+    assert np.allclose(g_off, g), "동기를 끄면 게이트가 그대로여야 합니다"
+    for j, a in enumerate(apps[1:], start=1):
+        if Pn[0, j] >= GATE_ON_W[a]:
+            assert g_on[0, j] > 0.5, f"{a} 가 {Pn[0, j]:.1f}W 를 받고도 꺼져 있습니다"
