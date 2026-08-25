@@ -76,6 +76,23 @@ PRESETS: Dict[str, Dict[str, float]] = {
         "unplugged_baseline": 0.05,
         "smps_overlap": 0.14,
     },
+    # 12.90.2 뒤의 판 (2026-08-25). smps_hi(0.26)가 저항 레시피를 함께 깎아
+    # 포트 환각을 test_4 -> test3 으로 옮겼다. 여기서는 **저항 3종을 손대지
+    # 않는다** - high_power_resistive / high_low_mixed / resistive_overlap 고정.
+    # 용량도 0.26 -> 0.15 로 낮춘다.
+    "smps_mid": {
+        "random_realistic": 0.11,        # -0.05
+        "random_uniform": 0.10,          # -0.04
+        "standby_only": 0.14,            # -0.02
+        "low_load_among_standby": 0.16,  # -0.04  (smps_overlap 이 부분 대체한다:
+                                         #         SMPS 3종은 전부 저부하 기기이고
+                                         #         force_plugged_all 로 대기전력이 깔린다)
+        "high_power_resistive": 0.10,    # 고정
+        "high_low_mixed": 0.14,          # 고정
+        "resistive_overlap": 0.05,       # 고정
+        "unplugged_baseline": 0.05,      # 고정
+        "smps_overlap": 0.15,
+    },
     "smps_hi": {
         "random_realistic": 0.10,
         "random_uniform": 0.10,
