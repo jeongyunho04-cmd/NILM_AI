@@ -44,6 +44,7 @@ from src import env_guard  # noqa: F401  torch 보다 먼저
 import numpy as np
 import torch
 
+from src.preprocessing.file_registry import NOISE_FLOOR_EXTERNAL_W
 from src.model.inputs import build_inputs, target_index
 from src.run_gate_check import load_model
 
@@ -307,6 +308,11 @@ def main() -> int:
                     help="SMPS 3종(프로젝터/충전기/미니PC)만 이 체크포인트로 예측한다. "
                          "**기본은 빈 문자열 = 단독 동작**이다 (12.102.5). 하이브리드로 "
                          "되돌리려면 results/cnn_ze1.pt 를 준다")
+    ap.add_argument("--absorb", type=float, default=0.0, metavar="FRAC",
+                    help="총전력 잔차를 고조파가 닮은 SMPS 로 흡수한다 (12.104절). "
+                         "0.5 면 실측 8파일에서 잔차 8.88 -> 7.35W. **기본은 꺼 둔다** — "
+                         "미등록 부하의 잔차까지 SMPS 로 갈 수 있고, 그 위험은 우리 "
+                         "실측 파일로는 못 잰다")
     ap.add_argument("--postproc", default="on", choices=("off", "on", "sync"),
                     help="물리 전력 상한 후처리 (12.102절). 프로젝터가 상한(55W)을 넘는 "
                          "만큼을 다른 SMPS 로 넘긴다. sync 는 게이트도 맞춘다. "
@@ -350,6 +356,17 @@ def main() -> int:
     actual: Dict[str, bool] = {}
     log = Path(a.log); log.parent.mkdir(parents=True, exist_ok=True)
     logf = log.open("a", encoding="utf-8")
+    sigs = None
+    if a.absorb > 0:
+        from src.model.net import (harmonic_signatures, noise_signature,
+                                   standby_signatures)
+        from src.synthesis.segment_pool import SegmentPool
+        _pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+        sigs = (harmonic_signatures(_pool, apps), standby_signatures(_pool, apps),
+                noise_signature(_pool))
+        del _pool
+        print(f"  ** 잔차 흡수 {a.absorb:g} (12.104절) **")
+
     n_seen = n_infer = 0
     t_s = 0.0
     col: Dict[str, int] = {}
@@ -415,6 +432,9 @@ def main() -> int:
                                   torch.from_numpy(wide).to(dev))
                 gate[smps_ix] = torch.sigmoid(os_["on_logit"])[0].float().cpu().numpy()[smps_ix]
                 power[smps_ix] = os_["power"][0].float().cpu().numpy()[smps_ix]
+            standby_k = o["standby"][0].float().cpu().numpy()
+            standby = float(standby_k.sum())
+            p_obs = float(win[0, 30, ti])
             if a.postproc != "off":
                 # 물리 전력 상한 후처리 (12.102). 프로젝터가 상한을 넘는 만큼을
                 # 다른 SMPS 로 넘긴다. **오프라인 채점과 같은 함수**를 쓴다.
@@ -422,8 +442,14 @@ def main() -> int:
                 pp, gg = apply_postproc(power[None, :], gate[None, :], list(apps),
                                         gate_sync=(a.postproc == "sync"))
                 power, gate = pp[0], gg[0]
-            standby = float(o["standby"][0].sum())
-            p_obs = float(win[0, 30, ti])
+            if a.absorb > 0:
+                # 총전력 잔차를 고조파가 닮은 SMPS 로 흡수 (12.104).
+                from src.model.postproc import absorb_residual
+                obs_h = np.stack([win[0, 0:15, ti], win[0, 15:30, ti]], axis=-1)
+                power = absorb_residual(
+                    power[None, :], gate[None, :], list(apps), standby_k[None, :],
+                    np.array([NOISE_FLOOR_EXTERNAL_W]), np.array([p_obs]),
+                    obs_h[None], sigs[0], sigs[1], sigs[2], frac=a.absorb)[0]
             n_infer += 1
 
             rec = {"t_s": round(t_s, 3), "type": "pred", "p_observed": round(p_obs, 2),

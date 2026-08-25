@@ -156,6 +156,22 @@ def gated(d: dict, hard: bool) -> np.ndarray:
     return g * d["p_raw"]
 
 
+_SIG_CACHE: dict = {}
+
+
+def _signatures(apps: List[str]):
+    """와트당 고조파 지문 / 대기 지문 / 계측계 지문. 한 번만 만든다."""
+    key = tuple(apps)
+    if key not in _SIG_CACHE:
+        from src.model.net import (harmonic_signatures, noise_signature,
+                                   standby_signatures)
+        from src.synthesis.segment_pool import SegmentPool
+        pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+        _SIG_CACHE[key] = (harmonic_signatures(pool, apps),
+                           standby_signatures(pool, apps), noise_signature(pool))
+    return _SIG_CACHE[key]
+
+
 def score_one(d: dict, P: np.ndarray, stem: str, apps: List[str], ev: dict) -> dict:
     resid = P.sum(1) + d["standby"].sum(1) + d["p_noise"] - d["p_observed"]
     n_cycles = int(ev[stem]["cycles"])
@@ -254,6 +270,9 @@ def main() -> int:
                          "만큼을 다른 SMPS 로 넘긴다. sync 는 게이트도 맞춘다. "
                          "**2단계 단독에서만 이득이다** (44/59 vs 27/59). 하이브리드는 "
                          "41 -> 36/59 로 나빠지므로 기본은 꺼 둔다")
+    ap.add_argument("--absorb", type=float, default=0.0, metavar="FRAC",
+                    help="총전력 잔차를 고조파가 닮은 SMPS 에 흡수시킨다 (12.104절). "
+                         "0.5 면 잔차 8.88 -> 7.35W. 0 이면 끔")
     ap.add_argument("--stride", type=int, default=30)
     ap.add_argument("--out", default="results/gate_check.json")
     a = ap.parse_args()
@@ -282,6 +301,8 @@ def main() -> int:
                    + (f"+z{a.zero_ch.replace(',', '_')}" if a.zero_ch else ""))
         if a.postproc != "off":
             tag = f"{tag}+pp{'sync' if a.postproc == 'sync' else ''}"
+        if a.absorb > 0:
+            tag = f"{tag}+ab{a.absorb:g}"
         print("=" * 88)
         print(f"[{tag}] stage {ck.get('stage', 1)} | {', '.join(stems)}")
         if model_smps is not None:
@@ -305,6 +326,15 @@ def main() -> int:
                 P_hard, g_hard = apply_postproc(P_hard, d["gate"], apps, gate_sync=sync)
                 d_soft = dict(d, gate=g_soft)
                 d_hard = dict(d, gate=g_hard)
+            if a.absorb > 0:
+                from src.model.postproc import absorb_residual
+                sigs = _signatures(apps)
+                P_soft = absorb_residual(P_soft, d_soft["gate"], apps, d["standby"],
+                                         d["p_noise"], d["p_observed"], d["obs_harm"],
+                                         *sigs, frac=a.absorb)
+                P_hard = absorb_residual(P_hard, d_hard["gate"], apps, d["standby"],
+                                         d["p_noise"], d["p_observed"], d["obs_harm"],
+                                         *sigs, frac=a.absorb)
             s_soft = score_one(d_soft, P_soft, stem, apps, ev)
             s_hard = score_one(d_hard, P_hard, stem, apps, ev)
             per_file[stem] = {"soft": s_soft, "hard": s_hard, "hedge": hedge_report(d, apps)}

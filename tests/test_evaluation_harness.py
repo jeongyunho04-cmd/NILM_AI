@@ -487,3 +487,39 @@ def test_게이트_동기는_넘겨받은_기기만_켠다():
     for j, a in enumerate(apps[1:], start=1):
         if Pn[0, j] >= GATE_ON_W[a]:
             assert g_on[0, j] > 0.5, f"{a} 가 {Pn[0, j]:.1f}W 를 받고도 꺼져 있습니다"
+
+def test_잔차_흡수는_닮은_기기에만_준다():
+    """총전력 잔차를 고조파가 닮은 SMPS 로만 넘긴다 (12.104절).
+
+    저항 부하의 잔차까지 SMPS 로 가면 오귀속이 된다. 실측에서도 `test_9`
+    (저항만)는 25.65 -> 25.35W 로 거의 안 변하고 `test_5` 는 12.25 -> 3.52W 다.
+    """
+    import numpy as np
+    from src.model.postproc import absorb_residual
+
+    apps = ["beam_projector", "minipc", "oven"]
+    K, H = len(apps), 15
+    sig = np.zeros((K, H, 2), dtype=np.float32)
+    sig[0, ::2, 0] = [1.0, 0.6, 0.3, 0.1, 0.05, 0.02, 0.01, 0.0]   # 프로젝터
+    sig[1, ::2, 0] = [1.0, 0.9, 0.8, 0.7, 0.60, 0.50, 0.40, 0.3]   # 미니PC
+    sig[2, 0, 0] = 1.0                                             # 오븐 (기본파만)
+    sb = np.zeros_like(sig); nz = np.zeros((H, 2), dtype=np.float32)
+
+    P = np.array([[40.0, 10.0, 500.0]])
+    gate = np.array([[0.9, 0.9, 0.9]])
+    standby = np.zeros((1, K)); p_noise = np.zeros(1)
+
+    # 잔차 20W 가 **오븐 모양**(기본파만)으로 들어오면 SMPS 는 거의 안 받는다
+    obs_oven = np.einsum("nk,khc->nhc", P + np.array([[0.0, 0.0, 20.0]]), sig)
+    out = absorb_residual(P, gate, apps, standby, p_noise,
+                          np.array([P.sum() + 20.0]), obs_oven, sig, sb, nz, frac=1.0)
+    smps_gain = out[0, :2].sum() - P[0, :2].sum()
+
+    # 같은 20W 가 **미니PC 모양**이면 미니PC 가 받는다
+    obs_mini = np.einsum("nk,khc->nhc", P + np.array([[0.0, 20.0, 0.0]]), sig)
+    out2 = absorb_residual(P, gate, apps, standby, p_noise,
+                           np.array([P.sum() + 20.0]), obs_mini, sig, sb, nz, frac=1.0)
+    assert out2[0, 1] - P[0, 1] > smps_gain, (
+        f"미니PC 모양 잔차를 미니PC 가 더 받아야 합니다 "
+        f"({out2[0, 1] - P[0, 1]:.1f}W vs 오븐 모양일 때 SMPS 합 {smps_gain:.1f}W)")
+    assert out[0, 2] == P[0, 2], "저항 부하는 흡수 대상이 아닙니다"

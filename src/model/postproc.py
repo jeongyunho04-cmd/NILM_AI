@@ -92,3 +92,69 @@ def apply_postproc(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
                 g[:, j] = np.where(out[:, j] >= thr[a],
                                    np.maximum(g[:, j], 0.5 + 1e-6), g[:, j])
     return out, g
+
+
+#: 잔차 흡수 비율 (12.104). 기본파를 빼고 유사도를 재면 1.0 에서도 전이 귀속이
+#: 45/59 로 유지되고 잔차만 8.88 -> 6.50W 로 준다. **1.0 을 쓴다.**
+#: (기본파를 넣었을 때는 1.0 에서 전이가 43/59 로 떨어졌다 — 저항 잔차가
+#:  SMPS 로 새면서 전이 Δ 를 흔들었기 때문이다.)
+ABSORB_FRAC = 1.0
+
+#: 잔차를 받을 최소 게이트. 꺼져 있다고 본 기기에는 안 넘긴다 (유령 방지).
+ABSORB_MIN_GATE = 0.1
+
+
+def absorb_residual(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
+                    standby: np.ndarray, p_noise: np.ndarray, p_observed: np.ndarray,
+                    obs_harm: np.ndarray, sig: np.ndarray, standby_sig: np.ndarray,
+                    noise_sig: np.ndarray, frac: float = ABSORB_FRAC,
+                    min_gate: float = ABSORB_MIN_GATE,
+                    odd_only: bool = True, skip_fundamental: bool = True) -> np.ndarray:
+    """총전력 잔차를 **고조파 잔차가 닮은 SMPS 에** 나눠 준다 (12.104).
+
+    `L_cons` 를 추론 시점에 거는 것과 같은데, **누구에게 줄지를 고조파가 정한다**
+    는 점이 다르다 (12.5 가 경고한 "합만 보고 아무에게나 붙이는" 것을 피한다).
+
+        resid_h = 관측 고조파 − (Σ P̂·sig + 대기 + 계측계)
+        w_k     = max(0, cos(resid_h, sig_k))        게이트가 낮은 기기는 0
+        P̂_k    += w_k / Σw · (관측 총전력 − 예측 총합) · frac
+
+    **안전장치가 둘이다.** ① 게이트가 `min_gate` 아래인 기기는 안 받는다.
+    ② 유사도를 **3차 이상**으로만 잰다 — 기본파를 넣으면 코사인이 1차에 지배되어
+    저항 부하의 잔차까지 SMPS 를 닮은 것으로 보인다. 실측에서는 `test_9`(저항만)가
+    25.65 -> 25.35W 로 거의 안 변하고 `test_5` 는 12.25 -> 3.52W 다 (frac=1.0).
+    """
+    out = np.array(P, dtype=np.float64, copy=True)
+    if frac <= 0:
+        return out
+    cols = [j for j, a in enumerate(apps) if a in SMPS_GROUP]
+    if not cols:
+        return out
+    hh = list(range(0, sig.shape[1], 2)) if odd_only else list(range(sig.shape[1]))
+    if skip_fundamental and len(hh) > 1:
+        # **기본파를 뺀다.** 넣으면 코사인이 1차에 지배되어 저항 부하의 잔차까지
+        # SMPS 를 닮은 것으로 보인다 (단위 시험: 오븐 모양 20W 중 12.3W 가 SMPS 로
+        # 흘렀다). 3차 이상만 쓰면 크기가 아니라 **모양**으로 갈린다.
+        hh = hh[1:]
+
+    total = out.sum(1) + standby.sum(1) + p_noise
+    resid = (p_observed - total) * float(frac)
+
+    pred_h = (np.einsum("nk,khc->nhc", out, sig)
+              + np.einsum("nk,khc->nhc", standby, standby_sig) + noise_sig[None])
+    R = (obs_harm - pred_h)[:, hh, :]
+    Rc = R[:, :, 0] + 1j * R[:, :, 1]
+    rn = np.linalg.norm(Rc, axis=1)
+
+    W = np.zeros((len(out), len(cols)))
+    for i, j in enumerate(cols):
+        s = sig[j][hh, 0] + 1j * sig[j][hh, 1]
+        W[:, i] = np.clip(np.real(Rc @ np.conj(s)) / (np.linalg.norm(s) * rn + 1e-12),
+                          0.0, None)
+    W = np.where(gate[:, cols] >= min_gate, W, 0.0)
+    tw = W.sum(1, keepdims=True)
+    ok = tw[:, 0] > 0
+    add = np.zeros_like(W)
+    add[ok] = W[ok] / tw[ok] * resid[ok, None]
+    out[:, cols] = np.clip(out[:, cols] + add, 0.0, None)
+    return out
