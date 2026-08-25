@@ -168,6 +168,11 @@ def score_one(d: dict, P: np.ndarray, stem: str, apps: List[str], ev: dict) -> d
                  if v["fa_rel"] == v["fa_rel"]] or [float("nan")]),
             "residual_abs_w": float(np.abs(resid).mean()),
             "on_off_f1_mean": float(np.mean(vals)) if vals else float("nan"),
+            # 오귀속을 **기기별로도** 남긴다 (12.90). 합만 저장하던 탓에 12.89 의
+            # 유령 회귀(8.67 -> 16.27W)가 어느 기기 때문인지 보려고 채점을 다시
+            # 돌려야 했다. 원인은 SMPS 가 아니라 전기포트였다 - 합만 봐서는
+            # "SMPS 레시피가 유령을 늘렸다" 로 잘못 읽힌다.
+            "absent": ab["absent"],
             "per_app_f1": f1}
 
 
