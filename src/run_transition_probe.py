@@ -234,7 +234,8 @@ def print_file(stem: str, res: dict) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="전이 귀속 진단 (12.35.2절)")
-    ap.add_argument("--ckpt", default="results/adapt_ph1.pt")
+    # 운영점 (12.102.5). adapt_ph1 은 12.77.1 의 가드에 막혀 못 돈다.
+    ap.add_argument("--ckpt", default="results/adapt_smpsf.pt")
     ap.add_argument("--ckpt-smps", default=None, metavar="PT",
                     help="SMPS 3종만 이 체크포인트로 (운영 조합)")
     ap.add_argument("--zero-even", action="store_true",

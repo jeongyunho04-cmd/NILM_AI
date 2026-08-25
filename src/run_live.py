@@ -290,14 +290,24 @@ def main() -> int:
     ap.add_argument("--csv", default="data/live.csv", help="수신기가 쓰는 CSV")
     ap.add_argument("--replay", default=None, help="기존 CSV 를 재생해 검증한다")
     ap.add_argument("--speed", type=float, default=20.0, help="재생 배속 (0=최대)")
-    # 12.77.1 의 가드 때문에 옛 체크포인트(adapt_ph1 / cnn_ov1)는 못 돈다 —
-    # `zero_even_harmonics` 기록이 없다. 현행 운영점으로 바꾼다 (HANDOFF 5.4).
-    ap.add_argument("--ckpt", default="results/adapt_ze1.pt")
-    ap.add_argument("--ckpt-smps", default="results/cnn_ze1.pt", metavar="PT",
+    # ── 운영점 (2026-08-25, 12.102.5) ───────────────────────────────────
+    # **단일 모델 + 물리 상한 후처리로 바꿨다.** 12.31.5 이래 하이브리드
+    # (SMPS 는 1단계, 나머지는 2단계)였는데, 12.102 에서 단독+후처리가 네 지표를
+    # 앞섰다:
+    #
+    #   adapt_ze1+cnn_ze1        전이 41/59  유령 8.67W  잔차 11.13W  미니PC 0.763
+    #   adapt_smpsf --postproc   전이 44/59  유령 2.13W  잔차  8.88W  미니PC 0.716
+    #
+    # 뒤지는 것은 프로젝터(−0.046)·충전기(−0.034) F1 이다.
+    # **실행 간 폭은 안 쟀다** (12.102.5 의 유보). 사용자 결정으로 교체했다.
+    # 되돌리려면 `--ckpt results/adapt_ze1.pt --ckpt-smps results/cnn_ze1.pt
+    # --postproc off` 로 준다.
+    ap.add_argument("--ckpt", default="results/adapt_smpsf.pt")
+    ap.add_argument("--ckpt-smps", default="", metavar="PT",
                     help="SMPS 3종(프로젝터/충전기/미니PC)만 이 체크포인트로 예측한다. "
-                         "빈 문자열(--ckpt-smps \"\")을 주면 --ckpt 단독으로 돈다. "
-                         "SMPS_GROUP 주석의 측정 근거 참조")
-    ap.add_argument("--postproc", default="off", choices=("off", "on", "sync"),
+                         "**기본은 빈 문자열 = 단독 동작**이다 (12.102.5). 하이브리드로 "
+                         "되돌리려면 results/cnn_ze1.pt 를 준다")
+    ap.add_argument("--postproc", default="on", choices=("off", "on", "sync"),
                     help="물리 전력 상한 후처리 (12.102절). 프로젝터가 상한(55W)을 넘는 "
                          "만큼을 다른 SMPS 로 넘긴다. sync 는 게이트도 맞춘다. "
                          "**2단계 단독(--ckpt-smps \"\")에서만 이득이다** — 전이 귀속 "
