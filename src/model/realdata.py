@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
-from src.evaluation.sealing import is_sealed
+from src.evaluation.sealing import assert_not_sealed, is_sealed
 from src.model.inputs import build_inputs, target_index
 from src.preprocessing import load_nilm_npz
 from src.preprocessing.file_registry import NOISE_FLOOR_EXTERNAL_W
@@ -60,9 +60,11 @@ class RealWindows:
         if stems is None:
             stems = [s for s in found if not is_sealed(s)]
         else:
-            bad = [s for s in stems if is_sealed(s)]
-            if bad:
-                raise ValueError(f"봉인된 파일은 적응에 쓸 수 없습니다: {bad} (4.3절)")
+            # `assert_not_sealed` 를 쓴다 — **`unseal()` 블록 안에서는 통과한다.**
+            # 예전에는 여기서 `is_sealed` 로 무조건 막아, 최종 평가(4.3절)조차
+            # 이 경로로는 못 들어왔다. 개봉 여부의 판단은 sealing 한 곳에 둔다.
+            for s_ in stems:
+                assert_not_sealed(s_)
         if exclude:
             drop = set(exclude)
             unknown = drop - set(found)
