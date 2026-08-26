@@ -104,6 +104,11 @@ DEVICE_FILES: Dict[str, DeviceSpec] = {
     "electric_kettle_2_fixed": DeviceSpec("electiric_kettle", LoadClass.RESISTIVE, daily_usage_hours=0.15),
     "hotplate_3_fixed":        DeviceSpec("hotplate",         LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
     "laptop_charger_3_fixed":  DeviceSpec("laptop_charger",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=8.0),
+    # 2026-08-26 추가. 237V 회선, 9.2분, 52 -> 70W 로 **오르는** 구간이다
+    # (기존 녹화는 전부 65 -> 39W 로 내려가는 테이퍼였다). 12.30.6 이 "충전기는
+    # 다른 두 기기의 지문 위를 가로지르는 궤적" 이라 했는데, 그 궤적의 반대쪽
+    # 끝을 채운다. 체크리스트 B-1 의 "충전 상태를 바꿔 가며" 항목이다.
+    "laptop_charger_4_fixed":  DeviceSpec("laptop_charger",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=8.0),
     "oven_3_fixed":            DeviceSpec("oven",             LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
 }
 

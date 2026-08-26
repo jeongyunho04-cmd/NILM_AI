@@ -1,0 +1,62 @@
+{
+  "raw_rows": 33150,
+  "cleaned_rows": 33150,
+  "duration_s": 552.5,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 60,
+  "invalid_samples_dropped": 0,
+  "invalid_samples_interpolated": 60,
+  "interpolated_cycles": 60,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "noise_floor_applied_w": 1.4,
+  "source_file": "laptop_charger_4_fixed.csv",
+  "file_role": "device",
+  "appliance_type": "laptop_charger",
+  "load_class": "smps",
+  "classification_reason": "등록된 단일 가전 'laptop_charger'",
+  "output_file": null,
+  "feature_columns_count": 122,
+  "v_ref_v": 237.03,
+  "p_mean": 59.05,
+  "p_max": 75.02,
+  "irms_mean": 0.4508,
+  "korean_name": "노트북충전기",
+  "total_samples": 33150,
+  "on_percentage": 87.29,
+  "state_distribution": {
+    "IDLE_UNPLUGGED": {
+      "state_id": 0,
+      "description": "미연결 무부하 또는 완충 대기",
+      "count": 4215,
+      "percentage": 12.71,
+      "duration_min": 1.17
+    },
+    "TRICKLE_IDLE_CHARGE": {
+      "state_id": 1,
+      "description": "저속 트리클 충전 / 유휴 상태 충전",
+      "count": 1021,
+      "percentage": 3.08,
+      "duration_min": 0.28
+    },
+    "FAST_ACTIVE_CHARGE": {
+      "state_id": 2,
+      "description": "고속 충전 / CPU 부하 동작 중 충전",
+      "count": 27914,
+      "percentage": 84.21,
+      "duration_min": 7.75
+    }
+  },
+  "events_summary": {
+    "total_events": 10,
+    "on_events": 2,
+    "off_events": 2,
+    "mode_change_events": 6,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\laptop_charger_4_fixed_annotated.csv",
+  "npz_file": "processed_data\\npz\\laptop_charger_4_fixed.npz",
+  "events_json": "processed_data\\labels\\laptop_charger_4_fixed_events.json"
+}
