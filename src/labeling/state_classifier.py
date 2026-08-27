@@ -212,7 +212,14 @@ class StateClassifier:
 
             state_ids[i] = current_state
 
-        # 이진 is_on 라벨: 상태 ID가 0보다 크면 1, 0이면 0
-        is_on = np.where(state_ids > 0, 1, 0).astype(int)
+        # 이진 is_on 라벨: 상태 ID가 0보다 크면 1, 0이면 0.
+        # **단, `on_state_min_id` 가 있으면 그 ID 이상만 ON 이다** (12.111).
+        # 오븐이 그 경우다 — 팬/조명(16.5W)이 `on_threshold_w=10` 을 넘어서
+        # 히터가 꺼진 25분 내내 ON 으로 잡혔다. 그 라벨로 학습하면 "오븐 ON 인데
+        # 전력 0W" 인 창이 절반이 되고, 모델이 저항 부하를 전부 오븐으로 읽는다
+        # (12.110.2). 핫플레이트는 휴지 전력이 문턱 아래라 원래부터 통전만 ON 이다.
+        min_id = getattr(self.config, "on_state_min_id", None)
+        thr = 1 if min_id is None else int(min_id)
+        is_on = np.where(state_ids >= thr, 1, 0).astype(int)
 
         return state_ids, is_on, events

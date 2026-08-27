@@ -25,6 +25,12 @@ class ApplianceStateConfig:
     states: List[StateRule]
     min_state_duration_s: float = 0.5  # Minimum time in seconds to confirm state transition (anti-chatter)
     hysteresis_w: float = 2.0  # Power deadband around threshold boundaries
+    #: 이 ID 이상인 상태만 `is_on=1` 로 본다 (None 이면 `on_threshold_w` 를 쓴다).
+    #: **오븐 때문에 생겼다** (12.111). 오븐의 팬/조명 상태가 16.5W 라
+    #: `on_threshold_w=10` 을 넘어, 히터가 꺼진 25분 내내 ON 으로 잡혔다.
+    #: 그 결과 "오븐 ON 인데 전력 0W" 인 창이 절반이 되고, 모델이 저항 부하를
+    #: 전부 오븐으로 읽는 원인이 됐다 (12.110.2: 재현율 1.000 정밀도 0.277).
+    on_state_min_id: Optional[int] = None
 
 
 # ── Appliance Specific State Configurations ─────────────────────────────────
@@ -138,6 +144,9 @@ STATE_CONFIGURATIONS: Dict[str, ApplianceStateConfig] = {
         appliance_type="oven",
         korean_name="오븐",
         on_threshold_w=10.0,
+        # 히터 통전(state 2)만 ON 으로 본다 — 12.111. 팬/조명(16.5W)은 OFF 로
+        # 두어 합성기가 대기 전력으로 넘긴다 (핫플레이트와 같은 취급).
+        on_state_min_id=2,
         min_state_duration_s=0.5,
         hysteresis_w=5.0,
         states=[

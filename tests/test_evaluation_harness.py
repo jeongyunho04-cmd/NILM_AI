@@ -413,6 +413,8 @@ def test_real_event_labels_are_physically_possible():
         pytest.skip("real_events.json 이 없습니다")
     files = json.loads(ev_path.read_text(encoding="utf-8"))["files"]
 
+    from src.preprocessing.file_registry import is_periodic_duty
+
     # 기기별 최저 소비 (개별 녹화의 p10 중 최솟값). 여유를 두고 보수적으로 잡는다.
     MIN_W = {"minipc": 7.0, "beam_projector": 35.0, "laptop_charger": 15.0,
              "hotplate": 300.0, "oven": 10.0, "electiric_kettle": 800.0,
@@ -443,6 +445,16 @@ def test_real_event_labels_are_physically_possible():
             for a, b in iv.get("uncertain", []):
                 m[int(a * 60):int(b * 60)] = False
             if not m.any():
+                continue
+            if is_periodic_duty(app):
+                # **듀티 부하는 하한 검사를 못 쓴다.** 라벨이 세션 단위인데
+                # 릴레이/서모스탯이 통전을 끊으므로, 휴지 구간에는 총전력이
+                # 정당하게 0 근처로 내려간다 (test_11 의 핫플 세션 중 14.8%).
+                # 대신 **통전이 실제로 있었는가** 를 본다.
+                duty = float((p[m] >= floor).mean())
+                if duty < 0.15:
+                    bad.append(f"{stem}/{app}: ON 구간에서 {floor}W 이상인 사이클이 "
+                               f"{100*duty:.1f}% 뿐 (듀티 부하라 통전율로 본다)")
                 continue
             share = float((p[m] < floor).mean())
             if share > 0.02:

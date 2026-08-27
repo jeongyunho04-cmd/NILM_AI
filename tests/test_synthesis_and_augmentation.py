@@ -700,16 +700,22 @@ def test_high_power_resistive_windows_boost_rare_appliances(segment_pool):
     resistive = set(get_resistive_appliances())
     assert resistive, "저항 부하가 등록되어 있지 않습니다"
 
-    gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=300)
+    # **창 길이는 운영값(3600 = 60초)을 쓴다.** 300(5초)이면 오븐이 통전 없는
+    # 창을 만든다 — 12.111 이 오븐 ON 을 '히터 통전'으로 바꾸면서 서모스탯
+    # 공백(25~31초)이 라벨에 드러났고, 그것이 5초 창보다 훨씬 길다.
+    gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=3600)
     assert "high_power_resistive" in gen.describe_recipe_mix()
 
-    # 전용 레시피는 반드시 저항 부하를 켠다
+    # 전용 레시피는 저항 부하만 켠다. 다만 **듀티 부하는 창 안에서 통전이 없을 수
+    # 있으므로**(오븐 통전율 25~43%) 매 창이 아니라 대부분의 창을 본다.
+    n_active = 0
     for _ in range(20):
-        s = gen.synthesizer.synthesize_high_power_window(300)
+        s = gen.synthesizer.synthesize_high_power_window(3600)
         active = set(s.active_appliances)
-        assert active, "고전력 윈도우인데 켜진 기기가 없습니다"
+        n_active += bool(active)
         assert active <= resistive, f"저항 부하가 아닌 기기가 켜졌습니다: {active - resistive}"
         assert s.metadata["max_sustained_p_w"] <= gen.synthesizer.sustained_power_limit_w
+    assert n_active >= 18, f"20창 중 {n_active}창에서만 저항이 통전했습니다"
 
 
 def test_high_low_mixed_creates_the_error_bleed_case(segment_pool):
@@ -725,12 +731,16 @@ def test_high_low_mixed_creates_the_error_bleed_case(segment_pool):
     syn = LoadSynthesizer(segment_pool=segment_pool, compute_gt_harmonics=False)
     low_load = {a for a in syn.known_appliances if is_low_load(a)}
 
+    # 듀티 부하(오븐 통전율 25~43%)는 창 안에서 통전이 없을 수 있다 — 12.111.
+    # 그래서 매 창이 아니라 대부분의 창에서 고부하가 잡히는지 본다.
+    n_hi = 0
     for _ in range(20):
-        s = syn.synthesize_high_low_mixed_window(600)
+        s = syn.synthesize_high_low_mixed_window(3600)
         active = set(s.active_appliances)
-        assert active & resistive, f"고부하가 없습니다: {active}"
+        n_hi += bool(active & resistive)
         assert active & low_load, f"저부하가 없습니다: {active}"
         assert s.metadata["max_sustained_p_w"] <= syn.sustained_power_limit_w
+    assert n_hi >= 17, f"20창 중 {n_hi}창에서만 고부하가 통전했습니다"
 
 
 def test_recipe_mix_covers_high_low_cooccurrence(segment_pool):
