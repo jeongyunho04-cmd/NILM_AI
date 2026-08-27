@@ -299,15 +299,27 @@ def main() -> int:
     #   adapt_ze1+cnn_ze1        전이 41/59  유령 8.67W  잔차 11.13W  미니PC 0.763
     #   adapt_smpsf --postproc   전이 44/59  유령 2.13W  잔차  8.88W  미니PC 0.716
     #
+    # **2026-08-27 재교체: adapt_ovh + 저항 정합** (12.113). 오븐 라벨을 히터
+    # 통전으로 바꾸고(12.111) 등가저항 정합을 넣자(12.112) 저항 부하가 살아났다:
+    #
+    #   adapt_smpsf + pp         잔차 58.4W  F1 0.779  저항전용파일 F1 0.268/0.516
+    #   adapt_ovh + pp + rm      잔차 10.0W  F1 0.838  저항전용파일 F1 0.782/0.836
+    #
+    # 전이 귀속은 44 -> 38/59 로 진다. **저항이 700~1,500W 라 사용자에게 보이는
+    # 값이고 SMPS 전이 차이는 15~50W 대에서 일어난다** — 사용자 판단으로 교체했다.
+    #
     # 뒤지는 것은 프로젝터(−0.046)·충전기(−0.034) F1 이다.
     # **실행 간 폭은 안 쟀다** (12.102.5 의 유보). 사용자 결정으로 교체했다.
     # 되돌리려면 `--ckpt results/adapt_ze1.pt --ckpt-smps results/cnn_ze1.pt
     # --postproc off` 로 준다.
-    ap.add_argument("--ckpt", default="results/adapt_smpsf.pt")
+    ap.add_argument("--ckpt", default="results/adapt_ovh.pt")
     ap.add_argument("--ckpt-smps", default="", metavar="PT",
                     help="SMPS 3종(프로젝터/충전기/미니PC)만 이 체크포인트로 예측한다. "
                          "**기본은 빈 문자열 = 단독 동작**이다 (12.102.5). 하이브리드로 "
                          "되돌리려면 results/cnn_ze1.pt 를 준다")
+    ap.add_argument("--resmatch", type=float, default=0.02, metavar="TOL",
+                    help="저항 부하 정합 후처리 (12.112절). 관측 전력·전압으로 등가저항을 "
+                         "역산해 저항 조합을 **맞바꾼다**(개수는 안 바꾼다). 운영 기본 0.02, 0=끔")
     ap.add_argument("--absorb", type=float, default=0.0, metavar="FRAC",
                     help="총전력 잔차를 고조파가 닮은 SMPS 로 흡수한다 (12.104절). "
                          "0.5 면 실측 8파일에서 잔차 8.88 -> 7.35W. **기본은 꺼 둔다** — "
@@ -442,6 +454,16 @@ def main() -> int:
                 pp, gg = apply_postproc(power[None, :], gate[None, :], list(apps),
                                         gate_sync=(a.postproc == "sync"))
                 power, gate = pp[0], gg[0]
+            if a.resmatch > 0:
+                # 저항 정합 (12.112). 등가저항이 기기 고유값이라 조합을 역산할 수 있다.
+                from src.model.postproc import resistive_match
+                obs_h = np.stack([win[0, 0:15, ti], win[0, 15:30, ti]], axis=-1)
+                power, gate = resistive_match(
+                    power[None, :], gate[None, :], list(apps),
+                    np.array([p_obs]), np.array([float(win[0, 32, ti])]),
+                    standby_k[None, :], np.array([NOISE_FLOOR_EXTERNAL_W]),
+                    obs_harm=obs_h[None], tol=a.resmatch)
+                power, gate = power[0], gate[0]
             if a.absorb > 0:
                 # 총전력 잔차를 고조파가 닮은 SMPS 로 흡수 (12.104).
                 from src.model.postproc import absorb_residual

@@ -9,7 +9,7 @@ deploy/
 ├─ run_predict.py            CLI (수신기 CSV -> 기기별 전력)
 ├─ requirements.txt          numpy / torch (그게 전부다)
 ├─ models/
-│   └─ adapt_smpsf.pt        운영점 체크포인트 (2.4MB)
+│   └─ adapt_ovh.pt          운영점 체크포인트 (2.4MB)
 └─ nilm_runtime/
     ├─ __init__.py           `from nilm_runtime import NILMPredictor`
     ├─ predictor.py          ★ UI 가 부르는 API — 링버퍼 + 모델 + 후처리
@@ -93,7 +93,7 @@ from nilm_runtime import NILMPredictor, APPLIANCE_KO
 results = queue.Queue()
 
 def worker(csv_path: str):
-    pred = NILMPredictor("models/adapt_smpsf.pt")      # postproc="on" 이 기본
+    pred = NILMPredictor("models/adapt_ovh.pt")      # postproc="on" 이 기본
     with open(csv_path, newline="", encoding="utf-8") as f:
         r = csv.reader(f)
         pred.set_header(next(r))
@@ -140,13 +140,14 @@ python run_predict.py --csv data/live.csv --jsonl data/pred.jsonl --quiet
 
 ## 4. API
 
-### `NILMPredictor(ckpt_path, device=None, postproc="on", reorder=True)`
+### `NILMPredictor(ckpt_path, device=None, postproc="on", resmatch=0.02, reorder=True)`
 
 | 인자 | 뜻 |
 |---|---|
-| `ckpt_path` | `models/adapt_smpsf.pt` |
+| `ckpt_path` | `models/adapt_ovh.pt` |
 | `device` | `"cuda"` / `"cpu"`. 생략하면 있는 쪽 |
 | `postproc` | `"off"` / `"on"` / `"sync"` — 아래 6절 |
+| `resmatch` | 저항 부하 정합 허용오차. 운영 기본 0.02, 0 이면 끔 — 아래 6절 |
 | `reorder` | 순서 뒤바뀜 보정. **끄지 말 것** (2~3% 행이 역전돼 온다) |
 
 | 메서드 | 하는 일 |
@@ -184,54 +185,71 @@ python run_predict.py --csv data/live.csv --jsonl data/pred.jsonl --quiet
 
 ## 5. 성능 — UI 가 무엇을 믿어도 되는가
 
-실측 8파일(총 46분) 기준. **기기마다 신뢰도가 다르다.**
+실측 11파일(총 62분) 기준. **기기마다 신뢰도가 다르다.**
 
 | 기기 | on/off F1 | UI 표시 |
 |---|---|---|
-| 오븐 | 0.974 | 믿을 만하다 |
-| 핫플레이트 | 0.977 | 믿을 만하다 |
-| 충전기 | 0.921 | 믿을 만하다 |
-| 프로젝터 | 0.854 | 보통 |
-| 미니PC | 0.716 | **약하다 — 단독 표시보다 "SMPS 합계" 권장** |
+| 충전기 | 0.935 | 믿을 만하다 |
+| 핫플레이트 | 0.885 | 믿을 만하다 |
+| 프로젝터 | 0.850 | 믿을 만하다 |
+| 미니PC | 0.821 | 보통 |
+| 전기포트 | 0.78~0.92 | 보통 (파일에 따라 갈린다) |
+| 드라이기 | 0.84~0.92 | 보통 |
+| 오븐 | 0.627 | **주의 — 아래 설명** |
+
+> **오븐 숫자는 낮게 나온다.** 모델은 오븐의 **히터 통전**(전체의 25~43%)을
+> 예측하는데 정답 라벨은 사람이 스위치를 켠 **세션 전체**다. 정의가 다르므로
+> 0.627 은 실제 성능보다 낮게 찍힌 값이다. 정밀도는 0.72~0.76 이다.
+> UI 에서 "오븐 켜짐" 을 보이려면 **히터 펄스를 1~2분 창으로 묶어** 세션으로
+> 바꿔 표시하는 편이 사용자 기대에 맞는다.
 
 | 총량 지표 | 값 |
 |---|---|
-| 총전력 잔차 (절대 평균) | 8.9W |
-| 없는 기기에 붙은 전력 | 2.1W (예측 총합의 약 1%) |
+| 총전력 잔차 (절대 평균) | 10.0W |
+| 없는 기기에 붙은 전력 | 5.0W |
 | 추론 속도 | 120~200회/초 (RTX 2050) — 60Hz 요건의 2배 이상 |
 
 ### 알려진 한계 (UI 설계에 반영할 것)
 
 1. **SMPS 3종(프로젝터·충전기·미니PC)은 서로 헷갈린다.** 전이 시점 귀속이
-   59건 중 44건 정확하고, 틀린 15건은 **전부 이 세 기기 사이의 맞바꿈**이다.
-   합계는 맞으므로, 셋을 묶어 **"SMPS 합계"** 로 보여 주면 훨씬 정확하다.
+   59건 중 38건 정확하고, 틀린 것은 **전부 이 세 기기 사이의 맞바꿈**이다.
+   합계는 맞으므로 셋을 묶어 **"SMPS 합계"** 로 보여 주면 훨씬 정확하다.
 2. **에어컨 + 드라이기가 함께 켜지면 드라이기를 놓친다** (학습 데이터에 그 조합이
    0.2% 뿐). 그 구간에서 잔차가 500W 이상 뜬다 — `residual_w` 로 감지 가능하다.
-3. **234V 회선은 검증이 얕다.** 검증 파일 대부분이 219~222V 에서 측정됐다.
+3. **234V 회선은 검증이 얕다.** 검증 파일 대부분이 209~223V 에서 측정됐다.
 4. 시작 후 **60초는 결과가 없다.**
 
 > **UI 권장 표시.** 기기별 막대 + `residual_w` 게이지를 함께 두면, 모델이 못
 > 가른 부하가 있을 때 사용자가 바로 안다. 잔차가 100W 를 넘으면 경고를 띄우는
 > 정도가 적당하다 (정상 구간은 10W 안쪽이다).
 
----
+## 6. 후처리 (`postproc`, `resmatch`)
 
-## 6. 후처리 (`postproc`)
-
-프로젝터는 실제로 48.5~49.3W 만 먹는 기기인데, 모델은 복합 상황에서 창의 74%
-에서 그보다 크게(중앙 73.5W, 최대 137W) 예측한다. 그 초과분은 실은 다른 SMPS 의
-몫이다. 후처리는 **55W 를 넘는 만큼을 잘라 다른 SMPS 로 넘긴다.**
+**① 물리 전력 상한 (`postproc`).** 프로젝터는 실제로 48.5~49.3W 만 먹는데
+모델은 복합에서 창의 74%를 그보다 크게(중앙 73.5W, 최대 137W) 예측한다.
+그 초과분은 실은 다른 SMPS 의 몫이다. 55W 를 넘는 만큼을 잘라 넘긴다.
 
 | 값 | 효과 |
 |---|---|
 | `"off"` | 모델 출력 그대로 |
-| `"on"` (기본) | 전이 귀속 27→44/59, 유령 1.5→2.1W, 잔차 8.9W 유지 |
-| `"sync"` | 위 + 넘겨받은 기기의 ON 게이트도 켠다 (미니PC F1 0.716→0.785) |
+| `"on"` (기본) | 전이 귀속 27→44/59, 잔차 유지 |
+| `"sync"` | 위 + 넘겨받은 기기의 ON 게이트도 켠다 (미니PC F1 +0.07) |
 
-`"sync"` 는 파일에 따라 이득이 갈려 기본이 아니다. UI 에서 **미니PC 표시가
-중요하면 `"sync"`**, 오탐을 더 꺼리면 `"on"` 을 쓴다.
+**② 저항 부하 정합 (`resmatch`).** 저항은 니크롬선이라 `P = V²/R` 이고
+**R 이 기기 고유값**이다 (녹화 간 재현성 0.1~1.3%):
 
----
+```
+포트 35.8Ω   오븐 40.6Ω   드라이기 54.3Ω   핫플 101.8Ω
+```
+
+고조파로는 0.596%p 밖에 안 갈리는 세 기기가 저항값으로는 13~180% 갈린다.
+관측 전력·전압에서 컨덕턴스를 역산해 저항 조합을 **맞바꾼다** (기기 수는 안 바꾼다 —
+바꾸게 두면 없는 기기를 발명한다).
+
+| 값 | 효과 |
+|---|---|
+| `0` | 끔 |
+| `0.02` (기본) | 없는 기기 전력 7.6 → 5.0W, 저항 전용 파일 F1 0.76/0.79 → 0.78/0.84 |
 
 ## 7. 모델 교체
 
@@ -240,7 +258,7 @@ python run_predict.py --csv data/live.csv --jsonl data/pred.jsonl --quiet
 
 ```bash
 cp <학습PC>/results/<새모델>.pt models/
-python run_predict.py --ckpt models/<새모델>.pt --replay ../data/test_8.csv --speed 0
+python run_predict.py --ckpt models/<새모델>.pt --replay ../data/test_11.csv --speed 0
 ```
 
 **호환 조건**: 창 3,600 사이클 / 타깃 끝-6초 / 세밀 채널 ≤ 58. 학습 저장소에서

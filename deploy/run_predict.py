@@ -57,16 +57,19 @@ def main() -> int:
     ap.add_argument("--csv", default="data/live.csv", help="수신기가 쓰는 CSV")
     ap.add_argument("--replay", default=None, help="기존 CSV 를 재생한다")
     ap.add_argument("--speed", type=float, default=20.0, help="재생 배속 (0=최대)")
-    ap.add_argument("--ckpt", default=str(Path(__file__).parent / "models/adapt_smpsf.pt"))
+    ap.add_argument("--ckpt", default=str(Path(__file__).parent / "models/adapt_ovh.pt"))
     ap.add_argument("--postproc", default="on", choices=("off", "on", "sync"))
+    ap.add_argument("--resmatch", type=float, default=0.02,
+                    help="저항 부하 정합 (등가저항으로 조합을 맞바꾼다). 0 이면 끔")
     ap.add_argument("--every", type=int, default=30, help="추론 간격 (사이클). 30=0.5초")
     ap.add_argument("--jsonl", default="", help="결과를 이 파일에 한 줄 JSON 으로")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
 
     path = Path(a.replay or a.csv)
-    pred = NILMPredictor(a.ckpt, postproc=a.postproc)
-    print(f"[NILM] {a.ckpt} | 장치 {pred.dev} | 후처리 {a.postproc} | {path}")
+    pred = NILMPredictor(a.ckpt, postproc=a.postproc, resmatch=a.resmatch)
+    print(f"[NILM] {a.ckpt} | 장치 {pred.dev} | 후처리 {a.postproc}"
+          f" | 저항정합 {a.resmatch:g} | {path}")
     out = open(a.jsonl, "w", encoding="utf-8") if a.jsonl else None
     n = 0
     for header, row in rows(path, a.replay is not None, a.speed):

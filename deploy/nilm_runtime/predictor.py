@@ -21,7 +21,7 @@ import torch
 
 from .inputs import build_inputs, target_index, FINE_CYCLES, TARGET_LOOKAHEAD
 from .net import NILMNet, appliance_state_counts
-from .postproc import SMPS_GROUP, apply_postproc
+from .postproc import SMPS_GROUP, apply_postproc, resistive_match
 
 CYCLE_HZ = 60
 WINDOW_CYCLES = 3600                 # 60초
@@ -217,13 +217,16 @@ class NILMPredictor:
     """
 
     def __init__(self, ckpt_path: str, device: Optional[str] = None,
-                 postproc: str = "on", reorder: bool = True):
+                 postproc: str = "on", resmatch: float = 0.02,
+                 reorder: bool = True):
         """
         Args:
             ckpt_path: 운영점 체크포인트 (`models/adapt_smpsf.pt`)
             device: "cuda" / "cpu". 생략하면 있는 쪽을 쓴다
             postproc: "off" | "on" | "sync" — 물리 전력 상한 후처리.
                 운영 기본은 "on" 이다 (README 의 성능 표 참조)
+            resmatch: 저항 부하 정합 허용오차. 관측 전력·전압으로 등가저항을
+                역산해 저항 조합을 맞바꾼다. 운영 기본 0.02, 0 이면 끔
             reorder: 수신기 CSV 의 순서 뒤바뀜을 t_s 로 보정한다. 끄지 말 것
         """
         self.dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -240,6 +243,7 @@ class NILMPredictor:
         self.model.eval()
         self.meta = {k: v for k, v in ck.items() if k not in ("model",)}
         self.postproc = postproc
+        self.resmatch = float(resmatch)
         self.ring = CycleRing(WINDOW_CYCLES, use_time=reorder)
         self.cols: Optional[Dict[str, int]] = None
         self.target_in_window = target_index(WINDOW_CYCLES)
@@ -289,12 +293,24 @@ class NILMPredictor:
                        torch.from_numpy(wide).to(self.dev))
         gate = torch.sigmoid(o["on_logit"])[0].float().cpu().numpy()
         power = o["power"][0].float().cpu().numpy()
-        standby = float(o["standby"][0].sum())
+        standby_k = o["standby"][0].float().cpu().numpy()
+        standby = float(standby_k.sum())
         p_obs = float(win[0, 30, self.target_in_window])
 
         if self.postproc != "off":
             power, gate = apply_postproc(power[None, :], gate[None, :], self.appliances,
                                          gate_sync=(self.postproc == "sync"))
+            power, gate = power[0], gate[0]
+        if self.resmatch > 0:
+            # 저항 정합: 등가저항이 기기 고유값이라 조합을 역산할 수 있다.
+            #   포트 35.8 / 오븐 40.6 / 드라이기 54.3 / 핫플 101.8 Ω
+            obs_h = np.stack([win[0, 0:15, self.target_in_window],
+                              win[0, 15:30, self.target_in_window]], axis=-1)
+            power, gate = resistive_match(
+                power[None, :], gate[None, :], self.appliances,
+                np.array([p_obs]), np.array([float(win[0, 32, self.target_in_window])]),
+                standby_k[None, :], np.zeros(1),
+                obs_harm=obs_h[None], tol=self.resmatch)
             power, gate = power[0], gate[0]
 
         total = float(power.sum()) + standby

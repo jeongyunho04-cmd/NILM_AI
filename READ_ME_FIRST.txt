@@ -100,22 +100,29 @@
 
   ** 2026-08-25: 운영점이 바뀌었다. 기본값이 곧 운영점이라 인자가 필요 없다. **
 
-      모델      results/adapt_smpsf.pt  (2단계 단독)
+      모델      results/adapt_ovh.pt    (2단계 단독)
       후처리    --postproc on           (프로젝터 물리 상한 55W + 재배분)
+                --resmatch 0.02         (저항 등가저항 정합)
 
   12.31.5 이래 하이브리드(SMPS 는 1단계, 나머지는 2단계)였는데 단독+후처리가
   네 지표를 앞섰다 (12.102.5):
 
-      조합                       전이 귀속  유령W  잔차W  미니PC F1
-      adapt_ze1+cnn_ze1 (옛것)    41/59   8.67  11.13   0.763
-      adapt_smpsf --postproc on   44/59   2.13   8.88   0.716
+      조합                          잔차W   F1평균  저항전용파일 F1  전이(59)
+      adapt_ze1+cnn_ze1 (옛것)      11.13   ―      ―           41
+      adapt_smpsf + pp             58.35  0.779  0.268/0.516    44
+      adapt_ovh + pp + rm (현행)    10.00  0.838  0.782/0.836    38
 
-  뒤지는 것은 프로젝터(-0.046)·충전기(-0.034) F1 이다.
-  **실행 간 폭은 안 쟀다** — 44 vs 41 이 그 폭 안일 수 있다 (12.103).
+  2026-08-27 재교체: 오븐 라벨을 히터 통전으로 바꾸고 저항 정합을 넣자
+  저항 부하가 살아났다 (12.111~12.113). 저항은 700~1,500W 라 사용자가 보는
+  값이고, 잃은 전이 6건은 15~50W 대 SMPS 맞바꿈이다.
+  **실행 간 폭은 여전히 안 쟀다** — 전이 38 vs 44 가 그 폭 안일 수 있다.
 
   옛 하이브리드로 되돌리려면:
 
       python -m src.run_live --csv data/live.csv ^
-          --ckpt results/adapt_ze1.pt --ckpt-smps results/cnn_ze1.pt --postproc off
+          --ckpt results/adapt_smpsf.pt --resmatch 0        (직전 운영점)
+      python -m src.run_live --csv data/live.csv ^
+          --ckpt results/adapt_ze1.pt --ckpt-smps results/cnn_ze1.pt ^
+          --postproc off --resmatch 0                       (옛 하이브리드)
 
 ================================================================================

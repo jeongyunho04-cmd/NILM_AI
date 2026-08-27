@@ -158,3 +158,112 @@ def absorb_residual(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
     add[ok] = W[ok] / tw[ok] * resid[ok, None]
     out[:, cols] = np.clip(out[:, cols] + add, 0.0, None)
     return out
+
+
+# ── 저항 부하 정합 (12.112) ──────────────────────────────────────────────
+#: 격리 실측에서 잰 등가저항 (V^2 / P, 통전 중 중앙값).
+#: **기기 고유값이다** — 같은 기기의 서로 다른 녹화에서 0.1~1.3% 안에 든다.
+#:     포트   35.79 / 35.85            오븐 40.41 / 40.90 / 40.45
+#:     드라이기 54.48 / 54.57 / 53.89   핫플 101.76 / 101.82 / 101.90
+#: 니크롬선 저항이라 전압·개체와 무관하게 재현된다. 고조파로는 0.596%p 밖에
+#: 안 갈리는 저항 3종이 **저항값으로는 13~180% 갈린다** (0.2절의 그 문제).
+RESISTIVE_OHM: Dict[str, float] = {
+    "electiric_kettle": 35.8, "oven": 40.6, "hair_dryer": 54.3, "hotplate": 101.8,
+}
+
+#: 드라이기 약풍은 반파 정류라 전력이 절반이고 겉보기 저항이 2배(102.6Ω)다.
+#: 핫플(101.8Ω)과 겹치므로 **짝수차로 가른다** — 반파는 |I2|/|I1| 0.40,
+#: 핫플은 0.00 이다 (12.109.2).
+HALFWAVE_OHM: Dict[str, float] = {"hair_dryer": 108.6}
+HALFWAVE_I2_MIN = 0.15
+
+
+def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
+                    p_observed: np.ndarray, v_rms: np.ndarray,
+                    standby: np.ndarray, p_noise: np.ndarray,
+                    obs_harm: Optional[np.ndarray] = None,
+                    tol: float = 0.05, min_w: float = 150.0,
+                    cand_gate_min: float = 0.10, margin: float = 2.0,
+                    ) -> Tuple[np.ndarray, np.ndarray]:
+    """관측 전력·전압에 **맞는 저항 조합**을 골라 재배정한다 (12.112).
+
+    저항 부하는 니크롬선이라 `P = V^2 / R` 이고 `R` 이 기기 고유값이다. 그래서
+    창마다 다음을 푼다:
+
+        G_필요 = (관측 P − 비저항 예측 − 대기 − 계측) / V^2
+        16개 조합(저항 4종 on/off) 중 Σ(1/R_i) 가 G_필요 에 가장 가까운 것
+
+    **왜 후처리인가.** 모델은 P 와 V 를 따로 받지만 `V^2/P` 를 명시적으로 만들지
+    않고, 복합에서는 개별 기기의 P 를 모른다. 반면 후처리는 **합에서 역산**할 수
+    있다 — 저항 성분만 남기면 컨덕턴스는 더해지므로 조합을 셀 수 있다.
+
+    Args:
+        tol: 상대 오차가 이 값을 넘으면 손대지 않는다 (설명 못 하는 창)
+        min_w: 저항 성분이 이보다 작으면 손대지 않는다 (전부 꺼진 창)
+        obs_harm: (n,15,2). 주면 드라이기 약(반파)을 짝수차로 가른다
+    """
+    out = np.array(P, dtype=np.float64, copy=True)
+    g = np.array(gate, dtype=np.float64, copy=True)
+    cols = [j for j, a in enumerate(apps) if a in RESISTIVE_OHM]
+    if not cols:
+        return out, g
+    names = [apps[j] for j in cols]
+    v2 = np.maximum(np.asarray(v_rms, dtype=np.float64), 1.0) ** 2
+
+    # 저항 성분 = 관측 − (비저항 예측 + 대기 + 계측)
+    other = out.sum(1) - out[:, cols].sum(1)
+    p_res = np.asarray(p_observed, np.float64) - other - standby.sum(1) - p_noise
+
+    # 반파(드라이기 약) 판정용 짝수차
+    half = np.zeros(len(out), bool)
+    if obs_harm is not None:
+        h = np.asarray(obs_harm, np.float64)
+        i1 = np.hypot(h[:, 0, 0], h[:, 0, 1])
+        i2 = np.hypot(h[:, 1, 0], h[:, 1, 1])
+        half = (i2 / np.maximum(i1, 1e-9)) > HALFWAVE_I2_MIN
+
+    # 16개 조합의 컨덕턴스를 미리 만든다
+    import itertools
+    combos = []
+    for k in range(len(cols) + 1):
+        for pick in itertools.combinations(range(len(cols)), k):
+            combos.append(pick)
+
+    for i in range(len(out)):
+        if p_res[i] < min_w:
+            continue
+        g_need = p_res[i] / v2[i]
+        ohm = dict(RESISTIVE_OHM)
+        if half[i]:
+            ohm.update(HALFWAVE_OHM)      # 드라이기를 반파 저항으로 본다
+
+        # **개수는 그대로 두고 맞바꿈만 한다.** 기기를 늘리게 두면 정합기가 없는
+        # 기기를 발명한다 — 제한 없이 돌렸을 때 test_9(드라이기 없는 파일)의 유령이
+        # 3.94 -> 86.98W 로 터졌다. 반대로 게이트로만 후보를 좁히면 고쳐야 할
+        # 맞바꿈을 못 한다 — test3 의 오븐 게이트가 0.09 라 후보에서 빠진다.
+        # 물리 정합이 잘하는 일은 **누구인지 바꾸는 것**이지 몇 대인지 정하는 것이
+        # 아니다. 몇 대인지는 모델이 안다.
+        cur = tuple(k for k, j in enumerate(cols) if g[i, j] > 0.5)
+        if not cur:
+            continue
+
+        best, best_err, cur_err = None, np.inf, np.inf
+        for pick in combos:
+            if len(pick) != len(cur):
+                continue
+            gg = sum(1.0 / ohm[names[k]] for k in pick)
+            if gg <= 0:
+                continue
+            err = abs(gg - g_need) / max(g_need, 1e-9)
+            if pick == cur:
+                cur_err = err
+            if err < best_err:
+                best, best_err = pick, err
+        # **모델의 조합보다 확실히 나을 때만 바꾼다** (margin 배 이상).
+        if best is None or best_err > tol or best_err * margin > cur_err:
+            continue
+        for k, j in enumerate(cols):
+            on = k in best
+            out[i, j] = v2[i] / ohm[names[k]] if on else 0.0
+            g[i, j] = max(g[i, j], 0.5 + 1e-6) if on else min(g[i, j], 0.5 - 1e-6)
+    return out, g
