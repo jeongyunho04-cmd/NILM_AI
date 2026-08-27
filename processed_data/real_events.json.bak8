@@ -8,8 +8,7 @@
   "uncertain 구간은 어느 쪽으로도 채점하지 않는다. 오븐이 대표적이다 -",
   "타임라인은 히터 통전만 적어 두었고 팬/조명(state 1, is_on=1)이 언제 켜졌는지는",
   "알 수 없다. 그 구간을 OFF 로 채점하면 모델을 부당하게 벌하게 된다.",
-  "test.csv 는 봉인 대상이라 여기 없다 (sealing.py). 최종 평가 때 별도로 옮길 것.",
-  "test_10 은 2026-08-27 에 파일이 교체됐다(레인지 전환 버그 수정본). 옛 라벨은 제거했고 새 라벨은 미확정 — TEST_DATASET_TIMELINE_ANALYSIS [8]절이 98.6s 의 −970W 와 '노트북/충전기' 동일 기기 여부를 사용자 확인 대상으로 남겼다."
+  "test.csv 는 봉인 대상이라 여기 없다 (sealing.py). 최종 평가 때 별도로 옮길 것."
  ],
  "files": {
   "test.2": {
@@ -4317,34 +4316,44 @@
     }
    ]
   },
-  "test_11": {
-   "duration_s": 316.5,
-   "cycles": 18960,
-   "v_mean": 216.4,
+  "test_10": {
+   "duration_s": 952.5,
+   "cycles": 57150,
+   "v_mean": 235.2,
    "appliances_present": [
+    "air_conditioner",
     "electiric_kettle",
+    "fan",
     "hair_dryer",
-    "hotplate",
-    "oven"
+    "laptop_charger"
    ],
-   "_source": "TEST_DATASET_TIMELINE_ANALYSIS.txt [8]절 정정본 (사용자 기록 + 신호 정밀화)",
+   "_source": "data/test_10_timeline.txt (사용자 조작 기록, seq 기준)",
    "_label_provenance": "human_switching_log",
    "_verification": [
-    "시각은 TEST_DATASET_TIMELINE_ANALYSIS [8]절의 정밀화 값이다 (오차 중앙 0.4s).",
-    "핫플 ON/OFF 는 단발 계단이 아니라 릴레이 펄스 열(주기 2.0~2.2초)의 시작/끝으로 잡았다 (±3s).",
-    "seq 865 '오븐 꺼짐'(179.0s)은 P 가 −7.4W 밖에 안 움직인다 — 히터는 이미 멈췄고 팬/조명만 꺼졌다. 사람 시각을 그대로 뒀다.",
-    "seq 981 포트OFF / seq 1102 드라이기OFF 는 핫플 펄스와 겹쳐, 하위 포락선(p10)으로 크기를 확인했다."
+    "타임라인 47개 이벤트를 관측 P 와 대조했다 (2026-08-26).",
+    "고부하 기기(포트/드라이기/에어컨)는 47건 중 해당 이벤트 전부가 부호까지 일치.",
+    "선풍기·충전기 이벤트는 |ΔP| 가 5~60W 라 큰 부하가 켜진 구간에서는 신호로 확인 불가.",
+    "**포트 자동 차단 1건이 기록에 없다** — seq 865(432.5s) ON 뒤 꺼짐 없이 seq 1253(626.5s) 재점화. 관측에서 492.8s 에 785 -> 29W 계단을 찾아 그 시각을 OFF 로 넣고, 492.8~626.5s 를 uncertain 으로 뒀다 (끓어서 자동으로 꺼진 구간).",
+    "에어컨 2차(520~886s)는 저출력 운전이다 — 램프업이 126W 에서 멈춘다. 1차(57.5~447.5s)는 1,500W 까지 올라갔다."
    ],
    "intervals": {
-    "electiric_kettle": {
+    "fan": {
      "on": [
       [
-       70.3,
-       115.0
+       38.0,
+       176.0
       ],
       [
-       204.6,
-       237.6
+       270.0,
+       314.5
+      ],
+      [
+       349.0,
+       762.5
+      ],
+      [
+       813.0,
+       863.0
       ]
      ],
      "uncertain": []
@@ -4352,346 +4361,37 @@
     "hair_dryer": {
      "on": [
       [
-       28.9,
-       80.3
+       93.0,
+       138.5
       ],
       [
-       135.2,
-       214.1
+       208.0,
+       300.5
       ],
       [
-       258.9,
-       297.9
+       414.0,
+       477.5
+      ],
+      [
+       565.0,
+       589.0
+      ],
+      [
+       714.0,
+       772.0
       ]
      ],
      "uncertain": []
     },
-    "hotplate": {
+    "air_conditioner": {
      "on": [
       [
-       57.6,
-       123.3
+       57.5,
+       447.5
       ],
       [
-       236.0,
-       308.3
-      ]
-     ],
-     "uncertain": []
-    },
-    "oven": {
-     "on": [
-      [
-       99.4,
-       179.0
-      ]
-     ],
-     "uncertain": []
-    }
-   },
-   "events": [
-    {
-     "t_s": 28.9,
-     "appliance": "hair_dryer",
-     "kind": "on"
-    },
-    {
-     "t_s": 57.6,
-     "appliance": "hotplate",
-     "kind": "on"
-    },
-    {
-     "t_s": 70.3,
-     "appliance": "electiric_kettle",
-     "kind": "on"
-    },
-    {
-     "t_s": 80.3,
-     "appliance": "hair_dryer",
-     "kind": "off"
-    },
-    {
-     "t_s": 99.4,
-     "appliance": "oven",
-     "kind": "on"
-    },
-    {
-     "t_s": 115.0,
-     "appliance": "electiric_kettle",
-     "kind": "off"
-    },
-    {
-     "t_s": 123.3,
-     "appliance": "hotplate",
-     "kind": "off"
-    },
-    {
-     "t_s": 135.2,
-     "appliance": "hair_dryer",
-     "kind": "on"
-    },
-    {
-     "t_s": 164.8,
-     "appliance": "hair_dryer",
-     "kind": "state"
-    },
-    {
-     "t_s": 179.0,
-     "appliance": "oven",
-     "kind": "off"
-    },
-    {
-     "t_s": 197.1,
-     "appliance": "hair_dryer",
-     "kind": "state"
-    },
-    {
-     "t_s": 204.6,
-     "appliance": "electiric_kettle",
-     "kind": "on"
-    },
-    {
-     "t_s": 214.1,
-     "appliance": "hair_dryer",
-     "kind": "off"
-    },
-    {
-     "t_s": 236.0,
-     "appliance": "hotplate",
-     "kind": "on"
-    },
-    {
-     "t_s": 237.6,
-     "appliance": "electiric_kettle",
-     "kind": "off"
-    },
-    {
-     "t_s": 258.9,
-     "appliance": "hair_dryer",
-     "kind": "on"
-    },
-    {
-     "t_s": 297.9,
-     "appliance": "hair_dryer",
-     "kind": "off"
-    },
-    {
-     "t_s": 308.3,
-     "appliance": "hotplate",
-     "kind": "off"
-    }
-   ]
-  },
-  "test_12": {
-   "duration_s": 367.5,
-   "cycles": 22050,
-   "v_mean": 209.7,
-   "appliances_present": [
-    "electiric_kettle",
-    "hair_dryer",
-    "hotplate",
-    "oven"
-   ],
-   "_source": "TEST_DATASET_TIMELINE_ANALYSIS.txt [8]절 정정본 (사용자 기록 + 신호 정밀화)",
-   "_label_provenance": "human_switching_log",
-   "_verification": [
-    "시각은 정밀화 값 (오차 중앙 0.3s).",
-    "**라벨 정정 3건** — (1) seq 83 '오븐 꺼짐' -> 실제 오븐 ON (+836W). (2) seq 337 '포트 켜짐' -> 실제 포트 OFF (−1194W). (3) 51.5s 에 라벨에 없던 드라이기 OFF (−611W).",
-    "세 정정을 넣으면 오븐·포트가 ON/OFF 로 정확히 교대한다.",
-    "seq 268 포트 ON 만 오차 −8.3s 로 크다."
-   ],
-   "intervals": {
-    "electiric_kettle": {
-     "on": [
-      [
-       17.1,
-       79.3
-      ],
-      [
-       125.7,
-       168.3
-      ],
-      [
-       184.8,
-       319.2
-      ]
-     ],
-     "uncertain": []
-    },
-    "hair_dryer": {
-     "on": [
-      [
-       5.3,
-       51.5
-      ],
-      [
-       102.3,
-       213.5
-      ],
-      [
-       245.7,
-       276.8
-      ]
-     ],
-     "uncertain": []
-    },
-    "hotplate": {
-     "on": [
-      [
-       81.8,
-       158.3
-      ]
-     ],
-     "uncertain": []
-    },
-    "oven": {
-     "on": [
-      [
-       41.7,
-       143.3
-      ],
-      [
-       228.3,
-       352.3
-      ]
-     ],
-     "uncertain": []
-    }
-   },
-   "events": [
-    {
-     "t_s": 5.3,
-     "appliance": "hair_dryer",
-     "kind": "on"
-    },
-    {
-     "t_s": 17.1,
-     "appliance": "electiric_kettle",
-     "kind": "on"
-    },
-    {
-     "t_s": 41.7,
-     "appliance": "oven",
-     "kind": "on"
-    },
-    {
-     "t_s": 51.5,
-     "appliance": "hair_dryer",
-     "kind": "off"
-    },
-    {
-     "t_s": 79.3,
-     "appliance": "electiric_kettle",
-     "kind": "off"
-    },
-    {
-     "t_s": 81.8,
-     "appliance": "hotplate",
-     "kind": "on"
-    },
-    {
-     "t_s": 102.3,
-     "appliance": "hair_dryer",
-     "kind": "on"
-    },
-    {
-     "t_s": 115.9,
-     "appliance": "hair_dryer",
-     "kind": "state"
-    },
-    {
-     "t_s": 125.7,
-     "appliance": "electiric_kettle",
-     "kind": "on"
-    },
-    {
-     "t_s": 143.3,
-     "appliance": "oven",
-     "kind": "off"
-    },
-    {
-     "t_s": 158.3,
-     "appliance": "hotplate",
-     "kind": "off"
-    },
-    {
-     "t_s": 168.3,
-     "appliance": "electiric_kettle",
-     "kind": "off"
-    },
-    {
-     "t_s": 177.0,
-     "appliance": "hair_dryer",
-     "kind": "state"
-    },
-    {
-     "t_s": 184.8,
-     "appliance": "electiric_kettle",
-     "kind": "on"
-    },
-    {
-     "t_s": 213.5,
-     "appliance": "hair_dryer",
-     "kind": "off"
-    },
-    {
-     "t_s": 228.3,
-     "appliance": "oven",
-     "kind": "on"
-    },
-    {
-     "t_s": 245.7,
-     "appliance": "hair_dryer",
-     "kind": "on"
-    },
-    {
-     "t_s": 276.8,
-     "appliance": "hair_dryer",
-     "kind": "off"
-    },
-    {
-     "t_s": 319.2,
-     "appliance": "electiric_kettle",
-     "kind": "off"
-    },
-    {
-     "t_s": 352.3,
-     "appliance": "oven",
-     "kind": "off"
-    }
-   ]
-  },
-  "test_13": {
-   "duration_s": 818.0,
-   "cycles": 49050,
-   "v_mean": 223.4,
-   "appliances_present": [
-    "beam_projector",
-    "laptop_charger",
-    "minipc"
-   ],
-   "_source": "TEST_DATASET_TIMELINE_ANALYSIS.txt [8]절 정정본 (사용자 기록 + 신호 정밀화)",
-   "_label_provenance": "human_switching_log",
-   "_verification": [
-    "SMPS 전용 파일이라 I3 계단으로 시각을 잡았다 (오차 중앙 1.7s).",
-    "미니PC '작업 시작/끝'은 ON/OFF 가 아니라 부하 상태 전환이라 state 로 뒀다 — 구간을 끊지 않는다.",
-    "seq 230 '미니PC 작업 시작'(115.0s)만 신호에서 못 찾았다. 105~129s 의 P/I3 가 평탄하다.",
-    "seq 1599 빔프OFF / 1615 충전기OFF 는 8초 간격이라 탐색 창을 이웃까지의 절반으로 줄여야 갈린다."
-   ],
-   "intervals": {
-    "beam_projector": {
-     "on": [
-      [
-       23.2,
-       224.2
-      ],
-      [
-       251.7,
-       437.7
-      ],
-      [
-       474.7,
-       801.2
+       520.0,
+       886.0
       ]
      ],
      "uncertain": []
@@ -4699,172 +4399,339 @@
     "laptop_charger": {
      "on": [
       [
-       49.2,
-       177.7
+       13.5,
+       335.0
       ],
       [
-       206.7,
-       263.2
+       504.5,
+       753.0
       ],
       [
-       302.2,
-       413.2
-      ],
-      [
-       449.2,
-       581.2
-      ],
-      [
-       674.7,
-       806.2
+       802.5,
+       903.5
       ]
      ],
      "uncertain": []
     },
-    "minipc": {
+    "electiric_kettle": {
      "on": [
       [
-       75.2,
-       292.7
+       83.5,
+       163.0
       ],
       [
-       322.2,
-       732.2
+       215.5,
+       247.0
+      ],
+      [
+       257.5,
+       369.0
+      ],
+      [
+       432.5,
+       492.8
+      ],
+      [
+       626.5,
+       640.5
       ]
      ],
-     "uncertain": []
+     "uncertain": [
+      [
+       492.8,
+       626.5
+      ]
+     ]
     }
    },
    "events": [
     {
-     "t_s": 23.2,
-     "appliance": "beam_projector",
-     "kind": "on"
-    },
-    {
-     "t_s": 49.2,
+     "t_s": 13.5,
      "appliance": "laptop_charger",
-     "kind": "on"
+     "kind": "on",
+     "_note": "켜짐"
     },
     {
-     "t_s": 75.2,
-     "appliance": "minipc",
-     "kind": "on"
+     "t_s": 38.0,
+     "appliance": "fan",
+     "kind": "on",
+     "_note": "켜짐"
     },
     {
-     "t_s": 115.0,
-     "appliance": "minipc",
-     "kind": "state"
+     "t_s": 57.5,
+     "appliance": "air_conditioner",
+     "kind": "on",
+     "_note": "켜짐"
     },
     {
-     "t_s": 177.7,
+     "t_s": 83.5,
+     "appliance": "electiric_kettle",
+     "kind": "on",
+     "_note": "켜짐"
+    },
+    {
+     "t_s": 93.0,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "_note": "켜짐"
+    },
+    {
+     "t_s": 106.0,
+     "appliance": "hair_dryer",
+     "kind": "state",
+     "_note": "약"
+    },
+    {
+     "t_s": 120.0,
+     "appliance": "hair_dryer",
+     "kind": "state",
+     "_note": "강"
+    },
+    {
+     "t_s": 138.5,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 163.0,
+     "appliance": "electiric_kettle",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 176.0,
+     "appliance": "fan",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 208.0,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "_note": "켜짐"
+    },
+    {
+     "t_s": 215.5,
+     "appliance": "electiric_kettle",
+     "kind": "on",
+     "_note": "켜짐"
+    },
+    {
+     "t_s": 228.5,
+     "appliance": "hair_dryer",
+     "kind": "state",
+     "_note": "약"
+    },
+    {
+     "t_s": 238.5,
+     "appliance": "hair_dryer",
+     "kind": "state",
+     "_note": "강"
+    },
+    {
+     "t_s": 247.0,
+     "appliance": "electiric_kettle",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 257.5,
+     "appliance": "electiric_kettle",
+     "kind": "on",
+     "_note": "켜짐"
+    },
+    {
+     "t_s": 270.0,
+     "appliance": "fan",
+     "kind": "on",
+     "_note": "켜짐"
+    },
+    {
+     "t_s": 290.0,
+     "appliance": "fan",
+     "kind": "state",
+     "_note": "강풍"
+    },
+    {
+     "t_s": 300.5,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 314.5,
+     "appliance": "fan",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 335.0,
      "appliance": "laptop_charger",
-     "kind": "off"
+     "kind": "off",
+     "_note": "꺼짐"
     },
     {
-     "t_s": 206.7,
+     "t_s": 349.0,
+     "appliance": "fan",
+     "kind": "on",
+     "_note": "중 켜짐"
+    },
+    {
+     "t_s": 356.0,
+     "appliance": "fan",
+     "kind": "state",
+     "_note": "약"
+    },
+    {
+     "t_s": 369.0,
+     "appliance": "electiric_kettle",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 414.0,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "_note": "켜짐"
+    },
+    {
+     "t_s": 432.5,
+     "appliance": "electiric_kettle",
+     "kind": "on",
+     "_note": "켜짐"
+    },
+    {
+     "t_s": 447.5,
+     "appliance": "air_conditioner",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 467.0,
+     "appliance": "hair_dryer",
+     "kind": "state",
+     "_note": "약"
+    },
+    {
+     "t_s": 477.5,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 504.5,
      "appliance": "laptop_charger",
-     "kind": "on"
+     "kind": "on",
+     "_note": "켜짐"
     },
     {
-     "t_s": 224.2,
-     "appliance": "beam_projector",
-     "kind": "off"
+     "t_s": 520.0,
+     "appliance": "air_conditioner",
+     "kind": "on",
+     "_note": "켜짐"
     },
     {
-     "t_s": 242.2,
-     "appliance": "minipc",
-     "kind": "state"
+     "t_s": 546.0,
+     "appliance": "fan",
+     "kind": "state",
+     "_note": "강"
     },
     {
-     "t_s": 251.7,
-     "appliance": "beam_projector",
-     "kind": "on"
+     "t_s": 565.0,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "_note": "켜짐"
     },
     {
-     "t_s": 263.2,
+     "t_s": 589.0,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 601.0,
+     "appliance": "fan",
+     "kind": "state",
+     "_note": "약"
+    },
+    {
+     "t_s": 626.5,
+     "appliance": "electiric_kettle",
+     "kind": "on",
+     "_note": "켜짐"
+    },
+    {
+     "t_s": 640.5,
+     "appliance": "electiric_kettle",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 714.0,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "_note": "켜짐"
+    },
+    {
+     "t_s": 726.5,
+     "appliance": "hair_dryer",
+     "kind": "state",
+     "_note": "약"
+    },
+    {
+     "t_s": 739.5,
+     "appliance": "hair_dryer",
+     "kind": "state",
+     "_note": "강"
+    },
+    {
+     "t_s": 753.0,
      "appliance": "laptop_charger",
-     "kind": "off"
+     "kind": "off",
+     "_note": "꺼짐"
     },
     {
-     "t_s": 292.7,
-     "appliance": "minipc",
-     "kind": "off"
+     "t_s": 762.5,
+     "appliance": "fan",
+     "kind": "off",
+     "_note": "꺼짐"
     },
     {
-     "t_s": 302.2,
+     "t_s": 772.0,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 802.5,
      "appliance": "laptop_charger",
-     "kind": "on"
+     "kind": "on",
+     "_note": "켜짐"
     },
     {
-     "t_s": 322.2,
-     "appliance": "minipc",
-     "kind": "on"
+     "t_s": 813.0,
+     "appliance": "fan",
+     "kind": "on",
+     "_note": "약 켜짐"
     },
     {
-     "t_s": 367.2,
-     "appliance": "minipc",
-     "kind": "state"
+     "t_s": 863.0,
+     "appliance": "fan",
+     "kind": "off",
+     "_note": "꺼짐"
     },
     {
-     "t_s": 413.2,
+     "t_s": 886.0,
+     "appliance": "air_conditioner",
+     "kind": "off",
+     "_note": "꺼짐"
+    },
+    {
+     "t_s": 903.5,
      "appliance": "laptop_charger",
-     "kind": "off"
-    },
-    {
-     "t_s": 437.7,
-     "appliance": "beam_projector",
-     "kind": "off"
-    },
-    {
-     "t_s": 449.2,
-     "appliance": "laptop_charger",
-     "kind": "on"
-    },
-    {
-     "t_s": 474.7,
-     "appliance": "beam_projector",
-     "kind": "on"
-    },
-    {
-     "t_s": 517.2,
-     "appliance": "minipc",
-     "kind": "state"
-    },
-    {
-     "t_s": 581.2,
-     "appliance": "laptop_charger",
-     "kind": "off"
-    },
-    {
-     "t_s": 604.7,
-     "appliance": "minipc",
-     "kind": "state"
-    },
-    {
-     "t_s": 674.7,
-     "appliance": "laptop_charger",
-     "kind": "on"
-    },
-    {
-     "t_s": 704.7,
-     "appliance": "minipc",
-     "kind": "state"
-    },
-    {
-     "t_s": 732.2,
-     "appliance": "minipc",
-     "kind": "off"
-    },
-    {
-     "t_s": 801.2,
-     "appliance": "beam_projector",
-     "kind": "off"
-    },
-    {
-     "t_s": 806.2,
-     "appliance": "laptop_charger",
-     "kind": "off"
+     "kind": "off",
+     "_note": "꺼짐"
     }
    ]
   }

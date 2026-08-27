@@ -80,6 +80,10 @@ DEVICE_FILES: Dict[str, DeviceSpec] = {
     "fan_3":            DeviceSpec("fan",              LoadClass.MOTOR,     low_load=True,  daily_usage_hours=5.0),
     "hair_dryer_1":     DeviceSpec("hair_dryer",       LoadClass.RESISTIVE, daily_usage_hours=0.1),
     "hair_dryer_2":     DeviceSpec("hair_dryer",       LoadClass.RESISTIVE, daily_usage_hours=0.1),
+    # 2026-08-27 추가 (3차 펌웨어, 레인지 전환 수정본). 약/강 두 단계를 다 담았다 —
+    # **약은 반파 정류다**: P 가 정확히 절반(466 vs 879W)이고 |I2|/|I1| 0.395 로
+    # 이론값 0.424 에 붙는다. 옛 녹화(hair_dryer_1/2)도 같다 (0.414). 12.109 참조.
+    "hair_dryer_3":     DeviceSpec("hair_dryer",       LoadClass.RESISTIVE, daily_usage_hours=0.1),
     # 핫플레이트는 릴레이가 약 1초 ON / 1초 OFF 로 통전을 끊는 주기 부하다.
     "hotplate_1":       DeviceSpec("hotplate",         LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
     "hotplate_2":       DeviceSpec("hotplate",         LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),

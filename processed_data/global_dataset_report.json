@@ -1,5 +1,5 @@
 {
-  "processed_files_count": 26,
+  "processed_files_count": 27,
   "sampling_hz": 60.0,
   "devices": {
     "air_conditioner": {
@@ -460,6 +460,46 @@
           "count": 4950,
           "percentage": 44.24,
           "duration_min": 1.38
+        }
+      }
+    },
+    "hair_dryer_3": {
+      "appliance_type": "hair_dryer",
+      "korean_name": "헤어드라이기",
+      "file_role": "device",
+      "load_class": "resistive",
+      "rows": 7830,
+      "duration_min": 2.17,
+      "p_mean": 503.21,
+      "p_max": 938.55,
+      "v_ref_v": 218.35,
+      "invalid_samples_flagged": 0,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 1,
+      "on_percentage": 73.46,
+      "events_count": 7,
+      "npz_file": "processed_data\\npz\\hair_dryer_3.npz",
+      "state_distribution": {
+        "OFF": {
+          "state_id": 0,
+          "description": "전원 꺼짐",
+          "count": 2078,
+          "percentage": 26.54,
+          "duration_min": 0.58
+        },
+        "LOW_HEAT_COOL": {
+          "state_id": 1,
+          "description": "냉풍 또는 1단 온풍/저열 모드",
+          "count": 2700,
+          "percentage": 34.48,
+          "duration_min": 0.75
+        },
+        "HIGH_HEAT_TURBO": {
+          "state_id": 2,
+          "description": "2단 열풍/터보 고열 모드",
+          "count": 3052,
+          "percentage": 38.98,
+          "duration_min": 0.85
         }
       }
     },
@@ -1044,12 +1084,39 @@
       "excluded_from_segment_pool": true
     },
     "test_10": {
-      "rows": 57150,
-      "duration_s": 952.5,
-      "p_mean": 683.61,
-      "p_max": 1790.83,
-      "v_ref_v": 235.24,
+      "rows": 14430,
+      "duration_s": 240.5,
+      "p_mean": 1027.82,
+      "p_max": 3088.22,
+      "v_ref_v": 217.67,
       "npz_file": "processed_data\\composite_eval\\test_10.npz",
+      "excluded_from_segment_pool": true
+    },
+    "test_11": {
+      "rows": 18990,
+      "duration_s": 316.5,
+      "p_mean": 925.82,
+      "p_max": 2630.93,
+      "v_ref_v": 216.38,
+      "npz_file": "processed_data\\composite_eval\\test_11.npz",
+      "excluded_from_segment_pool": true
+    },
+    "test_12": {
+      "rows": 22050,
+      "duration_s": 367.5,
+      "p_mean": 1586.44,
+      "p_max": 2899.23,
+      "v_ref_v": 209.69,
+      "npz_file": "processed_data\\composite_eval\\test_12.npz",
+      "excluded_from_segment_pool": true
+    },
+    "test_13": {
+      "rows": 49080,
+      "duration_s": 818.0,
+      "p_mean": 86.38,
+      "p_max": 145.76,
+      "v_ref_v": 223.38,
+      "npz_file": "processed_data\\composite_eval\\test_13.npz",
       "excluded_from_segment_pool": true
     },
     "test_4": {
@@ -1107,7 +1174,7 @@
       "excluded_from_segment_pool": true
     }
   },
-  "total_cleaned_samples": 1596900,
-  "total_duration_hours": 7.39,
-  "total_events_detected": 2327
+  "total_cleaned_samples": 1604730,
+  "total_duration_hours": 7.43,
+  "total_events_detected": 2334
 }
