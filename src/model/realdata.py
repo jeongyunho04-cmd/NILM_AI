@@ -77,7 +77,7 @@ class RealWindows:
         self.window_cycles = int(window_cycles)
         self.target_in_window = target_index(self.window_cycles)
 
-        F, W, P, H, S, C = [], [], [], [], [], []
+        F, W, P, H, S, C, V = [], [], [], [], [], [], []
         self.per_file: Dict[str, int] = {}
         for stem in stems:
             raw = load_nilm_npz(str(d / f"{stem}.npz"))
@@ -99,6 +99,8 @@ class RealWindows:
             fine, wide = self._windows(x, targets)
             F.append(fine); W.append(wide)
             P.append(np.asarray(raw["power_features"])[targets, 0].astype(np.float32))
+            # 단자 전압. 저항 정합 후처리가 P = V^2/R 을 푸는 데 쓴다 (12.112).
+            V.append(np.asarray(raw["power_features"])[targets, 4].astype(np.float32))
             H.append(np.asarray(raw["harmonics_ri"])[targets].astype(np.float32))
             S += [stem] * len(targets)
             C.append(targets)
@@ -109,6 +111,7 @@ class RealWindows:
         self.fine = np.concatenate(F)
         self.wide = np.concatenate(W)
         self.p_observed = np.concatenate(P)
+        self.v_observed = np.concatenate(V)
         self.obs_harm = np.concatenate(H)
         self.target_cycle = np.concatenate(C)
         self.stem = np.asarray(S)

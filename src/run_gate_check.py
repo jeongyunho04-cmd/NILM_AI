@@ -129,6 +129,8 @@ def forward_file(model, stem: str, dev: str, stride: int = 30,
     return {"gate": np.concatenate(G), "p_raw": np.concatenate(R),
             "standby": np.concatenate(SB), "p_noise": np.concatenate(PN),
             "p_observed": np.concatenate(POBS), "targets": rw.target_cycle,
+            # 단자 전압 (n,). 저항 정합(12.112)이 P = V^2/R 을 푸는 데 쓴다.
+            "v_rms": rw.v_observed.astype(np.float64),
             # 관측 고조파 (n,15,2) Re/Im. 12.40 의 전이 스냅이 |I3| 를 쓴다 —
             # 저항 부하는 3차를 거의 안 흘려서 SMPS 계단만 남는다 (12.37.2).
             "obs_harm": np.concatenate(OH)}
@@ -270,6 +272,9 @@ def main() -> int:
                          "만큼을 다른 SMPS 로 넘긴다. sync 는 게이트도 맞춘다. "
                          "**2단계 단독에서만 이득이다** (44/59 vs 27/59). 하이브리드는 "
                          "41 -> 36/59 로 나빠지므로 기본은 꺼 둔다")
+    ap.add_argument("--resmatch", type=float, default=0.0, metavar="TOL",
+                    help="저항 부하 정합 후처리 (12.112절). 관측 전력·전압으로 등가저항을 "
+                         "역산해 저항 조합을 **맞바꾼다** (개수는 안 바꾼다). 0.02 권장, 0=끔")
     ap.add_argument("--absorb", type=float, default=0.0, metavar="FRAC",
                     help="총전력 잔차를 고조파가 닮은 SMPS 에 흡수시킨다 (12.104절). "
                          "0.5 면 잔차 8.88 -> 7.35W. 0 이면 끔")
@@ -301,6 +306,8 @@ def main() -> int:
                    + (f"+z{a.zero_ch.replace(',', '_')}" if a.zero_ch else ""))
         if a.postproc != "off":
             tag = f"{tag}+pp{'sync' if a.postproc == 'sync' else ''}"
+        if a.resmatch > 0:
+            tag = f"{tag}+rm{a.resmatch:g}"
         if a.absorb > 0:
             tag = f"{tag}+ab{a.absorb:g}"
         print("=" * 88)
@@ -326,6 +333,15 @@ def main() -> int:
                 P_hard, g_hard = apply_postproc(P_hard, d["gate"], apps, gate_sync=sync)
                 d_soft = dict(d, gate=g_soft)
                 d_hard = dict(d, gate=g_hard)
+            if a.resmatch > 0:
+                from src.model.postproc import resistive_match
+                P_soft, g_soft = resistive_match(
+                    P_soft, d_soft["gate"], apps, d["p_observed"], d["v_rms"],
+                    d["standby"], d["p_noise"], obs_harm=d["obs_harm"], tol=a.resmatch)
+                P_hard, g_hard = resistive_match(
+                    P_hard, d_hard["gate"], apps, d["p_observed"], d["v_rms"],
+                    d["standby"], d["p_noise"], obs_harm=d["obs_harm"], tol=a.resmatch)
+                d_soft, d_hard = dict(d, gate=g_soft), dict(d, gate=g_hard)
             if a.absorb > 0:
                 from src.model.postproc import absorb_residual
                 sigs = _signatures(apps)
