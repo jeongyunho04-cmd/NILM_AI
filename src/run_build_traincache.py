@@ -31,6 +31,9 @@ def main() -> int:
     ap.add_argument("--recipe-mix", default="", metavar="NAME|JSON",
                     help="레시피 믹스. run_recipe_mix_probe 의 프리셋 이름(half/full) 이나 "
                          "JSON. 기본은 DEFAULT_RECIPE_MIX (12.67절)")
+    ap.add_argument("--power-scale-std", default="", metavar="NAME|JSON",
+                    help="기기별 전력 증강 폭 (12.118). 프리셋 measured/resistive "
+                         "또는 JSON. 기본은 일괄 0.05")
     ap.add_argument("--dither-even-amp", type=float, default=0.0,
                     help="짝수차 전용 지터 σ (12.69절). 차수 비례를 쓰지 않고 무리 전체에 "
                          "같은 값. 1.4 에서 프로젝터↔충전기 |I2|/|I1| d' 가 5.04 -> 1.06")
@@ -52,6 +55,13 @@ def main() -> int:
         print(f"  ** 녹화 단위 홀드아웃: {excl} - 이 녹화의 활성화는 학습에서 뺀다 **")
     if mix:
         print(f"  ** 레시피 믹스 '{a.recipe_mix}': 동시성을 올린다 (12.67절) **")
+    pss = None
+    if a.power_scale_std:
+        from src.synthesis.augmentor import POWER_SCALE_STD_PRESETS
+        pss = (POWER_SCALE_STD_PRESETS[a.power_scale_std]
+               if a.power_scale_std in POWER_SCALE_STD_PRESETS else json.loads(a.power_scale_std))
+        print(f"  ** 기기별 전력 증강 폭 '{a.power_scale_std}' (12.118): "
+              + ", ".join(f"{k}={v:g}" for k, v in sorted(pss.items())) + " **")
     if a.dither_even_amp > 0 or a.dither_even_phase_deg > 0:
         print(f"  ** 짝수차 지터: σ={a.dither_even_amp:.2f} / 위상 {a.dither_even_phase_deg:.1f}° "
               f"(무리 전체 동일, 12.69절) **")
@@ -64,7 +74,8 @@ def main() -> int:
                 dither_amp=a.dither_amp, dither_phase_deg=a.dither_phase_deg,
                 recipe_mix=mix,
                 dither_even_amp=a.dither_even_amp,
-                dither_even_phase_deg=a.dither_even_phase_deg)
+                dither_even_phase_deg=a.dither_even_phase_deg,
+                power_scale_std_map=pss)
     return 0
 
 

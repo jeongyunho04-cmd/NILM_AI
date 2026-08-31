@@ -77,15 +77,80 @@ def build_on_off_truth(
     return on, scorable
 
 
+# ── 세션 단위 채점 (2026-08-31, 12.119절) ────────────────────────────────────
+# **오븐만 라벨과 모델의 granularity 가 다르다.** 12.111 이 오븐의 ON 을 '히터
+# 통전' 으로 바꿨는데 `real_events.json` 의 사람 기록은 '스위치를 켠 세션 전체'
+# 다. 그래서 모델이 옳게 예측해도 서모스탯이 끊은 구간이 전부 오답이 된다.
+#
+# 재 보면 라벨상 오븐 ON 인 2,198초 중 히터가 실제로 통전한 시간이 1,334초
+# (60.7%) 다. **그것이 재현율의 천장**이고, 실측 재현율 0.528 은 그 천장의
+# 87% 다 — 오븐 F1 0.648 의 거의 전부가 정의 차이다.
+#
+# 12.13.1 은 같은 문제를 핫플에서 겪고 **라벨을 통전 단위로 고쳐** 풀었다
+# (원래 세션은 `_sessions` 에 보존). 오븐은 그 변환을 안 했고, 하려면 사람
+# 기록을 신호 추정으로 내려야 하므로 여기서는 **정답을 건드리지 않는다.**
+#
+# 대신 **예측과 정답 양쪽에 같은 병합을 걸어** 세션 단위로 잰다. 라벨이 이미
+# 세션이면 정답 쪽은 안 바뀌고 예측만 이어지며, 라벨이 통전 단위여도 양쪽이
+# 같이 세션이 되므로 어느 granularity 든 공정하다.
+#
+# 병합 상한은 `segment_pool.PERIODIC_MERGE_GAP_CAP_CYCLES` 와 같은 값이다 —
+# 그쪽이 오븐 공백을 25~31초(p90 35, 최대 78)로 재고 90초를 상한으로 잡았다.
+# 이 채점기에서 다시 재도 공백 중앙값 24.0초, p90 31.0초로 같다.
+#
+# **핫플은 넣지 않는다.** 12.13.1 이 라벨 쪽에서 이미 통전 단위로 맞춰 놨다.
+SESSION_MERGE_CYCLES: Dict[str, int] = {"oven": 5400}      # 90초 @ 60Hz
+
+
+def close_gaps(x: np.ndarray, limit: int) -> np.ndarray:
+    """(n,) bool 에서 `limit` 이하의 공백을 메운다. **팽창이 아니라 닫기다** —
+    맨 앞뒤로는 번지지 않고, ON 구간이 하나뿐이면 아무 일도 안 한다."""
+    x = np.asarray(x, bool)
+    if limit <= 0 or not x.any():
+        return x
+    d = np.diff(x.astype(np.int8))
+    starts = np.flatnonzero(d == 1) + 1
+    ends = np.flatnonzero(d == -1) + 1
+    if x[0]:
+        starts = np.r_[0, starts]
+    if x[-1]:
+        ends = np.r_[ends, len(x)]
+    if len(starts) < 2:
+        return x
+    out = x.copy()
+    for e, s in zip(ends[:-1], starts[1:]):
+        if s - e <= limit:
+            out[e:s] = True
+    return out
+
+
 def score_on_off(
     pred_on: np.ndarray,             # (n_cycles, K) bool
     stem: str,
     appliances: Sequence[str],
     events: Optional[dict] = None,
+    session_merge: Optional[Dict[str, int]] = None,
 ) -> Dict[str, dict]:
-    """실측 on/off F1. uncertain 구간은 세지 않는다."""
+    """실측 on/off F1. uncertain 구간은 세지 않는다.
+
+    Args:
+        session_merge: {기기: 최대 공백 사이클}. 주면 그 기기를 **세션 단위**로
+            잰다 — `SESSION_MERGE_CYCLES` 주석 참조. **예측과 정답 양쪽에**
+            같은 병합을 걸므로 라벨의 granularity 와 무관하게 공정하다.
+            기본 None 이면 예전과 완전히 같다 (채점 도구의 기본은 안 바꾼다,
+            12.113.2 의 규율).
+    """
     pred_on = np.asarray(pred_on, bool)
     truth, scorable = build_on_off_truth(stem, appliances, len(pred_on), events)
+    if session_merge:
+        pred_on = pred_on.copy()
+        truth = truth.copy()
+        for j, app in enumerate(appliances):
+            lim = int(session_merge.get(app, 0))
+            if lim <= 0:
+                continue
+            pred_on[:, j] = close_gaps(pred_on[:, j], lim)
+            truth[:, j] = close_gaps(truth[:, j], lim)
     out = {}
     for j, app in enumerate(appliances):
         m = scorable[:, j]

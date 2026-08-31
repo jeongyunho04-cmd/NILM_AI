@@ -63,7 +63,8 @@ _SEED_BASE = 0
 def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           exclude_files_json: str = "", dither_amp: float = 0.0,
           dither_phase_deg: float = 0.0, recipe_mix_json: str = "",
-          dither_even_amp: float = 0.0, dither_even_phase_deg: float = 0.0) -> None:
+          dither_even_amp: float = 0.0, dither_even_phase_deg: float = 0.0,
+          power_scale_std_json: str = "") -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.augmentor import DataAugmentor
     from src.synthesis.dataset import NILMBatchGenerator
@@ -80,10 +81,13 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
     pool = SegmentPool(npz_dir=npz_dir, time_split=time_split,
                        exclude_activation_files=excl)
     # 차수별 지터 (12.62절). 0 이면 `DataAugmentor` 기본과 같다.
+    # 기기별 전력 증강 폭 (12.118). 빈 문자열이면 일괄 `power_scale_std` 다.
+    pss = json.loads(power_scale_std_json) if power_scale_std_json else None
     aug = DataAugmentor(harmonic_dither_amp=float(dither_amp),
                         harmonic_dither_phase_deg=float(dither_phase_deg),
                         harmonic_dither_even_amp=float(dither_even_amp),
-                        harmonic_dither_even_phase_deg=float(dither_even_phase_deg))
+                        harmonic_dither_even_phase_deg=float(dither_even_phase_deg),
+                        power_scale_std_map=pss)
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
@@ -138,6 +142,7 @@ def build_cache(
     recipe_mix: Optional[Dict[str, float]] = None,
     dither_even_amp: float = 0.0,
     dither_even_phase_deg: float = 0.0,
+    power_scale_std_map: Optional[Dict[str, float]] = None,
 ) -> dict:
     """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다."""
     import multiprocessing as mp
@@ -145,6 +150,7 @@ def build_cache(
     from src.synthesis.segment_pool import SegmentPool
     excl_json = json.dumps(exclude_activation_files) if exclude_activation_files else ""
     mix_json = json.dumps(recipe_mix) if recipe_mix else ""
+    pss_json = json.dumps(power_scale_std_map) if power_scale_std_map else ""
     apps = SegmentPool(npz_dir=npz_dir, time_split=time_split,
                        exclude_activation_files=exclude_activation_files).get_appliance_types()
     k = len(apps)
@@ -175,7 +181,7 @@ def build_cache(
     with ctx.Pool(n_workers, initializer=_init,
                   initargs=(npz_dir, window_cycles, time_split, seed, excl_json,
                             dither_amp, dither_phase_deg, mix_json,
-                            dither_even_amp, dither_even_phase_deg)) as pool:
+                            dither_even_amp, dither_even_phase_deg, pss_json)) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -197,6 +203,7 @@ def build_cache(
             "recipe_mix": recipe_mix,
             "dither_even_amp": float(dither_even_amp),
             "dither_even_phase_deg": float(dither_even_phase_deg),
+            "power_scale_std_map": power_scale_std_map,
             "fine_shape": [FINE_CHANNELS, FINE_CYCLES], "bytes": int(total),
             "zero_even_harmonics": bool(ZERO_EVEN_HARMONICS),
             "build_seconds": round(time.time() - t0, 1),

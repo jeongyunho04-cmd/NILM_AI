@@ -119,11 +119,13 @@ class NILMLoss(torch.nn.Module):
         standby_sig: Optional[torch.Tensor] = None,  # (K, H, 2) 대기 상태 페이저
         noise_sig: Optional[torch.Tensor] = None,    # (H, 2) 계측계 페이저
         harm_scale: Optional[torch.Tensor] = None,   # (H,) 차수별 정규화
-        harm_odd_only: bool = False,                # 짝수차를 L_harm 에서 뺀다 (12.75)
+        harm_odd_only: bool = False,                # 짝수차를 L_harm 에서 뺀다 (12.75, 실행 기록은 12.78)
         weights: Optional[LossWeights] = None,
         power_delta: float = 0.1,
         standby_delta: float = 1.0,
         s_state: Optional[torch.Tensor] = None,      # (K, MAX_STATES) 상태별 척도
+        harm_grad_balance: str = "off",             # off | smps | all  (12.120)
+        smps_group: Optional[Sequence[int]] = None,  # SMPS 열 인덱스
     ):
         super().__init__()
         self.register_buffer("s_i", s_i.clamp(min=1e-3))
@@ -139,7 +141,40 @@ class NILMLoss(torch.nn.Module):
                              else torch.zeros(h, 2))
         self.register_buffer("harm_scale", harm_scale if harm_scale is not None
                              else torch.ones(h))
-        # 짝수차 제외 마스크 (12.75절).
+
+        # ── L_harm 기울기 균등화 (2026-08-31, 12.120절) ─────────────────────
+        # `∂L_harm/∂P̂_i = sign(err)·sig_i/harm_scale` 이라 **기울기 크기가
+        # `‖sig_i‖` 에 비례한다.** 그래서 와트당 지문이 작은 기기가 잔여를 흡수하는
+        # 가장 싼 자리가 된다:
+        #
+        #     프로젝터 0.1219/W   충전기 0.1479 (1.21배)   미니PC 0.1697 (1.39배)
+        #
+        # 관측된 편향의 순서와 정확히 같다 — 프로젝터 재현율 1.000·정밀도 0.47,
+        # 예측 전력이 창의 87%에서 상한에 붙어 있고, 충전기는 재현율 0.62 로
+        # 놓친다 (12.120.1).
+        #
+        # 12.87.3 은 이것을 **미결정**이라 했는데 절반만 맞다. 해가 여러 개인 것은
+        # 맞지만 모델은 무작위로 고르지 않는다 — **`L_harm` 이 순서를 매긴다.**
+        #
+        # **값이 아니라 기울기만 고친다.** `p_eff = P·w + (P·(1−w)).detach()` 는
+        # 값이 정확히 `P` 라 재구성 `Σ P̂·sig` 가 안 바뀐다 (물리 보존).
+        # 바뀌는 것은 최적화가 어느 기기를 움직이기 쉬운가뿐이다.
+        #
+        # **2단계(`unlabeled`)에만 건다.** 1단계에는 `L_power` 가 기기별로
+        # 붙잡아 주므로 비대칭이 상쇄되지만 2단계에는 그 항이 없다 (4.2절).
+        sn = (self.sig[:, :, 0] ** 2 + self.sig[:, :, 1] ** 2).sqrt()
+        sn = (sn / self.harm_scale.clamp(min=1e-9)[None]).norm(dim=1).clamp(min=1e-9)
+        w = torch.ones_like(sn)
+        if harm_grad_balance == "all":
+            w = sn.mean() / sn
+        elif harm_grad_balance == "smps" and smps_group:
+            idx = torch.as_tensor(list(smps_group), dtype=torch.long)
+            w[idx] = sn[idx].mean() / sn[idx]
+        self.register_buffer("harm_gw", w)
+        self.harm_grad_balance = str(harm_grad_balance)
+        # 짝수차 제외 마스크 (12.75절. **그 절은 계획만 있고 비어 있었다** —
+        # 유일한 실행 기록은 12.78 이고 넷을 한꺼번에 바꾼 판이라 단일 변수가
+        # 아니다. 12.75.5 가 2단계만으로 다시 잰다).
         #
         # [왜] 12.72 가 짝수차를 **계측 인공물**로 확정했다 — 두 증폭 경로의 DC
         # 오프셋이 개별 보정되지 않아 레인지 전환마다 단차가 생기고, 그 1/h
@@ -283,7 +318,12 @@ class NILMLoss(torch.nn.Module):
         parts["cons"] = wmean((recon - tgt["p_observed"]).abs())
 
         if tgt.get("obs_harm") is not None:
-            pred = torch.einsum("bk,khc->bhc", out["power"], self.sig)
+            # 12.120 — 값은 그대로, 기울기만 기기별로 균등화한다 (`harm_gw` 주석).
+            p_h = out["power"]
+            if self.harm_grad_balance != "off":
+                gw = self.harm_gw[None]
+                p_h = p_h * gw + (p_h * (1.0 - gw)).detach()
+            pred = torch.einsum("bk,khc->bhc", p_h, self.sig)
             idle = torch.sigmoid(out["plugged_logit"]) * (1.0 - torch.sigmoid(out["on_logit"]))
             pred = pred + torch.einsum("bk,khc->bhc", idle, self.standby_sig)
             pred = pred + self.noise_sig[None]

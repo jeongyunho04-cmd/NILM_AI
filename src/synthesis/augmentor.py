@@ -19,12 +19,63 @@
    부수 효과로 오븐처럼 활성화 구간이 2개뿐인 기기도, 32.9분짜리 원본에서
    매번 다른 위상을 잘라 쓰게 되어 실질적인 다양성이 크게 늘어난다.
 """
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 import numpy as np
 
 from .segment_pool import ApplianceActivation
 
 MIN_AUGMENTED_CYCLES = 30
+
+# ── 기기별 전력 증강 폭 (2026-08-27, 12.118절) ────────────────────────────────
+# 일괄 `power_scale_std=0.05` 는 **실측과 거꾸로** 걸려 있었다.
+#
+# 등가저항 `R = V^2/P` 의 산포를 60초 창 규모와 녹화 간으로 갈라 재면:
+#
+#   기기/상태          CV 60초창   CV 녹화간      현행 σ
+#   포트                 0.27%      0.13%        5%   <- 17배 과하다
+#   핫플                 0.35%      0.09%        5%
+#   오븐                 0.65%      0.67%        5%
+#   프로젝터              0.60%      0.36%        5%
+#   드라이기 강            0.58%      0.63%        5%
+#   충전기 고속           11.42%      8.36%        5%   <- 오히려 모자란다
+#   미니PC 작업            4.44%     14.31%        5%
+#
+# **크기가 판별자인 기기에는 크기를 흔들고, 못 믿을 기기에는 덜 흔들고 있었다.**
+# 12.112 가 등가저항으로 저항 3종을 갈랐는데(포트 35.8 / 오븐 40.6 / 드라이기
+# 54.3 / 핫플 101.8Ω), 그 판별자가 학습 분포에서 뭉개진다 — 캐시에서 재면
+# 포트↔오븐 d' 가 **2.50** 이고 실측 산포로 계산하면 **18.3** 이다.
+#
+# 12.110.1 이 *"증강은 폭의 1/3 만 만든다, 나머지는 전압"* 이라 한 것은 **전력**
+# 이야기다. 등가저항에서는 `V^2` 이 정의상 소거되므로 **폭이 거의 전부 증강**이다
+# (학습 CV 5.2% vs 증강 5.0%).
+#
+# ⚠ **이것은 기기 종류가 아니라 이 개체를 외우게 하는 선택이다.** 녹화 간 CV 는
+# 같은 실물을 다른 날 잰 값이고 기기당 실물이 하나뿐이다. 3.3절이 닫힌 세계
+# (멀티탭 9종 한정)를 명시하므로 이 프로젝트에서는 정당하나, **기기를 교체하면
+# 재학습이 필요하다.**
+POWER_SCALE_STD_MEASURED: Dict[str, float] = {
+    "electiric_kettle": 0.005,
+    "hotplate":         0.005,
+    "oven":             0.010,
+    "hair_dryer":       0.010,
+    "beam_projector":   0.010,
+    "fan":              0.030,
+    "minipc":           0.120,
+    "laptop_charger":   0.150,
+    "air_conditioner":  0.060,
+}
+
+#: 저항 4종 + 프로젝터만 좁힌 판 (12.118 의 대조군 ⑤). SMPS 는 현행 0.05 그대로다.
+#: 저항과 SMPS 를 동시에 바꾸면 좋아져도 어느 쪽 덕인지 모른다 (부록 규칙 4).
+POWER_SCALE_STD_RESISTIVE: Dict[str, float] = {
+    k: v for k, v in POWER_SCALE_STD_MEASURED.items()
+    if k in ("electiric_kettle", "hotplate", "oven", "hair_dryer", "beam_projector")
+}
+
+POWER_SCALE_STD_PRESETS: Dict[str, Dict[str, float]] = {
+    "measured": POWER_SCALE_STD_MEASURED,
+    "resistive": POWER_SCALE_STD_RESISTIVE,
+}
 
 
 class DataAugmentor:
@@ -48,9 +99,12 @@ class DataAugmentor:
         harmonic_dither_even_amp: float = 0.0,
         harmonic_dither_even_phase_deg: float = 0.0,
         level_scramble: Optional[dict] = None,
+        power_scale_std_map: Optional[Dict[str, float]] = None,
     ):
         self.duration_scale_range = duration_scale_range
         self.power_scale_std = power_scale_std
+        #: 기기별 폭 (12.118). 없는 기기는 `power_scale_std` 를 쓴다.
+        self.power_scale_std_map = dict(power_scale_std_map or {})
         self.phase_jitter_max_deg = phase_jitter_max_deg
         self.switching_inrush_jitter = switching_inrush_jitter
         # 주기 부하의 통전/휴지 **길이** 를 흔든다 (`_retime_duty` 주석).
@@ -162,7 +216,10 @@ class DataAugmentor:
             lo, hi = self.level_scramble[act.appliance_type]
             p_scale = float(np.random.uniform(lo, hi))
         else:
-            p_scale = float(np.clip(1.0 + np.random.normal(0, self.power_scale_std), 0.85, 1.15))
+            sd = self.power_scale_std_map.get(act.appliance_type, self.power_scale_std)
+            # 클립은 3σ 로 둔다. 일괄 ±15% 로 두면 σ=0.15 인 충전기가 잘리고
+            # σ=0.005 인 포트는 클립이 아무 일도 안 한다 (12.118).
+            p_scale = float(np.clip(1.0 + np.random.normal(0, sd), 1.0 - 3 * sd, 1.0 + 3 * sd))
 
         aug_c = aug_c * p_scale
         aug_pow = aug_pow.copy()

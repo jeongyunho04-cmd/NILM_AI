@@ -167,7 +167,9 @@ def main() -> int:
     ap.add_argument("--smps-boost", type=float, default=4.0,
                     help="--real-weight smps-boost 의 배수")
     ap.add_argument("--harm-odd-only", action="store_true",
-                    help="L_harm 에서 짝수차를 뺀다 (12.75절). **2단계가 실측에서 도는 것이므로 1단계보다 이쪽이 더 중요하다**")
+                    help="L_harm 에서 짝수차를 뺀다 (12.75절 — 계획만 있던 절이고 실행 기록은 "
+                         "12.78, 단일 변수 재측정은 12.75.5). **2단계가 실측에서 도는 것이므로 "
+                         "1단계보다 이쪽이 더 중요하다**")
     ap.add_argument("--init", default="results/cnn_v17.pt",
                     help="1단계 체크포인트. v17 은 듀티 주기 무작위화로 다시 학습한 것이고 "
                          "1단계만으로 v15 의 2단계 결과를 앞선다 (12.17절)")
@@ -191,6 +193,11 @@ def main() -> int:
                          "튜닝 잔향인지 확인하는 용도")
     ap.add_argument("--real-stride", type=int, default=30)
     ap.add_argument("--eval-every", type=int, default=250)
+    ap.add_argument("--harm-grad-balance", default="off",
+                    choices=("off", "smps", "all"),
+                    help="L_harm 의 기울기를 기기별로 균등화한다 (12.120). "
+                         "값은 안 바뀌고 기울기만 바뀐다. smps 는 SMPS 3종 "
+                         "안에서만, all 은 9종 전부. 기본 off")
     ap.add_argument("--cache", default="cache/train60")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="adapt")
@@ -244,6 +251,9 @@ def main() -> int:
         signatures=torch.from_numpy(sig), standby_sig=torch.from_numpy(sb),
         noise_sig=torch.from_numpy(nz), harm_scale=torch.from_numpy(hsc),
         harm_odd_only=a.harm_odd_only,
+        harm_grad_balance=a.harm_grad_balance,
+        smps_group=[apps.index(x) for x in
+                    ("beam_projector", "laptop_charger", "minipc") if x in apps],
         weights=LossWeights(harm=0.1, cons=0.0, over=0.0),
         s_state=build_state_scales(apps, [S_I[x] for x in apps]),
     ).to(dev)
