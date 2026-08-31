@@ -49,3 +49,8 @@ cache/
 results/*.pkl
 
 results/live_log.jsonl
+
+# 1단계 학습 중간 스냅샷 (ep0050~0250). 최종 체크포인트만 있으면 재현되고,
+# 이미 추적 중인 것만 307MB 다. 새 실험의 스냅샷은 더 쌓지 않는다.
+# (되살리려면 이 줄을 지우고 git add -f)
+results/snapshots/
