@@ -183,7 +183,8 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
                     standby: np.ndarray, p_noise: np.ndarray,
                     obs_harm: Optional[np.ndarray] = None,
                     tol: float = 0.05, min_w: float = 150.0,
-                    cand_gate_min: float = 0.10, margin: float = 2.0,
+                    cand_gate_min: float = 0.0, margin: float = 2.0,
+                    snap: bool = False,
                     ) -> Tuple[np.ndarray, np.ndarray]:
     """관측 전력·전압에 **맞는 저항 조합**을 골라 재배정한다 (12.112).
 
@@ -201,6 +202,15 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
         tol: 상대 오차가 이 값을 넘으면 손대지 않는다 (설명 못 하는 창)
         min_w: 저항 성분이 이보다 작으면 손대지 않는다 (전부 꺼진 창)
         obs_harm: (n,15,2). 주면 드라이기 약(반파)을 짝수차로 가른다
+        cand_gate_min: 후보 조합에 넣을 최소 게이트 (12.117 의 B). 0 이면 무제한.
+            **이미 켜진 기기(`cur`)는 문턱과 무관하게 남는다** — 12.112 가
+            경고한 "게이트로 후보를 좁히면 고쳐야 할 맞바꿈을 놓친다" 를 피한다
+            (`test3` 오븐 게이트 0.09). 겨냥은 게이트가 **바닥**인 기기를
+            맞바꿈으로 켜는 것이다 (`test_9` 드라이기).
+        snap: 조합이 이미 맞을 때(`best == cur`)도 전력을 `V^2/R` 로 맞춘다
+            (12.117 의 A). 개수도 신원도 안 바뀌므로 규칙 18 과 충돌하지 않는다 —
+            **같은 집합**이다. 겨냥은 `test3` 처럼 조합은 맞는데 전력이 모자라
+            그 차이가 문턱 아래 게이트로 새는 창이다.
     """
     out = np.array(P, dtype=np.float64, copy=True)
     g = np.array(gate, dtype=np.float64, copy=True)
@@ -247,9 +257,19 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
         if not cur:
             continue
 
+        # 후보 제한 (12.117.3). 게이트가 바닥인 기기는 맞바꿈으로 켜지 못한다.
+        # **이미 켜진 것은 무조건 남긴다** — 안 그러면 `cur` 자체가 후보에서
+        # 빠져 `cur_err` 이 inf 가 되고 아무 맞바꿈이나 통과한다.
+        allow = None
+        if cand_gate_min > 0:
+            allow = {k for k, j in enumerate(cols)
+                     if g[i, j] >= cand_gate_min} | set(cur)
+
         best, best_err, cur_err = None, np.inf, np.inf
         for pick in combos:
             if len(pick) != len(cur):
+                continue
+            if allow is not None and not set(pick) <= allow:
                 continue
             gg = sum(1.0 / ohm[names[k]] for k in pick)
             if gg <= 0:
@@ -260,7 +280,14 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
             if err < best_err:
                 best, best_err = pick, err
         # **모델의 조합보다 확실히 나을 때만 바꾼다** (margin 배 이상).
-        if best is None or best_err > tol or best_err * margin > cur_err:
+        # 다만 `best == cur` — 조합이 이미 맞는 경우 — 는 맞바꿈이 아니라 **스냅**이다.
+        # margin 조건은 `cur_err == best_err` 라 항상 걸리므로 따로 가른다 (12.117.2).
+        if best is None or best_err > tol:
+            continue
+        if tuple(best) == tuple(cur):
+            if not snap:
+                continue
+        elif best_err * margin > cur_err:
             continue
         for k, j in enumerate(cols):
             on = k in best

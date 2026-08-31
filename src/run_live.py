@@ -317,6 +317,9 @@ def main() -> int:
                     help="SMPS 3종(프로젝터/충전기/미니PC)만 이 체크포인트로 예측한다. "
                          "**기본은 빈 문자열 = 단독 동작**이다 (12.102.5). 하이브리드로 "
                          "되돌리려면 results/cnn_ze1.pt 를 준다")
+    ap.add_argument("--no-rm-snap", action="store_true",
+                    help="저항 정합의 전력 스냅을 끈다 (12.118 이전 동작). "
+                         "기본은 켜짐 — 조합이 이미 맞을 때도 V^2/R 로 맞춘다")
     ap.add_argument("--resmatch", type=float, default=0.02, metavar="TOL",
                     help="저항 부하 정합 후처리 (12.112절). 관측 전력·전압으로 등가저항을 "
                          "역산해 저항 조합을 **맞바꾼다**(개수는 안 바꾼다). 운영 기본 0.02, 0=끔")
@@ -462,7 +465,7 @@ def main() -> int:
                     power[None, :], gate[None, :], list(apps),
                     np.array([p_obs]), np.array([float(win[0, 32, ti])]),
                     standby_k[None, :], np.array([NOISE_FLOOR_EXTERNAL_W]),
-                    obs_harm=obs_h[None], tol=a.resmatch)
+                    obs_harm=obs_h[None], tol=a.resmatch, snap=not a.no_rm_snap)
                 power, gate = power[0], gate[0]
             if a.absorb > 0:
                 # 총전력 잔차를 고조파가 닮은 SMPS 로 흡수 (12.104).

@@ -217,7 +217,7 @@ class NILMPredictor:
     """
 
     def __init__(self, ckpt_path: str, device: Optional[str] = None,
-                 postproc: str = "on", resmatch: float = 0.02,
+                 postproc: str = "on", resmatch: float = 0.02, rm_snap: bool = True,
                  reorder: bool = True):
         """
         Args:
@@ -225,6 +225,8 @@ class NILMPredictor:
             device: "cuda" / "cpu". 생략하면 있는 쪽을 쓴다
             postproc: "off" | "on" | "sync" — 물리 전력 상한 후처리.
                 운영 기본은 "on" 이다 (README 의 성능 표 참조)
+            rm_snap: 저항 정합이 조합을 확인한 창에서 전력도 V^2/R 로 맞춘다
+                (12.117). 끄면 12.117 이전 동작이다.
             resmatch: 저항 부하 정합 허용오차. 관측 전력·전압으로 등가저항을
                 역산해 저항 조합을 맞바꾼다. 운영 기본 0.02, 0 이면 끔
             reorder: 수신기 CSV 의 순서 뒤바뀜을 t_s 로 보정한다. 끄지 말 것
@@ -244,6 +246,10 @@ class NILMPredictor:
         self.meta = {k: v for k, v in ck.items() if k not in ("model",)}
         self.postproc = postproc
         self.resmatch = float(resmatch)
+        #: 저항 정합에서 조합이 이미 맞을 때도 전력을 V^2/R 로 스냅한다 (12.117).
+        #: 시드 4개에서 8파일 유령 8.98 -> 5.23W, 폭 6.05 -> 4.15W, 잔차
+        #: 10.15 -> 7.30W, F1 과 전이 귀속은 불변. 운영 기본 True.
+        self.rm_snap = bool(rm_snap)
         self.ring = CycleRing(WINDOW_CYCLES, use_time=reorder)
         self.cols: Optional[Dict[str, int]] = None
         self.target_in_window = target_index(WINDOW_CYCLES)
@@ -310,7 +316,7 @@ class NILMPredictor:
                 power[None, :], gate[None, :], self.appliances,
                 np.array([p_obs]), np.array([float(win[0, 32, self.target_in_window])]),
                 standby_k[None, :], np.zeros(1),
-                obs_harm=obs_h[None], tol=self.resmatch)
+                obs_harm=obs_h[None], tol=self.resmatch, snap=self.rm_snap)
             power, gate = power[0], gate[0]
 
         total = float(power.sum()) + standby

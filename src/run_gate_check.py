@@ -39,7 +39,8 @@ from src import env_guard  # noqa: F401  torch 보다 먼저
 import numpy as np
 import torch
 
-from src.evaluation.real_events import load_events, score_absent, score_on_off
+from src.evaluation.real_events import (SESSION_MERGE_CYCLES, load_events,
+                                        score_absent, score_on_off)
 from src.evaluation.sealing import is_sealed
 from src.model.inputs import (FINE_CYCLES, LEGACY_FINE_CHANNELS, ZERO_EVEN_HARMONICS,
                               LEGACY_FINE_CYCLES, LEGACY_TARGET_LOOKAHEAD,
@@ -174,12 +175,13 @@ def _signatures(apps: List[str]):
     return _SIG_CACHE[key]
 
 
-def score_one(d: dict, P: np.ndarray, stem: str, apps: List[str], ev: dict) -> dict:
+def score_one(d: dict, P: np.ndarray, stem: str, apps: List[str], ev: dict,
+              session_merge=None) -> dict:
     resid = P.sum(1) + d["standby"].sum(1) + d["p_noise"] - d["p_observed"]
     n_cycles = int(ev[stem]["cycles"])
     on_c = upsample_to_cycles(d["gate"] > 0.5, d["targets"], n_cycles)
     ab = score_absent(P, stem, apps, pred_on=d["gate"] > 0.5, s_i=S_I, events=ev)
-    f1 = score_on_off(on_c, stem, apps, events=ev)
+    f1 = score_on_off(on_c, stem, apps, events=ev, session_merge=session_merge)
     vals = [v["f1"] for v in f1.values() if v["n_true_on"] > 0]
     return {"absent_sum_w": ab["absent_sum_w"], "absent_fa_rel_max":
             max([v["fa_rel"] for v in ab["absent"].values()
@@ -275,6 +277,16 @@ def main() -> int:
     ap.add_argument("--resmatch", type=float, default=0.0, metavar="TOL",
                     help="저항 부하 정합 후처리 (12.112절). 관측 전력·전압으로 등가저항을 "
                          "역산해 저항 조합을 **맞바꾼다** (개수는 안 바꾼다). 0.02 권장, 0=끔")
+    ap.add_argument("--session-merge", action="store_true",
+                    help="주기 부하(오븐)를 **세션 단위**로 잰다 (12.119). "
+                         "예측과 정답 양쪽에 90초 공백 병합을 걸어 "
+                         "라벨 granularity 차이를 없앤다. 기본 꺼짐")
+    ap.add_argument("--rm-snap", action="store_true",
+                    help="저항 정합: 조합이 이미 맞을 때도 전력을 V^2/R 로 스냅한다 "
+                         "(12.117 의 A). 개수·신원 불변")
+    ap.add_argument("--rm-gate-min", type=float, default=0.0, metavar="G",
+                    help="저항 정합: 맞바꿈 후보의 최소 게이트 (12.117 의 B). "
+                         "이미 켜진 기기는 문턱과 무관하게 남는다. 0 이면 무제한")
     ap.add_argument("--absorb", type=float, default=0.0, metavar="FRAC",
                     help="총전력 잔차를 고조파가 닮은 SMPS 에 흡수시킨다 (12.104절). "
                          "0.5 면 잔차 8.88 -> 7.35W. 0 이면 끔")
@@ -337,10 +349,12 @@ def main() -> int:
                 from src.model.postproc import resistive_match
                 P_soft, g_soft = resistive_match(
                     P_soft, d_soft["gate"], apps, d["p_observed"], d["v_rms"],
-                    d["standby"], d["p_noise"], obs_harm=d["obs_harm"], tol=a.resmatch)
+                    d["standby"], d["p_noise"], obs_harm=d["obs_harm"], tol=a.resmatch,
+                    snap=a.rm_snap, cand_gate_min=a.rm_gate_min)
                 P_hard, g_hard = resistive_match(
                     P_hard, d_hard["gate"], apps, d["p_observed"], d["v_rms"],
-                    d["standby"], d["p_noise"], obs_harm=d["obs_harm"], tol=a.resmatch)
+                    d["standby"], d["p_noise"], obs_harm=d["obs_harm"], tol=a.resmatch,
+                    snap=a.rm_snap, cand_gate_min=a.rm_gate_min)
                 d_soft, d_hard = dict(d, gate=g_soft), dict(d, gate=g_hard)
             if a.absorb > 0:
                 from src.model.postproc import absorb_residual
@@ -351,8 +365,9 @@ def main() -> int:
                 P_hard = absorb_residual(P_hard, d_hard["gate"], apps, d["standby"],
                                          d["p_noise"], d["p_observed"], d["obs_harm"],
                                          *sigs, frac=a.absorb)
-            s_soft = score_one(d_soft, P_soft, stem, apps, ev)
-            s_hard = score_one(d_hard, P_hard, stem, apps, ev)
+            sm = SESSION_MERGE_CYCLES if a.session_merge else None
+            s_soft = score_one(d_soft, P_soft, stem, apps, ev, session_merge=sm)
+            s_hard = score_one(d_hard, P_hard, stem, apps, ev, session_merge=sm)
             per_file[stem] = {"soft": s_soft, "hard": s_hard, "hedge": hedge_report(d, apps)}
             rows["soft"].append(s_soft); rows["hard"].append(s_hard)
             if stem == "test_4":
