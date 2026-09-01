@@ -94,6 +94,138 @@ def apply_postproc(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
     return out, g
 
 
+# ── 프로젝터 전력 스냅 (2026-08-31, SMPS_PLAN 4.3절) ─────────────────────────
+# **지금 것은 한 방향이다.** `apply_postproc` 은 상한(55W)을 *넘는* 만큼만 넘긴다.
+# 그런데 12.120.1 이 재 보니 창의 **87.1%** 가 상한에 붙어 있고, 격리 통전값은
+# 47.4W (p5~p95 46.4~48.3, 폭 1.9W) 다 — 상한이 격리값보다 7.6W 높아서 그
+# 사이의 과대예측은 통과한다.
+#
+# 스냅은 세 가지가 다르다:
+#     ① 값     55W(상한) -> 47.4W(격리 중앙)
+#     ② 방향   한 방향 -> **양방향**. 모델이 40W 로 낮게 붙였으면 되받아 온다
+#     ③ 상대   게이트 가중 / 3차 이상 고조파 코사인 중 고른다
+#
+# ⚠ **12.102 의 "52W 로 내렸더니 42/59 로 나빠졌다" 와 다른 조작이다** —
+#   그것은 clip 이고 이것은 snap 이다. 다만 그 결과가 이 항목의 가장 강한 반증
+#   후보이므로 **값 둔감성 검사**(47.4 / 48.5 / 50.0 이 같은 방향인가)를 반드시
+#   같이 돌린다. 한 점만 좋으면 튜닝 잔향이다.
+#
+# ⚠ **양방향은 총합을 보존하지 않는다.** 낮게 붙은 것을 끌어올리면 그만큼을
+#   남에게서 뺏어 와야 하는데, 뺏길 기기가 이미 0 이면 못 뺏는다. 그래서
+#   `take_from` 이 실제로 뺀 만큼만 준다 — 총합은 절대 늘지 않는다.
+#
+# ⚠ **프로젝터는 상태가 여럿이다** (OPERATING_POINT 1절, 상태수 3). 단일 상수
+#   스냅은 그 상태를 뭉갠다. `state_targets` 를 주면 모델의 상태 argmax 에 맞는
+#   격리 중앙값으로 스냅한다 — 그쪽이 물리적으로 옳다.
+#
+#: 격리 통전 중앙값 (12.120.1). **상한이 아니라 중앙이다.**
+SNAP_TARGET_W: Dict[str, float] = {"beam_projector": 47.4}
+
+#: 값 둔감성 검사용 후보. 한 점만 좋으면 튜닝 잔향이다 (12.102 가 상한에 쓴 검사).
+SNAP_SWEEP_W: Tuple[float, ...] = (47.4, 48.5, 50.0)
+
+
+def snap_power(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
+               targets: Optional[Dict[str, float]] = None,
+               bidirectional: bool = True,
+               share: str = "gate",
+               obs_harm: Optional[np.ndarray] = None,
+               sig: Optional[np.ndarray] = None,
+               state_targets: Optional[Dict[str, Sequence[float]]] = None,
+               state: Optional[np.ndarray] = None,
+               min_gate: float = 0.5,
+               redistribute: bool = True,
+               ) -> Tuple[np.ndarray, np.ndarray]:
+    """켜져 있다고 본 기기의 전력을 격리 중앙값으로 **양방향** 스냅한다.
+
+    Args:
+        P: (n, K) 예측 전력   gate: (n, K) 게이트 확률
+        targets: {기기: 목표W}. 기본 `SNAP_TARGET_W`
+        bidirectional: False 면 초과분만 넘긴다 (지금 동작과 같은 방향)
+        share: "gate" 게이트 가중 | "harm" 3차 이상 고조파 코사인
+        obs_harm/sig: share="harm" 일 때 필요 (n,15,2) / (K,15,2)
+        state_targets: {기기: [상태별 목표W]}. 주면 `state` argmax 로 고른다
+        state: (n, K, S) 상태 로짓
+        min_gate: 이 게이트 아래면 손대지 않는다 — 꺼진 기기를 켜지 않는다 (규칙 18)
+        redistribute: False 면 **깎기만 하고 남에게 안 준다.** 총합 보존이 깨지는
+            대신 유령이 안 는다. 12.122.4 가 스냅을 반증한 이유가 재배분이었는지
+            스냅 자체였는지 가른다 (규칙 3)
+
+    Returns:
+        (P_new, gate_new). **개수도 신원도 안 바꾼다** — 규칙 18 을 지킨다.
+        총합은 늘지 않는다 (뺏을 수 있는 만큼만 준다).
+    """
+    tgt = SNAP_TARGET_W if targets is None else targets
+    out = np.array(P, dtype=np.float64, copy=True)
+    g = np.array(gate, dtype=np.float64, copy=True)
+    recv = [j for j, a in enumerate(apps) if a in SMPS_GROUP]
+    snapped = [(j, a) for j, a in enumerate(apps) if a in tgt]
+    if not snapped or len(recv) < 2:
+        return out, g
+
+    for j, app in snapped:
+        others = [k for k in recv if k != j]
+        if not others:
+            continue
+        # 목표값 — 상태별이 있으면 그것을 쓴다
+        if state_targets and app in state_targets and state is not None:
+            lv = np.asarray(state_targets[app], dtype=np.float64)
+            si = np.asarray(state)[:, j, :len(lv)].argmax(1)
+            aim = lv[si]
+        else:
+            aim = np.full(len(out), float(tgt[app]))
+
+        live = g[:, j] >= min_gate            # 켜져 있다고 본 창만
+        delta = np.where(live, out[:, j] - aim, 0.0)
+        if not bidirectional:
+            delta = np.clip(delta, 0.0, None)
+
+        # 나눌 비중
+        if share == "harm":
+            if obs_harm is None or sig is None:
+                raise ValueError("share='harm' 은 obs_harm 과 sig 가 필요합니다")
+            w = _harmonic_affinity(obs_harm, sig, others)
+        else:
+            w = np.clip(g[:, others], 1e-6, None)
+        ssum = w.sum(1, keepdims=True)
+        w = np.divide(w, ssum, out=np.zeros_like(w), where=ssum > 0)
+
+        give = np.clip(delta, 0.0, None)       # 프로젝터가 내놓는 몫
+        take = np.clip(-delta, 0.0, None)      # 프로젝터가 받아 오는 몫
+        if not redistribute:
+            # 깎기만 한다. 받아 오지도 않는다 — 줄 사람이 없으므로.
+            out[:, j] -= give
+            continue
+        # **받아 올 때는 남이 가진 만큼까지만.** 총합을 늘리지 않는다.
+        avail = (out[:, others] * w).sum(1)
+        take = np.minimum(take, avail)
+
+        out[:, j] += take - give
+        out[:, others] += w * give[:, None] - w * take[:, None]
+        out = np.clip(out, 0.0, None)
+    return out, g
+
+
+def _harmonic_affinity(obs_harm: np.ndarray, sig: np.ndarray,
+                       cols: Sequence[int]) -> np.ndarray:
+    """관측 고조파와 각 기기 지문의 **3차 이상** 코사인 (n, len(cols)).
+
+    `absorb_residual` 이 잔차를 기기에 사영할 때 쓰는 기계와 같다 — 기본파를
+    빼는 이유도 같다 (12.104: 기본파를 넣으면 저항 잔차가 SMPS 로 샌다).
+    게이트가 이미 편향돼 있으면(충전기 재현 0.641) 게이트 가중은 그 편향대로
+    나눈다. 관측 자체로 나누면 그 고리를 끊는다.
+    """
+    o = np.asarray(obs_harm, dtype=np.float64)
+    y = (o[:, 2:, 0] + 1j * o[:, 2:, 1])                  # h>=3
+    yn = np.linalg.norm(y, axis=1)
+    W = np.zeros((len(o), len(cols)))
+    for c, j in enumerate(cols):
+        v = sig[j, 2:, 0] + 1j * sig[j, 2:, 1]
+        vn = np.linalg.norm(v)
+        W[:, c] = np.clip(np.real(y @ np.conj(v)) / (yn * vn + 1e-12), 0.0, None)
+    return W
+
+
 #: 잔차 흡수 비율 (12.104). 기본파를 빼고 유사도를 재면 1.0 에서도 전이 귀속이
 #: 45/59 로 유지되고 잔차만 8.88 -> 6.50W 로 준다. **1.0 을 쓴다.**
 #: (기본파를 넣었을 때는 1.0 에서 전이가 43/59 로 떨어졌다 — 저항 잔차가

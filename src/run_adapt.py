@@ -79,9 +79,14 @@ def real_sample_weights(p_observed, mode: str, boost: float = 4.0):
     return w / w.mean().clamp(min=1e-6)
 
 
-def real_targets(b, dev):
+def real_targets(b, dev, human=None):
+    """`human` 은 `RealWindows.human(idx)` 의 (on, mask). 없으면 기존과 같다."""
     fine, wide, pobs, oh, pn = [torch.from_numpy(np.ascontiguousarray(x)).to(dev) for x in b]
-    return fine, wide, {"p_observed": pobs, "obs_harm": oh, "p_noise": pn}
+    tg = {"p_observed": pobs, "obs_harm": oh, "p_noise": pn}
+    if human is not None:
+        ho, hm = [torch.from_numpy(np.ascontiguousarray(x)).to(dev) for x in human]
+        tg["human_on"], tg["human_mask"] = ho, hm
+    return fine, wide, tg
 
 
 @torch.no_grad()
@@ -198,6 +203,34 @@ def main() -> int:
                     help="L_harm 의 기울기를 기기별로 균등화한다 (12.120). "
                          "값은 안 바뀌고 기울기만 바뀐다. smps 는 SMPS 3종 "
                          "안에서만, all 은 9종 전부. 기본 off")
+    # ── 사람 스위칭 로그 지도 (SMPS_PLAN 4.5절) ─────────────────────────
+    ap.add_argument("--w-real-on", type=float, default=0.0,
+                    help="사람 스위칭 로그 on/off 를 2단계에 거는 무게 (기본 0 = 끔). "
+                         "test_5/6/7/8/13 의 human_switching_log 만 쓴다. 전력은 "
+                         "감독하지 않는다 - 로그가 on/off 만 주기 때문 (SMPS_PLAN 4.5)")
+    ap.add_argument("--real-on-scope", default="smps",
+                    choices=("smps", "present", "all"),
+                    help="어느 열을 감독할지. smps=SMPS 3종만(가설 그대로), "
+                         "present=그 파일에 있던 기기만, all=9종 전부(없는 기기=OFF). "
+                         "규칙 3 - 유령 억제와 SMPS 분해를 섞지 않으려고 가른다")
+    ap.add_argument("--human-label-shuffle", action="store_true",
+                    help="**귀무 대조.** 라벨 시간축을 순환 이동해 ON 비율·구간 "
+                         "길이는 보존하고 시각 대응만 깬다. 여기서도 같은 이득이 "
+                         "나오면 라벨이 아니라 BCE 항의 정규화 효과다 (규칙 3)")
+    ap.add_argument("--human-label-files", default="",
+                    help="지도에 쓸 파일을 직접 지정 (쉼표). 비우면 SMPS 가 든 "
+                         "사람 라벨 5파일. **test_11/12 를 넣으면 규칙 20 대조가 죽는다**")
+    ap.add_argument("--harm-deadzone", type=float, default=0.0, metavar="X",
+                    help="L_harm 불감대 배수 (12.122.16). 정답 배분에서도 남는 "
+                         "차수별 잔차의 X배까지는 벌하지 않는다. **줄일 수 없는 "
+                         "잔차의 70%%를 줄이라고 밀어서 배분이 밀린다** — 그것을 "
+                         "끊는다. 1.0 이 측정된 중앙값. 0 이면 끔(이전과 동일). "
+                         "⚠ 너무 키우면 L_harm 이 죽어 '합만 맞추는 해' 로 간다 (12.12.2)")
+    ap.add_argument("--sig-insitu", default="", metavar="NPZ",
+                    help="`L_harm` 의 지문을 in-situ 적합본으로 갈아끼운다 "
+                         "(12.122.11, run_fit_insitu_sig 의 산출물). 비우면 격리 지문. "
+                         "**LOFO 로 검증했지만 사람 라벨 5파일에서 적합한 것이라, "
+                         "그 파일을 --holdout-real 로 빼도 지문에는 남아 있다**")
     ap.add_argument("--cache", default="cache/train60")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="adapt")
@@ -218,9 +251,19 @@ def main() -> int:
     hs.X = np.zeros((len(prep[0]), 1, 1), np.float32)
 
     held = [x.strip() for x in a.holdout_real.split(",") if x.strip()]
-    rw = RealWindows(stride=a.real_stride, exclude=held or None)
+    hl = [x.strip() for x in a.human_label_files.split(",") if x.strip()]
+    rw = RealWindows(stride=a.real_stride, exclude=held or None,
+                     appliances=apps if a.w_real_on > 0 else None,
+                     human_on_scope=a.real_on_scope if a.w_real_on > 0 else "off",
+                     human_on_stems=hl or None,
+                     human_on_shuffle=a.human_label_shuffle)
     adapted = list(rw.stems)
     print(rw.describe())
+    if a.w_real_on > 0:
+        print(f"  ** 사람 라벨 지도 켜짐: w_real_on={a.w_real_on:g} "
+              f"scope={a.real_on_scope} (SMPS_PLAN 4.5) **"
+              + ("\n  ** 라벨 순환 이동 (귀무 대조) **" if a.human_label_shuffle else ""))
+        print(rw.human_coverage())
     if held:
         print(f"  ** 실측 홀드아웃: {', '.join(held)} - 적응에 안 쓰고 채점만 한다 **")
     print(f"합성 replay: {a.cache} | λ={a.lam} | w_cons={a.w_cons} w_harm={a.w_harm}")
@@ -233,6 +276,18 @@ def main() -> int:
     sig, sb, nz, hsc = (harmonic_signatures(pool, apps), standby_signatures(pool, apps),
                         noise_signature(pool), harmonic_scales(pool, apps))
     del pool
+
+    if a.sig_insitu:
+        # ── in-situ 지문 (12.122.11) ────────────────────────────────────
+        # 격리 녹화가 아니라 **복합 파일에서** 푼 지문이다. 12.122.10 이
+        # 격리->복합 전이 실패를 확정했고, 이쪽은 그 전이를 아예 건너뛴다.
+        z = np.load(a.sig_insitu, allow_pickle=True)
+        if list(z["appliances"]) != list(apps):
+            raise SystemExit(f"{a.sig_insitu} 의 기기 목록이 다릅니다")
+        new = np.asarray(z["sig"], np.float32)
+        d = np.abs(new - sig).max()
+        sig = new
+        print(f"  ** in-situ 지문: {a.sig_insitu} (격리 대비 최대 차 {d:.5f} A/W) **")
 
     ck = torch.load(a.init, map_location="cpu", weights_only=False)
     assert_target_config(ck, a.init)   # 12.45.3
@@ -252,6 +307,7 @@ def main() -> int:
         noise_sig=torch.from_numpy(nz), harm_scale=torch.from_numpy(hsc),
         harm_odd_only=a.harm_odd_only,
         harm_grad_balance=a.harm_grad_balance,
+        harm_deadzone=a.harm_deadzone,
         smps_group=[apps.index(x) for x in
                     ("beam_projector", "laptop_charger", "minipc") if x in apps],
         weights=LossWeights(harm=0.1, cons=0.0, over=0.0),
@@ -296,7 +352,8 @@ def main() -> int:
     agg, nb = {}, 0
     for step in range(1, a.steps + 1):
         ridx = rng.choice(len(rw), a.batch, replace=len(rw) < a.batch)
-        rf, rwd, rtg = real_targets(rw.batch(ridx), dev)
+        rf, rwd, rtg = real_targets(rw.batch(ridx), dev,
+                                    rw.human(ridx) if a.w_real_on > 0 else None)
         sidx = np.sort(rng.choice(len(cache), a.batch, replace=False))
         sb_ = tuple(torch.from_numpy(x) for x in cache.batch(sidx))
         sf, swd, stg = to_targets(sb_, dev)
@@ -306,7 +363,7 @@ def main() -> int:
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
             rp = crit.unlabeled(model(rf, rwd), rtg, w_cons=a.w_cons,
                                 w_harm=a.w_harm, w_over=a.w_over, w_hedge=a.w_hedge,
-                                sample_w=sw)
+                                sample_w=sw, w_real_on=a.w_real_on)
             sp = crit(model(sf, swd), stg)
             loss = rp["total"] + a.lam * sp["total"]
         opt.zero_grad(set_to_none=True)
@@ -315,7 +372,7 @@ def main() -> int:
         opt.step()
 
         for k, v in (("real_cons", rp["cons"]), ("real_harm", rp["harm"]),
-                     ("real_hedge", rp["hedge"]),
+                     ("real_hedge", rp["hedge"]), ("real_on", rp["real_on"]),
                      ("synth_total", sp["total"]), ("loss", loss)):
             d = v.detach()
             agg[k] = d if k not in agg else agg[k] + d
@@ -325,7 +382,8 @@ def main() -> int:
             m = {k: float(v) / nb for k, v in agg.items()}
             print(f"\n  step {step:>5d}/{a.steps}  loss {m['loss']:.4f} "
                   f"(실측 cons {m['real_cons']:.2f} harm {m['real_harm']:.3f} "
-                  f"hedge {m['real_hedge']:.3f} / "
+                  f"hedge {m['real_hedge']:.3f}"
+                  + (f" on {m['real_on']:.3f}" if a.w_real_on > 0 else "") + f" / "
                   f"합성 {m['synth_total']:.4f})  [{time.time()-t0:.0f}s]", flush=True)
             hist.append(snapshot(f"step {step}"))
             agg, nb = {}, 0

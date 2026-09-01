@@ -87,6 +87,13 @@ def build_state_scales(appliances: Sequence[str], s_i: Sequence[float],
     return out
 
 
+#: 정답 배분에서도 남는 차수별 잔차의 중앙값 (손실 단위, 2026-09-01 측정).
+#: 사람 라벨 5파일의 60초 창 55개에서 `min_{P>=0} ‖y − A_정답·P‖` 의 잔차다.
+#: **이것이 순방향 모델의 오차이고, `L_harm` 이 벌하면 안 되는 양이다.**
+HARM_DEADZONE_PROFILE = [0.191, 0.843, 0.303, 0.851, 0.320, 0.772, 0.270,
+                         0.879, 0.265, 1.138, 0.298, 1.068, 0.378, 1.545, 0.798]
+
+
 @dataclass
 class LossWeights:
     power: float = 1.0
@@ -126,6 +133,7 @@ class NILMLoss(torch.nn.Module):
         s_state: Optional[torch.Tensor] = None,      # (K, MAX_STATES) 상태별 척도
         harm_grad_balance: str = "off",             # off | smps | all  (12.120)
         smps_group: Optional[Sequence[int]] = None,  # SMPS 열 인덱스
+        harm_deadzone: float = 0.0,                 # L_harm 불감대 배수 (12.122.16)
     ):
         super().__init__()
         self.register_buffer("s_i", s_i.clamp(min=1e-3))
@@ -190,6 +198,33 @@ class NILMLoss(torch.nn.Module):
         #
         # `unlabeled()`(2단계 적응)도 같은 버퍼를 쓴다. 2단계가 실측에서 도는
         # 것이므로 오히려 그쪽이 더 중요하다.
+        # ── L_harm 불감대 (2026-09-01, 12.122.16절) ────────────────────────
+        # **줄일 수 없는 잔차를 줄이라고 밀면 배분이 밀린다.**
+        #
+        # 사람 라벨로 정답 배분을 넣고 전력만 자유롭게 풀어도 고조파 잔차의
+        # **70% 가 남는다** (12.122.16: 정답 0.206 vs 자유 0.145). 순방향
+        # 모델이 그만큼 틀려 있다. 그런데 `L_harm` 은 그 70% 도 줄이라고
+        # 밀고, 줄일 방법이 배분뿐이라 **배분이 밀린다.** 그것이 12.120.3 의
+        # '가장 싼 기기' 로 몰리는 기제이고, 12.122.12/14 에서 지문을 고칠
+        # 때마다 유령이 옮겨 다닌 이유다.
+        #
+        # 그래서 **순방향 모델 오차만큼은 벌하지 않는다:**
+        #
+        #     err = relu(|pred − obs|/harm_scale − tau_h)
+        #
+        # `tau_h` 는 정답 배분에서 남는 차수별 잔차의 중앙값이다 (아래 프로파일).
+        # 짝수차가 0.77~1.55 로 큰 것은 12.72 가 계측 인공물로 확정한 그 자리라
+        # 아무것도 설명 못 하는 것이 맞다 — 불감대가 자연스럽게 용서한다.
+        #
+        # ⚠ **너무 키우면 `L_harm` 이 죽는다.** 12.12.2 가 `L_cons` 만 남으면
+        # "합만 맞추는 해" 로 무너진다고 쟀다. 배수를 쓸어 보고 정해야 한다.
+        # 기본 0 = 끔이라 이전과 글자 그대로 같다.
+        dz = torch.as_tensor(HARM_DEADZONE_PROFILE[:h], dtype=torch.float32)
+        if len(dz) < h:
+            dz = torch.cat([dz, dz.new_full((h - len(dz),), float(dz[-1]))])
+        self.register_buffer("harm_dz", dz * float(harm_deadzone))
+        self.harm_deadzone = float(harm_deadzone)
+
         mask = torch.ones(h)
         if harm_odd_only:
             mask[1::2] = 0.0          # 0-based 라 인덱스 1,3,5.. 가 2,4,6..차다
@@ -282,7 +317,8 @@ class NILMLoss(torch.nn.Module):
     def unlabeled(self, out: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor],
                   w_cons: float = 0.4, w_harm: float = 0.1,
                   w_over: float = 0.0, w_hedge: float = 0.0,
-                  sample_w: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+                  sample_w: Optional[torch.Tensor] = None,
+                  w_real_on: float = 0.0) -> Dict[str, torch.Tensor]:
         """**기기별 라벨이 없는 실측 창**용 손실 (4.2절 2단계).
 
         실측 복합 부하에는 기기별 정답이 없다. 라벨이 필요 없는 항만 쓴다.
@@ -328,6 +364,10 @@ class NILMLoss(torch.nn.Module):
             pred = pred + torch.einsum("bk,khc->bhc", idle, self.standby_sig)
             pred = pred + self.noise_sig[None]
             err = (pred - tgt["obs_harm"]).abs() / self.harm_scale[None, :, None]
+            # 불감대 — 순방향 모델 오차만큼은 벌하지 않는다 (`harm_dz` 주석).
+            # **2단계에만 건다.** 1단계는 합성이라 순방향이 정확하다.
+            if self.harm_deadzone > 0:
+                err = (err - self.harm_dz[None, :, None]).clamp(min=0.0)
             # 마스크를 걸어도 손실 규모가 유지되도록 마스크 평균으로 나눈다.
             # 그래야 `w_harm=0.1` 이 이전과 같은 뜻을 갖는다.
             parts["harm"] = (wmean(err * self.harm_mask[None, :, None])
@@ -355,6 +395,30 @@ class NILMLoss(torch.nn.Module):
         q = torch.sigmoid(out["on_logit"]).clamp(1e-6, 1 - 1e-6)
         parts["hedge"] = wmean(-(q * q.log() + (1 - q) * (1 - q).log()))
 
+        # ── 사람 스위칭 로그 지도 (2026-08-31, SMPS_PLAN 4.5절) ────────────
+        # 바로 위 헤지 항의 주석이 *"실측에는 라벨이 없어 이 압력이 없다"* 로
+        # 끝난다. **다섯 파일에는 있다** — 스위치를 누른 사람이 그 자리에서 적은
+        # on/off 다 (`realdata.HUMAN_ON_DEFAULT_STEMS`, 3,499초).
+        #
+        # 헤지는 "아무거나 확실하게 정해라" 이고 이 항은 "이것으로 정해라" 다.
+        # 둘이 겹치는 구간에서는 이쪽이 방향을 준다.
+        #
+        # **전력은 감독하지 않는다.** 로그는 on/off 만 주므로 `on_logit` 에만 건다.
+        # `P̂ = σ(on)·p_raw` 라 게이트가 맞으면 전력도 따라오지만, 그 경로는
+        # `L_cons`/`L_harm` 이 정하게 둔다 — 크기 정답을 지어내지 않는다.
+        #
+        # 마스크는 (창 x 기기) 단위다. `uncertain` 구간과 지도 범위 밖 열은 0 이라
+        # **양쪽 어느 쪽으로도 안 센다** (`build_on_off_truth` 의 규칙 그대로).
+        # 마스크 합으로 나누므로 라벨 있는 창의 비율이 바뀌어도 뜻이 안 변한다.
+        hm = tgt.get("human_mask")
+        if w_real_on > 0 and hm is not None and float(hm.sum()) > 0:
+            bce = F.binary_cross_entropy_with_logits(
+                out["on_logit"], tgt["human_on"], reduction="none")
+            parts["real_on"] = (bce * hm).sum() / hm.sum().clamp(min=1.0)
+        else:
+            parts["real_on"] = out["power"].sum() * 0.0
+
         parts["total"] = (w_cons * parts["cons"] + w_harm * parts["harm"]
-                          + w_over * parts["over"] + w_hedge * parts["hedge"])
+                          + w_over * parts["over"] + w_hedge * parts["hedge"]
+                          + w_real_on * parts["real_on"])
         return parts

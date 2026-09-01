@@ -287,6 +287,22 @@ def main() -> int:
     ap.add_argument("--rm-gate-min", type=float, default=0.0, metavar="G",
                     help="저항 정합: 맞바꿈 후보의 최소 게이트 (12.117 의 B). "
                          "이미 켜진 기기는 문턱과 무관하게 남는다. 0 이면 무제한")
+    # ── 프로젝터 전력 스냅 (SMPS_PLAN 4.3) ──────────────────────────────
+    ap.add_argument("--snap", type=float, default=0.0, metavar="W",
+                    help="프로젝터를 이 값으로 **양방향** 스냅한다 (0=끔). "
+                         "격리 통전 중앙 47.4W (12.120.1). 상한 55W 의 clip 과 "
+                         "다르다 - 낮게 붙은 것도 끌어올린다")
+    ap.add_argument("--snap-oneway", action="store_true",
+                    help="스냅을 한 방향으로만 (초과분만 넘긴다). 절제용 - "
+                         "효과가 어느 쪽에서 오는지 가른다 (규칙 3)")
+    ap.add_argument("--snap-share", default="gate", choices=("gate", "harm"),
+                    help="넘긴 전력을 나누는 비중. gate=게이트 가중(지금과 같음), "
+                         "harm=3차 이상 고조파 코사인(게이트 편향을 안 탄다)")
+    ap.add_argument("--snap-no-redist", action="store_true",
+                    help="스냅한 초과분을 남에게 안 준다 (총합 보존 포기). "
+                         "12.122.4 의 반증이 재배분 탓인지 스냅 탓인지 가른다")
+    ap.add_argument("--snap-min-gate", type=float, default=0.5, metavar="G",
+                    help="이 게이트 아래면 손대지 않는다. 규칙 18 - 개수는 안 바꾼다")
     ap.add_argument("--absorb", type=float, default=0.0, metavar="FRAC",
                     help="총전력 잔차를 고조파가 닮은 SMPS 에 흡수시킨다 (12.104절). "
                          "0.5 면 잔차 8.88 -> 7.35W. 0 이면 끔")
@@ -322,6 +338,11 @@ def main() -> int:
             tag = f"{tag}+rm{a.resmatch:g}"
         if a.absorb > 0:
             tag = f"{tag}+ab{a.absorb:g}"
+        if a.snap > 0:
+            tag = (f"{tag}+snap{a.snap:g}"
+                   + ("1way" if a.snap_oneway else "")
+                   + ("h" if a.snap_share == "harm" else "")
+                   + ("nr" if a.snap_no_redist else ""))
         print("=" * 88)
         print(f"[{tag}] stage {ck.get('stage', 1)} | {', '.join(stems)}")
         if model_smps is not None:
@@ -345,6 +366,21 @@ def main() -> int:
                 P_hard, g_hard = apply_postproc(P_hard, d["gate"], apps, gate_sync=sync)
                 d_soft = dict(d, gate=g_soft)
                 d_hard = dict(d, gate=g_hard)
+            if a.snap > 0:
+                # **상한 뒤, 저항 정합 앞.** 상한이 먼저 극단을 자르고 스냅이
+                # 나머지를 격리값으로 맞춘다. 저항 정합은 저항 열만 만지므로
+                # 순서가 무관하지만, 잔차 흡수는 스냅 결과를 봐야 한다.
+                from src.model.postproc import snap_power
+                sn = {"beam_projector": float(a.snap)}
+                kw = dict(targets=sn, bidirectional=not a.snap_oneway,
+                          share=a.snap_share, min_gate=a.snap_min_gate,
+                          redistribute=not a.snap_no_redist)
+                if a.snap_share == "harm":
+                    kw["obs_harm"] = d["obs_harm"]
+                    kw["sig"] = _signatures(apps)[0]
+                P_soft, g_soft = snap_power(P_soft, d_soft["gate"], apps, **kw)
+                P_hard, g_hard = snap_power(P_hard, d_hard["gate"], apps, **kw)
+                d_soft, d_hard = dict(d, gate=g_soft), dict(d, gate=g_hard)
             if a.resmatch > 0:
                 from src.model.postproc import resistive_match
                 P_soft, g_soft = resistive_match(
@@ -365,8 +401,23 @@ def main() -> int:
                 P_hard = absorb_residual(P_hard, d_hard["gate"], apps, d["standby"],
                                          d["p_noise"], d["p_observed"], d["obs_harm"],
                                          *sigs, frac=a.absorb)
+            # ── 기기별 전력 오차 (12.122.6, 2026-09-01) ──────────────────
+            # **참값을 아는 넷에 대해서만** 배분 오차를 잰다. 이게 없던 동안
+            # 배분을 겨냥한 처방이 부작용(유령·잔차)으로만 평가받았다 —
+            # 프로젝터 스냅이 전력 오차를 8.1 -> 0.5W 로 줄이는데도 '반증' 으로
+            # 닫힐 뻔했다 (12.122.4 를 12.122.7 이 정정한다).
+            from src.evaluation.power_ref import score_power_ref
+            n_cyc = int(ev[stem]["cycles"])
+            pw_soft = score_power_ref(
+                upsample_to_cycles(P_soft, d["targets"], n_cyc),
+                upsample_to_cycles(d_soft["gate"] > 0.5, d["targets"], n_cyc),
+                stem, apps, events=ev,
+                p_observed=upsample_to_cycles(d["p_observed"], d["targets"], n_cyc),
+                v_rms=upsample_to_cycles(d["v_rms"], d["targets"], n_cyc))
+
             sm = SESSION_MERGE_CYCLES if a.session_merge else None
             s_soft = score_one(d_soft, P_soft, stem, apps, ev, session_merge=sm)
+            s_soft["power_ref"] = pw_soft
             s_hard = score_one(d_hard, P_hard, stem, apps, ev, session_merge=sm)
             per_file[stem] = {"soft": s_soft, "hard": s_hard, "hedge": hedge_report(d, apps)}
             rows["soft"].append(s_soft); rows["hard"].append(s_hard)

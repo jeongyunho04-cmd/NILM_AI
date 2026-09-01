@@ -23,6 +23,8 @@
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+import warnings
+
 import numpy as np
 
 from src.evaluation.sealing import assert_not_sealed, is_sealed
@@ -33,6 +35,23 @@ from src.preprocessing.file_registry import NOISE_FLOOR_EXTERNAL_W
 DEFAULT_DIR = "processed_data/composite_eval"
 WINDOW_CYCLES = 3600
 SAMPLING_HZ = 60.0
+
+#: 사람이 스위치를 누르며 적은 라벨만 지도에 쓴다 (`_label_provenance_levels`).
+HUMAN_PROVENANCE = "human_switching_log"
+SMPS_APPLIANCES = ("beam_projector", "laptop_charger", "minipc")
+
+#: 지도에 쓰는 사람 라벨 파일 — **SMPS 3종이 들어 있는 다섯 개만**.
+#:
+#: `test_11` / `test_12` 도 `human_switching_log` 지만 **저항 4종뿐이라
+#: SMPS 가 하나도 없다.** 그 둘은 규칙 20 의 대조 파일이다 — "이 처방은 SMPS
+#: 배분만 겨냥하므로 SMPS 없는 파일은 거의 안 변해야 한다" 가 판정 기준에
+#: 들어간다. 그 파일까지 지도하면 대조가 죽는다. 실제로 열어 보면 scope=smps
+#: 에서도 두 파일에 846 개 셀이 붙는데 전부 OFF 라벨이라 '유령을 지워라' 라는
+#: 강한 감독이 된다 — 대조가 오히려 가장 많이 움직인다.
+HUMAN_ON_DEFAULT_STEMS = ("test_5", "test_6", "test_7", "test_8", "test_13")
+
+#: 대조로 남겨야 하는 파일. 여기에 지도가 붙으면 경고한다.
+HUMAN_ON_CONTROL_STEMS = ("test_9", "test_11", "test_12")
 
 
 class RealWindows:
@@ -46,6 +65,10 @@ class RealWindows:
         stride: int = 60,
         require_valid: bool = True,
         exclude: Optional[Sequence[str]] = None,
+        appliances: Optional[Sequence[str]] = None,
+        human_on_scope: str = "off",
+        human_on_stems: Optional[Sequence[str]] = None,
+        human_on_shuffle: bool = False,
     ):
         """`exclude` 는 적응에서 뺄 파일이다 (leave-one-file-out).
 
@@ -116,6 +139,91 @@ class RealWindows:
         self.target_cycle = np.concatenate(C)
         self.stem = np.asarray(S)
         self.p_noise = np.full(len(self.fine), NOISE_FLOOR_EXTERNAL_W, np.float32)
+        self._build_human_on(appliances, human_on_scope, human_on_stems,
+                             shuffle=human_on_shuffle)
+
+    # ── 사람 스위칭 로그 지도 (2026-08-31, SMPS_PLAN 4.5절) ─────────────────
+    # **이 저장소는 사람이 적은 on/off 정답을 채점에만 썼다.** `run_adapt` 는
+    # `crit.unlabeled` 만 부르고, 그 손실에는 기기별 정답이 한 항도 없다 —
+    # `--w-hedge` 의 도움말이 *"실측은 라벨이 없어 BCE 가 확신을 강제하지 못한다"*
+    # 라고 적은 그 상황이다. 그런데 정답이 있다: `_label_provenance` 가
+    # `human_switching_log` 인 파일 다섯 개(test_5/6/7/8/13, 3,499초)다.
+    #
+    # **전력 정답은 여전히 없다** — 로그는 on/off 만 준다. 그러니 걸 수 있는 것은
+    # `on_logit` 하나뿐이고, 마침 지금 무너지는 지표가 정확히 on/off 다
+    # (충전기 재현 0.641).
+    #
+    # [범위를 왜 가르는가 — 규칙 3]
+    # 파일에 아예 없는 기기는 정답이 OFF 로 확정이다(`appliances_present`,
+    # `score_absent` 가 쓰는 그 필드). 그것까지 지도하면 '유령을 지우는' 효과와
+    # 'SMPS 를 가르는' 효과가 섞여 무엇이 움직였는지 못 읽는다. 그래서:
+    #     smps     SMPS 3종 열만            <- 가설 그대로. 기본값
+    #     present  그 파일에 있던 기기만     <- 유령 억제 없이 검출만
+    #     all      9종 전부 (없는 기기=OFF)  <- 유령 억제까지
+    #
+    # [uncertain 은 양쪽 다 안 센다]
+    # `build_on_off_truth` 가 채점에서 쓰는 규칙을 그대로 쓴다. 오븐이 대표적이다
+    # (타임라인은 히터 통전만 적혀 있고 팬/조명 구간은 알 수 없다).
+    def _build_human_on(self, appliances, scope: str, stems,
+                        shuffle: bool = False) -> None:
+        """(N,K) 사람 라벨 `human_on` 과 감독 마스크 `human_mask` 를 만든다.
+
+        `human_mask` 가 0 이면 그 (창, 기기) 는 손실에서 빠진다. scope="off" 면
+        전부 0 이라 기존 동작과 **글자 그대로 같다.**
+        """
+        n, k = len(self.fine), (len(appliances) if appliances else 0)
+        self.human_on = np.zeros((n, max(k, 1)), np.float32)
+        self.human_mask = np.zeros((n, max(k, 1)), np.float32)
+        self.human_stems: List[str] = []
+        if scope == "off" or not appliances:
+            return
+        if scope not in ("smps", "present", "all"):
+            raise ValueError(f"human_on_scope 는 off|smps|present|all 입니다: {scope}")
+
+        from src.evaluation.real_events import build_on_off_truth, load_events
+        ev = load_events()
+        allow = set(stems) if stems is not None else set(HUMAN_ON_DEFAULT_STEMS)
+        bad = allow & set(HUMAN_ON_CONTROL_STEMS)
+        if bad:
+            warnings.warn(
+                f"대조 파일에 사람 라벨 지도가 걸렸습니다: {sorted(bad)}. "
+                "규칙 20 의 대조가 죽습니다 - 판정 기준을 다시 보십시오.",
+                RuntimeWarning, stacklevel=2)
+        for stem in self.stems:
+            spec = ev.get(stem)
+            if spec is None:
+                continue
+            # **사람 로그만 쓴다.** ai_inferred 는 모델이 만든 것이라 자기지도가 된다.
+            if spec.get("_label_provenance") != HUMAN_PROVENANCE:
+                continue
+            if allow is not None and stem not in allow:
+                continue
+            sel = np.flatnonzero(self.stem == stem)
+            if not len(sel):
+                continue
+            tc = self.target_cycle[sel]
+            on, scorable = build_on_off_truth(stem, appliances, int(tc.max()) + 1, ev)
+            present = set(spec.get("appliances_present", []))
+            cols = np.zeros(k, bool)
+            for j, app in enumerate(appliances):
+                if scope == "all":
+                    cols[j] = True
+                elif scope == "present":
+                    cols[j] = app in present
+                else:                                   # smps
+                    cols[j] = app in SMPS_APPLIANCES
+            ho = on[tc].astype(np.float32)
+            if shuffle:
+                # ── 귀무 대조 (규칙 3) ──────────────────────────────────
+                # **라벨이 정보를 나르는가, 아니면 BCE 항 자체가 게이트를
+                # 규제하는가.** 창 축을 파일 길이의 37% 만큼 순환 이동한다.
+                # ON 비율과 구간 길이 분포는 **글자 그대로 보존**되고 시각
+                # 대응만 깨진다. 이쪽에서도 같은 이득이 나오면 처방은 라벨이
+                # 아니라 정규화이고, 그러면 12.87.3 을 못 건드린다.
+                ho = np.roll(ho, int(len(ho) * 0.37), axis=0)
+            self.human_on[sel] = ho
+            self.human_mask[sel] = (scorable[tc] & cols[None, :]).astype(np.float32)
+            self.human_stems.append(stem)
 
     # ── 내부 ────────────────────────────────────────────────────────────
     @staticmethod
@@ -144,6 +252,26 @@ class RealWindows:
         i = np.asarray(idx)
         return (self.fine[i], self.wide[i], self.p_observed[i],
                 self.obs_harm[i], self.p_noise[i])
+
+    def human(self, idx: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """(human_on, human_mask) 만 따로. **`batch()` 의 자리수를 안 바꾼다** —
+        `run_gate_check` / `run_ablation_probe` 가 5개로 풀고 있어서다."""
+        i = np.asarray(idx)
+        return self.human_on[i], self.human_mask[i]
+
+    def human_coverage(self) -> str:
+        """지도에 실제로 들어가는 (창 x 기기) 가 몇 개인지. 판정 전에 찍어 둔다."""
+        m = self.human_mask
+        if not m.any():
+            return "  사람 라벨 지도: 꺼짐"
+        rows = []
+        for stem in self.human_stems:
+            sel = self.stem == stem
+            rows.append(f"    {stem:8s} {int(m[sel].sum()):>7,} (창 {int(sel.sum()):,})")
+        return (f"  사람 라벨 지도: {len(self.human_stems)}파일, "
+                f"{int(m.sum()):,} (창x기기), ON 비율 "
+                f"{float((self.human_on * m).sum() / max(m.sum(), 1)):.3f}\n"
+                + "\n".join(rows))
 
     def describe(self) -> str:
         rows = [f"  {k:8s} {v:>6,}창" for k, v in sorted(self.per_file.items())]

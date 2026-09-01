@@ -5,6 +5,9 @@
   "seed": 20260821,
   "time_split": "holdout",
   "holdout_frac": 0.2,
+  "ablate_pedestal_apps": [],
+  "recipe_mix": null,
+  "level_scramble": {},
   "appliances": [
     "air_conditioner",
     "beam_projector",
@@ -18,37 +21,37 @@
   ],
   "channel_layout": "0:15 harmonic Real, 15:30 harmonic Imag, 30 P, 31 Q, 32 V",
   "recipe_counts": {
-    "high_low_mixed": 1117,
-    "high_power_resistive": 813,
-    "low_load_among_standby": 1642,
-    "random_realistic": 1256,
-    "random_uniform": 1133,
-    "resistive_overlap": 390,
-    "standby_only": 1255,
-    "unplugged_baseline": 394
+    "high_low_mixed": 1054,
+    "high_power_resistive": 763,
+    "low_load_among_standby": 1627,
+    "random_realistic": 1272,
+    "random_uniform": 1158,
+    "resistive_overlap": 404,
+    "standby_only": 1311,
+    "unplugged_baseline": 411
   },
   "positive_rate": {
-    "air_conditioner": 0.036875,
-    "beam_projector": 0.15825,
-    "electiric_kettle": 0.122875,
-    "fan": 0.17325,
-    "hair_dryer": 0.098125,
-    "hotplate": 0.046625,
-    "laptop_charger": 0.188125,
-    "minipc": 0.191375,
-    "oven": 0.115
+    "air_conditioner": 0.038875,
+    "beam_projector": 0.15075,
+    "electiric_kettle": 0.101,
+    "fan": 0.171,
+    "hair_dryer": 0.08525,
+    "hotplate": 0.06025,
+    "laptop_charger": 0.18325,
+    "minipc": 0.191875,
+    "oven": 0.059125
   },
   "pool_holdout_minutes": {
     "air_conditioner": 12.12,
-    "beam_projector": 4.26,
-    "electiric_kettle": 1.56,
+    "beam_projector": 5.66,
+    "electiric_kettle": 2.86,
     "fan": 9.03,
-    "hair_dryer": 0.76,
+    "hair_dryer": 1.14,
     "hotplate": 1.28,
-    "laptop_charger": 9.93,
+    "laptop_charger": 14.17,
     "minipc": 14.38,
-    "oven": 9.96
+    "oven": 11.9
   },
-  "content_sha256": "a2f4974fe456dc3b",
+  "content_sha256": "f3fa003d1dc76866",
   "bytes": 3803232000
 }
