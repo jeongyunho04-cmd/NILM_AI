@@ -40,7 +40,7 @@ NILM 2갈래 CNN (설계 문서 2절)
 3.3절 참조. 닫힌 세계(9종 한정)라 `R̂` 이 표현할 대상이 없다.
 "설명 못 한 전력" 은 추론 시 산술로 낸다.
 """
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
@@ -361,6 +361,94 @@ def noise_signature(pool, n_harm: int = 15) -> np.ndarray:
     out = np.zeros((n_harm, 2), dtype=np.float32)
     out[:, 0], out[:, 1] = np.real(c), np.imag(c)
     return out
+
+
+#: `Q/P` 상수를 만들 수 없는 기기 — 격리 통전 폭/|중앙| 이 이 값을 넘으면 뺀다.
+#: `power_ref.REFERENCE_W` 의 0.10 과 같은 성격의 문턱이다. **둘 다 만족해야
+#: 채택한다** — 상대 폭만 보면 |Q|≈0 인 기기(포트 중앙 0.002)가 폭주해서 떨어지고,
+#: 절대 폭만 보면 인버터(에어컨)가 통과한다.
+REACTIVE_SPREAD_MAX = 0.60
+REACTIVE_ABS_SPREAD_MAX = 0.30
+
+
+def reactive_signatures(pool, appliances: Sequence[str]
+                        ) -> Tuple[np.ndarray, np.ndarray]:
+    """기기별 **와트당 무효전력** `Q/P` (K,) 와 쓸 수 있는지 표시 (K,) bool.
+
+    12.133 이 찾은 **두 번째 판별자**다. 저항은 등가저항 `R = V²/P` 가 기기
+    고유값이라 `resistive_match` 가 조합을 역산할 수 있는데, SMPS 에는 그런 것이
+    없어서 배분이 고조파 하나에만 걸려 있었다. `Q/P` 가 그 자리를 채운다:
+
+        기기               Q/P 폭/|중앙|    (참고) 전력 폭/중앙
+        beam_projector       0.114           0.077
+        laptop_charger       0.156           0.722   <- 전력으로는 못 쓰는데
+        minipc               0.289           1.162   <- Q/P 로는 쓴다
+
+        판별력 d′ (창간 산포로 나눔)      Q/P    고조파(와트당)
+        프로젝터 vs 충전기                2.31       0.91
+        프로젝터 vs 미니PC                4.64       1.85
+        충전기  vs 미니PC                3.11       1.41
+
+    ⚠ **이 `Q` 는 기본파 무효분이 아니다.** `sign(phase)·sqrt(S²−P²)` 로 왜곡분을
+      포함한 비유효전력이다(`feature_extractor.py:9`). 원리적으로는 가산이 아닌데
+      실측 66창 중 62창(94%)에서 관측 `Q/P` 가 정답 support 의 범위 안이었다
+      (12.133). **경험적 근거이지 물리적 근거가 아니다.**
+
+    ⚠ 상수가 없는 기기는 `usable=False` 로 뺀다 — 에어컨(인버터, 폭/중앙 4.30)과
+      포트·드라이기(|Q|≈0 이라 비가 폭주)다. 손실에서 그 열은 기여를 0 으로 둔다.
+    """
+    K, W = len(appliances), 3600
+    qp = np.zeros(K, np.float32)
+    ok = np.zeros(K, bool)
+    for j, app in enumerate(appliances):
+        acts = pool.appliance_activations.get(app, [])
+        if not acts:
+            continue
+        thr = 0.5 * pool.get_steady_power_w(app)
+        vals, by_rec = [], {}
+        for a in acts:
+            p = np.asarray(a.target_power_w, np.float64)
+            q = np.asarray(a.net_power_features, np.float64)[:, 1]
+            i = np.flatnonzero(p > max(thr, 1.0))
+            # **창 단위로 잰다.** 손실은 창 예측 `P̂` 에 걸리므로 사이클 단위
+            # 비(比)가 아니라 창 평균의 비가 맞는 통계다. `REFERENCE_W` 를 만드는
+            # `recompute_reference` 와 같은 방식이다 (60초, 겹침 1/4).
+            for k in range(0, len(i) - W, W // 4):
+                s_ = i[k:k + W]
+                if s_[-1] - s_[0] > W * 1.5:      # 구간을 넘어 이어붙인 창은 버린다
+                    continue
+                pm = float(p[s_].mean())
+                if pm > 1.0:
+                    r = float(q[s_].mean()) / pm
+                    vals.append(r)
+                    by_rec.setdefault(a.source_file, []).append(r)
+        if len(vals) < 3:
+            continue
+        v = np.asarray(vals)
+        lo, mid, hi = np.percentile(v, [5, 50, 95])
+        qp[j] = mid
+        tight = ((hi - lo) <= REACTIVE_ABS_SPREAD_MAX
+                 and (hi - lo) / max(abs(mid), 1e-9) <= REACTIVE_SPREAD_MAX)
+        # ⚠ **녹화 사이에서도 맞아야 한다** (규칙 1). 한 분할 안에서만 좁은 것은
+        #   상수가 아니라 그 녹화의 성질이다. 에어컨이 정확히 그렇다 — train 활성화
+        #   안에서는 0.674~0.692 (폭 0.018) 인데 전 녹화로는 −2.24~0.69 다.
+        #   녹화가 하나뿐이면 교차 검증이 불가능하므로 **채택하지 않는다.**
+        meds = [float(np.median(x)) for x in by_rec.values() if len(x) >= 2]
+        cross = (len(meds) >= 2
+                 and (max(meds) - min(meds)) <= REACTIVE_ABS_SPREAD_MAX
+                 and (max(meds) - min(meds)) / max(abs(mid), 1e-9) <= REACTIVE_SPREAD_MAX)
+        ok[j] = bool(tight and cross)
+    return qp, ok
+
+
+def noise_reactive(pool) -> float:
+    """계측계 자체의 무효전력 (VAR). `noise_signature` 의 Q 판.
+
+    `power_features` 열 1 이 Q 다 (`feature_extractor` 의 [p,q,s,pf,vrms,thd_i]).
+    """
+    v = [float(np.median(np.asarray(r.power_features, np.float64)[:, 1]))
+         for r in pool.noise_references.values()]
+    return float(np.mean(v)) if v else 0.0
 
 
 def harmonic_scales(pool, appliances: Sequence[str], n_harm: int = 15) -> np.ndarray:

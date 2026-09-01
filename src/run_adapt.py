@@ -46,6 +46,7 @@ from src.model.inputs import FINE_CYCLES, TARGET_LOOKAHEAD, LEGACY_FINE_CHANNELS
 from src.run_gate_check import assert_target_config
 from src.model.net import (
     NILMNet, appliance_state_counts, harmonic_scales, harmonic_signatures,
+    noise_reactive, reactive_signatures,
     noise_signature, standby_signatures,
 )
 from src.model.realdata import RealWindows, dense_targets, upsample_to_cycles
@@ -79,10 +80,15 @@ def real_sample_weights(p_observed, mode: str, boost: float = 4.0):
     return w / w.mean().clamp(min=1e-6)
 
 
-def real_targets(b, dev, human=None):
-    """`human` 은 `RealWindows.human(idx)` 의 (on, mask). 없으면 기존과 같다."""
+def real_targets(b, dev, human=None, qobs=None):
+    """`human` 은 `RealWindows.human(idx)` 의 (on, mask). 없으면 기존과 같다.
+
+    `qobs` 는 `RealWindows.reactive(idx)` — 무효전력 보존 항이 쓴다 (12.133).
+    """
     fine, wide, pobs, oh, pn = [torch.from_numpy(np.ascontiguousarray(x)).to(dev) for x in b]
     tg = {"p_observed": pobs, "obs_harm": oh, "p_noise": pn}
+    if qobs is not None:
+        tg["q_observed"] = torch.from_numpy(np.ascontiguousarray(qobs)).to(dev)
     if human is not None:
         ho, hm = [torch.from_numpy(np.ascontiguousarray(x)).to(dev) for x in human]
         tg["human_on"], tg["human_mask"] = ho, hm
@@ -220,6 +226,12 @@ def main() -> int:
     ap.add_argument("--human-label-files", default="",
                     help="지도에 쓸 파일을 직접 지정 (쉼표). 비우면 SMPS 가 든 "
                          "사람 라벨 5파일. **test_11/12 를 넣으면 규칙 20 대조가 죽는다**")
+    ap.add_argument("--w-consq", type=float, default=0.0, metavar="W",
+                    help="**무효전력 보존 항** (12.133). `L_cons` 와 같은 꼴로 P 대신 "
+                         "Q 를 맞춘다. 저항에는 등가저항(`resistive_match`)이라는 둘째 "
+                         "판별자가 있는데 SMPS 에는 없어서 배분이 `L_harm` 하나에 걸려 "
+                         "있었고, 12.122.2 가 그 항의 최소는 **오답 쪽**이라고 확정했다. "
+                         "`Q/P` 는 SMPS 를 고조파보다 2.2~2.5배 잘 가른다. 0 이면 끔")
     ap.add_argument("--harm-deadzone", type=float, default=0.0, metavar="X",
                     help="L_harm 불감대 배수 (12.122.16). 정답 배분에서도 남는 "
                          "차수별 잔차의 X배까지는 벌하지 않는다. **줄일 수 없는 "
@@ -275,7 +287,18 @@ def main() -> int:
     pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
     sig, sb, nz, hsc = (harmonic_signatures(pool, apps), standby_signatures(pool, apps),
                         noise_signature(pool), harmonic_scales(pool, apps))
+    qp, qp_ok = reactive_signatures(pool, apps)
+    nq = noise_reactive(pool)
     del pool
+
+    if a.w_consq > 0:
+        # 규칙 14 — 검증된 상수와 아닌 것을 갈라 찍는다. `usable` 은 창 폭과
+        # **녹화 간** 일치를 둘 다 통과한 것이다 (`reactive_signatures` 주석).
+        good = ", ".join(f"{apps[j]} {qp[j]:+.3f}" for j in range(len(apps)) if qp_ok[j])
+        bad = ", ".join(f"{apps[j]} {qp[j]:+.3f}" for j in range(len(apps)) if not qp_ok[j])
+        print(f"  ** 무효전력 보존 켜짐: w_consq={a.w_consq:g}, 계측 Q={nq:+.3f} VAR **")
+        print(f"     검증된 Q/P : {good}")
+        print(f"     ⚠ 미검증   : {bad}  (중앙값을 그대로 쓴다 — 12.133 주석)")
 
     if a.sig_insitu:
         # ── in-situ 지문 (12.122.11) ────────────────────────────────────
@@ -308,6 +331,7 @@ def main() -> int:
         harm_odd_only=a.harm_odd_only,
         harm_grad_balance=a.harm_grad_balance,
         harm_deadzone=a.harm_deadzone,
+        reactive_qp=torch.from_numpy(qp), noise_q=nq,
         smps_group=[apps.index(x) for x in
                     ("beam_projector", "laptop_charger", "minipc") if x in apps],
         weights=LossWeights(harm=0.1, cons=0.0, over=0.0),
@@ -353,7 +377,8 @@ def main() -> int:
     for step in range(1, a.steps + 1):
         ridx = rng.choice(len(rw), a.batch, replace=len(rw) < a.batch)
         rf, rwd, rtg = real_targets(rw.batch(ridx), dev,
-                                    rw.human(ridx) if a.w_real_on > 0 else None)
+                                    rw.human(ridx) if a.w_real_on > 0 else None,
+                                    rw.reactive(ridx) if a.w_consq > 0 else None)
         sidx = np.sort(rng.choice(len(cache), a.batch, replace=False))
         sb_ = tuple(torch.from_numpy(x) for x in cache.batch(sidx))
         sf, swd, stg = to_targets(sb_, dev)
@@ -363,7 +388,8 @@ def main() -> int:
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
             rp = crit.unlabeled(model(rf, rwd), rtg, w_cons=a.w_cons,
                                 w_harm=a.w_harm, w_over=a.w_over, w_hedge=a.w_hedge,
-                                sample_w=sw, w_real_on=a.w_real_on)
+                                sample_w=sw, w_real_on=a.w_real_on,
+                                w_consq=a.w_consq)
             sp = crit(model(sf, swd), stg)
             loss = rp["total"] + a.lam * sp["total"]
         opt.zero_grad(set_to_none=True)
@@ -372,6 +398,7 @@ def main() -> int:
         opt.step()
 
         for k, v in (("real_cons", rp["cons"]), ("real_harm", rp["harm"]),
+                     ("real_consq", rp["consq"]),
                      ("real_hedge", rp["hedge"]), ("real_on", rp["real_on"]),
                      ("synth_total", sp["total"]), ("loss", loss)):
             d = v.detach()
@@ -383,6 +410,7 @@ def main() -> int:
             print(f"\n  step {step:>5d}/{a.steps}  loss {m['loss']:.4f} "
                   f"(실측 cons {m['real_cons']:.2f} harm {m['real_harm']:.3f} "
                   f"hedge {m['real_hedge']:.3f}"
+                  + (f" consQ {m['real_consq']:.2f}" if a.w_consq > 0 else "")
                   + (f" on {m['real_on']:.3f}" if a.w_real_on > 0 else "") + f" / "
                   f"합성 {m['synth_total']:.4f})  [{time.time()-t0:.0f}s]", flush=True)
             hist.append(snapshot(f"step {step}"))

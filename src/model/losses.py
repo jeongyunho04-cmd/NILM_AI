@@ -134,6 +134,8 @@ class NILMLoss(torch.nn.Module):
         harm_grad_balance: str = "off",             # off | smps | all  (12.120)
         smps_group: Optional[Sequence[int]] = None,  # SMPS 열 인덱스
         harm_deadzone: float = 0.0,                 # L_harm 불감대 배수 (12.122.16)
+        reactive_qp: Optional[torch.Tensor] = None,  # (K,) 기기별 Q/P (12.133)
+        noise_q: float = 0.0,                        # 계측계 무효전력 (VAR)
     ):
         super().__init__()
         self.register_buffer("s_i", s_i.clamp(min=1e-3))
@@ -149,6 +151,14 @@ class NILMLoss(torch.nn.Module):
                              else torch.zeros(h, 2))
         self.register_buffer("harm_scale", harm_scale if harm_scale is not None
                              else torch.ones(h))
+        # ── 무효전력 보존 (12.133) ────────────────────────────────────────
+        # 저항은 등가저항 `R = V²/P` 가 기기 고유값이라 `resistive_match` 가 조합을
+        # 역산할 수 있는데, SMPS 에는 그런 둘째 판별자가 없어서 배분이 `L_harm`
+        # 하나에 걸려 있었다 — 그리고 12.122.2 가 그 항의 최소는 오답 쪽이라고
+        # 확정했다. `Q/P` 가 그 자리를 채운다 (SMPS 쌍 d′ 2.31~4.64 vs 고조파 0.91~1.85).
+        self.register_buffer("reactive_qp", reactive_qp if reactive_qp is not None
+                             else torch.zeros(len(s_i)))
+        self.noise_q = float(noise_q)
 
         # ── L_harm 기울기 균등화 (2026-08-31, 12.120절) ─────────────────────
         # `∂L_harm/∂P̂_i = sign(err)·sig_i/harm_scale` 이라 **기울기 크기가
@@ -318,7 +328,8 @@ class NILMLoss(torch.nn.Module):
                   w_cons: float = 0.4, w_harm: float = 0.1,
                   w_over: float = 0.0, w_hedge: float = 0.0,
                   sample_w: Optional[torch.Tensor] = None,
-                  w_real_on: float = 0.0) -> Dict[str, torch.Tensor]:
+                  w_real_on: float = 0.0,
+                  w_consq: float = 0.0) -> Dict[str, torch.Tensor]:
         """**기기별 라벨이 없는 실측 창**용 손실 (4.2절 2단계).
 
         실측 복합 부하에는 기기별 정답이 없다. 라벨이 필요 없는 항만 쓴다.
@@ -352,6 +363,27 @@ class NILMLoss(torch.nn.Module):
         parts: Dict[str, torch.Tensor] = {}
         recon = out["power"].sum(1) + out["standby"].sum(1) + tgt["p_noise"]
         parts["cons"] = wmean((recon - tgt["p_observed"]).abs())
+
+        # ── 무효전력 보존 `L_cons^Q` (12.133) ────────────────────────────────
+        #     |Σ qp_i·P̂_i + Σ qp_i·Ŝ_i + Q_noise − Q관측|
+        #
+        # `L_cons` 와 같은 꼴인데 **P 대신 Q** 를 맞춘다. 왜 이것이 배분을 고치는가:
+        # `L_cons` 는 합이 얼마나 어긋났는지만 알고 누구 몫인지는 모른다. 그래서
+        # 배분은 `L_harm` 하나가 정했는데, 12.122.2 가 실측에서 그 항의 최소는
+        # **오답 쪽에 있다**고 확정했다. `Q/P` 는 SMPS 를 고조파보다 2.2~2.5배 잘
+        # 가르므로(12.133) 두 번째 판별자가 된다 — 저항의 `resistive_match` 에 해당한다.
+        #
+        # ⚠ `qp` 중 검증된 것은 `reactive_signatures` 가 `usable` 로 표시한 것뿐이다
+        #   (프로젝터·충전기·미니PC·오븐). 나머지는 중앙값을 그대로 쓴다 —
+        #   |Q/P| 가 작아 기여가 적고(저항 ≤0.07), 실측 11파일에서 에어컨·선풍기는
+        #   한 번도 안 켜진다. **에어컨이 있는 환경에서는 마스크가 필요하다.**
+        if tgt.get("q_observed") is not None:
+            recon_q = ((out["power"] * self.reactive_qp[None]).sum(1)
+                       + (out["standby"] * self.reactive_qp[None]).sum(1)
+                       + self.noise_q)
+            parts["consq"] = wmean((recon_q - tgt["q_observed"]).abs())
+        else:
+            parts["consq"] = out["power"].sum() * 0.0
 
         if tgt.get("obs_harm") is not None:
             # 12.120 — 값은 그대로, 기울기만 기기별로 균등화한다 (`harm_gw` 주석).
@@ -420,5 +452,6 @@ class NILMLoss(torch.nn.Module):
 
         parts["total"] = (w_cons * parts["cons"] + w_harm * parts["harm"]
                           + w_over * parts["over"] + w_hedge * parts["hedge"]
-                          + w_real_on * parts["real_on"])
+                          + w_real_on * parts["real_on"]
+                          + w_consq * parts["consq"])
         return parts

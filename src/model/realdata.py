@@ -100,7 +100,7 @@ class RealWindows:
         self.window_cycles = int(window_cycles)
         self.target_in_window = target_index(self.window_cycles)
 
-        F, W, P, H, S, C, V = [], [], [], [], [], [], []
+        F, W, P, H, S, C, V, Q = [], [], [], [], [], [], [], []
         self.per_file: Dict[str, int] = {}
         for stem in stems:
             raw = load_nilm_npz(str(d / f"{stem}.npz"))
@@ -124,6 +124,9 @@ class RealWindows:
             P.append(np.asarray(raw["power_features"])[targets, 0].astype(np.float32))
             # 단자 전압. 저항 정합 후처리가 P = V^2/R 을 푸는 데 쓴다 (12.112).
             V.append(np.asarray(raw["power_features"])[targets, 4].astype(np.float32))
+            # 무효전력. 12.133 이 찾은 **두 번째 판별자** — `L_cons` 의 Q 판이 쓴다.
+            # 열 1 이 Q 다 ([p, q, s, pf, vrms, thd_i]).
+            Q.append(np.asarray(raw["power_features"])[targets, 1].astype(np.float32))
             H.append(np.asarray(raw["harmonics_ri"])[targets].astype(np.float32))
             S += [stem] * len(targets)
             C.append(targets)
@@ -135,6 +138,7 @@ class RealWindows:
         self.wide = np.concatenate(W)
         self.p_observed = np.concatenate(P)
         self.v_observed = np.concatenate(V)
+        self.q_observed = np.concatenate(Q)
         self.obs_harm = np.concatenate(H)
         self.target_cycle = np.concatenate(C)
         self.stem = np.asarray(S)
@@ -252,6 +256,11 @@ class RealWindows:
         i = np.asarray(idx)
         return (self.fine[i], self.wide[i], self.p_observed[i],
                 self.obs_harm[i], self.p_noise[i])
+
+    def reactive(self, idx: np.ndarray) -> np.ndarray:
+        """관측 무효전력 (n,). **`batch()` 의 자리수를 안 바꾼다** — `human()` 과
+        같은 이유다 (`run_gate_check` 등이 5개로 풀고 있다)."""
+        return self.q_observed[np.asarray(idx)]
 
     def human(self, idx: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """(human_on, human_mask) 만 따로. **`batch()` 의 자리수를 안 바꾼다** —
