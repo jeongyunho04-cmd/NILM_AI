@@ -1,0 +1,60 @@
+{
+ "weights": {
+  "균등 (현행)": {
+   "ratio": 2.234263666731988,
+   "eff_dim": 30.0
+  },
+  "홀수차만": {
+   "ratio": 2.169267413362445,
+   "eff_dim": 16.0
+  },
+  "1/tau_h": {
+   "ratio": 2.003027798713817,
+   "eff_dim": 21.840658250119013
+  },
+  "저차 강조 1/h": {
+   "ratio": 1.7400407817633041,
+   "eff_dim": 13.933640855451866
+  },
+  "저차 강조 1/h^2": {
+   "ratio": 1.5671045503673382,
+   "eff_dim": 4.615991928845784
+  },
+  "h1,h3 만": {
+   "ratio": 1.4122988265099805,
+   "eff_dim": 4.0
+  }
+ },
+ "transition_dprime": {
+  "beam_projector|laptop_charger": {
+   "d_trans": 0.5747388601303101,
+   "d_steady": 0.9071555137634277
+  },
+  "beam_projector|minipc": {
+   "d_trans": 1.4009311199188232,
+   "d_steady": 1.854018211364746
+  },
+  "laptop_charger|minipc": {
+   "d_trans": 0.6476919651031494,
+   "d_steady": 1.4050630331039429
+  }
+ },
+ "n_transitions": {
+  "electiric_kettle": 5,
+  "hair_dryer": 5,
+  "hotplate": 48,
+  "oven": 6,
+  "beam_projector": 13,
+  "laptop_charger": 11,
+  "minipc": 8
+ },
+ "_config": {
+  "argv": [
+   "C:\\Users\\yunho\\Documents\\NILM_train\\NILM_AI-main\\src\\run_lharm_alt_probe.py"
+  ],
+  "args": {
+   "ckpt": "results/cnn_ovh.pt",
+   "out": "results/lharm_alt.json"
+  }
+ }
+}
