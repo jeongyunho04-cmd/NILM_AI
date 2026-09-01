@@ -72,6 +72,7 @@ python run_predict.py --replay ../data/test_8.csv --speed 0
         │                          타깃은 창 끝에서 6초 안쪽 시점
         ▼
    postproc.apply_postproc()       프로젝터 55W 상한 + 초과분을 다른 SMPS 로 재배분
+   postproc.snap_power()           프로젝터를 참값 46.9W 로 스냅 (12.129)
         ▼
    PredictionResult                UI 로
 ```
@@ -140,7 +141,7 @@ python run_predict.py --csv data/live.csv --jsonl data/pred.jsonl --quiet
 
 ## 4. API
 
-### `NILMPredictor(ckpt_path, device=None, postproc="on", resmatch=0.02, reorder=True)`
+### `NILMPredictor(ckpt_path, device=None, postproc="on", resmatch=0.02, snap=46.9, reorder=True)`
 
 | 인자 | 뜻 |
 |---|---|
@@ -149,6 +150,7 @@ python run_predict.py --csv data/live.csv --jsonl data/pred.jsonl --quiet
 | `postproc` | `"off"` / `"on"` / `"sync"` — 아래 6절 |
 | `resmatch` | 저항 부하 정합 허용오차. 운영 기본 0.02, 0 이면 끔 — 아래 6절 |
 | `rm_snap` | 저항 정합이 조합을 확인한 창에서 전력도 `V²/R` 로 맞춘다. 운영 기본 `True` (12.117) |
+| `snap` | 프로젝터를 격리 참값 W 로 맞추고 차액을 다른 SMPS 로 넘긴다. 운영 기본 `46.9` (12.129), `0` 이면 끔 |
 | `reorder` | 순서 뒤바뀜 보정. **끄지 말 것** (2~3% 행이 역전돼 온다) |
 
 | 메서드 | 하는 일 |
@@ -235,6 +237,28 @@ python run_predict.py --csv data/live.csv --jsonl data/pred.jsonl --quiet
 | `"off"` | 모델 출력 그대로 |
 | `"on"` (기본) | 전이 귀속 27→44/59, 잔차 유지 |
 | `"sync"` | 위 + 넘겨받은 기기의 ON 게이트도 켠다 (미니PC F1 +0.07) |
+
+**①-b 프로젝터 참값 스냅 (`snap`, 기본 46.9W).** 상한이 55W 로 자른 뒤,
+프로젝터를 격리 참값으로 맞추고 차액을 다른 SMPS 로 넘긴다.
+
+**왜 상한만으로는 부족한가.** 상한은 "55W 를 넘지 마라" 이고 참값은 46.9W 다 —
+남는 8.1W 가 계속 프로젝터에 붙어 있었다. 그 8.1W 의 정체가 밝혀졌다: 학습된
+모델은 프로젝터에 +17.00W 를 얹고 **충전기에서 정확히 −17.01W 를 뺀다**
+(합 −0.01W, 제로섬). 총전력 부족분과는 무관하다. 맞바꿈이 보존적이므로
+프로젝터를 참값에 못 박으면 그 몫이 충전기로 돌아간다.
+
+| | 스냅 없음 | 스냅 46.9 |
+|---|---|---|
+| 프로젝터 중앙\|오차\| | 8.09W | **0.00W** |
+| 격리 폭(44.2~47.8W) 안에 드는 비율 | 2.5% | **99.9%** |
+| 충전기 (격리 33.3~68.4W) | 8.9W | 30.6W |
+| 없는 기기 전력 | — | +0.4W |
+| 잔차 | — | +0.04W |
+
+⚠ 46.9 로 맞추고 46.9 로 채점하면 오차 0 은 당연하다. 근거는 위 표의
+**격리 폭 안에 드는 비율**과 **충전기가 독립 기준(1단계 모델 31.1W)으로
+돌아온 것**이다. 충전기·미니PC 에는 못 건다 — 격리 통전 폭이 넓어(33~68W,
+8~23W) 단일 참값이 없다.
 
 **②-b 전력 스냅 (`rm_snap`, 기본 켜짐).** 정합이 조합을 옳다고 판정한 창에서는
 예전에 아무것도 안 했다. 그런데 **조합은 맞고 전력이 틀린 창**이 있다 — 오븐이

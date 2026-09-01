@@ -21,7 +21,8 @@ import torch
 
 from .inputs import build_inputs, target_index, FINE_CYCLES, TARGET_LOOKAHEAD
 from .net import NILMNet, appliance_state_counts
-from .postproc import SMPS_GROUP, apply_postproc, resistive_match
+from .postproc import (SMPS_GROUP, SNAP_TARGET_W, apply_postproc,
+                       resistive_match, snap_power)
 
 CYCLE_HZ = 60
 WINDOW_CYCLES = 3600                 # 60초
@@ -218,6 +219,7 @@ class NILMPredictor:
 
     def __init__(self, ckpt_path: str, device: Optional[str] = None,
                  postproc: str = "on", resmatch: float = 0.02, rm_snap: bool = True,
+                 snap: float = SNAP_TARGET_W["beam_projector"],
                  reorder: bool = True):
         """
         Args:
@@ -229,6 +231,9 @@ class NILMPredictor:
                 (12.117). 끄면 12.117 이전 동작이다.
             resmatch: 저항 부하 정합 허용오차. 관측 전력·전압으로 등가저항을
                 역산해 저항 조합을 맞바꾼다. 운영 기본 0.02, 0 이면 끔
+            snap: 프로젝터를 격리 참값 W 로 맞추고 차액을 다른 SMPS 로 넘긴다
+                (12.129). **운영 기본 켜짐** — 프로젝터 중앙|오차| 8.09 -> 0.00W,
+                격리 폭 안 2.5%% -> 99.9%%. 대가는 유령 +0.4W. 0 이면 끔
             reorder: 수신기 CSV 의 순서 뒤바뀜을 t_s 로 보정한다. 끄지 말 것
         """
         self.dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -246,6 +251,10 @@ class NILMPredictor:
         self.meta = {k: v for k, v in ck.items() if k not in ("model",)}
         self.postproc = postproc
         self.resmatch = float(resmatch)
+        #: 프로젝터 참값 스냅 (12.128~12.129). 프로젝터 과대예측은 총전력
+        #: 부족분의 배출구가 아니라 **충전기와의 제로섬 맞바꿈**(+17.00/−17.01W)
+        #: 이고, 참값에 못 박으면 그 17W 가 충전기로 돌아간다.
+        self.snap = float(snap)
         #: 저항 정합에서 조합이 이미 맞을 때도 전력을 V^2/R 로 스냅한다 (12.117).
         #: 시드 4개에서 8파일 유령 8.98 -> 5.23W, 폭 6.05 -> 4.15W, 잔차
         #: 10.15 -> 7.30W, F1 과 전이 귀속은 불변. 운영 기본 True.
@@ -306,6 +315,12 @@ class NILMPredictor:
         if self.postproc != "off":
             power, gate = apply_postproc(power[None, :], gate[None, :], self.appliances,
                                          gate_sync=(self.postproc == "sync"))
+            power, gate = power[0], gate[0]
+        if self.snap > 0:
+            # 프로젝터 참값 스냅 (12.129). **상한 뒤, 저항 정합 앞** —
+            # src/run_live.py 와 같은 순서다. 다르면 배포와 채점이 갈린다.
+            power, gate = snap_power(power[None, :], gate[None, :], self.appliances,
+                                     targets={"beam_projector": float(self.snap)})
             power, gate = power[0], gate[0]
         if self.resmatch > 0:
             # 저항 정합: 등가저항이 기기 고유값이라 조합을 역산할 수 있다.

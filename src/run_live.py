@@ -81,6 +81,11 @@ HARMONICS = 15
 # 충전기만은 `cnn_v17` 이 0.955 로 아직 최고다 (기본값 0.937).
 # `--ckpt-smps ""` 로 단독 동작을 되돌릴 수 있다.
 SMPS_GROUP = ("beam_projector", "laptop_charger", "minipc")
+
+# 프로젝터 스냅 목표 (12.129). `postproc` 과 **같은 상수**를 쓴다 — 두 군데에
+# 숫자를 적으면 언젠가 갈린다. 여기서 import 하는 것 자체가 운영 기본값이다.
+from src.model.postproc import SNAP_TARGET_W  # noqa: E402
+
 KOR = {"oven": "오븐", "hotplate": "핫플", "electiric_kettle": "포트",
        "hair_dryer": "드라이기", "minipc": "미니PC", "beam_projector": "프로젝터",
        "laptop_charger": "충전기", "fan": "선풍기", "air_conditioner": "에어컨"}
@@ -323,6 +328,15 @@ def main() -> int:
     ap.add_argument("--resmatch", type=float, default=0.02, metavar="TOL",
                     help="저항 부하 정합 후처리 (12.112절). 관측 전력·전압으로 등가저항을 "
                          "역산해 저항 조합을 **맞바꾼다**(개수는 안 바꾼다). 운영 기본 0.02, 0=끔")
+    ap.add_argument("--snap", type=float, default=SNAP_TARGET_W["beam_projector"],
+                    metavar="W",
+                    help="프로젝터를 격리 참값으로 스냅하고 차액을 다른 SMPS 로 넘긴다 "
+                         "(12.129). **운영 기본 켜짐** — 프로젝터 중앙|오차| "
+                         "8.09 -> 0.00W, 격리 폭 안에 드는 비율 2.5%% -> 99.9%%. "
+                         "대가는 유령 +0.4W, 잔차 +0.04W. 0 이면 끔")
+    ap.add_argument("--snap-no-redist", action="store_true",
+                    help="스냅이 깎기만 하고 남에게 안 준다. 총합 보존이 깨지는 대신 "
+                         "유령이 안 는다 (12.129 에서 잔차 4.24 -> 7.89W 로 터진다)")
     ap.add_argument("--absorb", type=float, default=0.0, metavar="FRAC",
                     help="총전력 잔차를 고조파가 닮은 SMPS 로 흡수한다 (12.104절). "
                          "0.5 면 실측 8파일에서 잔차 8.88 -> 7.35W. **기본은 꺼 둔다** — "
@@ -457,6 +471,19 @@ def main() -> int:
                 pp, gg = apply_postproc(power[None, :], gate[None, :], list(apps),
                                         gate_sync=(a.postproc == "sync"))
                 power, gate = pp[0], gg[0]
+            if a.snap > 0:
+                # 프로젝터 스냅 (12.129). **상한 뒤, 저항 정합 앞** — `run_gate_check`
+                # 와 같은 순서다. 순서가 다르면 오프라인 채점과 값이 갈린다.
+                #
+                # 왜 이것만 배분을 고치는가: 12.128 이 프로젝터 과대예측의 정체를
+                # **충전기와의 제로섬 맞바꿈**(+17.00/−17.01W)으로 확정했다.
+                # 프로젝터를 참값에 못 박으면 그 17W 는 갈 곳이 충전기뿐이고,
+                # 12.129 가 실제로 되돌아오는 것을 독립 기준 셋으로 확인했다.
+                from src.model.postproc import snap_power
+                ps, gs = snap_power(power[None, :], gate[None, :], list(apps),
+                                    targets={"beam_projector": float(a.snap)},
+                                    redistribute=not a.snap_no_redist)
+                power, gate = ps[0], gs[0]
             if a.resmatch > 0:
                 # 저항 정합 (12.112). 등가저항이 기기 고유값이라 조합을 역산할 수 있다.
                 from src.model.postproc import resistive_match
