@@ -94,16 +94,32 @@ def _ref_at(app: str, ref: Dict[str, tuple], v_rms) -> np.ndarray:
     return r * (np.asarray(v_rms, float) / v0) ** 2
 
 
+#: 짧은 구간에서 가드를 구간 길이의 이 비율로 줄인다.
+#: **고정 가드는 짧은 구간을 통째로 지운다** — 2026-09-01 감사에서 핫플이
+#: 666구간 중 3개만 살아남았다 (통전 펄스 중앙 1.2초, 가드 ±30초).
+#: 그래서 저항 오차가 "가장 긴 구간만" 의 값이었다. 구간마다
+#: `min(guard, 길이 x EDGE_GUARD_FRAC)` 을 쓰면 어느 구간이든 가운데 절반이 남는다.
+EDGE_GUARD_FRAC = 0.25
+
+
 def _trim_edges(on: np.ndarray, guard: int) -> np.ndarray:
-    """ON 구간의 양 끝 `guard` 사이클을 잘라낸 마스크."""
+    """ON 구간의 양 끝을 잘라낸 마스크. **구간마다 가드를 길이에 맞춘다.**
+
+    창이 60초라 전이 앞뒤 30초는 두 상태가 섞인다. 그런데 고정 30초를 쓰면
+    30초보다 짧은 구간이 전부 사라진다 — 그러면 지표가 **긴 구간만** 보게 되고
+    통전 펄스가 짧은 기기(핫플 1.2초)는 사실상 안 재진다.
+    """
     if guard <= 0 or not on.any():
         return on.copy()
     d = np.diff(np.concatenate([[False], on, [False]]).astype(np.int8))
+    starts, ends = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
     out = on.copy()
-    for a in np.flatnonzero(d == 1):
-        out[a:a + guard] = False
-    for b in np.flatnonzero(d == -1):
-        out[max(0, b - guard):b] = False
+    for a, b in zip(starts, ends):
+        gi = int(min(guard, max(0.0, (b - a) * EDGE_GUARD_FRAC)))
+        if gi <= 0:
+            continue
+        out[a:a + gi] = False
+        out[max(0, b - gi):b] = False
     return out
 
 
@@ -184,9 +200,17 @@ def score_power_ref(
         if not m.any():
             continue
         det = m & pred_on[:, j]
+        raw = truth[:, j] & scorable[:, j]
+        d0 = np.diff(np.concatenate([[0], raw.astype(np.int8), [0]]))
+        n_int = int((d0 == 1).sum())
+        kept = _trim_edges(truth[:, j], guard) & scorable[:, j]
+        d1 = np.diff(np.concatenate([[0], kept.astype(np.int8), [0]]))
         row = {"ref_w": float(r), "n": int(m.sum()), "n_detected": int(det.sum()),
                "detect_rate": float(det.sum() / m.sum()),
-               "guarded": p_observed is not None}
+               "guarded": p_observed is not None,
+               # 규칙 30 — 가드가 무엇을 버렸는지 함께 남긴다
+               "n_intervals": n_int, "n_intervals_kept": int((d1 == 1).sum()),
+               "cycle_coverage": float(m.sum() / max(raw.sum(), 1))}
         if det.any():
             e = P[det, j] - (rv[det] if np.ndim(rv) else rv)
             row.update({
