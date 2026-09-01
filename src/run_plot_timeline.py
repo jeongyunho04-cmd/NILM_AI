@@ -69,11 +69,15 @@ def _spans(mask: np.ndarray, t: np.ndarray):
 
 
 def plot_file(model, apps, stem: str, ev: dict, dev: str, out_dir: Path, tag: str,
-              stride: int = 15, model_smps=None) -> Path:
+              stride: int = 15, model_smps=None, pp: str = "off",
+              resmatch: float = 0.0, rm_snap: bool = False, snap: float = 0.0) -> Path:
     """`model_smps` 를 주면 SMPS 3종만 그 체크포인트에서 가져온다.
 
     `run_live --ckpt-smps` 와 같은 구성이다 (12.31.5). 운영에서 실제로 도는 것이
     두 체크포인트의 조합이므로, 그림도 그 조합으로 그려야 실물과 맞는다.
+
+    `pp`/`resmatch`/`snap` 은 **`run_gate_check` 와 같은 순서로** 건다
+    (상한 -> 스냅 -> 저항 정합). 안 걸면 그림이 운영 실물과 다르다.
     """
     d = forward_file(model, stem, dev, stride=stride)
     if model_smps is not None:
@@ -83,7 +87,21 @@ def plot_file(model, apps, stem: str, ev: dict, dev: str, out_dir: Path, tag: st
             d[k][:, six] = ds[k][:, six]
     t = d["targets"] / 60.0
     P = d["gate"] * d["p_raw"]
-    on = d["gate"] > 0.5
+    g = d["gate"]
+    if pp != "off":
+        from src.model.postproc import apply_postproc
+        P, g = apply_postproc(P, g, apps, gate_sync=pp == "sync")
+    if snap > 0:
+        from src.model.postproc import snap_power
+        P, g = snap_power(P, g, apps, targets={"beam_projector": float(snap)},
+                          bidirectional=True, share="gate", min_gate=0.5,
+                          redistribute=True)
+    if resmatch > 0:
+        from src.model.postproc import resistive_match
+        P, g = resistive_match(P, g, apps, d["p_observed"], d["v_rms"],
+                               d["standby"], d["p_noise"], obs_harm=d["obs_harm"],
+                               tol=resmatch, snap=rm_snap)
+    on = g > 0.5
     n_cycles = int(ev[stem]["cycles"])
     present = set(ev[stem].get("appliances_present", []))
     iv = ev[stem]["intervals"]
@@ -159,6 +177,14 @@ def main() -> int:
     ap.add_argument("--tag", default=None)
     ap.add_argument("--stride", type=int, default=15)
     ap.add_argument("--out", default="results/plots")
+    # 운영점 후처리 — `run_gate_check` 와 같은 이름·같은 순서 (12.129)
+    ap.add_argument("--postproc", default="off", choices=("off", "on", "sync"))
+    ap.add_argument("--resmatch", type=float, default=0.0)
+    ap.add_argument("--rm-snap", action="store_true")
+    ap.add_argument("--snap", type=float, default=0.0, metavar="W",
+                    help="프로젝터 스냅 (12.129 가 맞바꿈을 되돌린다고 쟀다). 46.9 가 참값")
+    ap.add_argument("--stems", nargs="+", default=None,
+                    help="기본: 봉인 안 된 전부")
     a = ap.parse_args()
 
     _korean_font()
@@ -173,11 +199,13 @@ def main() -> int:
     tag = a.tag or (Path(a.ckpt).stem if not a.ckpt_smps
                     else f"{Path(a.ckpt).stem}+{Path(a.ckpt_smps).stem}")
     ev = load_events()
+    want = set(a.stems) if a.stems else None
     for stem in sorted(ev):
-        if is_sealed(stem):
+        if is_sealed(stem) or (want is not None and stem not in want):
             continue
         p = plot_file(model, apps, stem, ev, dev, Path(a.out), tag,
-                      stride=a.stride, model_smps=model_s)
+                      stride=a.stride, model_smps=model_s, pp=a.postproc,
+                      resmatch=a.resmatch, rm_snap=a.rm_snap, snap=a.snap)
         print(f"  저장 {p}")
     return 0
 

@@ -1,0 +1,56 @@
+{
+ "median_w": {
+  "① 1단계 (맞바꿈 전)": {
+   "beam_projector": 62.4998893737793,
+   "laptop_charger": 31.05799102783203,
+   "minipc": 5.941705703735352
+  },
+  "② 정답 support NNLS": {
+   "beam_projector": 87.21218908627162,
+   "laptop_charger": 1.9021462261288093,
+   "minipc": 7.046866751011857
+  },
+  "2단계 원시 (후처리 끔)": {
+   "beam_projector": 81.0,
+   "laptop_charger": 8.875112533569336,
+   "minipc": 4.076505661010742
+  },
+  "2단계 운영점 (스냅 없음)": {
+   "beam_projector": 55.0,
+   "laptop_charger": 27.383751237167342,
+   "minipc": 20.444487512057734
+  },
+  "③ 2단계 운영점 + 스냅": {
+   "beam_projector": 46.9,
+   "laptop_charger": 30.559218939029954,
+   "minipc": 25.08692969355065
+  }
+ },
+ "n_stage2": 3,
+ "stems": [
+  "test_11",
+  "test_12",
+  "test_13",
+  "test_5",
+  "test_6",
+  "test_7",
+  "test_8"
+ ],
+ "_config": {
+  "argv": [
+   "C:\\Users\\yunho\\Documents\\NILM_train\\NILM_AI-main\\src\\run_snap_reverses_probe.py"
+  ],
+  "args": {
+   "stage1": "results/cnn_ovh.pt",
+   "stage2": [
+    "results/adapt_ovh.pt",
+    "results/adapt_ovh_s1.pt",
+    "results/adapt_ovh_s2.pt"
+   ],
+   "snap": 46.9,
+   "resmatch": 0.02,
+   "stride": 60,
+   "out": "results/snap_reverses.json"
+  }
+ }
+}

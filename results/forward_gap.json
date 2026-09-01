@@ -1,0 +1,50 @@
+{
+ "n_windows": 66,
+ "stems": [
+  "test_11",
+  "test_12",
+  "test_13",
+  "test_5",
+  "test_6",
+  "test_7",
+  "test_8"
+ ],
+ "by_class": {
+  "저항 전용": {
+   "n": 12,
+   "rel_iso": 0.04975111245941522,
+   "rel_insitu": 0.04975111243427328
+  },
+  "SMPS 전용": {
+   "n": 41,
+   "rel_iso": 0.14291755987454646,
+   "rel_insitu": 0.12199915142356726
+  },
+  "혼합": {
+   "n": 13,
+   "rel_iso": 0.04928666368543831,
+   "rel_insitu": 0.0387034874104706
+  }
+ },
+ "synth": {
+  "n": 927,
+  "rel_by_class": {
+   "저항 전용": 0.2098034720722267,
+   "SMPS 전용": 0.6552660990647474,
+   "혼합": 0.14325794998056746
+  },
+  "rel_all": 0.3796653989662724
+ },
+ "_config": {
+  "argv": [
+   "C:\\Users\\yunho\\Documents\\NILM_train\\NILM_AI-main\\src\\run_forward_gap_probe.py"
+  ],
+  "args": {
+   "ckpt": "results/cnn_ovh.pt",
+   "sig_insitu": "results/sig_insitu.npz",
+   "holdout": "processed_data/holdout60",
+   "n_synth": 1500,
+   "out": "results/forward_gap.json"
+  }
+ }
+}
