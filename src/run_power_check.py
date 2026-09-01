@@ -202,6 +202,9 @@ def main() -> None:
             print(f"  [{app}] 파일별 중앙|오차|W")
             print("    " + "  ".join(f"{s}:{v['median_abs_err_w']:.1f}" for s, v in rows))
 
+    # 규칙 33 — 이 표를 만든 명령을 산출물 안에 남긴다. 플래그가 태그에 안 붙는
+    # 것들(`--rm-snap` 등)이 있어, 없으면 나중에 이 파일이 무엇인지 증명 못 한다.
+    payload["_config"] = {"argv": sys.argv, "args": vars(a)}
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"\n저장: {a.out}")

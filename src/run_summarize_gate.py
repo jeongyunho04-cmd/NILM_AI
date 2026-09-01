@@ -120,6 +120,8 @@ def main() -> int:
     for path in a.json:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         for tag, per_file in payload.items():
+            if tag.startswith("_"):
+                continue          # `_config` 등 메타 (규칙 33). 체크포인트가 아니다
             if tag in rows:
                 print(f"  ⚠ 태그 중복 '{tag}' — 나중 파일({path})로 덮어씁니다.")
             rows[tag] = summarize_one(per_file, a.gate, hs)
