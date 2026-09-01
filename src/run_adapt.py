@@ -226,6 +226,13 @@ def main() -> int:
     ap.add_argument("--human-label-files", default="",
                     help="지도에 쓸 파일을 직접 지정 (쉼표). 비우면 SMPS 가 든 "
                          "사람 라벨 5파일. **test_11/12 를 넣으면 규칙 20 대조가 죽는다**")
+    ap.add_argument("--harm-weight", default="off",
+                    choices=("off", "inv_h", "inv_h2", "inv_tau"),
+                    help="`L_harm` 의 **차수별 신뢰도 가중** (12.135). `harm_scale` 이 "
+                         "15차수를 균등화하는데, 실측에서는 고차가 신호가 아니라 "
+                         "모델오차다. 모델오차/판별신호가 균등 2.23 -> 1/h 1.74 -> "
+                         "**inv_h2 1.57** 로 단조로 준다. 바닥은 1.41(h1,h3)인데 "
+                         "거기선 유효차원이 4 라 식별성이 죽는다. 기본 off = 이전과 동일")
     ap.add_argument("--w-consq", type=float, default=0.0, metavar="W",
                     help="**무효전력 보존 항** (12.133). `L_cons` 와 같은 꼴로 P 대신 "
                          "Q 를 맞춘다. 저항에는 등가저항(`resistive_match`)이라는 둘째 "
@@ -330,7 +337,7 @@ def main() -> int:
         noise_sig=torch.from_numpy(nz), harm_scale=torch.from_numpy(hsc),
         harm_odd_only=a.harm_odd_only,
         harm_grad_balance=a.harm_grad_balance,
-        harm_deadzone=a.harm_deadzone,
+        harm_deadzone=a.harm_deadzone, harm_weight=a.harm_weight,
         reactive_qp=torch.from_numpy(qp), noise_q=nq,
         smps_group=[apps.index(x) for x in
                     ("beam_projector", "laptop_charger", "minipc") if x in apps],

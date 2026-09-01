@@ -134,6 +134,7 @@ class NILMLoss(torch.nn.Module):
         harm_grad_balance: str = "off",             # off | smps | all  (12.120)
         smps_group: Optional[Sequence[int]] = None,  # SMPS 열 인덱스
         harm_deadzone: float = 0.0,                 # L_harm 불감대 배수 (12.122.16)
+        harm_weight: str = "off",                   # 차수별 신뢰도 가중 (12.135)
         reactive_qp: Optional[torch.Tensor] = None,  # (K,) 기기별 Q/P (12.133)
         noise_q: float = 0.0,                        # 계측계 무효전력 (VAR)
     ):
@@ -238,8 +239,38 @@ class NILMLoss(torch.nn.Module):
         mask = torch.ones(h)
         if harm_odd_only:
             mask[1::2] = 0.0          # 0-based 라 인덱스 1,3,5.. 가 2,4,6..차다
+        # ── 차수별 신뢰도 가중 (12.135) ────────────────────────────────────
+        # `harm_scale` 은 "판별 정보는 높은 차수에 있다"(0.2절)를 전제로 15차수를
+        # **균등화**한다. 그런데 실측에서는 그 전제가 뒤집힌다 — 높은 차수는
+        # 신호가 아니라 모델오차다. 차수별 정답잔차 tau 가 h1 0.079 vs h14 1.696 로
+        # 21배 갈리고(12.123.1), 차수 부분집합별 모델오차/판별신호가 h1 만 1.08 에서
+        # 고차만 3.68 까지 **단조**다 (12.133).
+        #
+        #     균등(현행) 2.23  ->  1/h 1.74  ->  **1/h² 1.57**  ->  h1,h3 만 1.41
+        #
+        # 1.41 이 바닥이고 거기서는 유효차원이 4 라 창당 켜진 기기 수와 맞먹는다 —
+        # 더 낮추면 식별성이 죽는다 (규칙 31). `1/h²` 이 유효차원 4.6 을 남기면서
+        # 비를 1.57 로 내리는 자리이고, **튜닝 상수가 없다** (차수의 역제곱뿐).
+        #
+        # ⚠ 이것은 결함을 **줄이지 없애지 못한다.** 어떤 가중으로도 최소는 오답
+        #   쪽에 남는다 (비가 1 아래로 안 간다).
+        if harm_weight != "off":
+            hh = torch.arange(1, h + 1, dtype=torch.float32)
+            if harm_weight == "inv_h":
+                w_h = 1.0 / hh
+            elif harm_weight == "inv_h2":
+                w_h = 1.0 / (hh * hh)
+            elif harm_weight == "inv_tau":
+                t = torch.as_tensor(HARM_DEADZONE_PROFILE[:h], dtype=torch.float32)
+                if len(t) < h:
+                    t = torch.cat([t, t.new_full((h - len(t),), float(t[-1]))])
+                w_h = 1.0 / t.clamp(min=1e-6)
+            else:
+                raise ValueError(f"모르는 harm_weight: {harm_weight}")
+            mask = mask * (w_h / w_h.max())
         self.register_buffer("harm_mask", mask)
         self.harm_odd_only = bool(harm_odd_only)
+        self.harm_weight = str(harm_weight)
         self.w = weights or LossWeights()
         self.power_delta = power_delta
         self.standby_delta = standby_delta
