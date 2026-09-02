@@ -57,7 +57,7 @@ def main() -> int:
     ap.add_argument("--csv", default="data/live.csv", help="수신기가 쓰는 CSV")
     ap.add_argument("--replay", default=None, help="기존 CSV 를 재생한다")
     ap.add_argument("--speed", type=float, default=20.0, help="재생 배속 (0=최대)")
-    ap.add_argument("--ckpt", default=str(Path(__file__).parent / "models/adapt_ovh.pt"))
+    ap.add_argument("--ckpt", default=str(Path(__file__).parent / "models/adapt_zi_s0.pt"))
     ap.add_argument("--postproc", default="on", choices=("off", "on", "sync"))
     ap.add_argument("--resmatch", type=float, default=0.02,
                     help="저항 부하 정합 (등가저항으로 조합을 맞바꾼다). 0 이면 끔")

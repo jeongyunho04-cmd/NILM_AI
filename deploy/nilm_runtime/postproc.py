@@ -248,12 +248,117 @@ ABSORB_FRAC = 1.0
 ABSORB_MIN_GATE = 0.1
 
 
+#: **흡수가 넘겨서는 안 되는 기기별 천장** (12.149.4).
+#:
+#: `CAP_W` 는 프로젝터 하나뿐이라, 12.149.3 으로 프로젝터를 막고 나니 같은 일이
+#: 미니PC 에서 났다 — `test_4` 에서 흡수가 미니PC 를 **98.5W** 까지 밀었다
+#: (격리 실측 상한 29.8W 의 3.3배). 상한이 한 기기에만 있으면 오차는 옆으로 간다
+#: (규칙 29).
+#:
+#: 값은 **격리 녹화의 사이클 최대**다 (2026-09-02 측정, `processed_data/npz`,
+#: `is_on & is_valid & p>1W`). 60초 창 최대가 아니라 사이클 최대를 쓰는 이유:
+#: 창 평균은 짧은 첨두를 뭉개므로 천장으로 쓰면 실재하는 값을 자른다.
+#:
+#:     기기              60초창 최대   사이클 최대   ISOLATED_MAX_W (2026-08-25)
+#:     beam_projector       47.9       52.0        49.6   <- CAP_W 55.0 이 그 위다
+#:     laptop_charger       68.8       84.6        70.3
+#:     minipc               25.6       29.8        26.9
+#:
+#: ⚠ 위의 `ISOLATED_MAX_W` 와 **다른 통계다.** 그쪽은 60초 창 *평균*의 최대이고
+#:   (재현 47.9 / 68.8 / 25.6 으로 재측정과 맞는다), 이쪽은 *사이클* 최대다.
+#:   창 평균을 천장으로 쓰면 실재하는 첨두를 자르므로 여기서는 못 쓴다.
+#:
+#: 프로젝터는 `CAP_W` 의 55.0 을 그대로 둔다 — **더 느슨한 쪽을 남긴다.** 이 표는
+#: 흡수를 막는 안전장치이지 예측을 조이는 장치가 아니다.
+ABSORB_CAP_W: Dict[str, float] = {
+    "beam_projector": 55.0, "laptop_charger": 84.6, "minipc": 29.8,
+}
+
+
+#: 게이트 정합 문턱 (12.149). **자유 파라미터가 아니다** — 채점(`score_on_off`)과
+#: 화면(`run_live.render`)이 이미 쓰는 그 0.5 이고, 요구는 하나다:
+#: **"OFF 라고 보고한 기기는 0W 를 낸다."**
+SQUELCH_TAU = 0.5
+
+
+def squelch(P: np.ndarray, gate: np.ndarray, tau: float = SQUELCH_TAU) -> np.ndarray:
+    """게이트가 `tau` 아래인 기기의 전력을 0 으로 만든다 (12.149).
+
+    `P̂ = σ(on)·p_raw` 는 σ 가 아무리 작아도 0 이 아니다. 그래서 **꺼졌다고
+    보고한 기기가 와트를 낸다.** 12.149 가 `adapt_zi_s0` 에서 잰 것:
+
+        에어컨    σ 0.0080 x p_raw  592W = 4.92W   (게이트>0.5 인 창 0.01%)
+        전기포트  σ 0.0048 x p_raw  973W = 5.89W   (이쪽은 `resistive_match` 가 지운다)
+
+    유령8 6.78W 의 82% 가 이 문턱 아래 누설이고, 하드 게이트로 보면 0.83W 다.
+    `w_hedge` 는 이것을 못 본다 — 이진 엔트로피 H(0.008)=0.046 이라 σ=0.008 은
+    이미 "결정했다" 인데 와트로는 4.9W 다. **손실에 와트를 보는 항이 없다.**
+
+    ⚠ **깎기만 한다.** 빠진 와트는 `absorb_residual` 이 고조파가 닮은 기기로
+      돌려보낸다 — 안 그러면 잔차가 4.52 -> 8.65W 로 커진다 (규칙 29: 오차는
+      사라지지 않고 옮겨 다닌다). 둘은 **같이 써야 한다.**
+    """
+    out = np.array(P, dtype=np.float64, copy=True)
+    out[np.asarray(gate) < float(tau)] = 0.0
+    return out
+
+
+#: `norton_offset` 이 계수를 한 번만 읽도록 하는 캐시.
+_NORTON_CACHE: Dict[str, tuple] = {}
+
+
+def norton_offset(obs_harm: np.ndarray, coef_npz: str) -> np.ndarray:
+    """관측 고조파에서 계통 임피던스 보정을 만든다 (12.148.2, 12.152).
+
+    `realdata.harmonic_offset` 은 원자료 CSV 의 `ih*`/`ihdeg*` 를 읽는다. 그것은
+    **적합 경로의 편의**였다 — 추론에는 `obs_harm` 의 Re/Im 이 곧 복소 전류라
+    CSV 가 필요 없다. 두 경로를 `test_7` 에서 견주면 **cos 1.0000, 비 1.0000**
+    이다 (2026-09-02 확인). 그래서 실시간에서도 같은 보정을 쓸 수 있다.
+
+        V_h = V_src,h − Z_h·I_h,  Z_h = R + j·h·ωL      (12.148.2)
+        보정 = ((1, Re(Z·I), Im(Z·I), ...) − mu)/sd @ B
+
+    Args:
+        obs_harm: (n, H, 2) 관측 고조파 Re/Im (A)
+        coef_npz: `run_norton_probe --save-coef` 의 산출물
+    Returns:
+        (n, H, 2) 창별 보정. 짝수차는 0 이다 (12.72 + 12.147).
+    """
+    if coef_npz not in _NORTON_CACHE:
+        z = np.load(coef_npz, allow_pickle=True)
+        _NORTON_CACHE[coef_npz] = (
+            np.asarray(z["coef"], np.float64), np.asarray(z["mu"], np.float64),
+            np.asarray(z["sd"], np.float64), np.asarray(z["orders"], int),
+            np.asarray(z["zi_orders"], int), float(z["R"]), float(z["X1"]))
+    B, mu, sd, odd, zo, R, X1 = _NORTON_CACHE[coef_npz]
+    o = np.asarray(obs_harm, dtype=np.float64)
+    cc = []
+    for h in zo:
+        zi = (R + 1j * h * X1) * (o[:, h - 1, 0] + 1j * o[:, h - 1, 1])
+        cc += [zi.real, zi.imag]
+    y = ((np.c_[np.ones(len(o)), np.array(cc).T] - mu) / sd) @ B
+    out = np.zeros((len(o), o.shape[1], 2), np.float64)
+    k = len(odd)
+    out[:, odd, 0] = y[:, :k]
+    out[:, odd, 1] = y[:, k:]
+    return out
+
+
 def absorb_residual(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
                     standby: np.ndarray, p_noise: np.ndarray, p_observed: np.ndarray,
                     obs_harm: np.ndarray, sig: np.ndarray, standby_sig: np.ndarray,
                     noise_sig: np.ndarray, frac: float = ABSORB_FRAC,
                     min_gate: float = ABSORB_MIN_GATE,
-                    odd_only: bool = True, skip_fundamental: bool = True) -> np.ndarray:
+                    odd_only: bool = True, skip_fundamental: bool = True,
+                    exclude: Optional[Sequence[str]] = None,
+                    caps: Optional[Dict[str, float]] = None,
+                    harm_offset: Optional[np.ndarray] = None,
+                    mode: str = "cos",
+                    limit_by_harm: bool = False,
+                    qp: Optional[np.ndarray] = None,
+                    noise_q: float = 0.0,
+                    q_observed: Optional[np.ndarray] = None,
+                    w_q: float = 3.0) -> np.ndarray:
     """총전력 잔차를 **고조파 잔차가 닮은 SMPS 에** 나눠 준다 (12.104).
 
     `L_cons` 를 추론 시점에 거는 것과 같은데, **누구에게 줄지를 고조파가 정한다**
@@ -263,15 +368,23 @@ def absorb_residual(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
         w_k     = max(0, cos(resid_h, sig_k))        게이트가 낮은 기기는 0
         P̂_k    += w_k / Σw · (관측 총전력 − 예측 총합) · frac
 
-    **안전장치가 둘이다.** ① 게이트가 `min_gate` 아래인 기기는 안 받는다.
+    **안전장치가 셋이다.** ① 게이트가 `min_gate` 아래인 기기는 안 받는다.
     ② 유사도를 **3차 이상**으로만 잰다 — 기본파를 넣으면 코사인이 1차에 지배되어
     저항 부하의 잔차까지 SMPS 를 닮은 것으로 보인다. 실측에서는 `test_9`(저항만)가
     25.65 -> 25.35W 로 거의 안 변하고 `test_5` 는 12.25 -> 3.52W 다 (frac=1.0).
+    ③ **물리 천장(`caps`, 기본 `ABSORB_CAP_W`)을 넘겨 주지 않는다** (12.149.3/.4).
+       ③이 없던 판이 프로젝터를 창의 32.7% 에서 55W 위로 올렸고(최대 344W),
+       프로젝터만 막았더니 미니PC 가 98.5W(격리 상한 29.8W)까지 올라갔다.
     """
     out = np.array(P, dtype=np.float64, copy=True)
     if frac <= 0:
         return out
-    cols = [j for j, a in enumerate(apps) if a in SMPS_GROUP]
+    # ── 못 박은 기기는 안 받는다 (2026-09-02, 12.149.2) ────────────────────
+    # `snap_power` 는 **"이 기기의 전력은 격리 측정으로 안다"** 는 주장이다.
+    # 거기에 잔차를 더하면 그 주장과 모순이고, 실제로 스냅이 세운 프로젝터를
+    # 다시 밀어 올린다 (중앙|오차| 0.00 -> 3.72W). 스냅 대상은 빼고 나눈다.
+    skip = set(exclude or ())
+    cols = [j for j, a in enumerate(apps) if a in SMPS_GROUP and a not in skip]
     if not cols:
         return out
     hh = list(range(0, sig.shape[1], 2)) if odd_only else list(range(sig.shape[1]))
@@ -286,20 +399,134 @@ def absorb_residual(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
 
     pred_h = (np.einsum("nk,khc->nhc", out, sig)
               + np.einsum("nk,khc->nhc", standby, standby_sig) + noise_sig[None])
+    # ── 계통 임피던스 보정 (2026-09-02, 12.152) ──────────────────────────
+    # 손실은 `pred += harm_offset` 을 하는데(12.148) 흡수는 안 했다. 그래서
+    # 흡수는 **보정 안 된 잔차**를 보고 배분을 정했다. 넣으면 그 잔차가
+    # 3차 이상 노름 중앙 101.9 -> 60.5 mA (−41%) 로 줄고 방향이 바뀐다
+    # (보정 전후 cos 중앙 −0.06 — 사실상 다른 벡터다).
+    if harm_offset is not None:
+        pred_h = pred_h + np.asarray(harm_offset, dtype=np.float64)
     R = (obs_harm - pred_h)[:, hh, :]
     Rc = R[:, :, 0] + 1j * R[:, :, 1]
     rn = np.linalg.norm(Rc, axis=1)
 
-    W = np.zeros((len(out), len(cols)))
+    cw = ABSORB_CAP_W if caps is None else caps
+    lim = np.full(len(cols), np.inf)
     for i, j in enumerate(cols):
-        s = sig[j][hh, 0] + 1j * sig[j][hh, 1]
-        W[:, i] = np.clip(np.real(Rc @ np.conj(s)) / (np.linalg.norm(s) * rn + 1e-12),
-                          0.0, None)
+        if apps[j] in cw:
+            lim[i] = float(cw[apps[j]])
+
+    SS = np.array([sig[j][hh, 0] + 1j * sig[j][hh, 1] for j in cols])   # (C, Hh)
+    if mode == "pq":
+        # ── 무효전력을 방정식으로 넣는다 (2026-09-02, 12.153) ──────────────
+        # 12.152 이 막힌 자리: 총전력 잔차 6W 는 실재하고 배분돼야 하는데
+        # **미지수 셋에 방정식이 하나**(Σx = 6W)뿐이라 고조파가 방향만 준다.
+        # 고조파로 크기까지 정하면 흡수가 꺼진다 (잔차 6.62 = 흡수 끈 것과 같음).
+        #
+        # 12.133 이 잰 **두 번째 판별자**가 그 자리를 채운다. SMPS 쌍 d′ 이
+        # Q/P 2.31~4.64 vs 고조파 0.91~1.85 로 2.2~2.5배 낫고, 충전기·미니PC 는
+        # **전력 자체보다 Q/P 가 훨씬 안정**하다 (폭/중앙 0.156/0.289 vs
+        # 0.722/1.162). 그래서 식이 둘이 된다:
+        #
+        #     Σ x_k            = 총전력 잔차     (하드. 6W 는 다 나간다)
+        #     Σ (Q/P)_k · x_k  = 무효 잔차       (연성. **새로 쓰는 것**)
+        #     Σ x_k · sig_k    ~ 고조파 잔차     (연성. 남은 한 자유도)
+        #
+        # 12.153 이 잰 것: 프로젝터 |오차| 중앙 9.44 -> 7.34W, **p90 20.45 ->
+        # 12.46W**. 6W 를 그대로 다 배분하면서 꼬리가 8W 준다.
+        #
+        # ⚠ 이 `Q` 는 기본파 무효분이 아니라 `sign(phase)·sqrt(S²−P²)` 다.
+        #   가산성은 **경험적 근거**다 (12.133: 66창 중 62창). 물리 유도가 아니다.
+        if qp is None or q_observed is None:
+            raise ValueError("mode='pq' 는 qp 와 q_observed 가 필요합니다")
+        qq = np.asarray(qp, dtype=np.float64)
+        qc = qq[cols]
+        room0 = np.clip(lim[None, :] - out[:, cols], 0.0, None) * (gate[:, cols] >= min_gate)
+        resid_q = (np.asarray(q_observed, dtype=np.float64)
+                   - ((out * qq[None]).sum(1) + (standby * qq[None]).sum(1) + float(noise_q)))
+        Ah = np.concatenate([SS.T.real, SS.T.imag], axis=0)        # (2Hh, C)
+        bh = np.concatenate([Rc.real, Rc.imag], axis=1)            # (n, 2Hh)
+        sh = np.maximum(np.linalg.norm(bh, axis=1), 1e-6)
+        sq = np.maximum(np.abs(resid_q), 1e-6)
+        # 정규방정식을 창별 스칼라 배율로 조립한다 (열이 셋뿐이라 싸다)
+        Hm = Ah.T @ Ah                                             # (C, C)
+        Qm = np.outer(qc, qc)
+        M = (Hm[None] / (sh ** 2)[:, None, None]
+             + (w_q ** 2) * Qm[None] / (sq ** 2)[:, None, None])
+        v = ((bh @ Ah) / (sh ** 2)[:, None]
+             + (w_q ** 2) * (resid_q / sq ** 2)[:, None] * qc[None])
+        L = np.maximum(np.trace(M, axis1=1, axis2=2), 1e-9)[:, None]
+        nlive = np.maximum((room0 > 0).sum(1, keepdims=True), 1)
+        x = np.clip(np.maximum(resid, 0.0)[:, None] / nlive, 0.0, room0)
+        for _ in range(150):
+            x = np.clip(x - (np.einsum("nij,nj->ni", M, x) - v) / L, 0.0, room0)
+            tot = x.sum(1, keepdims=True)
+            ok2 = (tot[:, 0] > 1e-9) & (resid > 0)
+            x[ok2] = np.clip(x[ok2] * (resid[ok2, None] / tot[ok2]), 0.0, room0[ok2])
+        W = x
+    elif mode == "nnls":
+        # ── "이 잔차를 만들려면 각 기기가 몇 W 인가" (12.152) ──────────────
+        # 코사인은 지문마다 **독립**으로 닮음을 재고 그 비로 나눈다. SMPS 3종
+        # 지문이 11.9도 안에 몰려 있어(12.145) 셋이 비슷해지고, 배분이 사실상
+        # 균등해진다. NNLS 는 셋을 **같이** 풀어 겹침을 처리한다.
+        Am = np.concatenate([SS.T.real, SS.T.imag], axis=0)             # (2Hh, C)
+        bm = np.concatenate([Rc.real, Rc.imag], axis=1).T               # (2Hh, n)
+        L = float(np.linalg.norm(Am, 2) ** 2) + 1e-9
+        hi = np.clip(lim[None, :] - out[:, cols], 0.0, None)
+        X = np.zeros((len(out), len(cols)))
+        for _ in range(200):
+            X = np.clip(X - ((Am @ X.T - bm).T @ Am) / L, 0.0, hi)
+        W = X
+    else:
+        W = np.zeros((len(out), len(cols)))
+        for i in range(len(cols)):
+            W[:, i] = np.clip(
+                np.real(Rc @ np.conj(SS[i])) / (np.linalg.norm(SS[i]) * rn + 1e-12),
+                0.0, None)
     W = np.where(gate[:, cols] >= min_gate, W, 0.0)
-    tw = W.sum(1, keepdims=True)
-    ok = tw[:, 0] > 0
+
+    # ── 물리 상한을 지키며 나눈다 (2026-09-02, 12.149.3) ──────────────────
+    # **처음에는 한 번에 나눴고 그것이 상한을 뚫었다.** `apply_postproc` 의
+    # 55W 상한(`CAP_W`)은 "프로젝터는 이보다 못 낸다" 는 물리 제약인데,
+    # 흡수가 그 뒤에 돌면서 창의 32.7% 에서 그것을 넘겼다 (최대 344W).
+    # 상한은 후처리 순서로 지킬 수 없다 — **흡수 자체가 알아야 한다.**
+    #
+    # 그래서 수도관 채우기(water-filling)로 나눈다: 여유(`cap − 현재`)만큼만
+    # 받고, 넘친 몫은 아직 여유가 있는 기기끼리 다시 나눈다. 받을 기기가
+    # 다 차면 남은 잔차는 **그대로 잔차로 둔다** — 없는 곳에 만들지 않는다.
+    if mode == "pq":
+        # `x` 가 이미 제약을 만족하는 **배분량**이다 (합 = 잔차, 천장 안).
+        out[:, cols] = np.clip(out[:, cols] + W, 0.0, None)
+        return out
+
     add = np.zeros_like(W)
-    add[ok] = W[ok] / tw[ok] * resid[ok, None]
+    room = np.clip(lim[None, :] - out[:, cols], 0.0, None)   # (n, C)
+    left = resid.copy()
+    if limit_by_harm:
+        # ── 증거보다 많이 주지 않는다 (12.152) ────────────────────────────
+        # 12.152 이 잰 것: 총전력 잔차 중앙 +5.96W 인데 **고조파가 지지하는
+        # 것은 1.18W** 다 (비 0.01, 0.8~1.25 안에 드는 창이 5.2%). 지금 구조는
+        # 총전력 잔차를 *반드시* 배분하므로 넘치는 몫이 프로젝터로 가고,
+        # 그래서 프로젝터 |오차| 중앙이 6.85 -> 9.58W 로 나빠진다.
+        # 여기서는 **고조파가 지지하는 만큼만** 주고 남는 것은 잔차로 둔다.
+        cap_h = W.sum(1)
+        left = np.sign(left) * np.minimum(np.abs(left), cap_h)
+    live = W > 0
+    for _ in range(len(cols) + 1):
+        w = np.where(live, W, 0.0)
+        tw = w.sum(1)
+        ok = (tw > 0) & (np.abs(left) > 1e-9)
+        if not ok.any():
+            break
+        share = np.zeros_like(w)
+        share[ok] = w[ok] / tw[ok, None] * left[ok, None]
+        # 음의 잔차(과대예측)는 상한과 무관하다. 양수 쪽만 여유로 자른다.
+        take = np.where(share > 0, np.minimum(share, room - add), share)
+        add += take
+        left = left - take.sum(1)
+        live = live & ((room - add) > 1e-9)
+        if not live.any():
+            break
     out[:, cols] = np.clip(out[:, cols] + add, 0.0, None)
     return out
 

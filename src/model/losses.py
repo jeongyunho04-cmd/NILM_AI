@@ -137,6 +137,8 @@ class NILMLoss(torch.nn.Module):
         harm_weight: str = "off",                   # 차수별 신뢰도 가중 (12.135)
         reactive_qp: Optional[torch.Tensor] = None,  # (K,) 기기별 Q/P (12.133)
         noise_q: float = 0.0,                        # 계측계 무효전력 (VAR)
+        power_ref: Optional[torch.Tensor] = None,    # (K,) 참값 전력, 0 = 모름 (12.145)
+        sig_real: Optional[torch.Tensor] = None,     # (K,H,2) **실측 갈래 전용** 지문 (12.151.1)
     ):
         super().__init__()
         self.register_buffer("s_i", s_i.clamp(min=1e-3))
@@ -146,12 +148,24 @@ class NILMLoss(torch.nn.Module):
         h = signatures.shape[1] if signatures is not None else 15
         self.register_buffer("sig", signatures if signatures is not None
                              else torch.zeros(len(s_i), h, 2))
+        # ── 실측 갈래 전용 지문 (12.151.1) ────────────────────────────────
+        # `sig` 를 h1 녹화전압으로 정규화하면 **합성 갈래에는 틀린 값**이 된다 —
+        # 캐시의 `obs_harm` 은 원래 지문으로 합성한 것이라 그 전방모형이 원래
+        # 지문이다. 정규화한 것을 거기 쓰면 h1 에 5% 계통오차를 새로 넣는다.
+        # 그래서 **실측 갈래(`unlabeled`)만** 이 버퍼를 쓴다. 없으면 `sig` 다.
+        self.register_buffer("sig_real", sig_real if sig_real is not None
+                             else torch.zeros(0))
         self.register_buffer("standby_sig", standby_sig if standby_sig is not None
                              else torch.zeros(len(s_i), h, 2))
         self.register_buffer("noise_sig", noise_sig if noise_sig is not None
                              else torch.zeros(h, 2))
         self.register_buffer("harm_scale", harm_scale if harm_scale is not None
                              else torch.ones(h))
+        # ── 전력 사전 (12.145) — 격리 녹화에서 통전 전력이 좁은 기기만 ──────
+        # `power_ref.REFERENCE_W` 의 값이고 **사람 라벨이 아니다** (기기를 한 번
+        # 따로 녹화한 상수). 모르는 기기는 0 이라 항에서 빠진다.
+        self.register_buffer("power_ref", power_ref if power_ref is not None
+                             else torch.zeros(len(s_i)))
         # ── 무효전력 보존 (12.133) ────────────────────────────────────────
         # 저항은 등가저항 `R = V²/P` 가 기기 고유값이라 `resistive_match` 가 조합을
         # 역산할 수 있는데, SMPS 에는 그런 둘째 판별자가 없어서 배분이 `L_harm`
@@ -269,6 +283,11 @@ class NILMLoss(torch.nn.Module):
                 raise ValueError(f"모르는 harm_weight: {harm_weight}")
             mask = mask * (w_h / w_h.max())
         self.register_buffer("harm_mask", mask)
+        # h1 만 1 인 (H,) 마스크. 12.151 의 전압 보정이 h1 에만 걸리는 이유는
+        # 항등식 `Re(I1)/P = 1/V1` 이 h1 에서만 성립해서다. 고차는 `V_h/R` 로
+        # 예측하면 최대 2배 틀리고 위상이 기기마다 달랐다 (12.151 의 자).
+        h1 = torch.zeros_like(mask); h1[0] = 1.0
+        self.register_buffer("h1_only", h1)
         self.harm_odd_only = bool(harm_odd_only)
         self.harm_weight = str(harm_weight)
         self.w = weights or LossWeights()
@@ -360,7 +379,8 @@ class NILMLoss(torch.nn.Module):
                   w_over: float = 0.0, w_hedge: float = 0.0,
                   sample_w: Optional[torch.Tensor] = None,
                   w_real_on: float = 0.0,
-                  w_consq: float = 0.0) -> Dict[str, torch.Tensor]:
+                  w_consq: float = 0.0,
+                  w_pref: float = 0.0) -> Dict[str, torch.Tensor]:
         """**기기별 라벨이 없는 실측 창**용 손실 (4.2절 2단계).
 
         실측 복합 부하에는 기기별 정답이 없다. 라벨이 필요 없는 항만 쓴다.
@@ -422,10 +442,38 @@ class NILMLoss(torch.nn.Module):
             if self.harm_grad_balance != "off":
                 gw = self.harm_gw[None]
                 p_h = p_h * gw + (p_h * (1.0 - gw)).detach()
-            pred = torch.einsum("bk,khc->bhc", p_h, self.sig)
+            sg = self.sig_real if self.sig_real.numel() else self.sig
+            pred = torch.einsum("bk,khc->bhc", p_h, sg)
+            # ── h1 지문의 전압 보정 (12.151) ──────────────────────────────────
+            # 유효전력의 정의에서 **항등식**이 나온다. P = V1·I1·cos(phi1) 이므로
+            #
+            #     Re(I1)/P = 1/V1     <-  기기와 무관하다
+            #
+            # 즉 와트당 h1 전류는 상수가 아니라 **그 창의 전압에 반비례**한다.
+            # `sig` 는 상수로 두므로 부하가 커져 전압이 222 -> 209V 로 떨어지면
+            # 예측 h1 전류를 6% 적게 낸다. 그 부족분을 모델은 **전력을 더 얹어서**
+            # 메우고, 가장 싼 기기(프로젝터)로 간다 (12.87.3 의 기전).
+            #
+            # `harm_offset`(12.148) 과 다르다. 저쪽은 `Re(Z·I1)` 에 대해 **선형**인
+            # 더하기 항이고, 이쪽은 `(dV/V)·pred_h1` 이라 전류에 대해 **2차**다.
+            # 규칙 40 — 기존 항이 못 담는 모양임을 먼저 확인했다.
+            if tgt.get("vscale") is not None:
+                pred = pred * (1.0 + (tgt["vscale"] - 1.0)[:, None, None]
+                               * self.h1_only[None, :, None])
             idle = torch.sigmoid(out["plugged_logit"]) * (1.0 - torch.sigmoid(out["on_logit"]))
             pred = pred + torch.einsum("bk,khc->bhc", idle, self.standby_sig)
             pred = pred + self.noise_sig[None]
+            # ── 교차주파수 어드미턴스 보정 (12.148) ────────────────────────────
+            # `sig` 는 **fixed current injection** 모형이라 기기 전류가 계통 조건과
+            # 무관하다고 본다. 문헌이 그 실패를 오래 전에 적었고(attenuation &
+            # diversity), 표준 처방이 Norton 등가 `I_h = I_source,h − Y_h·V_h` 다 —
+            # 그리고 **여러 차수의 전압**이 한 차수의 전류에 든다 (교차주파수 결합).
+            # 12.148 이 실측에서 적합했고 배분 오차가 파일 홀드아웃에서
+            # 39.4 -> 14.3W 로 준다. 창마다 다른 **상수**라 여기서는 더하기만 한다
+            # (`realdata.harmonic_offset` 이 전압 고조파에서 미리 계산한다).
+            # 짝수차는 0 이다 — 12.72(전류 인공물) + 12.147(전압 짝수차 미결).
+            if tgt.get("harm_offset") is not None:
+                pred = pred + tgt["harm_offset"]
             err = (pred - tgt["obs_harm"]).abs() / self.harm_scale[None, :, None]
             # 불감대 — 순방향 모델 오차만큼은 벌하지 않는다 (`harm_dz` 주석).
             # **2단계에만 건다.** 1단계는 합성이라 순방향이 정확하다.
@@ -481,8 +529,37 @@ class NILMLoss(torch.nn.Module):
         else:
             parts["real_on"] = out["power"].sum() * 0.0
 
+        # ── 전력 사전 `L_pref` (12.145) ───────────────────────────────────
+        # 12.144.2 가 잰 것: 저항 없는 창에서 모델이 프로젝터를 82.8W 로 낸다
+        # (참값 46.9). 그런데 **실측 손실만 보면 최적이 60.0W** 이고, 그마저
+        # 참값보다 13.1W 높다. 최소점 자체가 틀린 자리에 있다.
+        #
+        # 원인은 구조다 — SMPS 3종 지문이 11.9도 안에 몰려 있고(cos 0.979) 그
+        # 안에서 프로젝터가 **와트당 전류가 가장 작다**(8.038 mA/W). 그래서
+        # ① 같은 전류에 가장 많은 와트가 들고 ② 와트당 벌금이 가장 싸다.
+        # 둘 다 프로젝터로 몰아넣는다.
+        #
+        # 규칙 35 — **기울기를 만져서는 최적점이 안 옮겨진다. 값을 만져야 한다.**
+        # `--harm-grad-balance` 가 12.122.8 에서 안 움직인 이유이고, `--sig-insitu`
+        # 가 움직인 이유다 (지문 h1 을 12.5% 키워 눈금을 비틀었다).
+        #
+        # 이 항은 그것을 **비틀지 않고** 한다 — 참값을 아는 기기의 전력에 직접
+        # 건다. 12.144.2 의 최적점 훑기가 `w_pref >= 0.02` 면 최적이 47.5W 로
+        # 옮겨지고 그 위로는 포화한다고 쟀다 (`1/h²` 에서는 0.002 로도 된다).
+        #
+        # **게이트를 지렛대로 못 쓰게 한다.** `P̂ = σ(on)·p_raw` 라 `|P̂ − ref|`
+        # 에 걸면 게이트를 낮춰 벌금을 피할 수 있고 검출이 죽는다. 그래서
+        # `p_raw` 에 걸고 게이트는 **기울기를 끊어** 마스크로만 쓴다.
+        if w_pref > 0 and float(self.power_ref.abs().sum()) > 0:
+            m = (self.power_ref > 0).to(out["power_raw"].dtype)[None]      # (1,K)
+            g = torch.sigmoid(out["on_logit"]).detach()                    # 마스크로만
+            w8 = (out["power_raw"] - self.power_ref[None]).abs() * m * g
+            parts["pref"] = wmean(w8.sum(1, keepdim=True)) / max(float(m.sum()), 1.0)
+        else:
+            parts["pref"] = out["power"].sum() * 0.0
+
         parts["total"] = (w_cons * parts["cons"] + w_harm * parts["harm"]
                           + w_over * parts["over"] + w_hedge * parts["hedge"]
                           + w_real_on * parts["real_on"]
-                          + w_consq * parts["consq"])
+                          + w_consq * parts["consq"] + w_pref * parts["pref"])
         return parts

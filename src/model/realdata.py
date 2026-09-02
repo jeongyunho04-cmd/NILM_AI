@@ -23,6 +23,7 @@
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+import os
 import warnings
 
 import numpy as np
@@ -257,6 +258,12 @@ class RealWindows:
         return (self.fine[i], self.wide[i], self.p_observed[i],
                 self.obs_harm[i], self.p_noise[i])
 
+    def voltage(self, idx: np.ndarray) -> np.ndarray:
+        """관측 단자전압 (n,). h1 지문의 전압 보정이 쓴다 (12.151).
+
+        **`batch()` 의 자리수를 안 바꾼다** — `reactive()` 와 같은 이유다."""
+        return self.v_observed[np.asarray(idx)]
+
     def reactive(self, idx: np.ndarray) -> np.ndarray:
         """관측 무효전력 (n,). **`batch()` 의 자리수를 안 바꾼다** — `human()` 과
         같은 이유다 (`run_gate_check` 등이 5개로 풀고 있다)."""
@@ -322,3 +329,79 @@ def upsample_to_cycles(values: np.ndarray, targets: np.ndarray, n_cycles: int) -
     hi = np.clip(hi, 0, len(targets) - 1)
     take_hi = np.abs(targets[hi] - c) < np.abs(c - targets[lo])
     return values[np.where(take_hi, hi, lo)]
+
+
+# ── 교차주파수 어드미턴스 보정 (12.148) ──────────────────────────────────────
+def harmonic_offset(stems, target_cycle, coef_npz: str, n_harm: int = 15,
+                    z_npz: str = ""):
+    """창별 `L_harm` 보정 (n, H, 2). `run_norton_probe --save-coef` 의 산출물.
+
+    `harmonic_signatures` 는 **fixed current injection** 모형이다 — 기기 전류가
+    계통 조건과 무관하다고 본다. 문헌이 그 실패를 오래 전에 적었고(attenuation &
+    diversity) 표준 처방이 Norton 등가다: `I_h = I_source,h − Y_h·V_h`.
+
+    **전압 위상이 없어도 된다** (12.148.2). `V_h = V_src,h − Z_h·I_h` 에서
+    배경 `V_src` 는 그 집의 상수라 회귀 절편이 흡수하고, **변하는 부분 `Z·I`**
+    의 위상은 이미 기록된 전류 위상(`ihdeg`)이다. `Z` 는 물리 제약
+    `R + j·h·ωL` 로 미지수 둘만 두고 `|V_h|` 와 복소 `I_h` 로 푼다.
+
+        크기만 (12.148)    잔차 8파일 중 6개 악화, 배분 14.3W
+        **복소 Z·I**       잔차 7/8 개선 (−21%), 배분 **6.7W**
+
+    ⚠ 원자료 CSV 에서 `ih*`/`ihdeg*` 를 읽는다 — 전처리가 위상을 안 남긴다.
+      npz 와 CSV 의 행이 어긋나므로 `vrms` 상관으로 시프트를 찾는다.
+    ⚠ 짝수차는 0 이다 (12.72 전류 인공물 + 12.147 전압 짝수차 미결).
+
+    `z_npz` — **현장 임피던스로 갈아끼운다** (`run_fit_impedance --out` 의 산출물).
+    `Z` 는 그 집 배선의 값이라 장소가 바뀌면 3.2배까지 다르다 (12.148.2 전이 시험).
+    기울기는 물리적으로 `ΣY`(기기들의 어드미턴스 합)라 **기기 구성이 같으면
+    전이될 것으로 보지만 확인 안 됐다** — 다른 집 라벨이 없어 못 쟀다.
+
+    ⚠ `Z` 만 갈아도 **상수항은 학습 장소 것이 남는다.** 표준화의 `mu` 가 그 집
+       평균이고, 거기에 배경 `V_src` 효과가 섞여 있다 (보정 효과의 47%). `V_src` 가
+       장소 간 2.1배 다르므로 그 부분은 전이가 안 된다 (12.149.1).
+    """
+    import pandas as pd
+
+    z = np.load(coef_npz, allow_pickle=True)
+    B = np.asarray(z["coef"], np.float64)
+    mu, sd = np.asarray(z["mu"], np.float64), np.asarray(z["sd"], np.float64)
+    odd = np.asarray(z["orders"], int)                 # 출력 차수 (0-based)
+    zo = np.asarray(z["zi_orders"], int)               # 회귀 차수 (1-based)
+    R, X1 = float(z["R"]), float(z["X1"])
+    if z_npz:
+        zz = np.load(z_npz, allow_pickle=True)
+        R, X1 = float(zz["R"]), float(zz["X1"])
+    out = np.zeros((len(target_cycle), n_harm, 2), np.float32)
+    stems = np.asarray(stems)
+    for stem in np.unique(stems):
+        csv_p, npz_p = f"data/{stem}.csv", f"{DEFAULT_DIR}/{stem}.npz"
+        if not (os.path.exists(csv_p) and os.path.exists(npz_p)):
+            continue                                   # 원자료가 없으면 보정 0
+        cols = ["vrms"] + [f"ih{h}" for h in zo] + [f"ihdeg{h}" for h in zo]
+        csv = pd.read_csv(csv_p, usecols=cols)
+        nv = np.asarray(load_nilm_npz(npz_p)["power_features"])[:, 4]
+        best = (-2.0, 0)
+        for sh in range(-400, 401, 10):
+            a = csv.vrms.values[max(0, -sh):]; b = nv[max(0, sh):]
+            n = min(len(a), len(b))
+            if n < 100:
+                continue
+            c = float(np.corrcoef(a[:n], b[:n])[0, 1])
+            if c > best[0]:
+                best = (c, sh)
+        m = stems == stem
+        j = np.clip(target_cycle[m] - best[1], 0, len(csv) - 1)
+        cc = []
+        for h in zo:
+            I = (csv[f"ih{h}"].values[j]
+                 * np.exp(1j * np.deg2rad(csv[f"ihdeg{h}"].values[j])))
+            zi = (R + 1j * h * X1) * I                 # 부하가 만든 전압 왜곡
+            cc += [zi.real, zi.imag]
+        X = np.c_[np.ones(len(j)), np.array(cc).T]
+        y = ((X - mu) / sd) @ B
+        k = len(odd)
+        buf = np.zeros((int(m.sum()), n_harm, 2), np.float32)
+        buf[:, odd, 0] = y[:, :k]; buf[:, odd, 1] = y[:, k:]
+        out[m] = buf
+    return out

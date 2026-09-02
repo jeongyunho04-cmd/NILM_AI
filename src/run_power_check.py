@@ -122,6 +122,30 @@ def main() -> None:
     ap.add_argument("--rm-snap", action="store_true")
     ap.add_argument("--snap", type=float, default=0.0, help="프로젝터 스냅 (12.122.4)")
     ap.add_argument("--snap-no-redist", action="store_true")
+    # ── 게이트 정합 + 잔차 흡수 (12.149) ────────────────────────────────
+    # `run_gate_check` 에는 있고 여기에는 없었다. 배분을 겨냥한 처방을 **같은
+    # 파이프라인에서** 재야 표가 비교된다 (규칙 34).
+    ap.add_argument("--squelch", type=float, default=0.0, metavar="TAU",
+                    help="게이트 TAU 아래 기기의 전력을 0 으로 (12.149). "
+                         "0.5 = 채점·화면과 같은 문턱 = 자유 파라미터 아님")
+    ap.add_argument("--absorb-norton", default="", metavar="NPZ",
+                    help="흡수가 보는 잔차에 계통 임피던스 보정을 넣는다 (12.152). "
+                         "손실은 이미 쓰는데 흡수는 안 썼다. 잔차 101.9 -> 60.5 mA")
+    ap.add_argument("--absorb-mode", default="cos", choices=("cos", "nnls", "pq"),
+                    help="배분 규칙 (12.152). cos=지문별 독립 코사인(현행), "
+                         "nnls=셋을 같이 풀어 와트로 낸다, "
+                         "pq=거기에 **무효전력 방정식**을 더한다 (12.153)")
+    ap.add_argument("--absorb-limit", action="store_true",
+                    help="고조파가 지지하는 만큼만 준다 (12.152). 남는 것은 잔차로 둔다")
+    ap.add_argument("--absorb-wq", type=float, default=3.0, metavar="W",
+                    help="pq 모드에서 무효전력 방정식의 가중 (12.153). "
+                         "고조파 항 대비. 값 둔감성 검사용")
+    ap.add_argument("--absorb-cap-scale", type=float, default=1.0, metavar="X",
+                    help="흡수 천장(`ABSORB_CAP_W`)에 곱할 배수 (12.149.4). "
+                         "값 둔감성 검사용. 1.0 = 격리 사이클 최대 그대로")
+    ap.add_argument("--absorb", type=float, default=0.0, metavar="FRAC",
+                    help="총전력 잔차를 고조파가 닮은 SMPS 로 흡수 (12.104). "
+                         "**스켈치와 같이 쓴다** — 안 그러면 잔차만 커진다")
     ap.add_argument("--stride", type=int, default=30)
     ap.add_argument("--recompute-ref", action="store_true",
                     help="격리 녹화에서 참값 표를 다시 만들고 끝낸다")
@@ -159,6 +183,20 @@ def main() -> None:
             tag += f"+rm{a.resmatch:g}"
         if a.snap > 0:
             tag += f"+snap{a.snap:g}" + ("nr" if a.snap_no_redist else "")
+        if a.squelch > 0:
+            tag += f"+sq{a.squelch:g}"
+        if a.absorb > 0:
+            tag += f"+ab{a.absorb:g}"
+            if a.absorb_cap_scale != 1.0:
+                tag += f"c{a.absorb_cap_scale:g}"
+            if a.absorb_norton:
+                tag += "N"
+            if a.absorb_mode != "cos":
+                tag += a.absorb_mode
+                if a.absorb_mode == "pq" and a.absorb_wq != 3.0:
+                    tag += f"w{a.absorb_wq:g}"
+            if a.absorb_limit:
+                tag += "L"
 
         per_file: Dict[str, dict] = {}
         for stem in stems:
@@ -167,6 +205,11 @@ def main() -> None:
             d = forward_file(model, stem, dev, stride=a.stride)
             P = gated(d, False)
             g = d["gate"]
+            if a.squelch > 0:
+                # **후처리 앞이다.** 상한/스냅/저항정합이 문턱 아래 유령을 실체로
+                # 오인해 재배분하면 안 된다. `run_gate_check` 와 같은 순서다.
+                from src.model.postproc import squelch
+                P = squelch(P, g, a.squelch)
             if a.postproc != "off":
                 from src.model.postproc import apply_postproc
                 P, g = apply_postproc(P, g, apps, gate_sync=a.postproc == "sync")
@@ -179,6 +222,31 @@ def main() -> None:
                 P, g = resistive_match(P, g, apps, d["p_observed"], d["v_rms"],
                                        d["standby"], d["p_noise"], obs_harm=d["obs_harm"],
                                        tol=a.resmatch, snap=a.rm_snap)
+            if a.absorb > 0:
+                from src.model.postproc import ABSORB_CAP_W, absorb_residual
+                from src.run_gate_check import _signatures
+                cw = {k: v * a.absorb_cap_scale for k, v in ABSORB_CAP_W.items()}
+                ho = None
+                if a.absorb_norton:
+                    from src.model.postproc import norton_offset
+                    ho = norton_offset(d["obs_harm"], a.absorb_norton)
+                if a.absorb_mode == "pq":
+                    from src.model.net import noise_reactive, reactive_signatures
+                    from src.synthesis.segment_pool import SegmentPool
+                    _pl = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+                    _qp, _ = reactive_signatures(_pl, apps)
+                    kw_pq = dict(qp=np.asarray(_qp, np.float64),
+                                 noise_q=float(noise_reactive(_pl)),
+                                 q_observed=d["q_observed"], w_q=a.absorb_wq)
+                    del _pl
+                else:
+                    kw_pq = {}
+                P = absorb_residual(P, g, apps, d["standby"], d["p_noise"],
+                                    d["p_observed"], d["obs_harm"], *_signatures(apps),
+                                    frac=a.absorb,
+                                    exclude=["beam_projector"] if a.snap > 0 else None,
+                                    caps=cw, harm_offset=ho, mode=a.absorb_mode,
+                                    limit_by_harm=a.absorb_limit, **kw_pq)
             n_cycles = int(ev[stem]["cycles"])
             Pc = upsample_to_cycles(P, d["targets"], n_cycles)
             Gc = upsample_to_cycles(g > 0.5, d["targets"], n_cycles)

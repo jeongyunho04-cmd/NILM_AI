@@ -15,14 +15,15 @@ CSV 파싱과 링버퍼(순서 뒤바뀜 보정, 세션 이어붙임)는 원본 
 왜 그렇게 해야 하는지가 적혀 있다.
 """
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 import numpy as np
 import torch
 
 from .inputs import build_inputs, target_index, FINE_CYCLES, TARGET_LOOKAHEAD
 from .net import NILMNet, appliance_state_counts
-from .postproc import (SMPS_GROUP, SNAP_TARGET_W, apply_postproc,
-                       resistive_match, snap_power)
+from .postproc import (SMPS_GROUP, SNAP_TARGET_W, absorb_residual, apply_postproc,
+                       resistive_match, snap_power, squelch)
 
 CYCLE_HZ = 60
 WINDOW_CYCLES = 3600                 # 60초
@@ -219,11 +220,12 @@ class NILMPredictor:
 
     def __init__(self, ckpt_path: str, device: Optional[str] = None,
                  postproc: str = "on", resmatch: float = 0.02, rm_snap: bool = True,
-                 snap: float = SNAP_TARGET_W["beam_projector"],
+                 snap: float = 0.0, squelch: float = 0.1, absorb: float = 1.0,
+                 absorb_mode: str = "pq", absorb_wq: float = 1.0,
                  reorder: bool = True):
         """
         Args:
-            ckpt_path: 운영점 체크포인트 (`models/adapt_smpsf.pt`)
+            ckpt_path: 운영점 체크포인트 (`models/adapt_zi_s0.pt`)
             device: "cuda" / "cpu". 생략하면 있는 쪽을 쓴다
             postproc: "off" | "on" | "sync" — 물리 전력 상한 후처리.
                 운영 기본은 "on" 이다 (README 의 성능 표 참조)
@@ -232,8 +234,20 @@ class NILMPredictor:
             resmatch: 저항 부하 정합 허용오차. 관측 전력·전압으로 등가저항을
                 역산해 저항 조합을 맞바꾼다. 운영 기본 0.02, 0 이면 끔
             snap: 프로젝터를 격리 참값 W 로 맞추고 차액을 다른 SMPS 로 넘긴다
-                (12.129). **운영 기본 켜짐** — 프로젝터 중앙|오차| 8.09 -> 0.00W,
-                격리 폭 안 2.5%% -> 99.9%%. 대가는 유령 +0.4W. 0 이면 끔
+                (12.129). **2026-09-02 기본 꺼짐** — 복소 Z·I 모델이 프로젝터를
+                −0.37W 로 닫아서 못 박을 것이 없고, 흡수와 충돌한다 (12.149.2).
+                켜려면 `snap=46.9`.
+            squelch: 게이트가 이 값 아래인 기기의 전력을 0 으로 (12.149).
+                `P = sigma(on) * p_raw` 라 **꺼졌다고 보고한 기기가 와트를 낸다** —
+                에어컨 sigma 0.008 x p_raw 592W = 4.9W. 운영 기본 0.1, 0 이면 끔.
+            absorb: 그렇게 빠진 와트를 고조파가 닮은 SMPS 로 되돌린다 (12.104).
+                **스켈치와 짝이다** — 하나만 켜면 반쪽이다 (흡수만이면 유령이
+                그대로, 스켈치만이면 잔차가 터진다). 운영 기본 1.0, 0 이면 끔.
+            absorb_mode: 흡수의 배분 규칙 (12.153). **운영 기본 "pq"** —
+                총전력 잔차를 나눌 때 **무효전력 방정식**을 같이 푼다. `Q/P` 는
+                SMPS 쌍을 고조파보다 2.2~2.5배 잘 가른다 (12.133).
+                "cos" 는 12.104 의 옛 규칙.
+            absorb_wq: pq 에서 무효 방정식의 가중. 운영 기본 1.0.
             reorder: 수신기 CSV 의 순서 뒤바뀜을 t_s 로 보정한다. 끄지 말 것
         """
         self.dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -259,6 +273,27 @@ class NILMPredictor:
         #: 시드 4개에서 8파일 유령 8.98 -> 5.23W, 폭 6.05 -> 4.15W, 잔차
         #: 10.15 -> 7.30W, F1 과 전이 귀속은 불변. 운영 기본 True.
         self.rm_snap = bool(rm_snap)
+        #: 게이트 정합 스켈치 + 잔차 흡수 (12.149 / 12.149.1). **짝이다.**
+        #: `sig`/`standby_sig`/`noise_sig` 는 학습 자료에서 뽑아 꾸러미에 구워 뒀다
+        #: (`signatures.npz`) — 배포에는 `SegmentPool` 이 없다.
+        self.squelch_tau = float(squelch)
+        self.absorb = float(absorb)
+        self.absorb_mode = str(absorb_mode)
+        self.absorb_wq = float(absorb_wq)
+        self._sigs: Optional[tuple] = None
+        if self.absorb > 0:
+            z = np.load(Path(__file__).with_name("signatures.npz"))
+            if list(z["appliances"]) != list(self.appliances):
+                raise ValueError(
+                    f"signatures.npz 의 기기 목록이 체크포인트와 다릅니다: "
+                    f"{list(z['appliances'])} != {self.appliances}")
+            self._sigs = (z["sig"].astype(np.float64), z["standby_sig"].astype(np.float64),
+                          z["noise_sig"].astype(np.float64))
+            # 무효전력 지문 (12.133 / 12.153). `signatures.npz` 에 같이 구워 뒀다.
+            self._qp = z["qp"].astype(np.float64) if "qp" in z else None
+            self._noise_q = float(z["noise_q"]) if "noise_q" in z else 0.0
+            if self.absorb_mode == "pq" and self._qp is None:
+                raise ValueError("signatures.npz 에 qp 가 없습니다 — 다시 구우십시오")
         self.ring = CycleRing(WINDOW_CYCLES, use_time=reorder)
         self.cols: Optional[Dict[str, int]] = None
         self.target_in_window = target_index(WINDOW_CYCLES)
@@ -312,6 +347,10 @@ class NILMPredictor:
         standby = float(standby_k.sum())
         p_obs = float(win[0, 30, self.target_in_window])
 
+        if self.squelch_tau > 0:
+            # **후처리 앞이다** (12.149). 상한/스냅/저항정합이 문턱 아래 유령을
+            # 실체로 오인해 재배분하면 안 된다. src/run_live.py 와 같은 순서다.
+            power = squelch(power[None, :], gate[None, :], self.squelch_tau)[0]
         if self.postproc != "off":
             power, gate = apply_postproc(power[None, :], gate[None, :], self.appliances,
                                          gate_sync=(self.postproc == "sync"))
@@ -333,6 +372,21 @@ class NILMPredictor:
                 standby_k[None, :], np.zeros(1),
                 obs_harm=obs_h[None], tol=self.resmatch, snap=self.rm_snap)
             power, gate = power[0], gate[0]
+        if self.absorb > 0 and self._sigs is not None:
+            # 스켈치가 지운 와트를 고조파가 닮은 SMPS 로 되돌린다 (12.104 + 12.149).
+            obs_h = np.stack([win[0, 0:15, self.target_in_window],
+                              win[0, 15:30, self.target_in_window]], axis=-1)
+            kw = {}
+            if self.absorb_mode == "pq":
+                # 채널 31 이 원시 무효전력이다 (30=P, 32=V 와 같은 규약).
+                kw = dict(qp=self._qp, noise_q=self._noise_q, w_q=self.absorb_wq,
+                          q_observed=np.array([float(win[0, 31, self.target_in_window])]))
+            power = absorb_residual(
+                power[None, :], gate[None, :], self.appliances, standby_k[None, :],
+                np.zeros(1), np.array([p_obs]), obs_h[None], *self._sigs,
+                frac=self.absorb, mode=self.absorb_mode,
+                # 스냅으로 못 박은 기기는 잔차를 안 받는다 (12.149.2)
+                exclude=["beam_projector"] if self.snap > 0 else None, **kw)[0]
 
         total = float(power.sum()) + standby
         return PredictionResult(

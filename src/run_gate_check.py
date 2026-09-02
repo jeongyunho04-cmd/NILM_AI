@@ -112,7 +112,7 @@ def forward_file(model, stem: str, dev: str, stride: int = 30,
                  zero_ch: Optional[List[int]] = None) -> dict:
     """파일 하나를 촘촘히 훑어 게이트와 원시 전력을 그대로 돌려준다."""
     rw = dense_targets(stem, stride=stride)
-    G, R, SB, PN, POBS, OH = [], [], [], [], [], []
+    G, R, SB, PL, PN, POBS, OH = [], [], [], [], [], [], []
     for i in range(0, len(rw), 512):
         idx = np.arange(i, min(i + 512, len(rw)))
         f, w, pobs, oh, pn = rw.batch(idx)
@@ -126,15 +126,23 @@ def forward_file(model, stem: str, dev: str, stride: int = 30,
         G.append(torch.sigmoid(o["on_logit"]).float().cpu().numpy())
         R.append(o["power_raw"].float().cpu().numpy())
         SB.append(o["standby"].float().cpu().numpy())
+        # 대기 전류 항의 계수. `NILMLoss` 가 L_harm 을 만들 때 쓰는 것과 같은 식이라
+        # 채점 쪽에서 그 손실을 재현할 수 있다 (12.139 의 유령 인과 분해).
+        PL.append((torch.sigmoid(o["plugged_logit"])
+                   * (1.0 - torch.sigmoid(o["on_logit"]))).float().cpu().numpy())
         PN.append(pn); POBS.append(pobs); OH.append(oh)
     return {"gate": np.concatenate(G), "p_raw": np.concatenate(R),
-            "standby": np.concatenate(SB), "p_noise": np.concatenate(PN),
+            "standby": np.concatenate(SB), "idle": np.concatenate(PL),
+            "p_noise": np.concatenate(PN),
             "p_observed": np.concatenate(POBS), "targets": rw.target_cycle,
             # 단자 전압 (n,). 저항 정합(12.112)이 P = V^2/R 을 푸는 데 쓴다.
             "v_rms": rw.v_observed.astype(np.float64),
             # 관측 고조파 (n,15,2) Re/Im. 12.40 의 전이 스냅이 |I3| 를 쓴다 —
             # 저항 부하는 3차를 거의 안 흘려서 SMPS 계단만 남는다 (12.37.2).
-            "obs_harm": np.concatenate(OH)}
+            "obs_harm": np.concatenate(OH),
+            # 관측 무효전력 (n,). 12.133 이 **두 번째 판별자**로 확정했다 —
+            # SMPS 쌍 d′ 2.31~4.64 로 고조파(0.91~1.85)보다 2.2~2.5배 잘 가른다.
+            "q_observed": rw.reactive(np.arange(len(rw))).astype(np.float64)}
 
 
 def merge_smps(d: dict, d_smps: dict, apps: List[str]) -> dict:
@@ -303,6 +311,26 @@ def main() -> int:
                          "12.122.4 의 반증이 재배분 탓인지 스냅 탓인지 가른다")
     ap.add_argument("--snap-min-gate", type=float, default=0.5, metavar="G",
                     help="이 게이트 아래면 손대지 않는다. 규칙 18 - 개수는 안 바꾼다")
+    ap.add_argument("--squelch", type=float, default=0.0, metavar="TAU",
+                    help="게이트 TAU 아래 기기의 전력을 0 으로 (12.149). 유령8 의 82%%가 "
+                         "문턱 아래 누설이다. 0.5 는 채점·화면과 같은 문턱이라 "
+                         "**자유 파라미터가 아니다** — 소프트 열이 하드 열과 같아진다. "
+                         "값 둔감성은 0.02~0.5 쓸기로 본다")
+    ap.add_argument("--absorb-norton", default="", metavar="NPZ",
+                    help="흡수가 보는 잔차에 계통 임피던스 보정을 넣는다 (12.152). "
+                         "손실은 이미 쓰는데 흡수는 안 썼다. 잔차 101.9 -> 60.5 mA")
+    ap.add_argument("--absorb-mode", default="cos", choices=("cos", "nnls", "pq"),
+                    help="배분 규칙 (12.152). cos=지문별 독립 코사인(현행), "
+                         "nnls=셋을 같이 풀어 와트로 낸다, "
+                         "pq=거기에 **무효전력 방정식**을 더한다 (12.153)")
+    ap.add_argument("--absorb-limit", action="store_true",
+                    help="고조파가 지지하는 만큼만 준다 (12.152). 남는 것은 잔차로 둔다")
+    ap.add_argument("--absorb-wq", type=float, default=3.0, metavar="W",
+                    help="pq 모드에서 무효전력 방정식의 가중 (12.153). "
+                         "고조파 항 대비. 값 둔감성 검사용")
+    ap.add_argument("--absorb-cap-scale", type=float, default=1.0, metavar="X",
+                    help="흡수 천장(`ABSORB_CAP_W`)에 곱할 배수 (12.149.4). "
+                         "값 둔감성 검사용. 1.0 = 격리 사이클 최대 그대로")
     ap.add_argument("--absorb", type=float, default=0.0, metavar="FRAC",
                     help="총전력 잔차를 고조파가 닮은 SMPS 에 흡수시킨다 (12.104절). "
                          "0.5 면 잔차 8.88 -> 7.35W. 0 이면 끔")
@@ -336,8 +364,20 @@ def main() -> int:
             tag = f"{tag}+pp{'sync' if a.postproc == 'sync' else ''}"
         if a.resmatch > 0:
             tag = f"{tag}+rm{a.resmatch:g}"
+        if a.squelch > 0:
+            tag = f"{tag}+sq{a.squelch:g}"
         if a.absorb > 0:
             tag = f"{tag}+ab{a.absorb:g}"
+            if a.absorb_cap_scale != 1.0:
+                tag = f"{tag}c{a.absorb_cap_scale:g}"
+            if a.absorb_norton:
+                tag = f"{tag}N"
+            if a.absorb_mode != "cos":
+                tag = f"{tag}{a.absorb_mode}"
+                if a.absorb_mode == "pq" and a.absorb_wq != 3.0:
+                    tag = f"{tag}w{a.absorb_wq:g}"
+            if a.absorb_limit:
+                tag = f"{tag}L"
         if a.snap > 0:
             tag = (f"{tag}+snap{a.snap:g}"
                    + ("1way" if a.snap_oneway else "")
@@ -359,6 +399,12 @@ def main() -> int:
                                                zero_ch=zch), apps)
             d_soft, d_hard = d, d
             P_soft, P_hard = gated(d, False), gated(d, True)
+            if a.squelch > 0:
+                # **후처리 앞이다.** 상한/스냅/저항정합이 문턱 아래 유령을 실체로
+                # 오인해 재배분하면 안 된다. 하드 열은 τ<=0.5 에서 항등이다.
+                from src.model.postproc import squelch
+                P_soft = squelch(P_soft, d["gate"], a.squelch)
+                P_hard = squelch(P_hard, d["gate"], a.squelch)
             if a.postproc != "off":
                 from src.model.postproc import apply_postproc
                 sync = a.postproc == "sync"
@@ -395,12 +441,35 @@ def main() -> int:
             if a.absorb > 0:
                 from src.model.postproc import absorb_residual
                 sigs = _signatures(apps)
+                # 스냅으로 못 박은 기기는 잔차를 안 받는다 (12.149.2).
+                exc = ["beam_projector"] if a.snap > 0 else None
+                from src.model.postproc import ABSORB_CAP_W
+                cw = {k: v * a.absorb_cap_scale for k, v in ABSORB_CAP_W.items()}
+                ho = None
+                if a.absorb_norton:
+                    from src.model.postproc import norton_offset
+                    ho = norton_offset(d["obs_harm"], a.absorb_norton)
+                if a.absorb_mode == "pq":
+                    from src.model.net import noise_reactive, reactive_signatures
+                    from src.synthesis.segment_pool import SegmentPool
+                    _pl = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+                    _qp, _ = reactive_signatures(_pl, apps)
+                    kw_pq = dict(qp=np.asarray(_qp, np.float64),
+                                 noise_q=float(noise_reactive(_pl)),
+                                 q_observed=d["q_observed"], w_q=a.absorb_wq)
+                    del _pl
+                else:
+                    kw_pq = {}
                 P_soft = absorb_residual(P_soft, d_soft["gate"], apps, d["standby"],
                                          d["p_noise"], d["p_observed"], d["obs_harm"],
-                                         *sigs, frac=a.absorb)
+                                         *sigs, frac=a.absorb, exclude=exc, caps=cw,
+                                         harm_offset=ho, mode=a.absorb_mode,
+                                         limit_by_harm=a.absorb_limit, **kw_pq)
                 P_hard = absorb_residual(P_hard, d_hard["gate"], apps, d["standby"],
                                          d["p_noise"], d["p_observed"], d["obs_harm"],
-                                         *sigs, frac=a.absorb)
+                                         *sigs, frac=a.absorb, exclude=exc, caps=cw,
+                                         harm_offset=ho, mode=a.absorb_mode,
+                                         limit_by_harm=a.absorb_limit, **kw_pq)
             # ── 기기별 전력 오차 (12.122.6, 2026-09-01) ──────────────────
             # **참값을 아는 넷에 대해서만** 배분 오차를 잰다. 이게 없던 동안
             # 배분을 겨냥한 처방이 부작용(유령·잔차)으로만 평가받았다 —

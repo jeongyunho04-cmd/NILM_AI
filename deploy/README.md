@@ -9,14 +9,16 @@ deploy/
 ├─ run_predict.py            CLI (수신기 CSV -> 기기별 전력)
 ├─ requirements.txt          numpy / torch (그게 전부다)
 ├─ models/
-│   └─ adapt_ovh.pt          운영점 체크포인트 (2.4MB)
+│   ├─ adapt_zi_s0.pt        **운영점 체크포인트** (2.4MB, 복소 Z·I. 2026-09-02)
+│   └─ adapt_ovh.pt          옛 운영점 (2026-08-27~09-01)
 └─ nilm_runtime/
     ├─ __init__.py           `from nilm_runtime import NILMPredictor`
     ├─ predictor.py          ★ UI 가 부르는 API — 링버퍼 + 모델 + 후처리
     ├─ receiver.py           수신기 (보드 -> CSV). 원본 `nilm_receiver.py`
     ├─ inputs.py             33채널 -> 모델 입력(세밀 50ch + 광역 12ch) 변환
     ├─ net.py                모델 구조 (2갈래 CNN, 0.61M 파라미터)
-    ├─ postproc.py           물리 전력 상한 후처리
+    ├─ postproc.py           후처리 (상한 / 저항정합 / 스켈치 / 잔차흡수)
+    ├─ signatures.npz        와트당 고조파 지문 (잔차 흡수가 쓴다, 3KB)
     ├─ file_registry.py      기기 명세 (정격·부하 분류)
     └─ state_definitions.py  기기별 상태 정의
 ```
@@ -94,7 +96,7 @@ from nilm_runtime import NILMPredictor, APPLIANCE_KO
 results = queue.Queue()
 
 def worker(csv_path: str):
-    pred = NILMPredictor("models/adapt_ovh.pt")      # postproc="on" 이 기본
+    pred = NILMPredictor("models/adapt_zi_s0.pt")      # postproc="on" 이 기본
     with open(csv_path, newline="", encoding="utf-8") as f:
         r = csv.reader(f)
         pred.set_header(next(r))
@@ -141,16 +143,18 @@ python run_predict.py --csv data/live.csv --jsonl data/pred.jsonl --quiet
 
 ## 4. API
 
-### `NILMPredictor(ckpt_path, device=None, postproc="on", resmatch=0.02, snap=46.9, reorder=True)`
+### `NILMPredictor(ckpt_path, device=None, postproc="on", resmatch=0.02, snap=0.0, squelch=0.1, absorb=1.0, reorder=True)`
 
 | 인자 | 뜻 |
 |---|---|
-| `ckpt_path` | `models/adapt_ovh.pt` |
+| `ckpt_path` | `models/adapt_zi_s0.pt` |
 | `device` | `"cuda"` / `"cpu"`. 생략하면 있는 쪽 |
 | `postproc` | `"off"` / `"on"` / `"sync"` — 아래 6절 |
 | `resmatch` | 저항 부하 정합 허용오차. 운영 기본 0.02, 0 이면 끔 — 아래 6절 |
 | `rm_snap` | 저항 정합이 조합을 확인한 창에서 전력도 `V²/R` 로 맞춘다. 운영 기본 `True` (12.117) |
-| `snap` | 프로젝터를 격리 참값 W 로 맞추고 차액을 다른 SMPS 로 넘긴다. 운영 기본 `46.9` (12.129), `0` 이면 끔 |
+| `snap` | 프로젝터를 격리 참값 W 로 맞추고 차액을 다른 SMPS 로 넘긴다. **2026-09-02 기본 `0`(끔)** — 복소 Z·I 가 프로젝터를 −0.37W 로 닫아서 못 박을 것이 없고 `absorb` 와 충돌한다 (12.149.2) |
+| `squelch` | 게이트가 이 값 아래인 기기의 전력을 `0` 으로 (12.149). `P = σ(on)·p_raw` 라 **꺼졌다고 보고한 기기가 와트를 낸다** — 에어컨 σ 0.008 × 592W = 4.9W. 운영 기본 `0.1` |
+| `absorb` | 그렇게 빠진 와트를 고조파가 닮은 SMPS 로 되돌린다 (12.104). **`squelch` 와 짝이다** — 하나만 켜면 반쪽이다. 운영 기본 `1.0` |
 | `reorder` | 순서 뒤바뀜 보정. **끄지 말 것** (2~3% 행이 역전돼 온다) |
 
 | 메서드 | 하는 일 |

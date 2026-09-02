@@ -2,7 +2,7 @@
 
     from nilm_runtime import NILMPredictor
 
-    pred = NILMPredictor("models/adapt_ovh.pt")
+    pred = NILMPredictor("models/adapt_zi_s0.pt")
     pred.push_row(csv_row, header)      # 수신기 CSV 한 행 (사이클 1개)
     out = pred.predict()                # 창이 차면 결과, 아니면 None
 

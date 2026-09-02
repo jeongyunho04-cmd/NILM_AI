@@ -317,7 +317,10 @@ def main() -> int:
     # **실행 간 폭은 안 쟀다** (12.102.5 의 유보). 사용자 결정으로 교체했다.
     # 되돌리려면 `--ckpt results/adapt_ze1.pt --ckpt-smps results/cnn_ze1.pt
     # --postproc off` 로 준다.
-    ap.add_argument("--ckpt", default="results/adapt_ovh.pt")
+    # 2026-09-02: `adapt_ovh` -> `adapt_zi_s0` (12.148.3 채택, 12.149.1 로 확정).
+    # 복소 Z·I 계통 임피던스 보정으로 적응한 2단계 모델이다. 사람 라벨 5파일에서
+    # 검출 F1 0.873 -> 0.892, 유령 2.13 -> 0.27W, 잔차 3.70 -> 0.90W.
+    ap.add_argument("--ckpt", default="results/adapt_zi_s0.pt")
     ap.add_argument("--ckpt-smps", default="", metavar="PT",
                     help="SMPS 3종(프로젝터/충전기/미니PC)만 이 체크포인트로 예측한다. "
                          "**기본은 빈 문자열 = 단독 동작**이다 (12.102.5). 하이브리드로 "
@@ -328,20 +331,42 @@ def main() -> int:
     ap.add_argument("--resmatch", type=float, default=0.02, metavar="TOL",
                     help="저항 부하 정합 후처리 (12.112절). 관측 전력·전압으로 등가저항을 "
                          "역산해 저항 조합을 **맞바꾼다**(개수는 안 바꾼다). 운영 기본 0.02, 0=끔")
-    ap.add_argument("--snap", type=float, default=SNAP_TARGET_W["beam_projector"],
-                    metavar="W",
+    # 2026-09-02: **기본 켜짐 -> 꺼짐** (12.149.2, 사용자 판단).
+    # 스냅은 프로젝터가 +30W 과대예측이던 시절의 목발이다 (12.129). 복소 Z·I 가
+    # 그것을 −0.37W 로 닫았으므로 못 박을 것이 없다. 그리고 흡수와 충돌한다 —
+    # 흡수가 스냅 뒤에 돌면 프로젝터를 다시 +3.70W 로 밀어 올리고, 흡수의
+    # 수신자에서 빼면(`exclude`) 잔차가 갈 곳이 줄어 겨냥 잔차가 0.90 -> 2.84W.
+    #   스냅 켬 + 제외   프로젝터 −0.35 / 중앙|오차| 0.00   잔차겨냥 2.84
+    #   **스냅 끔**      프로젝터 −0.37 / 중앙|오차| 8.63   잔차겨냥 0.90
+    # 대가는 창별 프로젝터 산포다 (중앙 |오차| 8.63W). 평균은 맞는다.
+    ap.add_argument("--snap", type=float, default=0.0, metavar="W",
                     help="프로젝터를 격리 참값으로 스냅하고 차액을 다른 SMPS 로 넘긴다 "
-                         "(12.129). **운영 기본 켜짐** — 프로젝터 중앙|오차| "
-                         "8.09 -> 0.00W, 격리 폭 안에 드는 비율 2.5%% -> 99.9%%. "
-                         "대가는 유령 +0.4W, 잔차 +0.04W. 0 이면 끔")
+                         "(12.129). **2026-09-02 기본 꺼짐** — 복소 Z·I 가 프로젝터를 "
+                         f"닫아서 필요 없어졌고 흡수와 충돌한다 (12.149.2). "
+                         f"켜려면 --snap {SNAP_TARGET_W['beam_projector']:g}")
     ap.add_argument("--snap-no-redist", action="store_true",
                     help="스냅이 깎기만 하고 남에게 안 준다. 총합 보존이 깨지는 대신 "
                          "유령이 안 는다 (12.129 에서 잔차 4.24 -> 7.89W 로 터진다)")
-    ap.add_argument("--absorb", type=float, default=0.0, metavar="FRAC",
+    # ── 게이트 정합 + 잔차 흡수 (2026-09-02, 12.149) ────────────────────
+    # **둘은 짝이다.** 스켈치가 유령을 지우고 흡수가 그 와트를 되돌린다.
+    # 하나만 켜면 반쪽이다 — 흡수만: 유령 6.78 그대로 / 스켈치만: 잔차 8.80W.
+    ap.add_argument("--squelch", type=float, default=0.1, metavar="TAU",
+                    help="게이트가 TAU 아래인 기기의 전력을 0 으로 (12.149절). "
+                         "`P̂=σ·p_raw` 라 σ=0.008 x 592W = 4.9W 짜리 유령 에어컨이 "
+                         "생긴다. 유령8 6.78 -> 1.12W. 0.05~0.2 가 평지고 0.5 는 "
+                         "대조 파일 잔차를 6W 키운다. 0 이면 끔")
+    ap.add_argument("--absorb-mode", default="pq", choices=("cos", "nnls", "pq"),
+                    help="흡수의 배분 규칙 (12.153). **2026-09-02 기본 pq** — 총전력 "
+                         "잔차 6W 를 무효전력 방정식까지 써서 나눈다. cos 는 12.104 의 옛것")
+    ap.add_argument("--absorb-wq", type=float, default=1.0, metavar="W",
+                    help="pq 에서 무효 방정식의 가중 (12.153). 1~9 가 단조 절충이고 "
+                         "1.0 이 잔차 최소 (겨냥 2.12 -> 1.62W)")
+    ap.add_argument("--absorb", type=float, default=1.0, metavar="FRAC",
                     help="총전력 잔차를 고조파가 닮은 SMPS 로 흡수한다 (12.104절). "
-                         "0.5 면 실측 8파일에서 잔차 8.88 -> 7.35W. **기본은 꺼 둔다** — "
-                         "미등록 부하의 잔차까지 SMPS 로 갈 수 있고, 그 위험은 우리 "
-                         "실측 파일로는 못 잰다")
+                         "**2026-09-02 기본값 0 -> 1.0** (12.149) — 스켈치가 지운 "
+                         "와트를 되돌린다. 겨냥 5파일 잔차 3.88 -> 0.90W. "
+                         "⚠ 미등록 부하의 잔차까지 SMPS 로 갈 수 있고 그 위험은 "
+                         "우리 실측 파일로는 못 잰다. 0 이면 끔")
     ap.add_argument("--postproc", default="on", choices=("off", "on", "sync"),
                     help="물리 전력 상한 후처리 (12.102절). 프로젝터가 상한(55W)을 넘는 "
                          "만큼을 다른 SMPS 로 넘긴다. sync 는 게이트도 맞춘다. "
@@ -393,8 +418,17 @@ def main() -> int:
         _pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
         sigs = (harmonic_signatures(_pool, apps), standby_signatures(_pool, apps),
                 noise_signature(_pool))
+        qp_v, nq_v = None, 0.0
+        if a.absorb_mode == "pq":
+            from src.model.net import noise_reactive, reactive_signatures
+            qp_v = np.asarray(reactive_signatures(_pool, apps)[0], np.float64)
+            nq_v = float(noise_reactive(_pool))
         del _pool
-        print(f"  ** 잔차 흡수 {a.absorb:g} (12.104절) **")
+        print(f"  ** 잔차 흡수 {a.absorb:g} 모드 {a.absorb_mode}"
+              f"{f' w_q={a.absorb_wq:g}' if a.absorb_mode == 'pq' else ''}"
+              f" (12.104 + 12.153) **")
+    if a.squelch > 0:
+        print(f"  ** 게이트 정합 스켈치 {a.squelch:g} (12.149절) **")
 
     n_seen = n_infer = 0
     t_s = 0.0
@@ -464,6 +498,12 @@ def main() -> int:
             standby_k = o["standby"][0].float().cpu().numpy()
             standby = float(standby_k.sum())
             p_obs = float(win[0, 30, ti])
+            if a.squelch > 0:
+                # **후처리 앞이다** (12.149). 상한/스냅/저항정합이 문턱 아래
+                # 유령을 실체로 오인해 재배분하면 안 된다. 오프라인 채점
+                # (`run_gate_check --squelch`) 과 같은 순서다.
+                from src.model.postproc import squelch
+                power = squelch(power[None, :], gate[None, :], a.squelch)[0]
             if a.postproc != "off":
                 # 물리 전력 상한 후처리 (12.102). 프로젝터가 상한을 넘는 만큼을
                 # 다른 SMPS 로 넘긴다. **오프라인 채점과 같은 함수**를 쓴다.
@@ -501,7 +541,13 @@ def main() -> int:
                 power = absorb_residual(
                     power[None, :], gate[None, :], list(apps), standby_k[None, :],
                     np.array([NOISE_FLOOR_EXTERNAL_W]), np.array([p_obs]),
-                    obs_h[None], sigs[0], sigs[1], sigs[2], frac=a.absorb)[0]
+                    obs_h[None], sigs[0], sigs[1], sigs[2], frac=a.absorb,
+                    # 스냅으로 못 박은 기기는 잔차를 안 받는다 (12.149.2)
+                    exclude=["beam_projector"] if a.snap > 0 else None,
+                    mode=a.absorb_mode, qp=qp_v, noise_q=nq_v, w_q=a.absorb_wq,
+                    # 채널 31 이 원시 무효전력이다 (`inputs.build_fine` 이 asinh 를
+                    # 걸기 **전** 값. 30=P, 32=V 와 같은 규약).
+                    q_observed=np.array([float(win[0, 31, ti])]))[0]
             n_infer += 1
 
             rec = {"t_s": round(t_s, 3), "type": "pred", "p_observed": round(p_obs, 2),

@@ -70,7 +70,9 @@ def _spans(mask: np.ndarray, t: np.ndarray):
 
 def plot_file(model, apps, stem: str, ev: dict, dev: str, out_dir: Path, tag: str,
               stride: int = 15, model_smps=None, pp: str = "off",
-              resmatch: float = 0.0, rm_snap: bool = False, snap: float = 0.0) -> Path:
+              resmatch: float = 0.0, rm_snap: bool = False, snap: float = 0.0,
+              squelch_tau: float = 0.0, absorb: float = 0.0,
+              absorb_mode: str = "cos", absorb_wq: float = 1.0) -> Path:
     """`model_smps` 를 주면 SMPS 3종만 그 체크포인트에서 가져온다.
 
     `run_live --ckpt-smps` 와 같은 구성이다 (12.31.5). 운영에서 실제로 도는 것이
@@ -88,6 +90,10 @@ def plot_file(model, apps, stem: str, ev: dict, dev: str, out_dir: Path, tag: st
     t = d["targets"] / 60.0
     P = d["gate"] * d["p_raw"]
     g = d["gate"]
+    if squelch_tau > 0:
+        # 게이트 정합 (12.149). **후처리 앞** — run_live / run_gate_check 와 같은 순서.
+        from src.model.postproc import squelch
+        P = squelch(P, g, squelch_tau)
     if pp != "off":
         from src.model.postproc import apply_postproc
         P, g = apply_postproc(P, g, apps, gate_sync=pp == "sync")
@@ -101,6 +107,23 @@ def plot_file(model, apps, stem: str, ev: dict, dev: str, out_dir: Path, tag: st
         P, g = resistive_match(P, g, apps, d["p_observed"], d["v_rms"],
                                d["standby"], d["p_noise"], obs_harm=d["obs_harm"],
                                tol=resmatch, snap=rm_snap)
+    if absorb > 0:
+        # 스켈치가 지운 와트를 고조파가 닮은 SMPS 로 되돌린다 (12.104 + 12.149).
+        from src.model.postproc import absorb_residual
+        from src.run_gate_check import _signatures
+        kw = {}
+        if absorb_mode == "pq":
+            from src.model.net import noise_reactive, reactive_signatures
+            from src.synthesis.segment_pool import SegmentPool
+            _pl = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+            kw = dict(qp=np.asarray(reactive_signatures(_pl, apps)[0], np.float64),
+                      noise_q=float(noise_reactive(_pl)),
+                      q_observed=d["q_observed"], w_q=absorb_wq)
+            del _pl
+        P = absorb_residual(P, g, apps, d["standby"], d["p_noise"],
+                            d["p_observed"], d["obs_harm"], *_signatures(list(apps)),
+                            frac=absorb, mode=absorb_mode,
+                            exclude=["beam_projector"] if snap > 0 else None, **kw)
     on = g > 0.5
     n_cycles = int(ev[stem]["cycles"])
     present = set(ev[stem].get("appliances_present", []))
@@ -170,19 +193,28 @@ def plot_file(model, apps, stem: str, ev: dict, dev: str, out_dir: Path, tag: st
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="실측 예측 타임라인 플롯")
-    ap.add_argument("--ckpt", default="results/adapt_ph1.pt")
-    ap.add_argument("--ckpt-smps", default="results/cnn_ov1.pt", metavar="PT",
+    ap.add_argument("--ckpt", default="results/adapt_zi_s0.pt")
+    ap.add_argument("--ckpt-smps", default="", metavar="PT",
                     help="SMPS 3종만 이 체크포인트로 예측한다 (run_live --ckpt-smps 와 동일). "
                          "빈 문자열을 주면 --ckpt 단독")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--stride", type=int, default=15)
     ap.add_argument("--out", default="results/plots")
     # 운영점 후처리 — `run_gate_check` 와 같은 이름·같은 순서 (12.129)
-    ap.add_argument("--postproc", default="off", choices=("off", "on", "sync"))
-    ap.add_argument("--resmatch", type=float, default=0.0)
+    ap.add_argument("--postproc", default="on", choices=("off", "on", "sync"))
+    ap.add_argument("--resmatch", type=float, default=0.02)
     ap.add_argument("--rm-snap", action="store_true")
     ap.add_argument("--snap", type=float, default=0.0, metavar="W",
                     help="프로젝터 스냅 (12.129 가 맞바꿈을 되돌린다고 쟀다). 46.9 가 참값")
+    # ── 새 운영점 (2026-09-02, 12.149) ─────────────────────────────────
+    ap.add_argument("--squelch", type=float, default=0.1, metavar="TAU",
+                    help="게이트 정합 스켈치. 운영 기본 0.1, 0 이면 끔 (12.149)")
+    ap.add_argument("--absorb", type=float, default=1.0, metavar="FRAC",
+                    help="잔차 흡수. **스켈치와 짝이다.** 운영 기본 1.0, 0 이면 끔")
+    ap.add_argument("--absorb-mode", default="pq", choices=("cos", "nnls", "pq"),
+                    help="흡수 배분 규칙. 운영 기본 pq (12.153)")
+    ap.add_argument("--absorb-wq", type=float, default=1.0, metavar="W",
+                    help="pq 의 무효 방정식 가중. 운영 기본 1.0")
     ap.add_argument("--stems", nargs="+", default=None,
                     help="기본: 봉인 안 된 전부")
     a = ap.parse_args()
@@ -205,7 +237,9 @@ def main() -> int:
             continue
         p = plot_file(model, apps, stem, ev, dev, Path(a.out), tag,
                       stride=a.stride, model_smps=model_s, pp=a.postproc,
-                      resmatch=a.resmatch, rm_snap=a.rm_snap, snap=a.snap)
+                      resmatch=a.resmatch, rm_snap=a.rm_snap, snap=a.snap,
+                      squelch_tau=a.squelch, absorb=a.absorb,
+                      absorb_mode=a.absorb_mode, absorb_wq=a.absorb_wq)
         print(f"  저장 {p}")
     return 0
 

@@ -39,6 +39,7 @@ import numpy as np
 import torch
 
 from src.evaluation import load_holdout, resistive_confusion, score_appliances, summarize, total_power_residual
+from src.evaluation.power_ref import REFERENCE_W
 from src.evaluation.real_events import load_events, score_absent, score_events, score_on_off
 from src.evaluation.sealing import is_sealed
 from src.model.losses import LossWeights, NILMLoss, build_state_scales
@@ -80,7 +81,7 @@ def real_sample_weights(p_observed, mode: str, boost: float = 4.0):
     return w / w.mean().clamp(min=1e-6)
 
 
-def real_targets(b, dev, human=None, qobs=None):
+def real_targets(b, dev, human=None, qobs=None, hoff=None, vsc=None):
     """`human` 은 `RealWindows.human(idx)` 의 (on, mask). 없으면 기존과 같다.
 
     `qobs` 는 `RealWindows.reactive(idx)` — 무효전력 보존 항이 쓴다 (12.133).
@@ -89,6 +90,10 @@ def real_targets(b, dev, human=None, qobs=None):
     tg = {"p_observed": pobs, "obs_harm": oh, "p_noise": pn}
     if qobs is not None:
         tg["q_observed"] = torch.from_numpy(np.ascontiguousarray(qobs)).to(dev)
+    if hoff is not None:      # 교차주파수 어드미턴스 보정 (12.148)
+        tg["harm_offset"] = torch.from_numpy(np.ascontiguousarray(hoff)).to(dev)
+    if vsc is not None:       # h1 지문의 전압 보정 (12.151)
+        tg["vscale"] = torch.from_numpy(np.ascontiguousarray(vsc)).to(dev)
     if human is not None:
         ho, hm = [torch.from_numpy(np.ascontiguousarray(x)).to(dev) for x in human]
         tg["human_on"], tg["human_mask"] = ho, hm
@@ -245,11 +250,56 @@ def main() -> int:
                          "잔차의 70%%를 줄이라고 밀어서 배분이 밀린다** — 그것을 "
                          "끊는다. 1.0 이 측정된 중앙값. 0 이면 끔(이전과 동일). "
                          "⚠ 너무 키우면 L_harm 이 죽어 '합만 맞추는 해' 로 간다 (12.12.2)")
+    ap.add_argument("--w-pref", type=float, default=0.0, metavar="W",
+                    help="**전력 사전** (12.145). 격리 녹화에서 통전 전력이 좁은 "
+                         "기기(`power_ref.REFERENCE_W`)의 전력을 그 참값에 묶는다. "
+                         "12.144.2 가 잰 것 — 저항 없는 창에서 프로젝터가 82.8W 인데 "
+                         "참값은 46.9W 이고 **실측 손실의 최적점마저 60.0W** 다. "
+                         "SMPS 3종 지문이 11.9도 안에 몰려 있어(cos 0.979) 고조파로는 "
+                         "못 가르고, 그 안에서 프로젝터가 와트당 전류가 가장 작아 "
+                         "**가장 싼 배출구**가 된다. 규칙 35 대로 기울기가 아니라 "
+                         "값을 만진다. 최적점 훑기가 0.02 면 47.5W 로 옮겨지고 그 위로 "
+                         "포화한다고 쟀다. **사람 라벨이 아니다** — 기기별 격리 녹화 "
+                         "상수다 (인수인계의 `--snap` 과 같은 등급). 0 이면 끔")
+    ap.add_argument("--harm-offset", default="", metavar="NPZ",
+                    help="**교차주파수 어드미턴스 보정** (12.148, `run_norton_probe --save-coef` 의 "
+                         "산출물). `harmonic_signatures` 는 fixed current injection "
+                         "모형이라 기기 전류가 계통 조건과 무관하다고 보는데, 문헌이 "
+                         "그 실패를 오래 전에 적었다 (attenuation & diversity). 표준 "
+                         "처방은 Norton 등가 `I_h = I_source,h − Y_h·V_h` 이고 **여러 "
+                         "차수의 전압**이 한 차수의 전류에 든다. 12.148 이 실측에서 "
+                         "적합해 배분 오차가 파일 홀드아웃에서 39.4 -> 14.3W. "
+                         "⚠ 원자료 CSV 의 `vh1~vh15` 를 읽는다 — 전처리가 그것을 버린다")
+    ap.add_argument("--harm-offset-z", default="", metavar="NPZ",
+                    help="`--harm-offset` 의 계수는 그대로 두고 **계통 임피던스만** "
+                         "현장 값으로 갈아끼운다 (`run_fit_impedance --out` 의 산출물). "
+                         "Z 는 그 집 배선이라 장소 간 3.2배까지 다르고 **라벨 없이** "
+                         "11초에 다시 잰다. 기울기는 `ΣY`(기기 속성)라 기기 구성이 "
+                         "같으면 전이될 것으로 보지만 **확인 안 됐다**. "
+                         "⚠ 상수항은 학습 장소 것이 남는다 (배경 V_src 효과)")
+    ap.add_argument("--pref-apps", default="beam_projector", metavar="LIST",
+                    help="전력 사전을 걸 기기 (쉼표). **기본이 프로젝터 하나인 이유** — "
+                         "`REFERENCE_W` 에는 포트·핫플·오븐도 있는데 저항을 참값에 "
+                         "못 박는 것은 12.143 이 **이미 닫았다** (유령 2.5~20배). "
+                         "규칙 3 — 절제 그룹은 가설을 가르도록 짠다")
     ap.add_argument("--sig-insitu", default="", metavar="NPZ",
                     help="`L_harm` 의 지문을 in-situ 적합본으로 갈아끼운다 "
                          "(12.122.11, run_fit_insitu_sig 의 산출물). 비우면 격리 지문. "
                          "**LOFO 로 검증했지만 사람 라벨 5파일에서 적합한 것이라, "
                          "그 파일을 --holdout-real 로 빼도 지문에는 남아 있다**")
+    ap.add_argument("--harm-vnorm", action="store_true",
+                    help="h1 지문에서 **녹화 전압**을 나눈다 (12.151.1). 지문의 h1 "
+                         "실수부 역수가 그 격리 녹화의 선전압이라는 항등식에서 "
+                         "나온다 — 기기 간 11.8% 의 가짜 판별자를 지운다")
+    ap.add_argument("--harm-vnorm-both", action="store_true",
+                    help="정규화를 **합성 갈래에도** 건다. 캐시의 `obs_harm` 은 원래 "
+                         "지문으로 합성한 것이라 틀린 값이 된다 — **대조용**이다")
+    ap.add_argument("--harm-vscale", type=float, default=0.0, metavar="X",
+                    help="L_harm 의 h1 지문을 창별 전압으로 보정 (12.151). "
+                         "1.0 이 물리값 — 와트당 h1 전류가 1/V_rms 라는 항등식이다. "
+                         "기준 전압은 적응 창의 중앙값이라 평균 배율이 1 이고, "
+                         "**부하와 상관된 변동만** 새 정보로 들어간다 "
+                         "(그냥 지문을 상수배 한 것과 구별하기 위해서다)")
     ap.add_argument("--cache", default="cache/train60")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="adapt")
@@ -319,6 +369,42 @@ def main() -> int:
         sig = new
         print(f"  ** in-situ 지문: {a.sig_insitu} (격리 대비 최대 차 {d:.5f} A/W) **")
 
+    # ── h1 지문의 녹화전압 정규화 (12.151.1) ──────────────────────────────
+    # `Re(I₁)/P = 1/V₁` 은 유효전력의 **정의**다 (12.151). 그러면 지문의 h1 실수부
+    # 역수 `1/Re(sig[k,1,0])` 은 기기의 성질이 아니라 **그 격리 녹화의 선전압**이다.
+    # 실제로 격리 녹화 전압과 몇 V 안에서 맞는다:
+    #
+    #     포트 212.9(녹화 213.5)  오븐 215.7(216.0)  핫플 217.7(219.8)
+    #     프로젝터 224.4(223.4)   드라이기 234.5(228.7)  에어컨 238.1(232.9)
+    #
+    # 즉 손실은 기기 사이에 **11.8% 의 가짜 판별자**를 갖고 있다. 같은 드라이기를
+    # 217.7V 와 233.8V 에서 찍은 두 녹화가 와트당 7.4% 다른 것이 그 증거다.
+    # 여기서 그 편차를 나눠 버리면 전 기기의 h1 실수부가 `1/V_ref` 로 같아진다 —
+    # **정의상 같아야 하는 값이다.** 허수부(변위)는 손대지 않는다.
+    SIG_REAL = None
+    if a.harm_vnorm:
+        vref0 = float(np.median(np.asarray(rw.v_observed, np.float64)))
+        vk = 1.0 / np.maximum(sig[:, 0, 0].astype(np.float64), 1e-9)   # 함의 전압
+        f = (vk / vref0).astype(np.float32)
+        SIG_REAL = sig.copy(); SIG_REAL[:, 0, :] *= f[:, None]
+        if a.harm_vnorm_both:
+            # ⚠ 합성 갈래에도 건다 — **캐시의 `obs_harm` 은 원래 지문으로 합성한
+            #    것**이라 여기에는 정규화가 틀린 값이다. 대조용으로만 둔다.
+            sig = SIG_REAL; SIG_REAL = None
+        print(f"  ** h1 녹화전압 정규화: V_ref={vref0:.1f}V "
+              f"({'양쪽 갈래 — 대조' if a.harm_vnorm_both else '실측 갈래만'}, 12.151.1) **")
+        print("     " + "  ".join(f"{apps[j][:6]} {vk[j]:.0f}V(x{f[j]:.3f})"
+                                  for j in range(len(apps))))
+
+    _pref_set = {x for x in a.pref_apps.split(",") if x}
+    if a.w_pref > 0:
+        good = [f"{x} {REFERENCE_W[x][0]:.1f}W" for x in apps
+                if x in _pref_set and x in REFERENCE_W]
+        miss = sorted(_pref_set - set(REFERENCE_W))
+        print(f"  ** 전력 사전 켜짐: w_pref={a.w_pref:g} | {', '.join(good)} **")
+        if miss:
+            print(f"     ⚠ 참값이 없어 뺀 기기: {miss} (격리 통전 폭이 넓다)")
+
     ck = torch.load(a.init, map_location="cpu", weights_only=False)
     assert_target_config(ck, a.init)   # 12.45.3
     model = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0),
@@ -343,9 +429,45 @@ def main() -> int:
                     ("beam_projector", "laptop_charger", "minipc") if x in apps],
         weights=LossWeights(harm=0.1, cons=0.0, over=0.0),
         s_state=build_state_scales(apps, [S_I[x] for x in apps]),
+        power_ref=torch.tensor(
+            [REFERENCE_W[x][0] if (x in REFERENCE_W and x in _pref_set) else 0.0
+             for x in apps], dtype=torch.float32),
+        sig_real=(None if SIG_REAL is None else torch.from_numpy(SIG_REAL)),
     ).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=0.01)
     cache = CachedWindows(a.cache)
+    # ── 교차주파수 어드미턴스 보정 (12.148) — 창마다 상수라 미리 다 만든다 ──
+    HOFF = None
+    if a.harm_offset:
+        from src.model.realdata import harmonic_offset
+        HOFF = harmonic_offset(rw.stem, rw.target_cycle, a.harm_offset,
+                               z_npz=a.harm_offset_z)
+        z = np.load(a.harm_offset, allow_pickle=True)
+        nz_ = float(np.abs(HOFF).max())
+        print(f"  ** 교차주파수 보정: {a.harm_offset} "
+              f"(적합 {list(z['stems'])}, 뺀 파일 {list(z['excluded'])}) **")
+        if a.harm_offset_z:
+            zz = np.load(a.harm_offset_z, allow_pickle=True)
+            print(f"     계통 임피던스 교체: {a.harm_offset_z}  "
+                  f"R {float(z['R']):.3f} -> {float(zz['R']):.3f} Ω,  "
+                  f"L {float(z['X1']) / (2 * np.pi * 60) * 1e6:.0f} -> "
+                  f"{float(zz['X1']) / (2 * np.pi * 60) * 1e6:.0f} µH")
+            print(f"     ⚠ 상수항은 학습 장소 것이 남는다 (배경 V_src 효과, 12.149.1)")
+        print(f"     창 {len(HOFF)}개, 최대 보정 {nz_ * 1000:.1f} mA, "
+              f"h1 중앙 {np.median(np.linalg.norm(HOFF[:, 0], axis=1)) * 1000:.1f} mA")
+    # ── h1 지문의 전압 보정 (12.151) — 이것도 창마다 상수다 ────────────────
+    # 기준을 **적응 창의 중앙 전압**으로 잡는다. 그러면 배율의 중앙이 정확히 1 이라
+    # "지문을 상수배 한 것" 과 구별된다 (12.135 가 `harm_weight` 에 건 것과 같은
+    # 판정 기준이다). 남는 것은 부하와 상관된 변동뿐이다.
+    VSC = None
+    if a.harm_vscale > 0:
+        v = np.asarray(rw.v_observed, np.float32)
+        vref = float(np.median(v))
+        VSC = (1.0 + a.harm_vscale
+               * (vref / np.clip(v, 1.0, None) - 1.0)).astype(np.float32)
+        print(f"  ** h1 전압 보정: x{a.harm_vscale:g} (12.151) **")
+        print(f"     V_rms {v.min():.1f} ~ {v.max():.1f}V (중앙 {vref:.1f}), "
+              f"배율 {VSC.min():.4f} ~ {VSC.max():.4f} (중앙 {np.median(VSC):.4f})")
     rng = np.random.default_rng(a.seed)
 
     def snapshot(tag: str) -> dict:
@@ -385,7 +507,9 @@ def main() -> int:
         ridx = rng.choice(len(rw), a.batch, replace=len(rw) < a.batch)
         rf, rwd, rtg = real_targets(rw.batch(ridx), dev,
                                     rw.human(ridx) if a.w_real_on > 0 else None,
-                                    rw.reactive(ridx) if a.w_consq > 0 else None)
+                                    rw.reactive(ridx) if a.w_consq > 0 else None,
+                                    HOFF[ridx] if HOFF is not None else None,
+                                    VSC[ridx] if VSC is not None else None)
         sidx = np.sort(rng.choice(len(cache), a.batch, replace=False))
         sb_ = tuple(torch.from_numpy(x) for x in cache.batch(sidx))
         sf, swd, stg = to_targets(sb_, dev)
@@ -396,7 +520,7 @@ def main() -> int:
             rp = crit.unlabeled(model(rf, rwd), rtg, w_cons=a.w_cons,
                                 w_harm=a.w_harm, w_over=a.w_over, w_hedge=a.w_hedge,
                                 sample_w=sw, w_real_on=a.w_real_on,
-                                w_consq=a.w_consq)
+                                w_consq=a.w_consq, w_pref=a.w_pref)
             sp = crit(model(sf, swd), stg)
             loss = rp["total"] + a.lam * sp["total"]
         opt.zero_grad(set_to_none=True)
