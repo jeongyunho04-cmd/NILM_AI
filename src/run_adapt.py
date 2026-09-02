@@ -452,7 +452,7 @@ def main() -> int:
                   f"R {float(z['R']):.3f} -> {float(zz['R']):.3f} Ω,  "
                   f"L {float(z['X1']) / (2 * np.pi * 60) * 1e6:.0f} -> "
                   f"{float(zz['X1']) / (2 * np.pi * 60) * 1e6:.0f} µH")
-            print(f"     ⚠ 상수항은 학습 장소 것이 남는다 (배경 V_src 효과, 12.149.1)")
+            print(f"     ⚠ 상수항은 학습 장소 것이 남는다 (배경 V_src 효과, 12.150.1)")
         print(f"     창 {len(HOFF)}개, 최대 보정 {nz_ * 1000:.1f} mA, "
               f"h1 중앙 {np.median(np.linalg.norm(HOFF[:, 0], axis=1)) * 1000:.1f} mA")
     # ── h1 지문의 전압 보정 (12.151) — 이것도 창마다 상수다 ────────────────

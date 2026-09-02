@@ -359,7 +359,7 @@ def harmonic_offset(stems, target_cycle, coef_npz: str, n_harm: int = 15,
 
     ⚠ `Z` 만 갈아도 **상수항은 학습 장소 것이 남는다.** 표준화의 `mu` 가 그 집
        평균이고, 거기에 배경 `V_src` 효과가 섞여 있다 (보정 효과의 47%). `V_src` 가
-       장소 간 2.1배 다르므로 그 부분은 전이가 안 된다 (12.149.1).
+       장소 간 2.1배 다르므로 그 부분은 전이가 안 된다 (12.150.1).
     """
     import pandas as pd
 

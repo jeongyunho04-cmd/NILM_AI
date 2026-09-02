@@ -210,7 +210,7 @@ def main() -> int:
             print("     ⚠ 두 자가 50% 넘게 다르다. 어느 쪽도 믿지 말 것.")
 
     # ── 배경 전압 ────────────────────────────────────────────────────
-    print(f"\n  [배경 전압 V_src]  — `--harm-offset` 의 회귀자로도 쓴다 (12.149.1)\n")
+    print(f"\n  [배경 전압 V_src]  — `--harm-offset` 의 회귀자로도 쓴다 (12.150.1)\n")
     print(f"  {'파일':<12s}" + "".join(f"{f'V_src,{h}':>10s}" for h in ORDERS[:5]))
     for s in a.stems:
         print(f"  {s:<12s}" + "".join(f"{abs(VS[(s, h)]):>10.2f}" for h in ORDERS[:5]))
