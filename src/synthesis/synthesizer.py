@@ -137,8 +137,31 @@ def _max_sustained_power(p_series: np.ndarray, sampling_hz: float = 60.0) -> flo
 
 # 기기별 플러그 연결 확률 기본값.
 # 상시 대기 회로가 있는 기기는 늘 꽂혀 있고, 휴대용 발열 기구는 쓸 때만 꽂는다.
+# ── 에어컨 꽂힘 확률을 실측 바닥에 맞춘다 (2026-09-04, 12.174) ──────────────
+# 에어컨 대기는 **4.76W / 113.18mA (k 5.55)** 로 9종 중 압도적으로 크다.
+# 0.85 로 꽂으면 그 하나가 합성 상시 바닥 148.6mA 의 **65%(96.2mA)** 를 만든다.
+#
+# 그런데 **복합 실측 16파일 전부에서 에어컨은 한 번도 안 켜지고(0.0초), 꽂혀
+# 있지도 않았다.** 파일별 '전부 OFF' 창의 |I1| 이 42~74mA 인데 에어컨 대기만
+# 113mA 라, 꽂혀 있었으면 바닥이 그보다 컸어야 한다. 라벨에 에어컨이 있는
+# 세 파일(test.2 3.4mA / test3 62.4 / test_4 8.6)도 나머지보다 높지 않다.
+#
+# 비용이 크다 — 그 96mA 는 h3 가 거의 없는 전류라 **모든 창의 h3/h1 을
+# 끌어내린다.** 12.173.1 이 잰 것: 같은 전력에서 실측 0.83~0.90 vs 합성
+# 0.57~0.86. 그리고 모델은 "항상 96mA 가 있다" 고 배워, 없는 장소에서 그것을
+# 찾다가 유령을 만든다 (12.168.3 의 장소 B 에어컨 13.25W).
+#
+# 맞춘다: 에어컨 외 기여가 52.4mA 이므로 `52.4 + 113.18·p = 62`(실측 중앙)
+# 에서 p ~= 0.09. 표현을 남기려고 **0.10** 으로 둔다 (30만 창 중 3만).
+# ⚠ 이 값은 **우리 녹화 환경에 맞춘 보정**이다. 에어컨이 상시 꽂힌 곳에
+# 배포한다면 다시 재야 한다.
+#: 이 기기들은 `force_plugged_all` 로도 **이 확률을 넘겨 꽂지 않는다.**
+#: 레시피 대부분이 `force_plugged_all=True` 나 균일 `plugged_prob` 를 쓰므로
+#: `DEFAULT_PLUG_PROBABILITY` 를 그냥 낮추면 안 닿는다 (12.174 에서 겪었다).
+PLUG_PROBABILITY_CAP: Dict[str, float] = {"air_conditioner": 0.10}
+
 DEFAULT_PLUG_PROBABILITY: Dict[str, float] = {
-    "air_conditioner": 0.85,
+    "air_conditioner": 0.10,
     "oven": 0.85,
     "beam_projector": 0.85,
     "minipc": 0.85,
@@ -289,6 +312,12 @@ class LoadSynthesizer:
         return accepted, dropped
 
     # ── 플러그 연결 상태 결정 ───────────────────────────────────────────────
+    def _plug(self, app: str, prob: float) -> bool:
+        """꽂힘 추첨. `PLUG_PROBABILITY_CAP` 이 있으면 그 위로 못 올라간다."""
+        cap = PLUG_PROBABILITY_CAP.get(app)
+        p = prob if cap is None else min(prob, cap)
+        return bool(np.random.rand() < p)
+
     def _resolve_plugged(
         self,
         plugged_in_appliances: Optional[Dict[str, bool]],
@@ -300,7 +329,7 @@ class LoadSynthesizer:
                 is_plugged[app] = bool(plugged_in_appliances[app])
             else:
                 prob = DEFAULT_PLUG_PROBABILITY.get(app, default_plugged_prob)
-                is_plugged[app] = bool(np.random.rand() < prob)
+                is_plugged[app] = self._plug(app, prob)
         return is_plugged
 
     # ── 본체 ────────────────────────────────────────────────────────────────
@@ -689,7 +718,7 @@ class LoadSynthesizer:
         chosen, over_budget = self._fit_within_power_budget(chosen, env.base_voltage_v, limit)
 
         plugged = {
-            a: (True if force_plugged_all else bool(np.random.rand() < plugged_prob))
+            a: self._plug(a, 1.0 if force_plugged_all else plugged_prob)
             for a in self.known_appliances
         }
 
@@ -746,7 +775,7 @@ class LoadSynthesizer:
         모델이 "대기전력 합"을 "저부하 기기 1대"로 오인하지 않게 만드는 핵심 학습 사례다.
         정답은 전 기기 OFF / 0W 이며, 그럼에도 관측 전력은 0 이 아니다.
         """
-        plugged = {a: bool(np.random.rand() < plugged_prob) for a in self.known_appliances}
+        plugged = {a: self._plug(a, plugged_prob) for a in self.known_appliances}
         return self.synthesize_scenario(
             total_duration_cycles=window_size_cycles,
             schedules=[],
