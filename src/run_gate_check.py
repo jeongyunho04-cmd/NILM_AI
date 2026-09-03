@@ -267,6 +267,9 @@ def oven_on_breakdown(d: dict, apps: List[str], ev: dict) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="게이트 진단 — 소프트 vs 하드 (12.9.14절)")
+    ap.add_argument("--events", default="", metavar="JSON",
+                    help="라벨 파일을 바꿔 채점한다 (12.155). 기본은 "
+                         "processed_data/real_events.json")
     ap.add_argument("--ckpt", nargs="+", default=["results/cnn_v15.pt", "results/hedge_0.2.pt"])
     ap.add_argument("--ckpt-smps", default=None, metavar="PT",
                     help="SMPS 3종(프로젝터/충전기/미니PC)만 이 체크포인트로 채점한다. "
@@ -339,7 +342,7 @@ def main() -> int:
     a = ap.parse_args()
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    ev = load_events()
+    ev = load_events(a.events) if a.events else load_events()
     stems = [s for s in sorted(ev) if not is_sealed(s)]
     payload: Dict[str, dict] = {}
 

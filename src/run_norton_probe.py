@@ -51,6 +51,8 @@ from src import env_guard  # noqa: F401
 
 import numpy as np
 import pandas as pd
+
+from src.preprocessing.raw_csv import read_raw_csv
 from scipy.optimize import nnls
 
 from src.evaluation.power_ref import REFERENCE_W
@@ -84,7 +86,7 @@ def load(stem: str, stride: int, nz: np.ndarray) -> dict:
 
     # 원자료의 vh1~vh15 를 npz 행에 맞춘다. `vrms` 상관으로 시프트를 찾는다 —
     # npz 가 원자료보다 길거나 짧은 파일이 있다 (test_7 은 +330행).
-    csv = pd.read_csv(f"data/{stem}.csv",
+    csv, _ = read_raw_csv(f"data/{stem}.csv",
                       usecols=["vrms"] + [f"vh{h}" for h in range(1, H + 1)])
     z = load_nilm_npz(f"processed_data/composite_eval/{stem}.npz")
     nv = np.asarray(z["power_features"])[:, 4]
@@ -130,7 +132,7 @@ def fit_impedance(stems, orders=(1, 3, 5, 7, 9, 11, 13, 15)) -> tuple:
     D = {}
     for s in stems:
         c = [f"vh{h}" for h in orders] + [f"ih{h}" for h in orders]             + [f"ihdeg{h}" for h in orders]
-        d = pd.read_csv(f"data/{s}.csv", usecols=c)
+        d, _ = read_raw_csv(f"data/{s}.csv", usecols=c)
         n = len(d) // 30 * 30                      # vh 는 30사이클마다 갱신된다
         D[s] = {h: ((d[f"ih{h}"].values
                      * np.exp(1j * np.deg2rad(d[f"ihdeg{h}"].values)))[:n]
@@ -159,7 +161,7 @@ def zi_design(stem: str, idx: np.ndarray, R: float, X1: float, sh: int,
     인데 다른 열이 1~5 라 조건수가 무너진다. 그리고 그 223 은 `V_src` 라
     **절편이 이미 먹는다.** 변하는 부분만 넣는 것이 맞다.
     """
-    csv = pd.read_csv(f"data/{stem}.csv",
+    csv, _ = read_raw_csv(f"data/{stem}.csv",
                       usecols=[f"ih{h}" for h in orders]
                       + [f"ihdeg{h}" for h in orders])
     j = np.clip(idx - sh, 0, len(csv) - 1)

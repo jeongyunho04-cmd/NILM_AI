@@ -39,10 +39,11 @@ import numpy as np
 import torch
 
 from src.evaluation import load_holdout, resistive_confusion, score_appliances, summarize, total_power_residual
-from src.evaluation.power_ref import REFERENCE_W
+from src.evaluation.power_ref import REFERENCE_W, REFERENCE_W_STEMWISE
 from src.evaluation.real_events import load_events, score_absent, score_events, score_on_off
 from src.evaluation.sealing import is_sealed
 from src.model.losses import LossWeights, NILMLoss, build_state_scales
+from src.model.postproc import HALFWAVE_OHM, RESISTIVE_OHM
 from src.model.inputs import FINE_CYCLES, TARGET_LOOKAHEAD, LEGACY_FINE_CHANNELS
 from src.run_gate_check import assert_target_config
 from src.model.net import (
@@ -81,7 +82,8 @@ def real_sample_weights(p_observed, mode: str, boost: float = 4.0):
     return w / w.mean().clamp(min=1e-6)
 
 
-def real_targets(b, dev, human=None, qobs=None, hoff=None, vsc=None):
+def real_targets(b, dev, human=None, qobs=None, hoff=None, vsc=None, vrms=None,
+                 prefm=None):
     """`human` 은 `RealWindows.human(idx)` 의 (on, mask). 없으면 기존과 같다.
 
     `qobs` 는 `RealWindows.reactive(idx)` — 무효전력 보존 항이 쓴다 (12.133).
@@ -94,6 +96,10 @@ def real_targets(b, dev, human=None, qobs=None, hoff=None, vsc=None):
         tg["harm_offset"] = torch.from_numpy(np.ascontiguousarray(hoff)).to(dev)
     if vsc is not None:       # h1 지문의 전압 보정 (12.151)
         tg["vscale"] = torch.from_numpy(np.ascontiguousarray(vsc)).to(dev)
+    if vrms is not None:      # 단자 전압. `L_res` 가 P = V²/R 을 푼다 (12.156)
+        tg["v_rms"] = torch.from_numpy(np.ascontiguousarray(vrms)).to(dev)
+    if prefm is not None:     # 창별 참값 마스크 (12.159)
+        tg["pref_mask"] = torch.from_numpy(np.ascontiguousarray(prefm)).to(dev)
     if human is not None:
         ho, hm = [torch.from_numpy(np.ascontiguousarray(x)).to(dev) for x in human]
         tg["human_on"], tg["human_mask"] = ho, hm
@@ -250,6 +256,80 @@ def main() -> int:
                          "잔차의 70%%를 줄이라고 밀어서 배분이 밀린다** — 그것을 "
                          "끊는다. 1.0 이 측정된 중앙값. 0 이면 끔(이전과 동일). "
                          "⚠ 너무 키우면 L_harm 이 죽어 '합만 맞추는 해' 로 간다 (12.12.2)")
+    ap.add_argument("--w-res", type=float, default=0.0, metavar="W",
+                    help="**저항 컨덕턴스 정합** `L_res` (12.156). 니크롬선은 "
+                         "P = V^2/R 이고 R 이 기기 고유값이라(같은 기기 다른 녹화에서 "
+                         "0.1~1.3%) 저항 몫을 컨덕턴스로 옮기면 조합을 셀 수 있다. "
+                         "포트 35.8Ω 과 오븐 40.6Ω 은 222V 에서 163W 벌어지는데 "
+                         "`L_harm` 은 그 둘을 h1(=전력) 으로만 가른다 — 판별 기여 "
+                         "18.27 중 17.38(97.6%)이 h1 이고 모양은 4.9% 다. 그래서 "
+                         "12.155.6 의 반파 채널이 포트 1,209W 를 **장소 B 에 없는 "
+                         "오븐**에게 넘겼다. 잃은 창에서 16조합 최적을 세면 포트가 "
+                         "93/88/93% 이고 오븐은 상위 4위에 한 번도 없다 — 정보는 "
+                         "깨끗한데 모델에게 준 적이 없어 `resistive_match` 후처리가 "
+                         "뒤늦게, 그것도 절반만 고치고 있었다 (포트 F1 0.403 -> 0.767). "
+                         "**포트·오븐에만 건다** (핫플은 장소 B 에서 230~240W 로 참조 "
+                         "460W 와 다르고, 드라이기는 강 54.3Ω / 약 108.6Ω 로 상태마다 "
+                         "다르다 — 규칙 14).")
+    ap.add_argument("--w-swap", type=float, default=0.0, metavar="W",
+                    help="**저항 조합 맞바꿈 감독** `L_swap` (12.158). `L_res` 는 "
+                         "`σ(on)` 을 곱해 걸리므로 게이트가 바닥이면 안 닿는다 — "
+                         "12.157.4b 가 그것을 확정했다 (포트 σ중앙 0.0344 -> 효과 "
+                         "+0.563, 핫플 0.0033 -> +0.009, 드라이기 강풍 0.0001 -> "
+                         "−0.011. 완전한 단조이고 유일한 차이가 게이트다). 이 항은 "
+                         "`σ` 를 안 거치고 **로짓에 직접** BCE 를 건다. 무엇을 "
+                         "가르칠지는 `resistive_match`(12.112) 처럼 컨덕턴스 조합을 "
+                         "세서 정하므로 **라벨이 필요 없다**. 12.112 의 제한을 "
+                         "그대로 쓴다 — 개수는 안 바꾸고 맞바꿈만, tol 밖은 안 건드림. "
+                         "여기에 하나 더: `best==현재` 인 창은 감독하지 않는다 "
+                         "(후처리와 달리 손실은 1,000 스텝을 밀므로 틀린 결정이 굳는다).")
+    ap.add_argument("--swap-tol", type=float, default=0.02, metavar="TOL",
+                    help="`L_swap` 의 상대오차 문턱. 12.112.3 이 0.02 를 최적으로 "
+                         "쟀다 (0.01 은 아무것도 안 고치고 0.05 이상은 엉뚱한 조합을 문다).")
+    ap.add_argument("--swap-slack", type=int, default=0, metavar="N",
+                    help="`L_swap` 이 허용할 켜진 기기 **개수의 변화**. 0 이면 "
+                         "12.112 처럼 맞바꿈만 한다. 12.158.1 이 잰 것 — 드라이기 "
+                         "강풍 정답 ON 창의 44%%가 저항이 하나도 안 켜진 창이라 "
+                         "개수 고정으로는 감독에서 통째로 빠진다. 1 이면 하나를 "
+                         "켜거나 끌 수 있다. ⚠ 후처리에서 이 제한을 풀었을 때 "
+                         "없는 기기를 발명했다 (test_9 유령 3.94 -> 86.98W).")
+    ap.add_argument("--harm-offset-skip-stems", default="", metavar="LIST",
+                    help="이 파일들에는 `harm_offset` 을 **안 건다** (12.160.2). "
+                         "`norton_coef` 는 장소 A 8파일에서 적합한 것이고, 장소 B 로 "
+                         "전이하면 보정이 관측을 넘는다 (h9 111%, h13 143%). "
+                         "12.148 이 *'전이될 것으로 보지만 확인 안 됐다'* 고 유보한 "
+                         "것을 12.155 의 라벨로 확인한 결과다.")
+    ap.add_argument("--harm-offset-z-stems", default="", metavar="LIST",
+                    help="`--harm-offset-z` 를 **이 파일들에만** 건다 (12.160). "
+                         "안 주면 전 창에 걸린다(기존 동작). 적응 자료에 장소가 "
+                         "섞여 있으면 하나를 전역으로 걸 때 한쪽이 반드시 틀린다 — "
+                         "장소 A 의 Z(L 455µH)로 장소 B 를 보정하면 h3 보정량이 "
+                         "244~503mA 어긋나고, 그것은 미니PC IDLE 의 |I3| 43.6mA 의 "
+                         "6~11배다.")
+    ap.add_argument("--res-apps", default="electiric_kettle,oven", metavar="LIST",
+                    help="`--w-res` 가 저항을 못 박을 기기. 기본은 포트·오븐 — "
+                         "축퇴인 쌍이면서 등가저항이 13% 벌어진 유일한 쌍이다.")
+    ap.add_argument("--standby-operating", action="store_true",
+                    help="`standby_sig` 를 **동작 중 휴지**의 지문으로 바꾼다 (12.163). "
+                         "기본값(`get_standby_profile`)은 `OFF_STANDBY` 인데, 합성은 "
+                         "activation 휴지의 전력을 `net_power_features` 에서 가져오므로 "
+                         "오븐의 경우 FAN_LIGHT 15.02W 다. 즉 **전력은 FAN_LIGHT 인데 "
+                         "고조파는 OFF_STANDBY** 이라 6.44 vs 67.3mA 로 10배 어긋난다. "
+                         "이 플래그가 둘을 같은 상태로 맞춘다.")
+    ap.add_argument("--companion", action="store_true",
+                    help="**동반 부하 항** (12.156). 오븐은 `OFF_STANDBY / FAN_LIGHT / "
+                         "HEATING` 세 상태인데 라벨이 FAN_LIGHT 를 `is_on=0, "
+                         "target_power_w=0` 으로 적어서, 조명·컨벡션 팬의 14.2W 가 "
+                         "**어느 기기 몫도 아니게** 배경으로 흘러간다. 그래서 오븐의 "
+                         "`standby_profile` 이 0.40W(OFF_STANDBY) 이고, 오븐이 존재하는 "
+                         "시간의 52~73% 를 차지하는 상태가 순방향 모형에 없다. "
+                         "이 항은 그것을 `σ(plugged)·companion_sig` 로 되돌린다 — "
+                         "**`(1−σ(on))` 을 곱하지 않는다.** 팬·조명은 히터와 동시에 "
+                         "돌기 때문이다 (격리 HEATING 의 |I3| 중 27~58%가 팬/조명 몫이고, "
+                         "빼고 남은 잔차의 |u3| 0.0010~0.0028 이 순수 니크롬이다). "
+                         "겨냥은 크기가 아니라 **신원**이다 — 오븐이 켜졌다면 64mA/"
+                         "|u3| 0.058 의 SMPS 전류가 같이 있어야 하고 포트에는 그런 "
+                         "상태가 없다. 상수는 녹화 3개에서 폭/중앙 0.010 이다.")
     ap.add_argument("--w-pref", type=float, default=0.0, metavar="W",
                     help="**전력 사전** (12.145). 격리 녹화에서 통전 전력이 좁은 "
                          "기기(`power_ref.REFERENCE_W`)의 전력을 그 참값에 묶는다. "
@@ -300,6 +380,10 @@ def main() -> int:
                          "기준 전압은 적응 창의 중앙값이라 평균 배율이 1 이고, "
                          "**부하와 상관된 변동만** 새 정보로 들어간다 "
                          "(그냥 지문을 상수배 한 것과 구별하기 위해서다)")
+    ap.add_argument("--zero-channels", default="", metavar="LIST",
+                    help="세밀 입력의 이 채널들을 0 으로 (쉼표). 1단계에서 같은 "
+                         "인자로 학습한 모델을 2단계에서도 같은 입력으로 돌리려면 "
+                         "여기서도 줘야 한다 (12.114 재시험의 조인 대조)")
     ap.add_argument("--cache", default="cache/train60")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="adapt")
@@ -314,9 +398,14 @@ def main() -> int:
     print("[Phase 5] 2단계 실측 준지도 적응 — 기기별 라벨 없이 (4.2절)")
     print("=" * 84)
 
+    ZERO_CH = [int(x) for x in a.zero_channels.split(",") if x.strip()]
+    if ZERO_CH:
+        print(f"  ** 세밀 채널 {ZERO_CH} 를 0 으로 (조인 대조, 12.114 재시험) **")
     hs = load_holdout(HOLDOUT_DIR)
     apps = hs.appliances
     prep = prepare_holdout_inputs(hs)
+    if ZERO_CH:
+        prep[0][:, ZERO_CH] = 0.0
     hs.X = np.zeros((len(prep[0]), 1, 1), np.float32)
 
     held = [x.strip() for x in a.holdout_real.split(",") if x.strip()]
@@ -344,6 +433,23 @@ def main() -> int:
     pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
     sig, sb, nz, hsc = (harmonic_signatures(pool, apps), standby_signatures(pool, apps),
                         noise_signature(pool), harmonic_scales(pool, apps))
+    # ── 동작 중 휴지의 지문 (2026-09-03, 12.163) ─────────────────────────
+    # `standby_signatures` 는 `OFF_STANDBY` 을 준다. 그런데 **합성이 실제로 넣는
+    # 값은 다르다** — `synthesizer` 가 activation 휴지의 `gt_standby_p` 를
+    # `net_power_features[:,0]` 에서 가져오므로 오븐은 FAN_LIGHT 의 15.02W 다.
+    # 전력 15W / 고조파 6.44mA 로 **10배 어긋나 있었다** (실제 67.3mA).
+    if a.standby_operating:
+        from src.model.companion import standby_operating_signatures
+        sb_op, sb_pw, sb_used = standby_operating_signatures(pool, apps)
+        if sb_used:
+            print("  ** 동작 중 휴지 지문 (12.163) — 합성이 넣는 것과 같은 자 **")
+            for x in sb_used:
+                _j = apps.index(x)
+                _o = float(np.hypot(sb[_j, 0, 0], sb[_j, 0, 1])) * 1000
+                _n = float(np.hypot(sb_op[_j, 0, 0], sb_op[_j, 0, 1])) * 1000
+                print(f"     {x:18s} |I1| {_o:6.2f} -> {_n:6.2f} mA "
+                      f"({_n/max(_o,1e-9):.1f}배), 전력 {sb_pw[_j]:.2f}W")
+                sb[_j] = sb_op[_j]
     qp, qp_ok = reactive_signatures(pool, apps)
     nq = noise_reactive(pool)
     del pool
@@ -397,6 +503,24 @@ def main() -> int:
                                   for j in range(len(apps))))
 
     _pref_set = {x for x in a.pref_apps.split(",") if x}
+    # ── 저항 컨덕턴스 정합이 붙잡을 기기 (12.156) ────────────────────────
+    # **포트·오븐만이다.** 이 둘이 `L_harm` 에서 축퇴이고(판별의 97.6%가 h1),
+    # 그러면서 등가저항은 13% 벌어져 있다. 핫플·드라이기를 넣으면 안 된다 —
+    # 핫플은 장소 B 에서 230~240W 로 돌고(참조 460W), 드라이기는 상태마다
+    # 저항이 다르다. 규칙 14: 안 잰 것을 측정처럼 쓰지 않는다.
+    _res_set = ({x for x in a.res_apps.split(",") if x}
+                if (a.w_res > 0 or a.w_swap > 0) else set())
+    # ── 동반 부하 상수 (12.156) ─────────────────────────────────────────
+    COMP_SIG = COMP_W = None
+    if a.companion:
+        from src.model.companion import companion_constants
+        COMP_SIG, COMP_W, _cnames = companion_constants(apps)
+        print(f"  ** 동반 부하 항 켜짐 (12.156): {', '.join(_cnames)} **")
+        for _n in _cnames:
+            _j = apps.index(_n)
+            _m = float(np.hypot(COMP_SIG[_j, 0, 0], COMP_SIG[_j, 0, 1]))
+            print(f"     {_n}: {COMP_W[_j]:.2f}W, |I1| {_m*1000:.2f}mA "
+                  f"(σ(plugged) 로만 건다 — 히터와 동시에 돈다)")
     if a.w_pref > 0:
         good = [f"{x} {REFERENCE_W[x][0]:.1f}W" for x in apps
                 if x in _pref_set and x in REFERENCE_W]
@@ -430,9 +554,20 @@ def main() -> int:
         weights=LossWeights(harm=0.1, cons=0.0, over=0.0),
         s_state=build_state_scales(apps, [S_I[x] for x in apps]),
         power_ref=torch.tensor(
-            [REFERENCE_W[x][0] if (x in REFERENCE_W and x in _pref_set) else 0.0
+            [(REFERENCE_W[x][0] if x in REFERENCE_W
+              else REFERENCE_W_STEMWISE[x][0][0]) if (x in _pref_set and
+              (x in REFERENCE_W or x in REFERENCE_W_STEMWISE)) else 0.0
              for x in apps], dtype=torch.float32),
         sig_real=(None if SIG_REAL is None else torch.from_numpy(SIG_REAL)),
+        companion_sig=(None if COMP_SIG is None else torch.from_numpy(COMP_SIG)),
+        companion_w=(None if COMP_W is None else torch.from_numpy(COMP_W)),
+        res_ohm=torch.tensor(
+            [RESISTIVE_OHM[x] if (x in RESISTIVE_OHM and x in _res_set) else 0.0
+             for x in apps], dtype=torch.float32),
+        # 반파 상태의 겉보기 저항. 드라이기만 있고 나머지는 0 이다 (12.157).
+        res_ohm_half=torch.tensor(
+            [HALFWAVE_OHM[x] if (x in HALFWAVE_OHM and x in _res_set) else 0.0
+             for x in apps], dtype=torch.float32),
     ).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=0.01)
     cache = CachedWindows(a.cache)
@@ -440,8 +575,48 @@ def main() -> int:
     HOFF = None
     if a.harm_offset:
         from src.model.realdata import harmonic_offset
-        HOFF = harmonic_offset(rw.stem, rw.target_cycle, a.harm_offset,
-                               z_npz=a.harm_offset_z)
+        # ── 창별 임피던스 (2026-09-03, 12.160) ──────────────────────────
+        # `Z` 는 **그 집 배선의 값**이라 장소가 바뀌면 다르다. 지금까지는
+        # `--harm-offset-z` 가 전 창에 하나를 걸었는데, 적응 자료에 장소 A 와 B
+        # 가 섞여 있으므로 **한쪽은 반드시 틀린다.**
+        #
+        # 얼마나 틀리는가 (12.160.1): 장소 A 의 Z(L 455µH)로 장소 B 를 보정하면
+        # h3 보정량이 186~269mA 인데, 장소 B 의 Z(L 6µH)로는 456~688mA 다 —
+        # **차 244~503mA.** 미니PC IDLE 의 |I3| 가 43.6mA 이므로 그 지문의
+        # **6~11배**가 보정 오차로 들어간다. 장소 B 에서만 미니PC `p_raw` 가
+        # 0.64W (참값 9.90) 로 무너진 것이 이것으로 설명된다.
+        #
+        # `--harm-offset-z-stems` 를 주면 **그 파일들만** 다른 Z 로 계산한다.
+        if a.harm_offset_z and a.harm_offset_z_stems:
+            zs = {x for x in a.harm_offset_z_stems.split(",") if x}
+            HOFF = harmonic_offset(rw.stem, rw.target_cycle, a.harm_offset)
+            sel = np.isin(rw.stem, list(zs))
+            if sel.any():
+                alt = harmonic_offset(rw.stem, rw.target_cycle, a.harm_offset,
+                                      z_npz=a.harm_offset_z)
+                HOFF[sel] = alt[sel]
+            print(f"  ** 창별 임피던스 (12.160): {sorted(zs)} 만 "
+                  f"{a.harm_offset_z} 로 계산 — 적응 창의 {sel.mean()*100:.1f}% **")
+        else:
+            HOFF = harmonic_offset(rw.stem, rw.target_cycle, a.harm_offset,
+                                   z_npz=a.harm_offset_z)
+        # ── 보정을 **안 걸 파일** (2026-09-03, 12.160.2) ────────────────────
+        # 12.148 의 독스트링이 유보해 둔 것: *"기울기는 물리적으로 ΣY 라 기기
+        # 구성이 같으면 전이될 것으로 보지만 **확인 안 됐다** — 다른 집 라벨이
+        # 없어 못 쟀다."* 12.155 가 그 라벨을 만들었고, **전이가 안 된다.**
+        #
+        # 보정량 / 관측 (중앙):
+        #     장소 A (적합한 곳)  h1 9.4%  h3 20.9%  h5 30.4%  h9 31.0%  h13 64.8%
+        #     장소 B (전이)      h1 2.3%  h3 79.5%  h5 94.7%  h9 **111.4%**  h13 **142.5%**
+        #
+        # 장소 B 에서는 h9 이상이 **보정 > 관측** 이다. h3 만 봐도 216.7mA 로
+        # 미니PC IDLE 의 |I3| 43.6mA 의 5배다 — 그 지문이 보정에 묻힌다.
+        if a.harm_offset_skip_stems:
+            sk = {x for x in a.harm_offset_skip_stems.split(",") if x}
+            msk = np.isin(rw.stem, list(sk))
+            HOFF[msk] = 0.0
+            print(f"  ** 보정 제외 (12.160.2): {sorted(sk)} — 적응 창의 "
+                  f"{msk.mean()*100:.1f}% 에서 harm_offset = 0 **")
         z = np.load(a.harm_offset, allow_pickle=True)
         nz_ = float(np.abs(HOFF).max())
         print(f"  ** 교차주파수 보정: {a.harm_offset} "
@@ -459,6 +634,41 @@ def main() -> int:
     # 기준을 **적응 창의 중앙 전압**으로 잡는다. 그러면 배율의 중앙이 정확히 1 이라
     # "지문을 상수배 한 것" 과 구별된다 (12.135 가 `harm_weight` 에 건 것과 같은
     # 판정 기준이다). 남는 것은 부하와 상관된 변동뿐이다.
+    # `L_res` 가 쓰는 단자 전압 (12.156). 창마다 상수라 미리 다 만든다.
+    VRMS = (np.asarray(rw.v_observed, np.float32)
+            if (a.w_res > 0 or a.w_swap > 0) else None)
+    if VRMS is not None:
+        print(f"  ** 저항 제약 켜짐: w_res={a.w_res:g} (12.156) / "
+              f"w_swap={a.w_swap:g} tol={a.swap_tol:g} (12.158), 대상 {sorted(_res_set)} **")
+        _v0 = float(np.median(VRMS))
+        print(f"     V_rms {VRMS.min():.1f} ~ {VRMS.max():.1f}V (중앙 {_v0:.1f})")
+        for x in sorted(_res_set):
+            if x not in RESISTIVE_OHM:
+                continue
+            line = f"     {x:18s} {RESISTIVE_OHM[x]:6.1f}Ω -> {_v0**2/RESISTIVE_OHM[x]:6.0f}W"
+            if x in HALFWAVE_OHM:
+                line += (f"   |  반파 {HALFWAVE_OHM[x]:.1f}Ω -> "
+                         f"{_v0**2/HALFWAVE_OHM[x]:.0f}W  (12.157, 관문 |I2|−|I4|>0.1A)")
+            print(line)
+    # ── 창별 참값 마스크 (12.159) ────────────────────────────────────────
+    # `REFERENCE_W_STEMWISE` 의 기기는 **적힌 파일의 창에서만** 참값이 성립한다.
+    # 나머지 창에서는 0 이라 `L_pref` 가 그 기기를 안 건드린다.
+    PREFM = None
+    if a.w_pref > 0:
+        pm = np.ones((len(rw), len(apps)), np.float32)
+        _named = []
+        for x, (val, stems) in REFERENCE_W_STEMWISE.items():
+            if x not in _pref_set or x not in apps:
+                continue
+            j = apps.index(x)
+            pm[:, j] = np.isin(rw.stem, list(stems)).astype(np.float32)
+            _named.append((x, val[0], stems, float(pm[:, j].mean())))
+        if _named:
+            PREFM = pm
+            print("  ** 창별 참값 (12.159) — 그 파일의 창에서만 건다 **")
+            for x, v, stems, frac in _named:
+                print(f"     {x}: {v:.2f}W, 파일 {list(stems)} "
+                      f"-> 적응 창의 {frac*100:.1f}%")
     VSC = None
     if a.harm_vscale > 0:
         v = np.asarray(rw.v_observed, np.float32)
@@ -509,10 +719,15 @@ def main() -> int:
                                     rw.human(ridx) if a.w_real_on > 0 else None,
                                     rw.reactive(ridx) if a.w_consq > 0 else None,
                                     HOFF[ridx] if HOFF is not None else None,
-                                    VSC[ridx] if VSC is not None else None)
+                                    VSC[ridx] if VSC is not None else None,
+                                    VRMS[ridx] if VRMS is not None else None,
+                                    PREFM[ridx] if PREFM is not None else None)
         sidx = np.sort(rng.choice(len(cache), a.batch, replace=False))
         sb_ = tuple(torch.from_numpy(x) for x in cache.batch(sidx))
         sf, swd, stg = to_targets(sb_, dev)
+        if ZERO_CH:
+            rf[:, ZERO_CH] = 0.0
+            sf[:, ZERO_CH] = 0.0
 
         sw = real_sample_weights(rtg["p_observed"], a.real_weight, a.smps_boost)
 
@@ -520,7 +735,10 @@ def main() -> int:
             rp = crit.unlabeled(model(rf, rwd), rtg, w_cons=a.w_cons,
                                 w_harm=a.w_harm, w_over=a.w_over, w_hedge=a.w_hedge,
                                 sample_w=sw, w_real_on=a.w_real_on,
-                                w_consq=a.w_consq, w_pref=a.w_pref)
+                                w_consq=a.w_consq, w_pref=a.w_pref,
+                                w_res=a.w_res, w_swap=a.w_swap,
+                                swap_tol=a.swap_tol, swap_slack=a.swap_slack,
+                                companion=bool(a.companion))
             sp = crit(model(sf, swd), stg)
             loss = rp["total"] + a.lam * sp["total"]
         opt.zero_grad(set_to_none=True)
@@ -529,7 +747,8 @@ def main() -> int:
         opt.step()
 
         for k, v in (("real_cons", rp["cons"]), ("real_harm", rp["harm"]),
-                     ("real_consq", rp["consq"]),
+                     ("real_consq", rp["consq"]), ("real_res", rp["res"]),
+                     ("real_swap", rp["swap"]), ("swap_frac", rp["swap_frac"]),
                      ("real_hedge", rp["hedge"]), ("real_on", rp["real_on"]),
                      ("synth_total", sp["total"]), ("loss", loss)):
             d = v.detach()
@@ -542,7 +761,12 @@ def main() -> int:
                   f"(실측 cons {m['real_cons']:.2f} harm {m['real_harm']:.3f} "
                   f"hedge {m['real_hedge']:.3f}"
                   + (f" consQ {m['real_consq']:.2f}" if a.w_consq > 0 else "")
-                  + (f" on {m['real_on']:.3f}" if a.w_real_on > 0 else "") + f" / "
+                  + (f" on {m['real_on']:.3f}" if a.w_real_on > 0 else "")
+                  + (f" res {m['real_res']:.2f}" if a.w_res > 0 else "")
+                  # 감독 창 비율을 같이 찍는다 — 맞바꿈이 드물면 항이 켜져 있어도
+                  # 아무 일이 안 일어난다 (`_criteria_hwL.md` 의 미리 적은 위험).
+                  + (f" swap {m['real_swap']:.3f} (창 {m['swap_frac']*100:.1f}%)"
+                     if a.w_swap > 0 else "") + f" / "
                   f"합성 {m['synth_total']:.4f})  [{time.time()-t0:.0f}s]", flush=True)
             hist.append(snapshot(f"step {step}"))
             agg, nb = {}, 0

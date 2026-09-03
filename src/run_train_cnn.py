@@ -209,6 +209,13 @@ def main() -> int:
                          "달라지므로 홀드아웃도 그 값으로 다시 만들어야 한다 (12.45)")
     ap.add_argument("--cache", default="cache/train60",
                     help="학습 캐시 경로. 'none' 이면 실시간 합성 (12.8.2절 참조)")
+    ap.add_argument("--zero-channels", default="", metavar="LIST",
+                    help="세밀 입력의 이 채널들을 **0 으로 만든다** (쉼표). "
+                         "채널 하나의 효과를 재는 **가장 조인 대조**다 — 채널 수를 "
+                         "바꾸면 첫 층 모양이 달라져 초기화 난수까지 바뀌고, "
+                         "12.114 가 바로 그 재학습 잡음에 묻혀 판정을 못 했다. "
+                         "여기서는 구조·초기화·자료 순서가 전부 같고 그 채널의 "
+                         "**값만** 없어진다")
     ap.add_argument("--fine-channels", type=int, default=None, metavar="N",
                     help="세밀 갈래가 쓸 채널 수 (기본: inputs.FINE_CHANNELS). "
                          "캐시는 그대로 두고 앞에서부터 N 개만 쓴다. "
@@ -227,9 +234,14 @@ def main() -> int:
     print(f"[Phase 3] 2갈래 CNN — 세밀 10초@60Hz + 광역 60초@2Hz, 타깃 끝-1초")
     print("=" * 84)
 
+    ZERO_CH = [int(x) for x in a.zero_channels.split(",") if x.strip()]
+    if ZERO_CH:
+        print(f"  ** 세밀 채널 {ZERO_CH} 를 0 으로 (조인 대조, 12.114 재시험) **")
     hs = load_holdout(a.holdout)
     apps = hs.appliances
     prep = prepare_holdout_inputs(hs)
+    if ZERO_CH:
+        prep[0][:, ZERO_CH] = 0.0        # 학습과 평가가 같은 입력을 봐야 한다
     # 변환이 끝나면 3.8GB 원시 memmap 은 더 필요 없다. 놓아 주어야
     # 그 페이지가 작업집합에 남지 않는다.
     hs.X = np.zeros((len(prep[0]), 1, 1), np.float32)
@@ -338,6 +350,8 @@ def main() -> int:
         t0 = time.time(); agg, nb = {}, 0
         for batch in epoch_batches():
             fine, wide, tgt = to_targets(batch, dev)
+            if ZERO_CH:
+                fine[:, ZERO_CH] = 0.0        # 12.114 재시험의 조인 대조
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
                 out = model(fine, wide)
                 parts = crit(out, tgt)

@@ -81,6 +81,8 @@ from src import env_guard  # noqa: F401
 
 import numpy as np
 import pandas as pd
+
+from src.preprocessing.raw_csv import read_raw_csv
 from scipy.optimize import least_squares, minimize
 
 #: 홀수차만 쓴다 — 12.72(전류 짝수차는 레인지 전환 인공물)와 12.147(전압 짝수차가
@@ -93,7 +95,9 @@ def load_blocks(stem: str, orders: Sequence[int] = ORDERS) -> Dict[int, tuple]:
     """차수마다 (복소 I, |V|) 를 30사이클 블록으로. **라벨을 안 쓴다.**"""
     cols = ([f"vh{h}" for h in orders] + [f"ih{h}" for h in orders]
             + [f"ihdeg{h}" for h in orders])
-    d = pd.read_csv(f"data/{stem}.csv", usecols=cols)
+    # ⚠ 반드시 정본 순서로 읽는다 — 원본 CSV 는 재전송 때문에 패킷 순서가
+    #   뒤바뀌어 있다 (12.152). 계단법은 연속한 두 창의 차를 보므로 치명적이다.
+    d, _ = read_raw_csv(f"data/{stem}.csv", usecols=cols)
     n = len(d) // BLOCK * BLOCK
     out = {}
     for h in orders:

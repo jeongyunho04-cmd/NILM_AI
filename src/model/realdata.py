@@ -363,6 +363,8 @@ def harmonic_offset(stems, target_cycle, coef_npz: str, n_harm: int = 15,
     """
     import pandas as pd
 
+    from src.preprocessing.raw_csv import read_raw_csv
+
     z = np.load(coef_npz, allow_pickle=True)
     B = np.asarray(z["coef"], np.float64)
     mu, sd = np.asarray(z["mu"], np.float64), np.asarray(z["sd"], np.float64)
@@ -379,7 +381,11 @@ def harmonic_offset(stems, target_cycle, coef_npz: str, n_harm: int = 15,
         if not (os.path.exists(csv_p) and os.path.exists(npz_p)):
             continue                                   # 원자료가 없으면 보정 0
         cols = ["vrms"] + [f"ih{h}" for h in zo] + [f"ihdeg{h}" for h in zo]
-        csv = pd.read_csv(csv_p, usecols=cols)
+        # ⚠ **정본 순서로 읽어야 한다** (12.152). 원본 CSV 는 Wi-Fi 재전송 때문에
+        #   패킷 순서가 뒤바뀌어 있고(전 파일 3,226곳), npz 는 이미 정렬돼 있다.
+        #   정렬 안 하면 아래 vrms 상관이 그만큼 흐려진다 — test.2 0.797 /
+        #   test3 0.878 로 11파일 중 최저 둘이었던 것이 정확히 가장 엉킨 둘이다.
+        csv, _ = read_raw_csv(csv_p, usecols=cols)
         nv = np.asarray(load_nilm_npz(npz_p)["power_features"])[:, 4]
         best = (-2.0, 0)
         for sh in range(-400, 401, 10):

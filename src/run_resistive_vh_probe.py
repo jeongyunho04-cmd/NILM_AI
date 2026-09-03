@@ -39,6 +39,8 @@ from src import env_guard  # noqa: F401
 import numpy as np
 import pandas as pd
 
+from src.preprocessing.raw_csv import read_raw_csv
+
 #: 순저항으로 보는 기기와 그 격리 녹화. `fan`/`air_conditioner` 는 뺐다 —
 #: 12.150.3 에서 선풍기는 선형이지만 저항이 아니고 에어컨은 비선형이다.
 RESISTIVE: Dict[str, List[str]] = {
@@ -53,7 +55,8 @@ ORDERS = (1, 3, 5, 7, 9, 11, 13, 15)
 def load(stem: str, orders=ORDERS):
     cols = ["p_w", "vrms"] + [f"ih{h}" for h in orders] \
         + [f"ihdeg{h}" for h in orders] + [f"vh{h}" for h in orders]
-    d = pd.read_csv(f"data/{stem}.csv", usecols=cols)
+    # 정본 순서 (12.152). hotplate_1 은 순서 뒤바뀜이 210곳이다.
+    d, _ = read_raw_csv(f"data/{stem}.csv", usecols=cols)
     I = np.stack([d[f"ih{h}"].to_numpy(np.float64)
                   * np.exp(1j * np.deg2rad(d[f"ihdeg{h}"].to_numpy(np.float64)))
                   for h in orders], 1)                       # (N, H) 복소

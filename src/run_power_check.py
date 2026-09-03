@@ -115,6 +115,9 @@ def recompute_reference(npz_dir: str = "processed_data/npz",
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--events", default="", metavar="JSON",
+                    help="라벨 파일을 바꿔 채점한다 (12.155). 기본은 "
+                         "processed_data/real_events.json")
     ap.add_argument("--ckpt", nargs="+", default=["results/adapt_ovh.pt"])
     ap.add_argument("--stems", nargs="+", default=None, help="기본: 봉인 안 된 전부")
     ap.add_argument("--postproc", default="off", choices=("off", "on", "sync"))
@@ -157,7 +160,7 @@ def main() -> None:
         return
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    ev = load_events()
+    ev = load_events(a.events) if a.events else load_events()
     stems = a.stems or [s for s in sorted(ev) if not is_sealed(s)]
     payload: Dict[str, dict] = {}
 

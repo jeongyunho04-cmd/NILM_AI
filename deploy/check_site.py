@@ -102,7 +102,32 @@ def read_csv(path: Path, cols) -> dict:
                     out[c].append(float(row[idx[c]]))
             except ValueError:
                 continue
-    return {c: np.asarray(v, float) for c, v in out.items()}
+    d = {c: np.asarray(v, float) for c, v in out.items()}
+    return _canonical(d)
+
+
+def _canonical(d: dict) -> dict:
+    """**정본 순서로 되돌린다.** 수신기는 Wi-Fi 재전송 때문에 패킷을 순서가
+    뒤바뀐 채 기록한다 — 학습 자료 44파일에서 3,226곳이었다 (최대 7.5초).
+    계단법은 연속한 두 창의 차를 보므로 정렬 안 하면 없는 계단을 만든다.
+
+    `seq`/`cycle` 이 없으면(옛 펌웨어) 그대로 둔다.
+    """
+    if "seq" not in d or "cycle" not in d:
+        return d
+    key = d["seq"] * BLOCK + d["cycle"]
+    # 보드 리셋으로 seq 가 되감기면 뒤 세션만 남긴다 (겹치는 seq 가 섞이면 못 쓴다).
+    reset = np.flatnonzero(np.diff(d["seq"]) < -32)
+    lo = int(reset[-1]) + 1 if len(reset) else 0
+    if lo:
+        print(f"  ⚠ 녹화가 {len(reset)+1}개 이어져 있습니다. 마지막 것만 씁니다 "
+              f"({len(d['seq']) - lo:,}/{len(d['seq']):,}행).")
+        d = {c: v[lo:] for c, v in d.items()}
+        key = key[lo:]
+    o = np.argsort(key, kind="stable")
+    _, first = np.unique(key[o], return_index=True)      # 중복 패킷 제거
+    o = o[first]
+    return {c: v[o] for c, v in d.items()}
 
 
 def blocks(x: np.ndarray) -> np.ndarray:
@@ -123,7 +148,8 @@ def main() -> int:
     if not p.exists():
         raise SystemExit(f"파일이 없습니다: {p}")
     hs = [1, 3, 5, 7, 9]
-    d = read_csv(p, ["irms", "vrms"] + [f"ih{h}" for h in hs]
+    # `seq`/`cycle` 은 정본 순서 복원에 쓴다 (`_canonical`). 없어도 돈다.
+    d = read_csv(p, ["seq", "cycle", "irms", "vrms"] + [f"ih{h}" for h in hs]
                  + [f"ihdeg{h}" for h in hs] + [f"vh{h}" for h in hs])
 
     I1 = blocks(d["ih1"] * np.cos(np.deg2rad(d["ihdeg1"]))) \
@@ -219,7 +245,7 @@ def main() -> int:
         print("          --out results/z_site.npz")
         print("      # ② 계수는 그대로, 임피던스만 현장 값으로 (3분, 라벨 0)")
         print("      python -X utf8 -m src.run_adapt --init results/cnn_ovh.pt \\")
-        print("          --cache cache/train60_ovh --steps 1000 --seed 0 --harm-weight inv_h2 \\")
+        print("          --cache cache/train60_ovh_30k --steps 1000 --seed 0 --harm-weight inv_h2 \\")
         print("          --harm-offset results/norton_coef.npz \\")
         print("          --harm-offset-z results/z_site.npz --tag adapt_zi_site --out results")
         print("      cp results/adapt_zi_site.pt deploy/models/")

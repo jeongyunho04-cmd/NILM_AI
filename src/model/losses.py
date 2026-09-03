@@ -139,6 +139,10 @@ class NILMLoss(torch.nn.Module):
         noise_q: float = 0.0,                        # 계측계 무효전력 (VAR)
         power_ref: Optional[torch.Tensor] = None,    # (K,) 참값 전력, 0 = 모름 (12.145)
         sig_real: Optional[torch.Tensor] = None,     # (K,H,2) **실측 갈래 전용** 지문 (12.151.1)
+        companion_sig: Optional[torch.Tensor] = None,   # (K,H,2) 동반 부하 페이저 (12.156)
+        companion_w: Optional[torch.Tensor] = None,     # (K,) 동반 부하 전력 (W)
+        res_ohm: Optional[torch.Tensor] = None,         # (K,) 등가저항 Ω, 0 = 안 건다 (12.156)
+        res_ohm_half: Optional[torch.Tensor] = None,    # (K,) 반파 상태의 등가저항 (12.157)
     ):
         super().__init__()
         self.register_buffer("s_i", s_i.clamp(min=1e-3))
@@ -166,6 +170,76 @@ class NILMLoss(torch.nn.Module):
         # 따로 녹화한 상수). 모르는 기기는 0 이라 항에서 빠진다.
         self.register_buffer("power_ref", power_ref if power_ref is not None
                              else torch.zeros(len(s_i)))
+        # ── 동반 부하 (2026-09-03, 12.156) ────────────────────────────────
+        # **오븐만 가진 것을 오븐에게 준다.** 오븐은 `OFF_STANDBY / FAN_LIGHT /
+        # HEATING` 세 상태인데 라벨이 FAN_LIGHT 를 `is_on=0, target_power_w=0`
+        # 으로 적는다 — 즉 조명·컨벡션 팬의 14.2W 는 **어느 기기 몫도 아니게**
+        # 배경으로 흘러간다. 그래서 `standby_profile` 이 OFF_STANDBY 의 0.40W 고,
+        # 오븐이 존재하는 시간의 52~73% 를 차지하는 상태가 순방향 모형에 없다.
+        #
+        # 왜 이것이 배분을 고치는가: 포트와 오븐은 `L_harm` 에서 **전력 크기를
+        # 빼면 축퇴**다. 판별 기여 18.27 중 h1 이 17.38(97.6%)이고 모양(h2~h8)은
+        # 다 합쳐 0.886(4.9%)뿐이다 (와트당 지문이 h1 1.3%, h5 4.2%, h7 3.9% 차).
+        # 그래서 압력이 어디서 오든 이 축으로 미끄러진다 — 12.155.6 의 반파 채널이
+        # 포트 1,209W 를 **장소 B 에 없는 오븐**에게 넘긴 것이 그것이다.
+        # 동반 부하는 크기가 아니라 **신원**을 요구한다: 오븐이 켜졌다면 어딘가에
+        # 64mA/|u3| 0.058 의 SMPS 전류가 같이 있어야 한다. 포트에는 그런 상태가 없다.
+        #
+        # **`(1−σ(on))` 을 곱하지 않는다.** `standby` 항과 다른 점이 이것이다.
+        # 팬·조명은 히터와 **동시에** 돈다 — 격리에서 HEATING 의 |I3| 중 27~58%
+        # 가 팬/조명 몫이고, 빼고 남은 잔차의 |u3| 가 0.0010~0.0028 로 순수
+        # 니크롬이다 (등가저항 40.6Ω -> 히터만 41.2Ω). 그래서 `σ(plugged)` 로만
+        # 건다. 히터가 꺼진 주기에도, 켜진 주기에도 같은 값이 흐른다.
+        #
+        # 상수의 재현성 (규칙 14): 녹화 3개에서 P 14.48/14.20/14.21W,
+        # |I1| 64.49/63.86/64.26mA — **폭/중앙 0.010**. `REFERENCE_W` 의 채택
+        # 문턱 0.10 을 열 배 여유로 통과한다.
+        self.register_buffer("companion_sig", companion_sig if companion_sig is not None
+                             else torch.zeros(len(s_i), h, 2))
+        self.register_buffer("companion_w", companion_w if companion_w is not None
+                             else torch.zeros(len(s_i)))
+        # ── 저항 컨덕턴스 정합 `L_res` (2026-09-03, 12.156) ────────────────
+        # `resistive_match`(12.112) 가 후처리에서 푸는 것을 **손실로 옮긴다.**
+        # 니크롬선이라 `P = V²/R` 이고 `R` 이 기기 고유값이다 (같은 기기 다른
+        # 녹화에서 0.1~1.3%). 포트 35.8Ω 과 오븐 40.6Ω 은 13% 차이라 222V 에서
+        # **163W** 벌어진다 — h1 이 못 가르는 그 크기를 정확히 가른다.
+        #
+        # 12.155.6 이 잃은 창에서 재 보면 16조합 중 최적이 포트를 93/88/93% 로
+        # 지목하고 **오븐은 상위 4위 안에 한 번도 안 든다.** 정보는 깨끗한데
+        # 모델에게 준 적이 없어서 후처리가 뒤늦게 고치고 있었다 (그것도 절반만 —
+        # 포트 F1 0.403 -> 0.767).
+        #
+        # ⚠ **포트·오븐에만 건다.** 핫플은 장소 B 에서 230~240W 로 도는데 참조가
+        #   460W 고(12.155 의 남은 것 [3]), 드라이기는 강 54.3Ω / 약 108.6Ω 로
+        #   상태마다 다르다. 그 둘은 모델 예측을 그대로 쓴다 — 안 그러면 이 항이
+        #   틀린 값을 강요한다 (규칙 14).
+        self.register_buffer("res_ohm", res_ohm if res_ohm is not None
+                             else torch.zeros(len(s_i)))
+        # ── 상태 의존 저항 (2026-09-03, 12.157) ────────────────────────────
+        # 드라이기는 **하나의 R 로 못 적는다** — 강풍은 전파 54.3Ω, 약풍은 반파라
+        # 겉보기 108.6Ω 이다 (12.109.2). 그래서 12.156 은 아예 뺐다.
+        #
+        # **그런데 반파 채널이 바로 그 상태를 알려준다.** 12.156.7 이 실측 계단으로
+        # 다시 재서 확인했다 — 반파로 가르면 강 0.997(n=27), 약 0.984(n=7) 로 둘 다
+        # 맞고, 약풍 쪽 폭/중앙이 **0.008 로 다섯 기기 중 가장 안정적**이다.
+        # 안 가르면 R 이 1.975 로 터진다 (두 상태가 섞여서).
+        #
+        # 이 버퍼가 0 이 아닌 기기는 창마다 `res_ohm` 과 이 값 중 하나를 쓴다.
+        # 관문은 `postproc.HALFWAVE_ABS_MIN` 의 **절대량** 판이다 — 비율은
+        # 복합에서 분모가 터져 죽는다 (12.114.2 가 반증한 형태).
+        self.register_buffer("res_ohm_half", res_ohm_half if res_ohm_half is not None
+                             else torch.zeros(len(s_i)))
+        # `L_swap`(12.158) 이 셀 조합. 저항 열의 on/off 전수다 (4종이면 16개).
+        nres = int((self.res_ohm > 0).sum()) if res_ohm is not None else 0
+        if nres > 0:
+            import itertools as _it
+            _c = torch.tensor(list(_it.product([0.0, 1.0], repeat=nres)),
+                              dtype=torch.float32)
+        else:
+            _c = torch.zeros(0, 0)
+        self.register_buffer("_swap_combos", _c)
+        #: 저항 몫이 이보다 작은 창은 안 건드린다 (`resistive_match` 의 `min_w`).
+        self.swap_min_w = 150.0
         # ── 무효전력 보존 (12.133) ────────────────────────────────────────
         # 저항은 등가저항 `R = V²/P` 가 기기 고유값이라 `resistive_match` 가 조합을
         # 역산할 수 있는데, SMPS 에는 그런 둘째 판별자가 없어서 배분이 `L_harm`
@@ -380,7 +454,12 @@ class NILMLoss(torch.nn.Module):
                   sample_w: Optional[torch.Tensor] = None,
                   w_real_on: float = 0.0,
                   w_consq: float = 0.0,
-                  w_pref: float = 0.0) -> Dict[str, torch.Tensor]:
+                  w_pref: float = 0.0,
+                  w_res: float = 0.0,
+                  w_swap: float = 0.0,
+                  swap_tol: float = 0.02,
+                  swap_slack: int = 0,
+                  companion: bool = False) -> Dict[str, torch.Tensor]:
         """**기기별 라벨이 없는 실측 창**용 손실 (4.2절 2단계).
 
         실측 복합 부하에는 기기별 정답이 없다. 라벨이 필요 없는 항만 쓴다.
@@ -412,7 +491,13 @@ class NILMLoss(torch.nn.Module):
             return (x * w).sum() / (w.expand_as(x).sum().clamp(min=1e-6))
 
         parts: Dict[str, torch.Tensor] = {}
+        # 동반 부하가 꽂혀 있으면 그 전력도 관측에 들어 있다 (12.156). `L_cons`
+        # 가 세지 않으면 이 항이 낸 14.2W 가 잔차로 남아 다른 기기로 간다.
+        comp = (torch.sigmoid(out["plugged_logit"]) if companion
+                else torch.zeros_like(out["power"]))
         recon = out["power"].sum(1) + out["standby"].sum(1) + tgt["p_noise"]
+        if companion:
+            recon = recon + (comp * self.companion_w[None]).sum(1)
         parts["cons"] = wmean((recon - tgt["p_observed"]).abs())
 
         # ── 무효전력 보존 `L_cons^Q` (12.133) ────────────────────────────────
@@ -462,6 +547,11 @@ class NILMLoss(torch.nn.Module):
                                * self.h1_only[None, :, None])
             idle = torch.sigmoid(out["plugged_logit"]) * (1.0 - torch.sigmoid(out["on_logit"]))
             pred = pred + torch.einsum("bk,khc->bhc", idle, self.standby_sig)
+            # 동반 부하 (12.156). **`(1−σ(on))` 이 없다** — 팬·조명은 히터와
+            # 동시에 돈다. 이 항이 오븐의 신원을 요구한다: 켜졌다면 64mA 의
+            # SMPS 전류가 같이 있어야 하고, 포트에는 그런 상태가 없다.
+            if companion:
+                pred = pred + torch.einsum("bk,khc->bhc", comp, self.companion_sig)
             pred = pred + self.noise_sig[None]
             # ── 교차주파수 어드미턴스 보정 (12.148) ────────────────────────────
             # `sig` 는 **fixed current injection** 모형이라 기기 전류가 계통 조건과
@@ -552,14 +642,151 @@ class NILMLoss(torch.nn.Module):
         # `p_raw` 에 걸고 게이트는 **기울기를 끊어** 마스크로만 쓴다.
         if w_pref > 0 and float(self.power_ref.abs().sum()) > 0:
             m = (self.power_ref > 0).to(out["power_raw"].dtype)[None]      # (1,K)
+            # ── 창별 참값 마스크 (12.159) ──────────────────────────────────
+            # 어떤 기기는 **특정 파일에서만** 참값을 안다. 미니PC 가 그렇다 —
+            # `test_14`~`test_18` 은 마우스 고장으로 IDLE 전용이라 9.90W 이고
+            # (폭/중앙 0.065), 장소 A 의 `test_13` 에는 ACTIVE(+27.3W 계단)가
+            # 섞인다. 전역으로 걸면 그 창에 틀린 값을 강요한다 (규칙 14).
+            if tgt.get("pref_mask") is not None:
+                m = m * tgt["pref_mask"].to(m.dtype)                        # (B,K)
             g = torch.sigmoid(out["on_logit"]).detach()                    # 마스크로만
             w8 = (out["power_raw"] - self.power_ref[None]).abs() * m * g
-            parts["pref"] = wmean(w8.sum(1, keepdim=True)) / max(float(m.sum()), 1.0)
+            denom = (m.sum(-1).mean() if m.dim() > 1 else m.sum()).clamp(min=1.0)
+            parts["pref"] = wmean(w8.sum(1, keepdim=True)) / denom
         else:
             parts["pref"] = out["power"].sum() * 0.0
+
+        # ── 저항 컨덕턴스 정합 `L_res` (2026-09-03, 12.156) ────────────────
+        # 니크롬선은 `P = V²/R` 이고 `R` 이 기기 고유값이다. 그래서 **저항 몫을
+        # 컨덕턴스로 옮기면 조합을 셀 수 있다** — `resistive_match`(12.112) 가
+        # 후처리에서 하는 그 계산이다. 여기서는 그것을 손실로 옮긴다.
+        #
+        #     G_예측 = Σ_{포트,오븐} σ(on_k)/R_k  +  (핫플·드라이기 예측)/V²
+        #     G_관측 = (P_관측 − 비저항 예측 − 대기 − 동반 − 계측) / V²
+        #     L_res  = |G_예측 − G_관측| · V²        (와트라 읽을 수 있다)
+        #
+        # **포트 35.8Ω, 오븐 40.6Ω 은 222V 에서 163W 벌어진다.** `L_harm` 의
+        # h1 이 못 가르는 그 크기다. 12.155.6 이 잃은 창에서 재면 16조합 중
+        # 최적이 포트를 93/88/93% 로 지목하고 오븐은 상위 4위에 한 번도 없다.
+        #
+        # 핫플·드라이기는 `res_ohm` 이 0 이라 이 항이 저항을 강요하지 않고
+        # **모델 예측을 그대로 컨덕턴스로 환산해 넣는다** (위 ⚠ 주석 참조).
+        # 그래서 이 항은 "저항 총량은 맞추되 포트·오븐의 **신원**만 못 박는다".
+        #
+        # `p_raw` 가 아니라 게이트에 건다 — 겨냥이 크기가 아니라 누구인지다.
+        if w_res > 0 and float(self.res_ohm.abs().sum()) > 0 and tgt.get("v_rms") is not None:
+            v2 = tgt["v_rms"].clamp(min=1.0) ** 2                          # (B,)
+            fixed = (self.res_ohm > 0).to(out["power"].dtype)[None]        # (1,K)
+            gcond = torch.reciprocal(self.res_ohm.clamp(min=1e-6))[None] * fixed
+            # ── 상태 의존 저항 (12.157) ──────────────────────────────────
+            # 드라이기 약풍은 반파라 겉보기 저항이 2배다. 관문을 **관측 고조파**로
+            # 건다 — 모델 출력이 아니라 자료에서 오므로 순환이 없다.
+            if float(self.res_ohm_half.abs().sum()) > 0 and tgt.get("obs_harm") is not None:
+                from src.model.postproc import HALFWAVE_ABS_MIN
+                h = tgt["obs_harm"]
+                i2 = torch.linalg.vector_norm(h[:, 1], dim=-1)
+                i4 = torch.linalg.vector_norm(h[:, 3], dim=-1)
+                half = ((i2 - i4) > HALFWAVE_ABS_MIN).to(gcond.dtype)[:, None]  # (B,1)
+                alt = (torch.reciprocal(self.res_ohm_half.clamp(min=1e-6))[None]
+                       * (self.res_ohm_half > 0).to(gcond.dtype)[None])
+                sw = (self.res_ohm_half > 0).to(gcond.dtype)[None]              # (1,K)
+                gcond = gcond * (1.0 - sw * half) + alt * (sw * half)
+            sg = torch.sigmoid(out["on_logit"])
+            p_fixed = (sg * gcond).sum(1) * v2                             # 못 박은 기기
+            p_free = (out["power"] * (1.0 - fixed)).sum(1)                 # 나머지
+            recon_r = p_fixed + p_free + out["standby"].sum(1) + tgt["p_noise"]
+            if companion:
+                recon_r = recon_r + (comp * self.companion_w[None]).sum(1)
+            parts["res"] = wmean((recon_r - tgt["p_observed"]).abs())
+        else:
+            parts["res"] = out["power"].sum() * 0.0
+
+        # ── 저항 조합 맞바꿈 `L_swap` (2026-09-03, 12.158) ──────────────────
+        # 12.157.4b 가 확정했다: `σ` 를 곱해 거는 항은 게이트가 바닥이면 안 닿는다.
+        # 같은 `L_res` 가 포트(σ중앙 0.0344)에서는 Δ +0.563 인데 핫플(0.0033)은
+        # +0.009, 드라이기 강풍(0.0001)은 −0.011 이다 — **완전한 단조**이고
+        # 유일한 차이가 게이트다. `dσ/dlogit = σ(1−σ)` 가 330배 갈린다.
+        #
+        # 그래서 `σ` 를 안 거치고 **로짓에 직접** 건다. 무엇을 가르칠지는
+        # `resistive_match`(12.112) 가 후처리에서 푸는 그 계산으로 정한다 —
+        # 컨덕턴스는 병렬로 더해지므로 조합을 셀 수 있고, **라벨이 필요 없다**
+        # (관측 P·V 와 기기 고유 R 만 쓴다).
+        #
+        # 12.112 의 두 제한을 그대로 가져온다:
+        #   ① **개수는 안 바꾸고 맞바꿈만.** 제한 없이 돌리면 정합기가 없는 기기를
+        #      발명한다 (test_9 유령 3.94 -> 86.98W). 겨냥인 "드라이기 강풍이
+        #      꺼지고 오븐이 켜진 것" 은 개수가 같은 맞바꿈이라 이 제한으로도 닿는다.
+        #   ② **tol 밖은 안 건드린다.** 설명 못 하는 창을 억지로 가르치지 않는다.
+        #
+        # 그리고 하나를 더 건다: **`best == 현재` 인 창은 감독하지 않는다.**
+        # 거기서 BCE 는 "지금 결정을 더 확신해라" 인데, 후처리와 달리 손실은
+        # 1,000 스텝을 밀므로 틀린 결정이 굳는다 (12.122.2 의 *"최소가 오답 쪽에
+        # 있다"*). 맞바꿈이 필요한 창에만 힘을 준다.
+        if (w_swap > 0 and float(self.res_ohm.abs().sum()) > 0
+                and tgt.get("v_rms") is not None):
+            cols = torch.nonzero(self.res_ohm > 0, as_tuple=False).flatten()
+            with torch.no_grad():
+                v2 = tgt["v_rms"].clamp(min=1.0) ** 2
+                fx = (self.res_ohm > 0).to(out["power"].dtype)[None]
+                gc = torch.reciprocal(self.res_ohm.clamp(min=1e-6))[None] * fx
+                if (float(self.res_ohm_half.abs().sum()) > 0
+                        and tgt.get("obs_harm") is not None):
+                    from src.model.postproc import HALFWAVE_ABS_MIN
+                    h = tgt["obs_harm"]
+                    i2 = torch.linalg.vector_norm(h[:, 1], dim=-1)
+                    i4 = torch.linalg.vector_norm(h[:, 3], dim=-1)
+                    hf = ((i2 - i4) > HALFWAVE_ABS_MIN).to(gc.dtype)[:, None]
+                    alt = (torch.reciprocal(self.res_ohm_half.clamp(min=1e-6))[None]
+                           * (self.res_ohm_half > 0).to(gc.dtype)[None])
+                    sw = (self.res_ohm_half > 0).to(gc.dtype)[None]
+                    gc = gc * (1.0 - sw * hf) + alt * (sw * hf)
+                gcr = gc.expand(out["power"].shape[0], -1)[:, cols]       # (B,R)
+                # 저항 몫 = 관측 − (안 박은 기기 예측 + 대기 + 동반 + 계측)
+                p_other = (out["power"] * (1.0 - fx)).sum(1)
+                p_res = (tgt["p_observed"] - p_other
+                         - out["standby"].sum(1) - tgt["p_noise"])
+                if companion:
+                    p_res = p_res - (comp * self.companion_w[None]).sum(1)
+                g_need = p_res / v2                                       # (B,)
+                cb = self._swap_combos.to(gcr.dtype)                      # (C,R)
+                cg = cb @ gcr.T                                           # (C,B)
+                cur = (out["on_logit"][:, cols] > 0.0).to(cb.dtype)       # (B,R) σ>0.5
+                k = cur.sum(1)                                            # (B,)
+                # ── 개수 여유 (12.158.2) ──────────────────────────────
+                # 12.112 의 "개수는 안 바꾸고 맞바꿈만" 은 **후처리의 규율**이다.
+                # 거기서는 겨냥이 맞바꿈이었고, 제한을 풀자 정합기가 없는 기기를
+                # 발명했다 (test_9 유령 3.94 -> 86.98W).
+                #
+                # **여기서는 겨냥이 다르다.** 12.158.1 이 잰 것: 드라이기 강풍
+                # 정답 ON 1,255창 중 **44%(548창)는 저항이 하나도 안 켜져 있다.**
+                # 개수를 고정하면 빈 조합만 후보라 `best==cur` 이 되어 감독에서
+                # 통째로 빠진다. 그 창을 고치려면 개수를 늘려야 한다.
+                #
+                # 그래서 ±`swap_slack` 을 허용한다. 0 이면 12.112 와 같다.
+                # 무한정 풀지 않는 이유는 그 유령 폭주가 실재하기 때문이다 —
+                # 손실은 `L_cons`/`L_harm` 과 경쟁하므로 후처리보다 덜하겠지만
+                # 안 재 봤다.
+                dk = (cb.sum(1)[:, None] - k[None, :]).abs()
+                same_k = (dk <= float(swap_slack))                        # (C,B)
+                err = (cg - g_need[None]).abs()
+                err = err.masked_fill(~same_k, float("inf"))
+                bi = err.argmin(0)                                        # (B,)
+                best = cb[bi]                                             # (B,R)
+                # tol: 상대오차. 저항 몫이 작은 창은 아예 안 건드린다.
+                rel = err.gather(0, bi[None]).squeeze(0) * v2 / p_res.abs().clamp(min=1.0)
+                m = ((rel <= swap_tol) & (p_res > self.swap_min_w)
+                     & (best != cur).any(1)).to(out["on_logit"].dtype)     # (B,)
+            bce = F.binary_cross_entropy_with_logits(
+                out["on_logit"][:, cols], best, reduction="none")          # (B,R)
+            parts["swap"] = (bce.mean(1) * m).sum() / m.sum().clamp(min=1.0)
+            parts["swap_frac"] = m.mean().detach()
+        else:
+            parts["swap"] = out["power"].sum() * 0.0
+            parts["swap_frac"] = out["power"].sum().detach() * 0.0
 
         parts["total"] = (w_cons * parts["cons"] + w_harm * parts["harm"]
                           + w_over * parts["over"] + w_hedge * parts["hedge"]
                           + w_real_on * parts["real_on"]
-                          + w_consq * parts["consq"] + w_pref * parts["pref"])
+                          + w_consq * parts["consq"] + w_pref * parts["pref"]
+                          + w_res * parts["res"] + w_swap * parts["swap"])
         return parts

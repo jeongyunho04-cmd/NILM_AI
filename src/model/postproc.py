@@ -548,6 +548,20 @@ RESISTIVE_OHM: Dict[str, float] = {
 HALFWAVE_OHM: Dict[str, float] = {"hair_dryer": 108.6}
 HALFWAVE_I2_MIN = 0.15
 
+#: 반파 관문의 **절대량** 판(12.157). `|I2| − |I4| > 이 값` (A).
+#
+# `HALFWAVE_I2_MIN` 은 비율 `|I2|/|I1|` 이라 **복합에서 분모가 터져 죽는다** —
+# 12.114.2 가 반증한 형태다. 실측 4파일에서 재면 비율 관문이 여는 창이
+# test_16 18.6% 인데 절대 관문은 28.7% 다 (test_17 16.5 -> 33.7%).
+#
+# 절대 차분은 12.114 의 ch50 과 **같은 양**이다 — 평평한 계측 인공물이 상쇄되고
+# 반파만 남는다 (반파는 h2 에서 h8 로 20배 감쇠, 인공물은 평평).
+#
+# 문턱 0.1A 의 근거: 격리 약풍 0.670A 의 1/6 이고, 복합 창 바닥(p50 ≤0.006A,
+# p90 은 드라이기 없는 파일에서 0.0035~0.017A)의 6~16배다. 분포가 이봉이라
+# (드라이기 있는 파일 p90 0.57~0.69) 이 사이가 비어 있다.
+HALFWAVE_ABS_MIN = 0.1
+
 
 def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
                     p_observed: np.ndarray, v_rms: np.ndarray,
