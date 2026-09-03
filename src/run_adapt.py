@@ -259,13 +259,13 @@ def main() -> int:
     ap.add_argument("--w-res", type=float, default=0.0, metavar="W",
                     help="**저항 컨덕턴스 정합** `L_res` (12.156). 니크롬선은 "
                          "P = V^2/R 이고 R 이 기기 고유값이라(같은 기기 다른 녹화에서 "
-                         "0.1~1.3%) 저항 몫을 컨덕턴스로 옮기면 조합을 셀 수 있다. "
+                         "0.1~1.3%%) 저항 몫을 컨덕턴스로 옮기면 조합을 셀 수 있다. "
                          "포트 35.8Ω 과 오븐 40.6Ω 은 222V 에서 163W 벌어지는데 "
                          "`L_harm` 은 그 둘을 h1(=전력) 으로만 가른다 — 판별 기여 "
-                         "18.27 중 17.38(97.6%)이 h1 이고 모양은 4.9% 다. 그래서 "
+                         "18.27 중 17.38(97.6%%)이 h1 이고 모양은 4.9%% 다. 그래서 "
                          "12.155.6 의 반파 채널이 포트 1,209W 를 **장소 B 에 없는 "
                          "오븐**에게 넘겼다. 잃은 창에서 16조합 최적을 세면 포트가 "
-                         "93/88/93% 이고 오븐은 상위 4위에 한 번도 없다 — 정보는 "
+                         "93/88/93%% 이고 오븐은 상위 4위에 한 번도 없다 — 정보는 "
                          "깨끗한데 모델에게 준 적이 없어 `resistive_match` 후처리가 "
                          "뒤늦게, 그것도 절반만 고치고 있었다 (포트 F1 0.403 -> 0.767). "
                          "**포트·오븐에만 건다** (핫플은 장소 B 에서 230~240W 로 참조 "
@@ -296,7 +296,7 @@ def main() -> int:
     ap.add_argument("--harm-offset-skip-stems", default="", metavar="LIST",
                     help="이 파일들에는 `harm_offset` 을 **안 건다** (12.160.2). "
                          "`norton_coef` 는 장소 A 8파일에서 적합한 것이고, 장소 B 로 "
-                         "전이하면 보정이 관측을 넘는다 (h9 111%, h13 143%). "
+                         "전이하면 보정이 관측을 넘는다 (h9 111%%, h13 143%%). "
                          "12.148 이 *'전이될 것으로 보지만 확인 안 됐다'* 고 유보한 "
                          "것을 12.155 의 라벨로 확인한 결과다.")
     ap.add_argument("--harm-offset-z-stems", default="", metavar="LIST",
@@ -308,24 +308,28 @@ def main() -> int:
                          "6~11배다.")
     ap.add_argument("--res-apps", default="electiric_kettle,oven", metavar="LIST",
                     help="`--w-res` 가 저항을 못 박을 기기. 기본은 포트·오븐 — "
-                         "축퇴인 쌍이면서 등가저항이 13% 벌어진 유일한 쌍이다.")
-    ap.add_argument("--standby-operating", action="store_true",
+                         "축퇴인 쌍이면서 등가저항이 13%% 벌어진 유일한 쌍이다.")
+    ap.add_argument("--standby-operating", nargs="?", const="all", default="off",
+                    choices=("off", "session", "all"),
                     help="`standby_sig` 를 **동작 중 휴지**의 지문으로 바꾼다 (12.163). "
                          "기본값(`get_standby_profile`)은 `OFF_STANDBY` 인데, 합성은 "
                          "activation 휴지의 전력을 `net_power_features` 에서 가져오므로 "
                          "오븐의 경우 FAN_LIGHT 15.02W 다. 즉 **전력은 FAN_LIGHT 인데 "
                          "고조파는 OFF_STANDBY** 이라 6.44 vs 67.3mA 로 10배 어긋난다. "
-                         "이 플래그가 둘을 같은 상태로 맞춘다.")
+                         "이 플래그가 둘을 같은 상태로 맞춘다. "
+                         "`session` 은 `gt_plugged` 의 뜻이 '동작 중' 으로 바뀐 "
+                         "기기(오븐)에만 건다 (12.164). 값 없이 주면 `all` — "
+                         "12.163 의 자와 같다(오븐+핫플).")
     ap.add_argument("--companion", action="store_true",
                     help="**동반 부하 항** (12.156). 오븐은 `OFF_STANDBY / FAN_LIGHT / "
                          "HEATING` 세 상태인데 라벨이 FAN_LIGHT 를 `is_on=0, "
                          "target_power_w=0` 으로 적어서, 조명·컨벡션 팬의 14.2W 가 "
                          "**어느 기기 몫도 아니게** 배경으로 흘러간다. 그래서 오븐의 "
                          "`standby_profile` 이 0.40W(OFF_STANDBY) 이고, 오븐이 존재하는 "
-                         "시간의 52~73% 를 차지하는 상태가 순방향 모형에 없다. "
+                         "시간의 52~73%% 를 차지하는 상태가 순방향 모형에 없다. "
                          "이 항은 그것을 `σ(plugged)·companion_sig` 로 되돌린다 — "
                          "**`(1−σ(on))` 을 곱하지 않는다.** 팬·조명은 히터와 동시에 "
-                         "돌기 때문이다 (격리 HEATING 의 |I3| 중 27~58%가 팬/조명 몫이고, "
+                         "돌기 때문이다 (격리 HEATING 의 |I3| 중 27~58%%가 팬/조명 몫이고, "
                          "빼고 남은 잔차의 |u3| 0.0010~0.0028 이 순수 니크롬이다). "
                          "겨냥은 크기가 아니라 **신원**이다 — 오븐이 켜졌다면 64mA/"
                          "|u3| 0.058 의 SMPS 전류가 같이 있어야 하고 포트에는 그런 "
@@ -370,7 +374,7 @@ def main() -> int:
     ap.add_argument("--harm-vnorm", action="store_true",
                     help="h1 지문에서 **녹화 전압**을 나눈다 (12.151.1). 지문의 h1 "
                          "실수부 역수가 그 격리 녹화의 선전압이라는 항등식에서 "
-                         "나온다 — 기기 간 11.8% 의 가짜 판별자를 지운다")
+                         "나온다 — 기기 간 11.8%% 의 가짜 판별자를 지운다")
     ap.add_argument("--harm-vnorm-both", action="store_true",
                     help="정규화를 **합성 갈래에도** 건다. 캐시의 `obs_harm` 은 원래 "
                          "지문으로 합성한 것이라 틀린 값이 된다 — **대조용**이다")
@@ -438,11 +442,14 @@ def main() -> int:
     # 값은 다르다** — `synthesizer` 가 activation 휴지의 `gt_standby_p` 를
     # `net_power_features[:,0]` 에서 가져오므로 오븐은 FAN_LIGHT 의 15.02W 다.
     # 전력 15W / 고조파 6.44mA 로 **10배 어긋나 있었다** (실제 67.3mA).
-    if a.standby_operating:
+    if a.standby_operating != "off":
         from src.model.companion import standby_operating_signatures
-        sb_op, sb_pw, sb_used = standby_operating_signatures(pool, apps)
+        from src.synthesis.synthesizer import SESSION_PLUGGED_APPS
+        _only = SESSION_PLUGGED_APPS if a.standby_operating == "session" else None
+        sb_op, sb_pw, sb_used = standby_operating_signatures(pool, apps, only=_only)
         if sb_used:
-            print("  ** 동작 중 휴지 지문 (12.163) — 합성이 넣는 것과 같은 자 **")
+            print(f"  ** 동작 중 휴지 지문 ({a.standby_operating}, 12.163) "
+                  f"— 합성이 넣는 것과 같은 자 **")
             for x in sb_used:
                 _j = apps.index(x)
                 _o = float(np.hypot(sb[_j, 0, 0], sb[_j, 0, 1])) * 1000

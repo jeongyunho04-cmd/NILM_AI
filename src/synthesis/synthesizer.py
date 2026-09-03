@@ -50,6 +50,26 @@ NUM_HARMONICS = 15
 # 국내 멀티탭은 보통 15A(3.3kW) ~ 16A(3.5kW) 정격이라 4kW 는 그 위의 안전 한도다.
 DEFAULT_SUSTAINED_POWER_LIMIT_W = 4000.0
 
+# `gt_is_plugged` 가 "콘센트에 꽂혀 있음" 이 아니라 **"동작 세션 중"** 을
+# 뜻하는 기기 (2026-09-03, 12.164).
+#
+# 오븐은 '안 켜진' 상태가 **둘**이다:
+#     미사용        OFF_STANDBY   0.40 W /  6.44 mA
+#     세션 중 히터off FAN_LIGHT   15.02 W / 67.4  mA   <- 팬과 조명이 돈다
+# 손실의 `idle = σ(plugged)·(1−σ(on))` 은 구조적으로 뒤쪽 자리인데,
+# `gt_plugged` 가 꽂혀 있기만 하면 항상 1 이라 **두 상태를 가를 신호가 없다**.
+# 그래서 모델이 평균값(실측 5.37W)으로 수렴하고, 남는 ~10W 가 다른 기기로
+# 전가되어 SMPS 배분까지 흔든다. 세션 중에만 1 로 두면 `idle` 이 정확히
+# FAN_LIGHT 자리가 되고 오븐 미사용 창에서는 0 이 된다.
+#
+# `gt_is_on` 과 `gt_standby_p` 는 **건드리지 않는다** - 그 둘은 이미 맞다
+# (휴지 구간의 15.02W 는 `net_power_features[:,0]` 에서 온다). 오븐을 3상태로
+# 만들면 `L_res`/`L_swap` 이 FAN_LIGHT 창에 히터 전력 1,143W 를 강요한다.
+#
+# 대기 전류 레이어는 그대로 둔다 - 미사용 오븐도 실제로 6.44mA 를 먹는다.
+# 라벨만 바꾸고 관측은 실측 그대로 유지한다.
+SESSION_PLUGGED_APPS: Tuple[str, ...] = ("oven",)
+
 # 무작위 윈도우에서 가전을 고르는 방식
 SELECTION_REALISTIC = "realistic"  # 기기별 사용률에 따라 각자 독립적으로 켜짐/꺼짐
 SELECTION_UNIFORM = "uniform"      # 9종 균등 추첨 (희귀 기기 학습 표본 확보용)
@@ -315,7 +335,10 @@ class LoadSynthesizer:
         for app in self.known_appliances:
             if not is_plugged[app]:
                 continue
-            gt_plugged[app][:] = 1
+            # 오븐류는 '세션 중'에만 1 이다 (SESSION_PLUGGED_APPS 주석 참조).
+            # 5절의 활성화 배치가 자기 구간에서 1 로 올린다.
+            if app not in SESSION_PLUGGED_APPS:
+                gt_plugged[app][:] = 1
             profile: StandbyProfile = self.pool.get_standby_profile(app)
             if profile.power_w <= 0.0 and not np.any(profile.harmonics_complex):
                 continue  # 기계식 스위치 기기 - 꺼지면 회로가 끊겨 대기전력이 없다

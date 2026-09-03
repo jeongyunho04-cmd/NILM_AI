@@ -135,7 +135,7 @@ def companion_constants(appliances: Sequence[str], npz_dir: str = "processed_dat
     return sig, pw, used
 
 
-def standby_operating_signatures(pool, appliances, n_harm: int = 15):
+def standby_operating_signatures(pool, appliances, n_harm: int = 15, only=None):
     """동작 중 주 상태가 아닐 때의 **net 페이저**와 전력 (12.163).
 
     `net.standby_signatures` 는 `get_standby_profile` 을 쓰는데, 그것은 오븐의
@@ -156,16 +156,25 @@ def standby_operating_signatures(pool, appliances, n_harm: int = 15):
     사이클의 `net_harmonics_complex` 중앙. 그러면 전력과 고조파가 같은 상태를
     가리킨다.
 
+    Args:
+        only: 여기 든 기기만 바꾼다. `None` 이면 휴지 비율 조건을 통과한 전부
+            (12.163 의 자 - 오븐+핫플). `gt_plugged` 의 뜻이 바뀐 기기에만
+            걸고 싶으면 `SESSION_PLUGGED_APPS` 를 넘긴다 (12.164) - 핫플은
+            `gt_plugged` 가 여전히 "꽂혀 있음" 이라 `OFF_STANDBY` 이 맞다.
+
     Returns:
         (K,H,2) 페이저, (K,) 전력W, 값이 들어간 기기 이름. 동작 중 휴지가
         거의 없는 기기(휴지 비율 < `MIN_IDLE_FRAC`)는 건드리지 않는다 — 그런
         기기는 `OFF_STANDBY` 이 맞다.
     """
+    only = None if only is None else set(only)
     K = len(appliances)
     sig = np.zeros((K, n_harm, 2), np.float32)
     pw = np.zeros(K, np.float32)
     used = []
     for j, app in enumerate(appliances):
+        if only is not None and app not in only:
+            continue
         acts = pool.appliance_activations.get(app, [])
         if not acts:
             continue

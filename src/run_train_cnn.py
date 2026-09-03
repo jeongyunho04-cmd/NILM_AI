@@ -204,6 +204,14 @@ def main() -> int:
     ap.add_argument("--harm-odd-only", action="store_true",
                     help="L_harm 에서 짝수차를 뺀다 (12.75절). 짝수차는 계측 인공물이라 "
                          "(12.72) 손실이 가장 큰 가중을 그것에 걸고 있었다 (12.70.3)")
+    ap.add_argument("--standby-operating", nargs="?", const="all", default="off",
+                    choices=("off", "session", "all"),
+                    help="`standby_sig` 를 **동작 중 휴지**의 지문으로 바꾼다 (12.164). "
+                         "`SESSION_PLUGGED_APPS` 의 `gt_plugged` 가 '동작 중' 을 뜻하게 "
+                         "바뀌면 `idle=σ(plugged)(1−σ(on))` 자리가 FAN_LIGHT 이므로 "
+                         "고조파 자도 FAN_LIGHT(67.4mA) 여야 한다. `OFF_STANDBY`(6.44mA) "
+                         "을 그대로 두면 전력과 고조파가 10배 어긋난 채 학습된다. "
+                         "라벨을 바꿨으면 `session` 을 같이 켜야 짝이 맞는다.")
     ap.add_argument("--holdout", default=HOLDOUT_DIR, metavar="DIR",
                     help="합성 홀드아웃 디렉터리. TARGET_LOOKAHEAD 를 바꾸면 라벨 시점이 "
                          "달라지므로 홀드아웃도 그 값으로 다시 만들어야 한다 (12.45)")
@@ -263,6 +271,20 @@ def main() -> int:
     pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
     sig = harmonic_signatures(pool, apps)
     sb_sig = standby_signatures(pool, apps)
+    # 동작 중 휴지의 지문 (12.164). `gt_plugged` 가 '동작 중' 으로 바뀐 기기는
+    # `idle` 항이 가리키는 상태가 OFF_STANDBY 이 아니라 FAN_LIGHT 이다.
+    if a.standby_operating != "off":
+        from src.model.companion import standby_operating_signatures
+        from src.synthesis.synthesizer import SESSION_PLUGGED_APPS
+        _only = SESSION_PLUGGED_APPS if a.standby_operating == "session" else None
+        sb_op, sb_pw, sb_used = standby_operating_signatures(pool, apps, only=_only)
+        for x in sb_used:
+            _j = apps.index(x)
+            _o = float(np.hypot(sb_sig[_j, 0, 0], sb_sig[_j, 0, 1])) * 1000
+            _n = float(np.hypot(sb_op[_j, 0, 0], sb_op[_j, 0, 1])) * 1000
+            print(f"  ** 동작 중 휴지 지문 ({a.standby_operating}) {x}: "
+                  f"|I1| {_o:.2f} -> {_n:.2f} mA, 전력 {sb_pw[_j]:.2f}W **")
+            sb_sig[_j] = sb_op[_j]
     nz_sig = noise_signature(pool)
     h_scale = harmonic_scales(pool, apps)
     del pool
