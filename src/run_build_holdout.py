@@ -91,6 +91,12 @@ def main() -> int:
                     help="레시피 믹스. 프리셋 이름(half/full) 또는 JSON (12.67절). "
                          "학습 믹스를 바꿨으면 평가 셋도 같은 믹스로 만들어야 "
                          "합성 F1 이 분포 어긋남과 교락되지 않는다")
+    ap.add_argument("--sp-curves", action="store_true",
+                    help="증강 전력스케일을 s(p) 로 (12.166). **학습 캐시와 같아야 한다**")
+    ap.add_argument("--background", action="store_true",
+                    help="상시 배경 부하를 넣는다 (12.166). **학습 캐시와 같아야 한다** — "
+                         "배경 없이 만든 홀드아웃으로 배경 있는 모델을 재면 최소 부하만 "
+                         "무너진다 (12.168.4: 미니PC −0.119, 선풍기 −0.093)")
     ap.add_argument("--level-scramble", nargs="*", default=None, metavar="APP:LO:HI",
                     help="그 가전의 전력 배율을 균등분포 [LO,HI] 로 흔든 반사실 평가 셋 "
                          "(12.64절). 예: --level-scramble beam_projector:0.64:1.42")
@@ -108,6 +114,7 @@ def main() -> int:
     build_holdout(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                   holdout_frac=a.holdout_frac, seed=a.seed,
                   ablate_pedestal_apps=a.ablate_pedestal,
+                  sp_curves=a.sp_curves, background=a.background,
                   level_scramble=_parse_scramble(a.level_scramble),
                   recipe_mix=_parse_mix(a.recipe_mix))
     return inspect(a.out)

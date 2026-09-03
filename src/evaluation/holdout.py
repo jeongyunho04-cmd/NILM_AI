@@ -81,6 +81,8 @@ def build_holdout(
     progress_every: int = 1000,
     ablate_pedestal_apps: Optional[Sequence[str]] = None,
     level_scramble: Optional[Dict[str, tuple]] = None,
+    sp_curves: bool = False,
+    background: bool = False,
 ) -> dict:
     """홀드아웃 구간에서만 평가 셋을 만들어 저장한다."""
     out = Path(out_dir)
@@ -89,8 +91,13 @@ def build_holdout(
 
     pool = SegmentPool(npz_dir=npz_dir, time_split="holdout", holdout_frac=holdout_frac,
                        ablate_pedestal_apps=ablate_pedestal_apps)
-    aug = DataAugmentor(level_scramble=level_scramble) if level_scramble else None
-    syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False, augmentor=aug)
+    # `sp_curves`/`background` 는 **학습 캐시와 반드시 같아야 한다** (12.168.4).
+    # 배경 없이 만든 홀드아웃으로 배경 있는 모델을 재면, 모델이 기대하는 5.5W 를
+    # 없는 데서 차감해 **최소 부하만** 무너진다 (미니PC −0.119, 선풍기 −0.093).
+    aug = DataAugmentor(level_scramble=level_scramble or None,
+                        sp_curves=bool(sp_curves))
+    syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
+                          augmentor=aug, background=bool(background))
     gen = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         recipe_mix=recipe_mix or DEFAULT_RECIPE_MIX, synthesizer=syn,
@@ -145,6 +152,9 @@ def build_holdout(
         "ablate_pedestal_apps": list(ablate_pedestal_apps or []),
         "recipe_mix": recipe_mix,
         "level_scramble": {k: list(v) for k, v in (level_scramble or {}).items()},
+        # 학습 캐시와 짝이 맞아야 하는 설정 (12.168.4)
+        "sp_curves": bool(sp_curves),
+        "background": bool(background),
         "appliances": apps,
         "channel_layout": "0:15 harmonic Real, 15:30 harmonic Imag, 30 P, 31 Q, 32 V",
         "recipe_counts": {r: rec.count(r) for r in sorted(set(rec))},
