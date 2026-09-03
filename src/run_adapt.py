@@ -334,6 +334,10 @@ def main() -> int:
     ap.add_argument("--swap-tb-orders", default="3", metavar="LIST",
                     help="동점깨기가 쓸 차수. **기본은 3 하나다** — 실측에서 "
                          "h5 는 약하고 h7 은 오히려 틀린 쪽을 고른다 (12.165.7).")
+    ap.add_argument("--harm-max-order", type=int, default=0, metavar="H",
+                    help="2단계 `L_harm` 에서 이 차수 위를 뺀다 (12.171.4 의 B). "
+                         "실측 창에서 L_harm 값의 **56%%가 h11~h15** 이고 그 예측이 "
+                         "관측의 1/4~2/3 다 (h15 21.6 vs 92.4 mA). 9 를 권장. 0 이면 끔.")
     ap.add_argument("--w-impl", type=float, default=0.0, metavar="W",
                     help="**함의 제약** `L_impl = relu(on_logit − plugged_logit)` "
                          "(12.164.9). 꽂히지 않은 기기가 켜질 수는 없다 — 합성 30만 "
@@ -599,6 +603,7 @@ def main() -> int:
         signatures=torch.from_numpy(sig), standby_sig=torch.from_numpy(sb),
         noise_sig=torch.from_numpy(nz), harm_scale=torch.from_numpy(hsc),
         harm_odd_only=a.harm_odd_only,
+        harm_max_order=a.harm_max_order,
         harm_grad_balance=a.harm_grad_balance,
         harm_deadzone=a.harm_deadzone, harm_weight=a.harm_weight,
         reactive_qp=torch.from_numpy(qp), noise_q=nq,

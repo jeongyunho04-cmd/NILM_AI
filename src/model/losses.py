@@ -127,6 +127,7 @@ class NILMLoss(torch.nn.Module):
         noise_sig: Optional[torch.Tensor] = None,    # (H, 2) 계측계 페이저
         harm_scale: Optional[torch.Tensor] = None,   # (H,) 차수별 정규화
         harm_odd_only: bool = False,                # 짝수차를 L_harm 에서 뺀다 (12.75, 실행 기록은 12.78)
+        harm_max_order: int = 0,                    # 이 차수 위를 L_harm 에서 뺀다 (12.171.4 의 B)
         weights: Optional[LossWeights] = None,
         power_delta: float = 0.1,
         standby_delta: float = 1.0,
@@ -327,6 +328,15 @@ class NILMLoss(torch.nn.Module):
         mask = torch.ones(h)
         if harm_odd_only:
             mask[1::2] = 0.0          # 0-based 라 인덱스 1,3,5.. 가 2,4,6..차다
+        # ── 고차 절단 (12.171.4 의 B) ──────────────────────────────────────
+        # 12.171.3 이 잰 것: 실측 창에서 `L_harm` 값의 **56%가 h11~h15** 이고,
+        # 그 차수들의 예측은 관측의 1/4~2/3 다 (h15 21.6 vs 92.4 mA). 기기
+        # 배분과 무관한 모델오차인데 `harm_scale` 이 작아(0.019~0.030) 정규화
+        # 후에는 가장 큰 항이 된다. 12.135 가 "높은 차수는 신호가 아니라
+        # 모델오차" 라고 이미 쟀고 `1/h²` 가중으로 **줄였다** — 여기서는 **끊는다.**
+        # 0 이면 끔 (이전과 글자 그대로 같다).
+        if harm_max_order and harm_max_order < h:
+            mask[int(harm_max_order):] = 0.0
         # ── 차수별 신뢰도 가중 (12.135) ────────────────────────────────────
         # `harm_scale` 은 "판별 정보는 높은 차수에 있다"(0.2절)를 전제로 15차수를
         # **균등화**한다. 그런데 실측에서는 그 전제가 뒤집힌다 — 높은 차수는
@@ -363,6 +373,7 @@ class NILMLoss(torch.nn.Module):
         h1 = torch.zeros_like(mask); h1[0] = 1.0
         self.register_buffer("h1_only", h1)
         self.harm_odd_only = bool(harm_odd_only)
+        self.harm_max_order = int(harm_max_order)
         self.harm_weight = str(harm_weight)
         self.w = weights or LossWeights()
         self.power_delta = power_delta
