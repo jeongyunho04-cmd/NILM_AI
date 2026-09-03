@@ -64,7 +64,8 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           exclude_files_json: str = "", dither_amp: float = 0.0,
           dither_phase_deg: float = 0.0, recipe_mix_json: str = "",
           dither_even_amp: float = 0.0, dither_even_phase_deg: float = 0.0,
-          power_scale_std_json: str = "") -> None:
+          power_scale_std_json: str = "",
+          sp_curves: bool = False, background: bool = False) -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.augmentor import DataAugmentor
     from src.synthesis.dataset import NILMBatchGenerator
@@ -87,11 +88,12 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
                         harmonic_dither_phase_deg=float(dither_phase_deg),
                         harmonic_dither_even_amp=float(dither_even_amp),
                         harmonic_dither_even_phase_deg=float(dither_even_phase_deg),
-                        power_scale_std_map=pss)
+                        power_scale_std_map=pss,
+                        sp_curves=bool(sp_curves))
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
-                                    augmentor=aug),
+                                    augmentor=aug, background=bool(background)),
         recipe_mix=mix, compute_gt_harmonics=False)
 
 
@@ -143,6 +145,8 @@ def build_cache(
     dither_even_amp: float = 0.0,
     dither_even_phase_deg: float = 0.0,
     power_scale_std_map: Optional[Dict[str, float]] = None,
+    sp_curves: bool = False,
+    background: bool = False,
 ) -> dict:
     """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다."""
     import multiprocessing as mp
@@ -181,7 +185,8 @@ def build_cache(
     with ctx.Pool(n_workers, initializer=_init,
                   initargs=(npz_dir, window_cycles, time_split, seed, excl_json,
                             dither_amp, dither_phase_deg, mix_json,
-                            dither_even_amp, dither_even_phase_deg, pss_json)) as pool:
+                            dither_even_amp, dither_even_phase_deg, pss_json,
+                            bool(sp_curves), bool(background))) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -204,6 +209,10 @@ def build_cache(
             "dither_even_amp": float(dither_even_amp),
             "dither_even_phase_deg": float(dither_even_phase_deg),
             "power_scale_std_map": power_scale_std_map,
+            # 부하 의존 서명 / 상시 배경 (12.166). 학습·손실 쪽이
+            # 이 값을 읽어 짝을 맞춘다.
+            "sp_curves": bool(sp_curves),
+            "background": bool(background),
             "fine_shape": [FINE_CHANNELS, FINE_CYCLES], "bytes": int(total),
             "zero_even_harmonics": bool(ZERO_EVEN_HARMONICS),
             "build_seconds": round(time.time() - t0, 1),

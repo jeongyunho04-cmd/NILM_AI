@@ -38,6 +38,18 @@ def main() -> int:
                     help="짝수차 전용 지터 σ (12.69절). 차수 비례를 쓰지 않고 무리 전체에 "
                          "같은 값. 1.4 에서 프로젝터↔충전기 |I2|/|I1| d' 가 5.04 -> 1.06")
     ap.add_argument("--dither-even-phase-deg", type=float, default=0.0)
+    ap.add_argument("--sp-curves", action="store_true",
+                    help="증강의 전력 스케일을 **부하 의존 서명** `s(p)` 로 옮긴다 "
+                         "(12.166). 지금은 `I <- I·a` 로 선형인데, 캡 입력 SMPS 는 "
+                         "부하가 바뀌면 도통각이 바뀌어 **모양도 바뀐다**. 실측에서 "
+                         "같은 기기의 부하 차이(45.7°)가 다른 기기와의 차이(9.0°)보다 "
+                         "3.6~7.3배 크다. 곡선이 없는 기기와 유효 범위 밖은 기존 선형.")
+    ap.add_argument("--background", action="store_true",
+                    help="**상시 배경 부하**를 넣는다 (12.166). 실측 '모든 기기 OFF' "
+                         "창에 2.6~5.3W / k≈3.1 의 강한 용량성 부하가 늘 흐르는데 "
+                         "합성에 없었다. 배경 5W 의 |I1| 0.074A 가 미니PC 9.5W 의 "
+                         "0.050A 보다 커서, 안 넣으면 모델이 그 전류를 가장 싼 SMPS 로 "
+                         "흘린다 (12.159 의 미니PC −77%%). `p_noise` 에 합산된다.")
     ap.add_argument("--dither-amp", type=float, default=0.0,
                     help="고조파 진폭 지터 (로그정규 σ, 홀수차 중앙값). 예: 0.50")
     ap.add_argument("--dither-phase-deg", type=float, default=0.0,
@@ -75,7 +87,8 @@ def main() -> int:
                 recipe_mix=mix,
                 dither_even_amp=a.dither_even_amp,
                 dither_even_phase_deg=a.dither_even_phase_deg,
-                power_scale_std_map=pss)
+                power_scale_std_map=pss,
+                sp_curves=a.sp_curves, background=a.background)
     return 0
 
 

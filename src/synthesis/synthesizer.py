@@ -70,6 +70,16 @@ DEFAULT_SUSTAINED_POWER_LIMIT_W = 4000.0
 # 라벨만 바꾸고 관측은 실측 그대로 유지한다.
 SESSION_PLUGGED_APPS: Tuple[str, ...] = ("oven",)
 
+# 상시 배경 부하 (2026-09-03, 12.166). 기기가 아니라 **집 자체**가 먹는 것이다.
+# 실측 "모든 기기 OFF" 창에서 재면 2.6~5.3W, `k = |I1|·V/P ≈ 3.1` 의 강한 용량성
+# 부하가 늘 흐른다. 우리 `noise_signature`(계측계 1.41W, k 1.37)와는 서명 각도가
+# 60~79° 로 다른 물건이고, 전력은 3.5배 크다. 즉 **모델링이 빠져 있었다.**
+#
+# 크기가 문제다 — 배경 5W 의 |I1| 0.074A 가 **미니PC 9.5W 의 0.050A 보다 크다.**
+# 합성이 이것을 안 넣으면 모델은 실측에서 만나는 이 상시 전류를 설명할 곳이 없어
+# 가장 싼 SMPS 로 흘린다. 12.159 의 장소 B 미니PC −77% 과소평가가 그 모양이다.
+BACKGROUND_W_RANGE: Tuple[float, float] = (2.6, 8.3)
+
 # 무작위 윈도우에서 가전을 고르는 방식
 SELECTION_REALISTIC = "realistic"  # 기기별 사용률에 따라 각자 독립적으로 켜짐/꺼짐
 SELECTION_UNIFORM = "uniform"      # 9종 균등 추첨 (희귀 기기 학습 표본 확보용)
@@ -209,8 +219,20 @@ class LoadSynthesizer:
         quantize_voltage_measurement: bool = True,
         compute_gt_harmonics: bool = True,
         sustained_power_limit_w: Optional[float] = DEFAULT_SUSTAINED_POWER_LIMIT_W,
+        background: bool = False,
+        background_w_range: Tuple[float, float] = BACKGROUND_W_RANGE,
     ):
         self.pool = segment_pool
+        # 상시 배경 부하 (12.166). 기본은 꺼 둔다 — 켜면 합성 분포가 바뀌므로
+        # 캐시를 새로 만들어야 하고, 기존 체크포인트와 비교가 끊긴다.
+        self.background_w_range = tuple(background_w_range)
+        self._bg = None
+        if background:
+            from .sp_curves import load_curves, BACKGROUND
+            self._bg = load_curves().get(BACKGROUND)
+            if self._bg is None:
+                raise FileNotFoundError(
+                    "배경 곡선을 못 찾았다 — processed_data/sp_curves.npz 가 필요하다")
         self.grid_sim = grid_simulator or GridSimulator()
         self.augmentor = augmentor or DataAugmentor()
         self.known_appliances = self.pool.get_appliance_types()
@@ -425,6 +447,16 @@ class LoadSynthesizer:
             _, noise_c, noise_pow = self.pool.sample_noise_slice(N)
             noise_c = noise_c.astype(np.complex64)
             p_noise = noise_pow[:, 0].astype(np.float32)
+
+        # 6b. 상시 배경 부하 (12.166). 계측계와 **다른 성분**이라 따로 더한다.
+        # 창 안에서는 상수로 둔다 — 실측에서 배경은 분 단위로 천천히 움직이고
+        # 창은 60초다. 창마다 다시 뽑으므로 모델이 "안 변하는 성분 = 배경" 이라는
+        # 합성 전용 단서를 배우지는 않는다.
+        if self._bg is not None and N > 0:
+            bg_w = float(np.random.uniform(*self.background_w_range))
+            bg_c = self._bg.current(bg_w, env.base_voltage_v)[:NUM_HARMONICS]
+            noise_c = noise_c + bg_c.astype(np.complex64)[None, :]
+            p_noise = p_noise + np.float32(bg_w)
 
         # 7. 전압 강하와 부하 응답의 되먹임을 반복 수렴시킨다.
         if simulate_voltage_drop and N > 0:

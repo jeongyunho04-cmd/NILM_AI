@@ -173,6 +173,17 @@ def summarize_real(rs: dict, only: Optional[Sequence[str]] = None) -> dict:
     }
 
 
+def _cache_says_background(cache: str) -> bool:
+    """캐시 meta 의 `background` 플래그. 없거나 못 읽으면 False."""
+    if not cache or str(cache).lower() == "none":
+        return False
+    try:
+        return bool(json.load(open(Path(cache) / "meta.json",
+                                   encoding="utf-8")).get("background", False))
+    except Exception:
+        return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Phase 5 — 2단계 실측 준지도 적응 (4.2절)")
     # 기본값은 12.9.5절 "확정된 것" 표와 일치시킨다. 4.2절이 적었던 첫 제안값
@@ -465,6 +476,13 @@ def main() -> int:
     pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
     sig, sb, nz, hsc = (harmonic_signatures(pool, apps), standby_signatures(pool, apps),
                         noise_signature(pool), harmonic_scales(pool, apps))
+    # 상시 배경 (12.166.3). 실측에도 실재하므로 캐시가 넣었으면 여기도 넣는다.
+    if _cache_says_background(a.cache):
+        from src.synthesis.sp_curves import background_signature, background_power
+        _bg = background_signature()
+        nz = nz + _bg
+        print(f"  ** 상시 배경 (12.166): +{background_power():.2f}W, "
+              f"|I1| +{np.hypot(_bg[0,0], _bg[0,1])*1000:.1f} mA -> noise_sig **")
     # ── 동작 중 휴지의 지문 (2026-09-03, 12.163) ─────────────────────────
     # `standby_signatures` 는 `OFF_STANDBY` 을 준다. 그런데 **합성이 실제로 넣는
     # 값은 다르다** — `synthesizer` 가 activation 휴지의 `gt_standby_p` 를

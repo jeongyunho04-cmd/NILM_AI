@@ -159,6 +159,17 @@ def report(pred, on_prob, hs, tag=""):
     return sc, summ, cm, resid
 
 
+def _cache_says_background(cache: str) -> bool:
+    """캐시 meta 의 `background` 플래그. 없거나 못 읽으면 False."""
+    if not cache or str(cache).lower() == "none":
+        return False
+    try:
+        return bool(json.load(open(Path(cache) / "meta.json",
+                                   encoding="utf-8")).get("background", False))
+    except Exception:
+        return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Phase 3 2갈래 CNN 학습")
     ap.add_argument("--epochs", type=int, default=40)
@@ -286,6 +297,14 @@ def main() -> int:
                   f"|I1| {_o:.2f} -> {_n:.2f} mA, 전력 {sb_pw[_j]:.2f}W **")
             sb_sig[_j] = sb_op[_j]
     nz_sig = noise_signature(pool)
+    # 상시 배경 (12.166.3). 캐시가 배경을 넣었으면 순방향 모형도 넣어야 짝이 맞는다.
+    # **플래그가 아니라 캐시 meta 를 읽는다** — 따로 주면 어긋날 수 있다.
+    if _cache_says_background(a.cache):
+        from src.synthesis.sp_curves import background_signature, background_power
+        _bg = background_signature()
+        nz_sig = nz_sig + _bg
+        print(f"  ** 상시 배경 (12.166): +{background_power():.2f}W, "
+              f"|I1| +{np.hypot(_bg[0,0], _bg[0,1])*1000:.1f} mA -> noise_sig **")
     h_scale = harmonic_scales(pool, apps)
     del pool
 

@@ -100,9 +100,15 @@ class DataAugmentor:
         harmonic_dither_even_phase_deg: float = 0.0,
         level_scramble: Optional[dict] = None,
         power_scale_std_map: Optional[Dict[str, float]] = None,
+        sp_curves: bool = False,
     ):
         self.duration_scale_range = duration_scale_range
         self.power_scale_std = power_scale_std
+        # 부하 의존 서명 곡선 (12.166). 없으면 기존 선형 스케일로 간다.
+        self._sp = {}
+        if sp_curves:
+            from .sp_curves import load_curves, BACKGROUND
+            self._sp = {k: v for k, v in load_curves().items() if k != BACKGROUND}
         #: 기기별 폭 (12.118). 없는 기기는 `power_scale_std` 를 쓴다.
         self.power_scale_std_map = dict(power_scale_std_map or {})
         self.phase_jitter_max_deg = phase_jitter_max_deg
@@ -221,7 +227,14 @@ class DataAugmentor:
             # σ=0.005 인 포트는 클립이 아무 일도 안 한다 (12.118).
             p_scale = float(np.clip(1.0 + np.random.normal(0, sd), 1.0 - 3 * sd, 1.0 + 3 * sd))
 
-        aug_c = aug_c * p_scale
+        # 고정 서명이면 `I <- I·a` 로 끝이지만, 캡 입력 SMPS 는 부하가 바뀌면
+        # **모양도 바뀐다** (12.166). 곡선이 있는 기기는 `s(p)` 를 따라 옮긴다.
+        cv = self._sp.get(act.appliance_type) if self._sp else None
+        if cv is not None:
+            from .sp_curves import rescale_to_power
+            aug_c = rescale_to_power(aug_c, aug_pow[:, 0], p_scale, cv)
+        else:
+            aug_c = aug_c * p_scale
         aug_pow = aug_pow.copy()
         aug_pow[:, 0] *= p_scale  # P
         aug_pow[:, 1] *= p_scale  # Q
