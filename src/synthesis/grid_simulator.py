@@ -51,10 +51,32 @@ class VoltageCluster:
 #   X 를 포함한 회귀                 R = 1.499 Ohm
 #   오븐 펄스 8개의 dV/dI 직접 측정   R = 1.588 Ohm
 # 이전 모델의 0.15~0.35 Ohm 은 실측의 1/4~1/6 수준이었다.
+#
+# ── 장소 B 를 더한다 (2026-09-03, 12.167) ─────────────────────────────────
+# `run_line_impedance` 로 복합 실측 15파일의 Z 를 계단(|ΔP|≥300W)에서 직접 쟀다.
+# `Z1 = -(V1_after - V1_before) / (|I1|_after - |I1|_before)` — 전압의 **차분**을
+# 쓰므로 스펙트럼 누설과 계통 표류가 상쇄된다.
+#
+#   장소 A  7파일 52이벤트   Z 중앙 **1.470 Ω**  (1.34~1.67)  무부하 V **223.3**
+#   장소 B  4파일 52이벤트   Z 중앙 **0.907 Ω**  (0.88~0.96)  무부하 V **227.5**
+#   test_14 (이사 당일)      Z 1.639 Ω          -> 아직 옛 장소 쪽이다
+#
+# 그룹 내 산포(±0.04Ω)가 그룹 간 차이(0.56Ω)보다 훨씬 작아 두 장소가 깨끗하게
+# 갈린다. **장소 A 는 `outlet_low_221v`(1.55Ω)와 잘 맞는데, 장소 B 는 어느
+# 무리와도 안 맞았다** — `outlet_high_234v` 는 234.7V/0.45Ω 로 전압이 7V 높고
+# 임피던스가 절반이다. 우리가 채점하는 장소가 합성에 없었던 것이다.
+#
+# `outlet_high_234v` 는 **지우지 않는다.** 기기 녹화 27개 중 7개가 230V 이상이라
+# (에어컨 233.6, 선풍기 233.7/235.6/236.0, 드라이기 234.2/235.4, 충전기 237.0)
+# 실재하는 콘센트다. 장소 B 를 **더한다.**
 OBSERVED_VOLTAGE_CLUSTERS: Tuple[VoltageCluster, ...] = (
-    VoltageCluster("outlet_low_221v", mean_v=221.3, std_v=2.4, weight=0.50, r_grid_ohm=1.55),
-    VoltageCluster("outlet_high_234v", mean_v=234.7, std_v=1.0, weight=0.30, r_grid_ohm=0.45),
+    VoltageCluster("outlet_low_221v", mean_v=221.3, std_v=2.4, weight=0.35, r_grid_ohm=1.55),
+    VoltageCluster("outlet_siteB_227v", mean_v=227.5, std_v=1.5, weight=0.25, r_grid_ohm=0.91),
+    VoltageCluster("outlet_high_234v", mean_v=234.7, std_v=1.0, weight=0.20, r_grid_ohm=0.45),
 )
+
+#: 계단으로 직접 잰 장소별 선로 임피던스 (12.167). 출처 기록용.
+MEASURED_SITE_Z_OHM = {"A": 1.470, "B": 0.907}
 
 # 두 콘센트만 학습하면 모델이 그 두 전압대에만 맞춰진다. 한국 표준 공급 전압
 # 220V +-10%(198~242V) 안에서 측정하지 못한 구간도 일부 섞어 일반화 여력을 남긴다.
@@ -97,7 +119,10 @@ class GridSimulator:
         nominal_voltage: Optional[float] = None,  # 지정 시 전압을 이 값으로 고정
         nominal_voltage_range: Optional[Tuple[float, float]] = None,  # 구버전 호환
         # 실측 두 콘센트가 0.45 / 1.55 Ohm 이었다. 그 사이와 바깥을 조금씩 덮는다.
-        r_grid_range: Tuple[float, float] = (0.35, 1.80),
+        # 탐색 성분(무리에 안 속한 20%)의 임피던스 폭. 실측 범위는 0.88~1.67Ω
+        # 이므로 위아래로 여유를 둔 0.7~2.0 이다 (12.167). 이전 0.35~1.80 은
+        # 아래쪽이 실측의 절반이라 물리적으로 없는 회선을 만들고 있었다.
+        r_grid_range: Tuple[float, float] = (0.70, 2.00),
         # X 는 식별이 어렵다. 저항 부하가 지배하는 구간에서는 I_im 변동폭이
         # 0.03A 뿐이라 회귀로 분리되지 않는다(X 를 빼도 R^2 가 같다).
         # 유도성 부하가 있는 test.csv 에서만 X≈0.12 로 잡혀 그 근방을 쓴다.
