@@ -453,7 +453,11 @@ class LoadSynthesizer:
         # 창은 60초다. 창마다 다시 뽑으므로 모델이 "안 변하는 성분 = 배경" 이라는
         # 합성 전용 단서를 배우지는 않는다.
         if self._bg is not None and N > 0:
-            bg_w = float(np.random.uniform(*self.background_w_range))
+            # 배경은 **집의 성질**이다 (12.166.4). 그 콘센트의 실측 범위가 있으면
+            # 그것을 쓴다 — 없으면 기본 범위. 장소 A 4.0~6.0W / 장소 B 2.0~3.5W 로
+            # 2배 다르므로, 하나의 범위로 뽑으면 한쪽이 반드시 어긋난다.
+            rng = getattr(env, "background_w_range", None) or self.background_w_range
+            bg_w = float(np.random.uniform(*rng))
             bg_c = self._bg.current(bg_w, env.base_voltage_v)[:NUM_HARMONICS]
             noise_c = noise_c + bg_c.astype(np.complex64)[None, :]
             p_noise = p_noise + np.float32(bg_w)

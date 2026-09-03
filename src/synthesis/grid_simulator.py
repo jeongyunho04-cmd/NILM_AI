@@ -40,6 +40,12 @@ class VoltageCluster:
     std_v: float
     weight: float
     r_grid_ohm: float = 0.8   # 이 콘센트까지의 배선 저항
+    #: 그 집의 상시 배경 부하 범위 W (12.166.4). **배경은 집의 성질이다** —
+    #: 실측 '모든 기기 OFF' 창에서 장소 A 4.75~5.33W, 장소 B 2.56W 로 **2배**
+    #: 다르다. 12.166 은 이것을 무리와 무관하게 (2.6, 8.3) 에서 뽑았고, 그래서
+    #: 장소 B 에서 2.1배 과대였다. 전압·임피던스와 같은 이유로 무리에 묶는다.
+    #: `None` 이면 `BACKGROUND_W_RANGE` 기본값 (미측정 콘센트).
+    background_w_range: Optional[Tuple[float, float]] = None
 
 
 # data/*.csv 의 파일별 평균 전압과, 복합 부하 실측(test*.csv)에서 회귀로 구한
@@ -70,9 +76,12 @@ class VoltageCluster:
 # (에어컨 233.6, 선풍기 233.7/235.6/236.0, 드라이기 234.2/235.4, 충전기 237.0)
 # 실재하는 콘센트다. 장소 B 를 **더한다.**
 OBSERVED_VOLTAGE_CLUSTERS: Tuple[VoltageCluster, ...] = (
-    VoltageCluster("outlet_low_221v", mean_v=221.3, std_v=2.4, weight=0.35, r_grid_ohm=1.55),
-    VoltageCluster("outlet_siteB_227v", mean_v=227.5, std_v=1.5, weight=0.25, r_grid_ohm=0.91),
-    VoltageCluster("outlet_high_234v", mean_v=234.7, std_v=1.0, weight=0.20, r_grid_ohm=0.45),
+    VoltageCluster("outlet_low_221v", mean_v=221.3, std_v=2.4, weight=0.35,
+                   r_grid_ohm=1.55, background_w_range=(4.0, 6.0)),
+    VoltageCluster("outlet_siteB_227v", mean_v=227.5, std_v=1.5, weight=0.25,
+                   r_grid_ohm=0.91, background_w_range=(2.0, 3.5)),
+    VoltageCluster("outlet_high_234v", mean_v=234.7, std_v=1.0, weight=0.20,
+                   r_grid_ohm=0.45, background_w_range=None),   # 미측정
 )
 
 #: 계단으로 직접 잰 장소별 선로 임피던스 (12.167). 출처 기록용.
@@ -94,6 +103,8 @@ class VoltageEnvironment:
     drift_tau_s: float          # 요동의 상관 시간 (초)
     sag_rate_per_min: float     # 외부 부하 사그 발생 빈도
     source: str                 # 이 전압이 어디서 나왔는지 (클러스터명 / exploration)
+    #: 이 콘센트의 상시 배경 부하 범위 W (12.166.4). None 이면 생성기 기본값.
+    background_w_range: Optional[Tuple[float, float]] = None
 
 
 class GridSimulator:
@@ -163,7 +174,7 @@ class GridSimulator:
     # ── 환경 샘플링 ─────────────────────────────────────────────────────────
     def sample_environment(self) -> VoltageEnvironment:
         """이번 합성이 놓일 배전 환경 하나를 뽑는다."""
-        base_v, source, cluster_r = self._sample_base_voltage()
+        base_v, source, cluster_r, cluster_bg = self._sample_base_voltage()
         # 실측 콘센트에서 뽑았다면 그 회선의 배선 저항을 함께 쓴다.
         # 전압과 임피던스는 같은 회선의 성질이므로 따로 뽑으면 짝이 어긋난다.
         if cluster_r is not None and self.r_grid_range[0] != self.r_grid_range[1]:
@@ -178,18 +189,21 @@ class GridSimulator:
             drift_tau_s=self.drift_tau_s,
             sag_rate_per_min=self.sag_rate_per_min,
             source=source,
+            background_w_range=cluster_bg,
         )
 
-    def _sample_base_voltage(self) -> Tuple[float, str, Optional[float]]:
+    def _sample_base_voltage(
+        self,
+    ) -> Tuple[float, str, Optional[float], Optional[Tuple[float, float]]]:
         """실측 이봉분포 + 미측정 영역 탐색 성분에서 기저 전압을 뽑는다.
 
         Returns:
-            (기저 전압, 출처 이름, 그 회선의 배선 저항 or None)
+            (기저 전압, 출처 이름, 배선 저항 or None, 배경 부하 범위 or None)
         """
         cluster_weight = sum(c.weight for c in self.voltage_clusters)
         total = cluster_weight + self.exploration_weight
         if total <= 0:
-            return self.default_ref_voltage, "default", None
+            return self.default_ref_voltage, "default", None, None
 
         r = np.random.rand() * total
         acc = 0.0
@@ -197,10 +211,11 @@ class GridSimulator:
             acc += c.weight
             if r < acc:
                 v = float(np.random.normal(c.mean_v, c.std_v)) if c.std_v > 0 else c.mean_v
-                return float(np.clip(v, *EXPLORATION_VOLTAGE_RANGE)), c.name, c.r_grid_ohm
+                return (float(np.clip(v, *EXPLORATION_VOLTAGE_RANGE)), c.name,
+                        c.r_grid_ohm, c.background_w_range)
 
         lo, hi = self.exploration_range
-        return float(np.random.uniform(lo, hi)), "exploration", None
+        return float(np.random.uniform(lo, hi)), "exploration", None, None
 
     # ── 전압 시계열 생성 ────────────────────────────────────────────────────
     def _generate_drift(self, n_samples: int, env: VoltageEnvironment) -> np.ndarray:
