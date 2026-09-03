@@ -459,6 +459,8 @@ class NILMLoss(torch.nn.Module):
                   w_swap: float = 0.0,
                   swap_tol: float = 0.02,
                   swap_slack: int = 0,
+                  swap_tiebreak: str = "off",
+                  swap_tb_orders: Sequence[int] = (3, 5, 7),
                   w_impl: float = 0.0,
                   impl_side: str = "both",
                   companion: bool = False) -> Dict[str, torch.Tensor]:
@@ -772,12 +774,77 @@ class NILMLoss(torch.nn.Module):
                 same_k = (dk <= float(swap_slack))                        # (C,B)
                 err = (cg - g_need[None]).abs()
                 err = err.masked_fill(~same_k, float("inf"))
-                bi = err.argmin(0)                                        # (B,)
+                # 모든 후보의 상대오차. tol 안에 든 것이 **여럿**일 수 있다.
+                rel_all = err * v2[None] / p_res.abs().clamp(min=1.0)[None]  # (C,B)
+                feas = rel_all <= swap_tol                                # (C,B)
+
+                # ── 고조파 동점깨기 (12.165.6) ────────────────────────────
+                # 컨덕턴스가 같으면 **전력도 같다.** 12.165.5 가 쟀다:
+                #   포트 1377W  ↔  드라이기강+핫플 1392W   **15W 차이(1.1%)**
+                # 오븐 FAN_LIGHT(14.2W)과 같은 크기다. `L_cons`/`L_res` 처럼
+                # 전력만 보는 항은 이 자리에서 **정보가 0** 이고, 컨덕턴스
+                # argmin 도 마찬가지다 — 둘 다 tol 안이라 어느 쪽이 이길지가
+                # 반올림에 달린다. 실측에서 그것이 포트 오탐으로 나왔다
+                # (test_15 정밀도 1.00 -> 0.84).
+                #
+                # **모양은 갈린다.** 같은 두 조합의 `h3/h1` 이 0.37% vs 2.14% 로
+                # 5.8배다. 그래서 tol 안의 후보들 중 **관측 고조파에 가장 가까운
+                # 것**을 고른다. h1 은 안 쓴다 — 12.156 이 `L_harm` 판별의
+                # 97.6%가 h1 이라고 쟀고, 여기서 축퇴인 축이 바로 그 h1 이다.
+                #
+                # 남은 축퇴는 2쌍뿐이고 둘 다 이 방식으로 갈린다. 나머지 6쌍은
+                # `ch50`(반파)이 이미 `gc` 단계에서 가른다 (12.165.5).
+                if (swap_tiebreak in ("h3", "mag") and tgt.get("obs_harm") is not None
+                        and float(self.sig.abs().sum()) > 0):
+                    od = [h - 1 for h in swap_tb_orders if 1 <= h <= self.sig.shape[1]]
+                    sig_r = self.sig[cols][:, od]                          # (R,O,2)
+                    # 조합별 저항 예측 고조파: 각 기기를 V²/R 로 켠다
+                    pw = gcr * v2[:, None]                                 # (B,R) W
+                    hc = torch.einsum("cr,br,rox->cbox", cb, pw, sig_r)    # (C,B,O,2)
+                    # 관측에서 **저항이 아닌 것**을 뺀 잔차
+                    other = torch.einsum("bk,kox->box",
+                                         out["power"] * (1.0 - fx), self.sig[:, od])
+                    idle_h = (torch.sigmoid(out["plugged_logit"])
+                              * (1.0 - torch.sigmoid(out["on_logit"])))
+                    other = other + torch.einsum("bk,kox->box", idle_h,
+                                                 self.standby_sig[:, od])
+                    other = other + self.noise_sig[od][None]
+                    h_res = tgt["obs_harm"][:, od] - other                 # (B,O,2)
+                    # ── 크기로 볼 것인가 복소로 볼 것인가 (12.165.7) ──────
+                    # `h3`(복소)은 **반증됐다.** `h_res` 에는 `harm_offset`
+                    # (12.148 의 Norton 보정, 창마다 다른 복소 오프셋)이 안 빠져
+                    # 있어 위상이 돌아가 있다. 실측 test_16 h3 에서:
+                    #     |h_res| 0.105  |포트| 0.024  |드+핫| 0.131
+                    #     크기로는 드+핫이 맞는데 **복소 거리는 |A−h| 0.098 <
+                    #     |B−h| 0.220** 로 포트가 이긴다 (B 의 위상이 거의 반대).
+                    # 결과: 장소B 포트 0.935 -> 0.853, 핫플 0.901 -> 0.701.
+                    #
+                    # `mag` 는 차수별 **크기**만 비교한다 — 공통 위상 회전에
+                    # 면역이다. 그리고 차수는 **h3 하나만** 쓰는 것이 맞다:
+                    #     h3  |Δ| 포트 0.081 vs 드+핫 0.026   -> 드+핫 (옳다)
+                    #     h5           0.121     0.113        -> 약하게 드+핫
+                    #     h7           0.082     0.139        -> **포트 (틀리다)**
+                    # 12.135 가 높은 차수는 신호가 아니라 모델오차라고 쟀다.
+                    sc = self.harm_scale[od].clamp(min=1e-6)
+                    if swap_tiebreak == "mag":
+                        mc = torch.linalg.vector_norm(hc, dim=-1)          # (C,B,O)
+                        mr = torch.linalg.vector_norm(h_res, dim=-1)       # (B,O)
+                        hsc = ((mc - mr[None]).abs() / sc[None, None]).mean(2)
+                    else:
+                        hsc = ((hc - h_res[None]).abs()
+                               / sc[None, None, :, None]).mean((2, 3))     # (C,B)
+                    # tol 밖 후보는 후보가 아니다. 아무것도 없으면 컨덕턴스로 간다.
+                    hsc = hsc.masked_fill(~feas, float("inf"))
+                    bi = torch.where(feas.any(0), hsc.argmin(0), err.argmin(0))
+                else:
+                    bi = err.argmin(0)                                     # (B,)
                 best = cb[bi]                                             # (B,R)
                 # tol: 상대오차. 저항 몫이 작은 창은 아예 안 건드린다.
-                rel = err.gather(0, bi[None]).squeeze(0) * v2 / p_res.abs().clamp(min=1.0)
+                rel = rel_all.gather(0, bi[None]).squeeze(0)
                 m = ((rel <= swap_tol) & (p_res > self.swap_min_w)
                      & (best != cur).any(1)).to(out["on_logit"].dtype)     # (B,)
+                # 동점이 실제로 몇 번 생기는지 — 항이 하는 일의 크기다
+                parts["swap_ties"] = (feas.sum(0).float() * m).sum() / m.sum().clamp(min=1.0)
             bce = F.binary_cross_entropy_with_logits(
                 out["on_logit"][:, cols], best, reduction="none")          # (B,R)
             parts["swap"] = (bce.mean(1) * m).sum() / m.sum().clamp(min=1.0)
@@ -785,6 +852,7 @@ class NILMLoss(torch.nn.Module):
         else:
             parts["swap"] = out["power"].sum() * 0.0
             parts["swap_frac"] = out["power"].sum().detach() * 0.0
+            parts["swap_ties"] = out["power"].sum().detach() * 0.0
 
         # ── 함의 제약 `on ⊂ plugged` (12.164.9) ────────────────────────────
         # 꽂히지 않은 기기가 켜질 수는 없다. 합성 30만 창에서 `on=1 & plugged=0`

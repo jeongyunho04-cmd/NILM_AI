@@ -309,6 +309,20 @@ def main() -> int:
     ap.add_argument("--res-apps", default="electiric_kettle,oven", metavar="LIST",
                     help="`--w-res` 가 저항을 못 박을 기기. 기본은 포트·오븐 — "
                          "축퇴인 쌍이면서 등가저항이 13%% 벌어진 유일한 쌍이다.")
+    ap.add_argument("--swap-tiebreak", default="off", choices=("off", "h3", "mag"),
+                    help="`L_swap` 이 허용오차 안에서 **여러 조합**을 만났을 때 "
+                         "무엇으로 고르는가 (12.165.6). 기본 `off` 는 컨덕턴스 "
+                         "argmin 인데, 컨덕턴스가 같으면 **전력도 같아서**(포트 "
+                         "1377W vs 드라이기강+핫플 1392W, 15W 차이) 정보가 0 이다. "
+                         "`h3` 는 관측 고조파에 가장 가까운 조합을 고른다 — 같은 두 "
+                         "조합의 h3/h1 이 0.37%% vs 2.14%% 로 5.8배 갈린다. "
+                         "h1 은 안 쓴다 (거기가 축퇴인 축이다). "
+                         "`h3` 는 복소 거리인데 **반증됐다** — `harm_offset` 이 안 "
+                         "빠져 위상이 돌아가 있다 (12.165.7). `mag` 는 차수별 크기만 "
+                         "비교해 공통 위상 회전에 면역이다. `mag` 를 쓸 것.")
+    ap.add_argument("--swap-tb-orders", default="3", metavar="LIST",
+                    help="동점깨기가 쓸 차수. **기본은 3 하나다** — 실측에서 "
+                         "h5 는 약하고 h7 은 오히려 틀린 쪽을 고른다 (12.165.7).")
     ap.add_argument("--w-impl", type=float, default=0.0, metavar="W",
                     help="**함의 제약** `L_impl = relu(on_logit − plugged_logit)` "
                          "(12.164.9). 꽂히지 않은 기기가 켜질 수는 없다 — 합성 30만 "
@@ -759,6 +773,9 @@ def main() -> int:
                                 w_consq=a.w_consq, w_pref=a.w_pref,
                                 w_res=a.w_res, w_swap=a.w_swap,
                                 swap_tol=a.swap_tol, swap_slack=a.swap_slack,
+                                swap_tiebreak=a.swap_tiebreak,
+                                swap_tb_orders=tuple(
+                                    int(x) for x in a.swap_tb_orders.split(",") if x),
                                 w_impl=a.w_impl, impl_side=a.impl_side,
                                 companion=bool(a.companion))
             sp = crit(model(sf, swd), stg)
@@ -771,6 +788,7 @@ def main() -> int:
         for k, v in (("real_cons", rp["cons"]), ("real_harm", rp["harm"]),
                      ("real_consq", rp["consq"]), ("real_res", rp["res"]),
                      ("real_swap", rp["swap"]), ("swap_frac", rp["swap_frac"]),
+                     ("swap_ties", rp["swap_ties"]),
                      ("real_impl", rp["impl"]), ("impl_frac", rp["impl_frac"]),
                      ("real_hedge", rp["hedge"]), ("real_on", rp["real_on"]),
                      ("synth_total", sp["total"]), ("loss", loss)):
@@ -788,7 +806,9 @@ def main() -> int:
                   + (f" res {m['real_res']:.2f}" if a.w_res > 0 else "")
                   # 감독 창 비율을 같이 찍는다 — 맞바꿈이 드물면 항이 켜져 있어도
                   # 아무 일이 안 일어난다 (`_criteria_hwL.md` 의 미리 적은 위험).
-                  + (f" swap {m['real_swap']:.3f} (창 {m['swap_frac']*100:.1f}%)"
+                  + (f" swap {m['real_swap']:.3f} (창 {m['swap_frac']*100:.1f}%"
+                     + (f", 동점 {m['swap_ties']:.2f}개"
+                        if a.swap_tiebreak != "off" else "") + ")"
                      if a.w_swap > 0 else "")
                   + (f" impl {m['real_impl']:.4f} (위반 {m['impl_frac']*100:.2f}%)"
                      if a.w_impl > 0 else "") + f" / "
