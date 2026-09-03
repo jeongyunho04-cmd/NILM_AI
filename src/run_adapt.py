@@ -309,6 +309,20 @@ def main() -> int:
     ap.add_argument("--res-apps", default="electiric_kettle,oven", metavar="LIST",
                     help="`--w-res` 가 저항을 못 박을 기기. 기본은 포트·오븐 — "
                          "축퇴인 쌍이면서 등가저항이 13%% 벌어진 유일한 쌍이다.")
+    ap.add_argument("--w-impl", type=float, default=0.0, metavar="W",
+                    help="**함의 제약** `L_impl = relu(on_logit − plugged_logit)` "
+                         "(12.164.9). 꽂히지 않은 기기가 켜질 수는 없다 — 합성 30만 "
+                         "창에서 `on=1 & plugged=0` 은 9종 전부 0건이다. 그런데 두 "
+                         "머리가 독립 시그모이드라 2단계에서는 그 모순을 벌하는 항이 "
+                         "없었고, 12.164 가 `gt_plugged` 를 '동작 세션 중' 으로 바꾸자 "
+                         "모델이 그 틈으로 갔다 (장소B 오븐 유령 1.1 -> 134W). "
+                         "로짓에 직접 건다 — σ 를 곱하면 포화 게이트에 안 닿는다(규칙 51). "
+                         "0 이면 끔")
+    ap.add_argument("--impl-side", default="both", choices=("both", "on"),
+                    help="`--w-impl` 에서 **어느 쪽이 양보하는가**. `both` 는 두 로짓 "
+                         "모두에 기울기를 준다 — 12.164.10 에서 모델이 틀린 쪽을 골랐다 "
+                         "(장소 B 에서 on 을 내리는 대신 plugged 를 0.02 -> 0.96 으로 "
+                         "올렸다). `on` 은 `plugged_logit` 을 detach 해 on 쪽만 민다.")
     ap.add_argument("--standby-operating", nargs="?", const="all", default="off",
                     choices=("off", "session", "all"),
                     help="`standby_sig` 를 **동작 중 휴지**의 지문으로 바꾼다 (12.163). "
@@ -745,6 +759,7 @@ def main() -> int:
                                 w_consq=a.w_consq, w_pref=a.w_pref,
                                 w_res=a.w_res, w_swap=a.w_swap,
                                 swap_tol=a.swap_tol, swap_slack=a.swap_slack,
+                                w_impl=a.w_impl, impl_side=a.impl_side,
                                 companion=bool(a.companion))
             sp = crit(model(sf, swd), stg)
             loss = rp["total"] + a.lam * sp["total"]
@@ -756,6 +771,7 @@ def main() -> int:
         for k, v in (("real_cons", rp["cons"]), ("real_harm", rp["harm"]),
                      ("real_consq", rp["consq"]), ("real_res", rp["res"]),
                      ("real_swap", rp["swap"]), ("swap_frac", rp["swap_frac"]),
+                     ("real_impl", rp["impl"]), ("impl_frac", rp["impl_frac"]),
                      ("real_hedge", rp["hedge"]), ("real_on", rp["real_on"]),
                      ("synth_total", sp["total"]), ("loss", loss)):
             d = v.detach()
@@ -773,7 +789,9 @@ def main() -> int:
                   # 감독 창 비율을 같이 찍는다 — 맞바꿈이 드물면 항이 켜져 있어도
                   # 아무 일이 안 일어난다 (`_criteria_hwL.md` 의 미리 적은 위험).
                   + (f" swap {m['real_swap']:.3f} (창 {m['swap_frac']*100:.1f}%)"
-                     if a.w_swap > 0 else "") + f" / "
+                     if a.w_swap > 0 else "")
+                  + (f" impl {m['real_impl']:.4f} (위반 {m['impl_frac']*100:.2f}%)"
+                     if a.w_impl > 0 else "") + f" / "
                   f"합성 {m['synth_total']:.4f})  [{time.time()-t0:.0f}s]", flush=True)
             hist.append(snapshot(f"step {step}"))
             agg, nb = {}, 0

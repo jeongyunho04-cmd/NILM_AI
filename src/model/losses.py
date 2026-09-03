@@ -459,6 +459,8 @@ class NILMLoss(torch.nn.Module):
                   w_swap: float = 0.0,
                   swap_tol: float = 0.02,
                   swap_slack: int = 0,
+                  w_impl: float = 0.0,
+                  impl_side: str = "both",
                   companion: bool = False) -> Dict[str, torch.Tensor]:
         """**기기별 라벨이 없는 실측 창**용 손실 (4.2절 2단계).
 
@@ -784,9 +786,42 @@ class NILMLoss(torch.nn.Module):
             parts["swap"] = out["power"].sum() * 0.0
             parts["swap_frac"] = out["power"].sum().detach() * 0.0
 
+        # ── 함의 제약 `on ⊂ plugged` (12.164.9) ────────────────────────────
+        # 꽂히지 않은 기기가 켜질 수는 없다. 합성 30만 창에서 `on=1 & plugged=0`
+        # 은 9종 전부 **0건**이다 — 라벨이 이미 이 포함관계를 담고 있다.
+        #
+        # 그런데 두 머리는 서로 독립인 시그모이드이고 2단계에는 라벨이 없어서,
+        # **그 모순을 벌하는 항이 하나도 없었다.** 12.164 가 `gt_plugged` 를
+        # "동작 세션 중" 으로 재정의하자 몸통에 "오븐이 없다" 는 특징이 생겼는데,
+        # 지킬 의무가 없으니 시드 2/3 이 `σ(on)>0.5 & σ(plugged)≈0.05` 로 가서
+        # 드라이기 강풍을 오븐+포트로 맞바꿨다 (장소B 유령 1.1 -> 134W).
+        #
+        # **로짓에 직접 건다.** `σ` 를 곱해 걸면 포화된 게이트에 안 닿는다
+        # (규칙 51). `L_swap` 이 같은 이유로 로짓 BCE 를 쓴다.
+        # 힌지라 `plugged_logit >= on_logit` 인 창에서는 정확히 0 이다 —
+        # 옳게 하고 있는 기기·창은 건드리지 않는다.
+        #
+        # `impl_side` 가 **어느 쪽이 양보하는가**를 정한다. 제약은 두 가지로
+        # 만족될 수 있고, 12.164.10 에서 `both` 는 틀린 쪽을 골랐다 —
+        # 장소 B 에서 `on` 을 내리는 대신 `σ(plugged)` 를 0.02 -> 0.96 으로
+        # 올려 버렸다 (오븐이 없는 장소인데도). 유령이 129W 로 그대로 남았다.
+        # `on` 은 `plugged_logit` 을 detach 해 **`on` 쪽만** 민다.
+        if w_impl > 0:
+            pl = out["plugged_logit"]
+            if impl_side == "on":
+                pl = pl.detach()
+            parts["impl"] = F.relu(out["on_logit"] - pl).mean()
+            parts["impl_frac"] = (
+                (out["on_logit"] > out["plugged_logit"]).to(out["power"].dtype)
+                .mean().detach())
+        else:
+            parts["impl"] = out["power"].sum() * 0.0
+            parts["impl_frac"] = out["power"].sum().detach() * 0.0
+
         parts["total"] = (w_cons * parts["cons"] + w_harm * parts["harm"]
                           + w_over * parts["over"] + w_hedge * parts["hedge"]
                           + w_real_on * parts["real_on"]
                           + w_consq * parts["consq"] + w_pref * parts["pref"]
-                          + w_res * parts["res"] + w_swap * parts["swap"])
+                          + w_res * parts["res"] + w_swap * parts["swap"]
+                          + w_impl * parts["impl"])
         return parts
