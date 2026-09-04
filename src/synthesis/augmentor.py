@@ -98,6 +98,7 @@ class DataAugmentor:
         harmonic_dither_ref_order: int = 9,
         harmonic_dither_even_amp: float = 0.0,
         harmonic_dither_even_phase_deg: float = 0.0,
+        harmonic_dither_min_order: int = 2,
         level_scramble: Optional[dict] = None,
         power_scale_std_map: Optional[Dict[str, float]] = None,
         sp_curves: bool = False,
@@ -142,6 +143,10 @@ class DataAugmentor:
         # 짝수차는 반주기 비대칭에서 나오므로 한 무리로 묶어 흔드는 것이 옳다.
         self.harmonic_dither_even_amp = max(0.0, float(harmonic_dither_even_amp))
         self.harmonic_dither_even_phase_deg = max(0.0, float(harmonic_dither_even_phase_deg))
+        # 차수 비례 지터를 **이 차수부터** 건다 (12.182). 장소 B 의 위상 회전은 h7 이상에
+        # 있는데(12.179.3) 60° 지터는 h3 에도 20° 를 줘서 φ3 판별자(12.34)를 지운다 —
+        # cnn_ph 홀드아웃 미니PC 0.950 -> 0.872. 기본 2 는 예전 동작 그대로다.
+        self.harmonic_dither_min_order = max(2, int(harmonic_dither_min_order))
 
     def augment_activation(
         self,
@@ -346,6 +351,10 @@ class DataAugmentor:
         rel = k / float(self.harmonic_dither_ref_order)
         sig_g = amp * rel
         sig_p = np.radians(ph) * rel
+        # 최소 차수 아래는 안 흔든다 (짝수차 전용 지터는 아래 분기가 따로 정한다).
+        low = k < float(self.harmonic_dither_min_order)
+        sig_g = np.where(low, 0.0, sig_g)
+        sig_p = np.where(low, 0.0, sig_p)
         # 짝수차는 차수 비례를 쓰지 않는다 — 판별을 지는 것이 2차 하나라 (12.65.3)
         # 차수로 키우면 정작 2차가 가장 약하게 흔들린다. 무리 전체에 같은 σ 를 건다.
         if e_amp > 0.0 or e_ph > 0.0:

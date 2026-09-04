@@ -54,6 +54,10 @@ def main() -> int:
                     help="고조파 진폭 지터 (로그정규 σ, 홀수차 중앙값). 예: 0.50")
     ap.add_argument("--dither-phase-deg", type=float, default=0.0,
                     help="고조파 위상 지터 (도, 홀수차 중앙값). 예: 15")
+    ap.add_argument("--dither-min-order", type=int, default=2, metavar="K",
+                    help="차수 비례 지터를 이 차수부터 건다 (12.182). 장소 위상 회전은 h7 "
+                         "이상인데 60° 지터가 h3 에 20° 를 줘 φ3 판별자를 지웠다 "
+                         "(cnn_ph 미니PC 0.950 -> 0.872). 예: 5")
     a = ap.parse_args()
     print("=" * 78); print("[NILM AI] 학습용 독립 창 캐시"); print("=" * 78)
     excl = json.loads(a.exclude_activation_files) if a.exclude_activation_files else None
@@ -79,7 +83,8 @@ def main() -> int:
               f"(무리 전체 동일, 12.69절) **")
     if a.dither_amp > 0 or a.dither_phase_deg > 0:
         print(f"  ** 차수별 지터: 진폭 σ={a.dither_amp:.2f} / 위상 {a.dither_phase_deg:.1f}° "
-              f"(홀수차 중앙값, 차수 비례) **")
+              f"(홀수차 중앙값, 차수 비례"
+              + (f", h{a.dither_min_order} 부터" if a.dither_min_order > 2 else "") + ") **")
     build_cache(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                 time_split=a.split, seed=a.seed, n_workers=a.workers,
                 exclude_activation_files=excl,
@@ -88,7 +93,8 @@ def main() -> int:
                 dither_even_amp=a.dither_even_amp,
                 dither_even_phase_deg=a.dither_even_phase_deg,
                 power_scale_std_map=pss,
-                sp_curves=a.sp_curves, background=a.background)
+                sp_curves=a.sp_curves, background=a.background,
+                dither_min_order=a.dither_min_order)
     return 0
 
 

@@ -65,7 +65,8 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           dither_phase_deg: float = 0.0, recipe_mix_json: str = "",
           dither_even_amp: float = 0.0, dither_even_phase_deg: float = 0.0,
           power_scale_std_json: str = "",
-          sp_curves: bool = False, background: bool = False) -> None:
+          sp_curves: bool = False, background: bool = False,
+          dither_min_order: int = 2) -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.augmentor import DataAugmentor
     from src.synthesis.dataset import NILMBatchGenerator
@@ -88,6 +89,7 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
                         harmonic_dither_phase_deg=float(dither_phase_deg),
                         harmonic_dither_even_amp=float(dither_even_amp),
                         harmonic_dither_even_phase_deg=float(dither_even_phase_deg),
+                        harmonic_dither_min_order=int(dither_min_order),
                         power_scale_std_map=pss,
                         sp_curves=bool(sp_curves))
     _GEN = NILMBatchGenerator(
@@ -147,6 +149,7 @@ def build_cache(
     power_scale_std_map: Optional[Dict[str, float]] = None,
     sp_curves: bool = False,
     background: bool = False,
+    dither_min_order: int = 2,
 ) -> dict:
     """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다."""
     import multiprocessing as mp
@@ -186,7 +189,8 @@ def build_cache(
                   initargs=(npz_dir, window_cycles, time_split, seed, excl_json,
                             dither_amp, dither_phase_deg, mix_json,
                             dither_even_amp, dither_even_phase_deg, pss_json,
-                            bool(sp_curves), bool(background))) as pool:
+                            bool(sp_curves), bool(background),
+                            int(dither_min_order))) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -205,6 +209,7 @@ def build_cache(
             "time_split": time_split, "seed": seed, "n_wide": n_wide,
             "exclude_activation_files": exclude_activation_files,
             "dither_amp": float(dither_amp), "dither_phase_deg": float(dither_phase_deg),
+            "dither_min_order": int(dither_min_order),
             "recipe_mix": recipe_mix,
             "dither_even_amp": float(dither_even_amp),
             "dither_even_phase_deg": float(dither_even_phase_deg),
