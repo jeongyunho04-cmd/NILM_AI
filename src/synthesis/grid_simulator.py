@@ -181,6 +181,12 @@ class GridSimulator:
             from src.synthesis.coupling import TEXTURE_STEMS
             texture_stems = TEXTURE_STEMS
         self.texture_stems = tuple(texture_stems)
+        # ⚠ 텍스처는 **전용 RNG** 로 뽑는다. 창마다 전역 `np.random` 에서 한 번 더 뽑으면
+        # 그 흐름이 밀려 **텍스처를 켜고 끄는 것만으로 기기 선택·시각·증강이 전부 달라진다** —
+        # 텍스처의 효과만 보려는 A/B 비교가 오염된다. 씨앗은 전역에서 **생성자에서 한 번만**
+        # 받아 `np.random.seed()` 의 재현성을 지키고, `texture_stems` 가 비어도 똑같이 받아서
+        # 켜고 끔이 전역 흐름을 한 칸도 옮기지 않게 한다.
+        self._tex_rng = np.random.default_rng(int(np.random.randint(0, 2 ** 31 - 1)))
         self._texture_model = texture_model
         self.default_ref_voltage = default_ref_voltage
         self.r_grid_range = (r_grid, r_grid) if r_grid is not None else r_grid_range
@@ -242,7 +248,7 @@ class GridSimulator:
         """
         if not self.texture_stems:
             return ""
-        return str(self.texture_stems[int(np.random.randint(len(self.texture_stems)))])
+        return str(self.texture_stems[int(self._tex_rng.integers(len(self.texture_stems)))])
 
     def _sample_base_voltage(
         self,
