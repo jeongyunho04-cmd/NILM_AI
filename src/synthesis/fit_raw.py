@@ -26,12 +26,13 @@
 Vf·i 와 R·i² 손실, 실측 3~5%). `match_power=True` 면 시뮬 입력 전력이 측정과 같아지도록
 P 를 안쪽에서 3회 되풀이해 맞춘다 — 그러면 잔차가 모양만 본다.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from src.synthesis.circuit_sim import F, NPC, simulate
+from src.synthesis.circuit_fit import EXTRA_SPEC
+from src.synthesis.circuit_sim import F, NPC, VF_DEFAULT, simulate
 
 NS = 256                #: 원시 표본/주기 (15360Hz / 60Hz)
 NCYC_SIM = 10           #: 시뮬 주기 수 (8주기면 40주기 값과 1e-13 안에서 같다)
@@ -40,6 +41,23 @@ BAND = 15               #: 손실을 자르는 차수
 #: par5 로그 경계 (C_dc, R, L, Cx, rd)
 LO5 = np.log(np.array([5e-6, 0.3, 5e-6, 0.02e-6, 0.02]))
 HI5 = np.log(np.array([600e-6, 40.0, 8000e-6, 2e-6, 20.0]))
+
+#: 원시 적합에서 켤 수 있는 확장 요소 — 12.184.10 의 E1·E2·E3 (판정 철회분, 12.185.1).
+#: 경계·중립값·두 번째 시작값은 `circuit_fit.EXTRA_SPEC` 하나만 쓴다.
+#: `k_hi`(h9↑ 전압 크기 배율)는 뺐다 — 2Hz 전압 채널의 인공물을 재던 **입력 정형**이고,
+#: 원시는 전압을 15360Hz 로 직접 재므로 같은 뜻을 갖지 않는다.
+#:
+#: ⚠ 셋 다 **`rd` 를 물리값에 고정한 위에서만** 뜻이 있다. `nvt` 는 브리지의 비선형 저항이고
+#: `rd` 는 그 선형 저항이라 같은 자리에 산다 — `rd` 가 자유로우면 둘이 맞바뀌어(미니PC 의
+#: R–rd 축퇴와 같은 종류) 어느 쪽도 판정되지 않는다.
+RAW_EXTRAS: Tuple[str, ...] = ("nvt", "Gp", "alpha")
+
+#: 원시 쪽 확장 사양 = `circuit_fit.EXTRA_SPEC` + `Vf`. 브리지 순방향 강하는 원래 상수
+#: (1.4V = 다이오드 2개)로 박아 두는데, `nvt`(지수 무릎)·`rd`(선형 저항)·`Vf`(상수)는
+#: **같은 브리지의 세 가지 기술**이다. 둘을 고정한 채 셋째만 맞추면 "요소가 필요하다" 는
+#: 결론이 그 고정 때문일 수 있다 — 그래서 `Vf` 도 풀 수 있게 둔다 (기본은 고정 1.4V).
+SPEC: Dict[str, Tuple[str, float, float, float, float]] = dict(EXTRA_SPEC)
+SPEC["Vf"] = ("lin", 0.2, 3.0, VF_DEFAULT, 0.8)
 
 
 # ── 신호 처리 ────────────────────────────────────────────────────────────────
@@ -171,28 +189,67 @@ def measure_cx(pt: RawPoint, thr: float = 0.15, guard: int = 3) -> Tuple[float, 
     return cx, r, int(m.sum())
 
 
+# ── 확장 요소 ────────────────────────────────────────────────────────────────
+def sim_kwargs(extras: Optional[Dict[str, float]]) -> Dict[str, float]:
+    """extras -> `circuit_sim.simulate` 인수. `Gp`(컨덕턴스) 를 `Rp`(저항) 로 뒤집는다.
+
+    중립값(nvt 0 · Gp 0 · alpha 1)이면 빈 dict 에 가까워져 기본 모형과 **정확히** 같다.
+    """
+    if not extras:
+        return {}
+    kw = {k: float(v) for k, v in extras.items() if k in ("nvt", "alpha", "Vf")}
+    if float(extras.get("Gp", 0.0)) > 0.0:
+        kw["Rp"] = 1.0 / float(extras["Gp"])
+    return kw
+
+
+def neutral_extras(names: Sequence[str] = ()) -> Dict[str, float]:
+    """중립값 — 여기서 확장 모형은 기본 5파라미터 모형과 같다."""
+    return {n: SPEC[n][3] for n in names}
+
+
+def warm_extras(names: Sequence[str] = ()) -> Dict[str, float]:
+    """두 번째 시작값 — 중립에서 야코비가 0 인 방향(Gp=0 하한, nvt 로그 하한)에 대비해 켠 값."""
+    return {n: SPEC[n][4] for n in names}
+
+
+def in_physical_range(extras: Dict[str, float]) -> List[str]:
+    """[E5] 물리 범위 밖인 요소 이름. 밖이면 '요소' 가 아니라 '자리표' 로 읽는다."""
+    lim = {"nvt": (0.03, 0.15), "Gp": (0.0, 0.05), "alpha": (0.0, 1.0), "Vf": (0.6, 2.1)}
+    out = []
+    for n, v in extras.items():
+        if n not in lim or v == SPEC[n][3]:    # 중립은 '꺼짐' 이라 판정 대상이 아니다
+            continue
+        lo, hi = lim[n]
+        if not lo <= v <= hi:
+            out.append(f"{n}={v:.4g}")
+    return out
+
+
 # ── 잔차와 적합 ──────────────────────────────────────────────────────────────
 def sim_current(par5: Sequence[float], pt: RawPoint, match_power: bool = True,
-                n_match: int = 3) -> Optional[np.ndarray]:
+                n_match: int = 3, extras: Optional[Dict[str, float]] = None) -> Optional[np.ndarray]:
     """(256,) 시뮬 전류 — 계측 RC 를 건 뒤 원시와 같은 표본률로."""
+    kw = sim_kwargs(extras)
     P = pt.p_w
     r = None
     for _ in range(n_match if match_power else 1):
-        r = simulate(P, *par5, vsrc=pt.vsrc)
+        r = simulate(P, *par5, vsrc=pt.vsrc, **kw)
         if not r["ok"] or not np.isfinite(r["p_w"]) or r["p_w"] <= 0:
             return None
         if not match_power:
             break
         P *= pt.p_w / r["p_w"]                      # 시뮬 입력 전력을 측정에 맞춘다
-    r = simulate(P, *par5, vsrc=pt.vsrc)
+    r = simulate(P, *par5, vsrc=pt.vsrc, **kw)
     if not r["ok"]:
         return None
     return rc_filter(downsample(r["i"][-NPC:]))
 
 
-def point_residual(par5, pt: RawPoint, band: int = BAND, match_power: bool = True) -> np.ndarray:
+def point_residual(par5, pt: RawPoint, band: int = BAND, match_power: bool = True,
+                   extras: Optional[Dict[str, float]] = None) -> np.ndarray:
     """(2·band,) 상대 잔차. `r@r` = (대역제한 상대 RMS)² (파세발)."""
-    isim = sim_current(par5, pt, match_power)
+    isim = sim_current(par5, pt, match_power, extras=extras)
     if isim is None:
         return np.full(2 * band, 10.0)
     d = (phasors(isim, band) - phasors(pt.i, band)) / pt.irms
@@ -200,14 +257,28 @@ def point_residual(par5, pt: RawPoint, band: int = BAND, match_power: bool = Tru
 
 
 def residual(x: np.ndarray, pts: Sequence[RawPoint], band: int = BAND,
-             match_power: bool = True, fixed: Optional[Dict[int, float]] = None) -> np.ndarray:
-    par5 = unpack(x, fixed)
+             match_power: bool = True, fixed: Optional[Dict[int, float]] = None,
+             extras: Sequence[str] = ()) -> np.ndarray:
+    par5, ex = unpack(x, fixed, extras)
     w = 1.0 / np.sqrt(len(pts))                     # 손실 = 동작점별 상대 RMS² 의 평균
-    return np.concatenate([point_residual(par5, p, band, match_power) * w for p in pts])
+    return np.concatenate([point_residual(par5, p, band, match_power, ex) * w for p in pts])
 
 
-def unpack(x: np.ndarray, fixed: Optional[Dict[int, float]] = None) -> Tuple[float, ...]:
-    """자유 변수 벡터(로그) -> par5. `fixed` 는 {인덱스: 값} 으로 고정한 것."""
+def loss_at(par5, extras: Optional[Dict[str, float]], pts: Sequence[RawPoint],
+            band: int = BAND, match_power: bool = True) -> float:
+    """한 점에서의 손실 (동작점별 상대 RMS² 의 평균). [E2] 단조 검사에 쓴다."""
+    w = 1.0 / np.sqrt(len(pts))
+    r = np.concatenate([point_residual(par5, p, band, match_power, extras) * w for p in pts])
+    return float(r @ r)
+
+
+def unpack(x: np.ndarray, fixed: Optional[Dict[int, float]] = None,
+           extras: Sequence[str] = ()) -> Tuple[Tuple[float, ...], Dict[str, float]]:
+    """자유 변수 벡터 -> (par5, extras dict). `fixed` 는 {인덱스: 값} 으로 고정한 것.
+
+    par5 는 로그, extras 는 `EXTRA_SPEC` 의 변환을 따른다. 로그 요소가 하한에 붙으면
+    중립값으로 되돌린다 (nvt 1e-4 -> 0: '없음' 을 정확히 표현하기 위해).
+    """
     fixed = fixed or {}
     free = [i for i in range(5) if i not in fixed]
     par = [0.0] * 5
@@ -215,17 +286,45 @@ def unpack(x: np.ndarray, fixed: Optional[Dict[int, float]] = None) -> Tuple[flo
         par[i] = float(np.exp(np.clip(x[j], LO5[i], HI5[i])))
     for i, v in fixed.items():
         par[i] = float(v)
-    return tuple(par)
+    ex: Dict[str, float] = {}
+    for j, n in enumerate(extras):
+        kind, lo, hi, neutral, _ = SPEC[n]
+        v = float(x[len(free) + j])
+        if kind == "log":
+            v = float(np.exp(np.clip(v, np.log(lo), np.log(hi))))
+            if v <= lo * 1.0000001:
+                v = neutral
+        else:
+            v = float(np.clip(v, lo, hi))
+        ex[n] = v
+    return tuple(par), ex
 
 
-def pack(par5: Sequence[float], fixed: Optional[Dict[int, float]] = None) -> np.ndarray:
+def pack(par5: Sequence[float], fixed: Optional[Dict[int, float]] = None,
+         extras: Optional[Dict[str, float]] = None, names: Sequence[str] = ()) -> np.ndarray:
     fixed = fixed or {}
-    return np.array([np.log(par5[i]) for i in range(5) if i not in fixed], float)
+    extras = extras or {}
+    x = [np.log(par5[i]) for i in range(5) if i not in fixed]
+    for n in names:
+        kind, lo, hi, neutral, _ = SPEC[n]
+        v = float(extras.get(n, neutral))
+        x.append(np.log(max(v, lo)) if kind == "log" else float(np.clip(v, lo, hi)))
+    return np.array(x, float)
 
 
-def rms_of(par5, pt: RawPoint, band: int = BAND, match_power: bool = True) -> Tuple[float, float]:
+def extra_bounds(names: Sequence[str] = ()) -> Tuple[np.ndarray, np.ndarray]:
+    lo, hi = [], []
+    for n in names:
+        kind, a, b = SPEC[n][:3]
+        lo.append(np.log(a) if kind == "log" else a)
+        hi.append(np.log(b) if kind == "log" else b)
+    return np.array(lo, float), np.array(hi, float)
+
+
+def rms_of(par5, pt: RawPoint, band: int = BAND, match_power: bool = True,
+           extras: Optional[Dict[str, float]] = None) -> Tuple[float, float]:
     """(대역제한 상대 RMS, 전대역 상대 RMS). 실패하면 (nan, nan)."""
-    isim = sim_current(par5, pt, match_power)
+    isim = sim_current(par5, pt, match_power, extras=extras)
     if isim is None:
         return np.nan, np.nan
     d = (phasors(isim, band) - phasors(pt.i, band)) / pt.irms
@@ -240,24 +339,41 @@ class RawFit:
     rms: Dict[str, Tuple[float, float]]
     at_bound: List[str]
     nfev: int
+    extras: Dict[str, float] = field(default_factory=dict)
+    #: [E2] 겹쳐 시작이 기본값보다 나쁜 결과를 막았는가 — True 면 그 줄은 최적화 실패의 기록이다
+    guard_fired: bool = False
 
 
 PAR_NAMES = ("C_dc", "R", "L", "Cx", "rd")
 
 
-def fit(pts: Sequence[RawPoint], starts: Sequence[Sequence[float]], band: int = BAND,
+def _norm_start(s) -> Tuple[Sequence[float], Dict[str, float]]:
+    """시작점을 (par5, extras) 로 정규화. par5 만 주면 extras 는 중립."""
+    if len(s) == 2 and isinstance(s[1], dict):
+        return s[0], s[1]
+    return s, {}
+
+
+def fit(pts: Sequence[RawPoint], starts: Sequence, band: int = BAND,
         match_power: bool = True, fixed: Optional[Dict[int, float]] = None,
-        max_nfev: int = 400) -> RawFit:
-    """다중 시작 TRF 최소제곱. `fixed` 로 파라미터를 물리값에 묶을 수 있다 (식별성)."""
+        max_nfev: int = 400, extras: Sequence[str] = ()) -> RawFit:
+    """다중 시작 TRF 최소제곱. `fixed` 로 파라미터를 물리값에 묶을 수 있다 (식별성).
+
+    `extras` 에 이름을 주면 그 확장 요소를 함께 맞춘다 (`RAW_EXTRAS`). 시작점은 par5 만
+    주거나 `(par5, extras_dict)` 쌍으로 준다 — 겹쳐 시작은 `fit_nested` 를 쓰라.
+    """
     from scipy.optimize import least_squares
     fixed = fixed or {}
+    extras = tuple(extras)
     free = [i for i in range(5) if i not in fixed]
-    lo, hi = LO5[free], HI5[free]
+    elo, ehi = extra_bounds(extras)
+    lo, hi = np.r_[LO5[free], elo], np.r_[HI5[free], ehi]
     best, nfev = None, 0
     for s in starts:
-        x0 = np.clip(pack(s, fixed), lo, hi)
+        p0, e0 = _norm_start(s)
+        x0 = np.clip(pack(p0, fixed, e0, extras), lo, hi)
         try:
-            r = least_squares(residual, x0, args=(pts, band, match_power, fixed),
+            r = least_squares(residual, x0, args=(pts, band, match_power, fixed, extras),
                               bounds=(lo, hi), diff_step=2e-3, xtol=1e-10, ftol=1e-12,
                               max_nfev=max_nfev)
         except Exception:
@@ -267,18 +383,71 @@ def fit(pts: Sequence[RawPoint], starts: Sequence[Sequence[float]], band: int = 
             best = (r.x, float(r.cost))
     if best is None:
         raise RuntimeError("모든 시작점이 실패했다")
-    par5 = unpack(best[0], fixed)
+    par5, ex = unpack(best[0], fixed, extras)
     ab = [PAR_NAMES[i] for j, i in enumerate(free)
           if abs(best[0][j] - lo[j]) < 1e-6 or abs(best[0][j] - hi[j]) < 1e-6]
-    rms = {p.stem: rms_of(par5, p, band, match_power) for p in pts}
-    return RawFit(par5, 2.0 * best[1], rms, ab, nfev)
+    rms = {p.stem: rms_of(par5, p, band, match_power, ex) for p in pts}
+    return RawFit(par5, 2.0 * best[1], rms, ab, nfev, ex)
 
 
-def loo(pts: Sequence[RawPoint], starts: Sequence[Sequence[float]], **kw) -> Tuple[float, Dict[str, float]]:
-    """동작점 하나를 빼고 맞춘 뒤 그 점의 대역제한 RMS. (평균, 점별)"""
-    out: Dict[str, float] = {}
+def fit_nested(pts: Sequence[RawPoint], base_par5: Sequence[float], extras: Sequence[str],
+               starts: Sequence = (), band: int = BAND, match_power: bool = True,
+               fixed: Optional[Dict[int, float]] = None, max_nfev: int = 400) -> RawFit:
+    """기본 모형의 최적점 + **중립** extras 에서 출발한다 — 결과가 기본보다 나쁠 수 없다.
+
+    12.184.10 의 요소 기각이 무효였던 이유가 여기다: 스칼라 최소화(Nelder-Mead)를 흩뿌린
+    시작점에서 돌려 확장 모형이 중립값보다 **나쁜** 점에서 멈췄다. 겹친 모형은 기본을 특수
+    케이스로 품으므로 그것은 요소가 아니라 최적화의 기록이다 (규칙: [E2]).
+
+    중립에서 야코비가 0 인 방향(Gp=0 은 하한, nvt 는 로그 하한)이 있으므로 켠 시작점
+    (`warm_extras`) 도 함께 넣는다 — 넣지 않으면 첫 미분이 0 이라 그 자리에서 못 움직인다.
+    """
+    extras = tuple(extras)
+    st = [(tuple(base_par5), neutral_extras(extras))]
+    if warm_extras(extras) != neutral_extras(extras):
+        st.append((tuple(base_par5), warm_extras(extras)))
+    st.extend(starts)
+    r = fit(pts, st, band=band, match_power=match_power, fixed=fixed,
+            max_nfev=max_nfev, extras=extras)
+    l0 = loss_at(base_par5, neutral_extras(extras), pts, band, match_power)
+    if l0 < r.loss:                                 # 단조 보장 — 여기 걸리면 최적화 결함이다
+        rms = {p.stem: rms_of(base_par5, p, band, match_power) for p in pts}
+        return RawFit(tuple(base_par5), l0, rms, [], r.nfev, neutral_extras(extras), True)
+    return r
+
+
+def loo_folds(pts: Sequence[RawPoint], starts: Sequence,
+              **kw) -> List[Tuple[RawPoint, List[RawPoint], RawFit]]:
+    """폴드마다 (뺀 점, 훈련점, 기본 적합). 요소를 여럿 재려면 이것을 한 번만 만들어 나눠 쓴다."""
+    out = []
     for i, p in enumerate(pts):
         tr = [q for j, q in enumerate(pts) if j != i]
-        r = fit(tr, starts, **kw)
-        out[p.stem] = rms_of(r.par5, p, kw.get("band", BAND), kw.get("match_power", True))[0]
+        out.append((p, tr, fit(tr, starts, **kw)))
+    return out
+
+
+def loo(pts: Sequence[RawPoint], starts: Sequence, **kw) -> Tuple[float, Dict[str, float]]:
+    """동작점 하나를 빼고 맞춘 뒤 그 점의 대역제한 RMS. (평균, 점별)"""
+    band, mp = kw.get("band", BAND), kw.get("match_power", True)
+    out = {p.stem: rms_of(r.par5, p, band, mp, r.extras)[0]
+           for p, _, r in loo_folds(pts, starts, **kw)}
     return float(np.mean(list(out.values()))), out
+
+
+def loo_nested(folds: Sequence[Tuple[RawPoint, List[RawPoint], RawFit]], extras: Sequence[str],
+               starts: Sequence = (), band: int = BAND, match_power: bool = True,
+               fixed: Optional[Dict[int, float]] = None, max_nfev: int = 400
+               ) -> Tuple[float, Dict[str, float], Dict[str, Dict[str, float]]]:
+    """확장 요소의 LOO. **폴드마다 다시 맞춘 기본**(`folds`) 에서 겹쳐 시작한다.
+
+    전체 자료로 맞춘 정본 par5 를 겹쳐 시작에 쓰면 그것이 뺀 점까지 보고 정한 값이라
+    새어 든다 ([E4]). 반환 (평균, 점별 RMS, 점별 채택된 extras).
+    """
+    out: Dict[str, float] = {}
+    ex_per: Dict[str, Dict[str, float]] = {}
+    for p, tr, b in folds:
+        r = fit_nested(tr, b.par5, extras, starts=starts, band=band, match_power=match_power,
+                       fixed=fixed, max_nfev=max_nfev)
+        out[p.stem] = rms_of(r.par5, p, band, match_power, r.extras)[0]
+        ex_per[p.stem] = r.extras
+    return float(np.mean(list(out.values()))), out, ex_per
