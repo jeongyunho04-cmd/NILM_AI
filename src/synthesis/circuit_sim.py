@@ -81,11 +81,14 @@ def _diode_ib(drive, rd, nvt):
 
 
 @njit(cache=True)
-def _core(vsrc, dt, P, C_dc, R, L, Cx, Vf, rd, vc0, nvt, Rp, alpha):
+def _core(vsrc, dt, P, C_dc, R, L, Cx, Vf, rd, vc0, nvt, Rp, alpha, nsub):
     """시간 적분. 반환 (선 전류 iL, 브리지 전류 ib).
 
     확장 (기본값이면 원본과 같다): nvt>0 지수 다이오드 무릎(E1), Rp>0 초크 병렬 감쇠(E2),
     alpha 직류 부하 지수(E3: 1 정전력, 0 정전류, −1 저항).
+
+    `nsub` 는 표본 하나를 몇 조각으로 쪼갤지 (L·Cx 공진이 빠를 때 안정성·정확도. `substeps()` 참조).
+    나온 값은 조각 평균이라 nsub=1 이면 원본과 같다.
     """
     N = vsrc.size
     iac = np.zeros(N)
@@ -94,52 +97,74 @@ def _core(vsrc, dt, P, C_dc, R, L, Cx, Vf, rd, vc0, nvt, Rp, alpha):
     iL = 0.0          # 초크(L)에 흐르는 전류
     it = 0.0          # 선 전류 = iL + Rp 가지 전류
     vn = vsrc[0]
-    b = dt / Cx if Cx > 1e-12 else 0.0
+    h = dt / nsub
+    b = h / Cx if Cx > 1e-12 else 0.0
     i_ref = P / V0_LOAD
     ib = 0.0
     for k in range(N):
-        # 소스 -> 노드 (R + (L ∥ Rp) 직렬)
-        if L > 1e-9:
-            if Rp > 0.0:
-                vL = (vsrc[k] - vn - R * iL) / (1.0 + R / Rp)
-                iL += dt * vL / L
-                it = iL + vL / Rp
-            else:
-                iL += dt * (vsrc[k] - vn - iL * R) / L
-                it = iL
-        else:
-            it = (vsrc[k] - vn) / R
-            iL = it
-        if Cx > 1e-12:
-            # 도통 여부를 현재 vn 으로 판정한 뒤 노드 전압을 반음해로 갱신.
-            # 지수 다이오드면 직전 ib 에서 선형화한 rd_eff 로 반음해 계수를 잡는다.
-            rd_eff = rd + (nvt / (I0_KNEE + ib) if nvt > 0.0 else 0.0)
-            a = dt / (rd_eff * Cx)
-            if vn >= 0.0:
-                if vn - Vf - vc > 0.0:
-                    vn = (vn + b * it + a * (Vf + vc)) / (1.0 + a)
+        v0 = vsrc[k]
+        v1 = vsrc[k + 1] if k + 1 < N else vsrc[k]
+        acc_i = 0.0
+        acc_b = 0.0
+        for j in range(nsub):
+            vs = v0 + (v1 - v0) * (j + 0.5) / nsub          # 조각 안의 소스 전압 (선형 보간)
+            # 소스 -> 노드 (R + (L ∥ Rp) 직렬)
+            if L > 1e-9:
+                if Rp > 0.0:
+                    vL = (vs - vn - R * iL) / (1.0 + R / Rp)
+                    iL += h * vL / L
+                    it = iL + vL / Rp
                 else:
-                    vn = vn + b * it
+                    iL += h * (vs - vn - iL * R) / L
+                    it = iL
             else:
-                if -vn - Vf - vc > 0.0:
-                    vn = (vn + b * it - a * (Vf + vc)) / (1.0 + a)
+                it = (vs - vn) / R
+                iL = it
+            if Cx > 1e-12:
+                # 도통 여부를 현재 vn 으로 판정한 뒤 노드 전압을 반음해로 갱신.
+                # 지수 다이오드면 직전 ib 에서 선형화한 rd_eff 로 반음해 계수를 잡는다.
+                rd_eff = rd + (nvt / (I0_KNEE + ib) if nvt > 0.0 else 0.0)
+                a = h / (rd_eff * Cx)
+                if vn >= 0.0:
+                    if vn - Vf - vc > 0.0:
+                        vn = (vn + b * it + a * (Vf + vc)) / (1.0 + a)
+                    else:
+                        vn = vn + b * it
                 else:
-                    vn = vn + b * it
-            ib = _diode_ib(abs(vn) - Vf - vc, rd, nvt)
-        else:
-            ib = _diode_ib(abs(vsrc[k] - it * R) - Vf - vc, rd, nvt)
-            it = ib if vsrc[k] >= 0.0 else -ib
-            iL = it
-        # 직류 부하: alpha=1 이면 P/vc (정전력)
-        vcc = max(vc, 1.0)
-        if alpha == 1.0:
-            i_load = P / vcc
-        else:
-            i_load = i_ref * (V0_LOAD / vcc) ** alpha
-        vc += dt * (ib - i_load) / C_dc
-        iac[k] = it
-        ibr[k] = ib
+                    if -vn - Vf - vc > 0.0:
+                        vn = (vn + b * it - a * (Vf + vc)) / (1.0 + a)
+                    else:
+                        vn = vn + b * it
+                ib = _diode_ib(abs(vn) - Vf - vc, rd, nvt)
+            else:
+                ib = _diode_ib(abs(vs - it * R) - Vf - vc, rd, nvt)
+                it = ib if vs >= 0.0 else -ib
+                iL = it
+            # 직류 부하: alpha=1 이면 P/vc (정전력)
+            vcc = max(vc, 1.0)
+            if alpha == 1.0:
+                i_load = P / vcc
+            else:
+                i_load = i_ref * (V0_LOAD / vcc) ** alpha
+            vc += h * (ib - i_load) / C_dc
+            acc_i += it
+            acc_b += ib
+        iac[k] = acc_i / nsub
+        ibr[k] = acc_b / nsub
     return iac, ibr
+
+
+def substeps(L: float, Cx: float, dt: float, target: float = 0.25, cap: int = 32) -> int:
+    """L·Cx 공진이 한 표본 안에서 몇 라디안 도는지 보고 쪼갤 수를 정한다.
+
+    심플렉틱 오일러는 `ω0·h < 2` 에서만 안정하고 `ω0·h` 가 0.5 를 넘으면 링잉 주파수가
+    눈에 띄게 어긋난다. 옛 판은 NPC=3072 고정이라 (프로젝터 L 32µH·Cx 0.51µF 에서 ω0·dt≈1.34)
+    여유가 없었고, 적합이 Cx 를 더 줄이면 **발산**해 손실이 1e2 로 튀었다 (12.185.4).
+    """
+    if L <= 1e-9 or Cx <= 1e-12:
+        return 1
+    w0 = 1.0 / np.sqrt(L * Cx)
+    return int(min(cap, max(1, np.ceil(w0 * dt / target))))
 
 
 def ideal_wave(V_rms: float = 222.0, n: int = NCYC * NPC) -> np.ndarray:
@@ -189,9 +214,10 @@ def simulate(P: float, C_dc: float, R: float, L: float, Cx: float = 0.0, rd: flo
         vsrc = ideal_wave(V_rms)
     vsrc = np.ascontiguousarray(vsrc, dtype=np.float64)
     dt = 1.0 / (F * NPC)
+    ns = substeps(float(L), float(Cx), dt)
     iL, ib = _core(vsrc, dt, float(P), float(C_dc), max(float(R), 1e-3), float(L), float(Cx),
                    float(Vf), max(float(rd), 1e-3), float(np.max(np.abs(vsrc))) - float(Vf),
-                   float(nvt), float(Rp), float(alpha))
+                   float(nvt), float(Rp), float(alpha), ns)
     out: Dict = {"ok": bool(np.all(np.isfinite(iL)))}
     if not out["ok"]:
         out["s"] = np.full(h_max, np.nan, complex)
@@ -212,7 +238,7 @@ def simulate(P: float, C_dc: float, R: float, L: float, Cx: float = 0.0, rd: flo
         "irms": float(np.sqrt(np.mean(seg_i ** 2))),
         "thd": float(np.sqrt(np.sum(np.abs(I[1:]) ** 2)) / max(abs(I[0]), 1e-12)),
         # 브리지 전류가 흐르는 표본의 비율 × 180° = 반주기 도통각
-        "cond_deg": float(np.mean(seg_b > 0.0) * 180.0),
+        "cond_deg": float(np.mean(seg_b > 0.0) * 180.0), "nsub": ns,
         "i": seg_i, "v": seg_v,
     })
     return out

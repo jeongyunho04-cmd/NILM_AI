@@ -212,14 +212,97 @@ def site_of(stem: str) -> str:
 # 펌웨어의 위상 교정은 "h차 빈을 −h×delay 만큼 회전" 하는 시간지연 모델이라, 교정값이
 # 틀리면 모든 차수가 h 에 비례해 돈다. 그 파일을 읽을 때 `ihdeg_h += fix × h` 로 되돌린다
 # (`raw_csv.read_raw_csv`, `pipeline.process_file` 이 적용). 값의 근거는 등록부 주석과 설계 12.184.3.
+# 2026-09-05 (12.185.6): 원시 스냅샷으로 **직접 쟀다**. 원시는 v 와 i 가 같은 표본 인덱스에서
+# 나오므로 V–I 정렬이 참값이다. 충전기 5개 스냅샷(19~72W, 두 세션) 대 5C 의 같은 전력대:
+#   −9.29 −9.29 −9.45 −9.69 −9.70 °/차수 (중앙값 −9.45, 선형 잔차 0.3~0.7° -> 순수 지연)
+# 기준 파일 beam_projector_4C 는 원시와 +0.07°/차수 로 사실상 일치하므로, 5C 를 그 관계로
+# 맞추는 값이 **+9.5** 다. 옛 값 10.8 (대기전류 위상으로 추정) 은 1.3°/차수 과교정이었다 —
+# h15 에서 19°. ⚠ 원인(부하 없는 USER 버튼 교정 대 DFT 창 오정렬)은 둘 다 −k×h 를 내므로
+# 이 자료로 못 가른다. 값만 고친다. 불확도 약 ±0.2°/차수.
 PHASE_FIX_DEG_PER_ORDER: Dict[str, float] = {
-    "laptop_charger_5C": 10.8,    # 부하 없는 USER 버튼 교정 (2026-09-04 11:59). 0.500 ms 상당
+    "laptop_charger_5C": 9.5,     # 원시 스냅샷 실측 (12.185.6). 0.44 ms ≈ 6.8 표본 상당
 }
+#: minipc_4C 도 원시 대비 −0.7 ~ −2.4 °/차수 로 어긋나 보이지만, **원시 세션끼리도 1표본 다르고**
+#: 선형 잔차가 1.6~2.3° 라 순수 지연으로 안 떨어진다 (충전기는 0.3~0.7°). 값을 정할 수 없으므로
+#: 보정하지 않는다 — 재녹화 대상 (12.185.6). h13 에서 15~30° 어긋날 수 있음을 감안하고 읽어라.
 
 
 def phase_fix_of(stem: str) -> float:
     """stem -> 되돌릴 위상 [°/차수]. 없으면 0."""
     return PHASE_FIX_DEG_PER_ORDER.get(_normalize_stem(stem), 0.0)
+
+
+# ── 원시 파형 스냅샷 (장소 C, 2026-09-04 22~23시) ────────────────────────────
+# 40주기 × 256표본 (15360Hz). 열: t_s,cyc,seq,n,high,v_r1,low,v_r2,range,i_a,v_v,
+# i_low_a,i_high_a,fs_hz,off_high,off_low,off_volt,gap_before.
+# 2Hz 파일과 달리 v 와 i 가 같은 표본 인덱스에서 나오므로 **V–I 정렬이 참값**이다
+# (2Hz 쪽 세션 오프셋을 이것으로 잰다). 회로 파라미터 적합의 정본 자료 (`synthesis.fit_raw`).
+# ⚠ 파일명 오타(latop, charge_3)는 원본 그대로 둔다.
+RAW_SNAPSHOT_FILES: Dict[str, List[str]] = {
+    "laptop_charger": ["raw_latop_charger_1", "raw_laptop_charger_2", "raw_laptop_charge_3",
+                       "raw_laptop_charger_4", "raw_laptop_charger_5"],
+    "beam_projector": ["raw_beam_projector_1", "raw_beam_projector_2"],
+    "minipc": ["raw_minipc_1", "raw_minipc_2", "raw_minipc_3", "raw_minipc_4", "raw_minipc_5"],
+}
+#: 원시 스냅샷 중 LOW/HIGH 가 섞인 것 (펄스 피크가 LOW 포화 2.2A 를 넘음 — 이어 붙인 파형이라
+#: 두 경로의 위상 응답이 한 파형에 섞인다, 12.184.15b). 적합에 쓰되 잔차를 따로 본다.
+RAW_RANGE_MIXED = {"raw_latop_charger_1", "raw_laptop_charger_2"}
+
+
+def raw_snapshots_of(device: str) -> List[str]:
+    """기기 -> 원시 스냅샷 stem 목록. 없으면 빈 목록."""
+    return list(RAW_SNAPSHOT_FILES.get(device, []))
+
+
+#: 조합 원시 스냅샷 (장소 C, 2026-09-05 00:29~00:33) -> 켜져 있던 기기.
+#: 조합 녹화는 **단자 전압 V_term 을 직접 잰다** — 고정점 반복 없이 결합을 검정할 수 있다 (12.185.12).
+#: 전력 배분: 프로젝터·미니PC 는 단독 스냅샷 전력으로 고정하고 나머지를 충전기에 준다
+#: (충전기만 배터리 상태로 변한다). 충전기는 여기서 28~33W 로 단독 스냅샷 17W 보다 크다.
+RAW_COMBO_FILES: Dict[str, List[str]] = {
+    "raw_beam_minipc_1": ["beam_projector", "minipc"],
+    "raw_beam_minipc_2": ["beam_projector", "minipc"],
+    "raw_beam_charger_1": ["beam_projector", "laptop_charger"],
+    "raw_beam_charger_2": ["beam_projector", "laptop_charger"],
+    "raw_smps3_1": ["beam_projector", "minipc", "laptop_charger"],
+    "raw_smps3_2": ["beam_projector", "minipc", "laptop_charger"],
+}
+#: 조합에서 각 기기와 짝지을 단독 스냅샷 (같은 세션·같은 동작점을 고른다)
+RAW_COMBO_SOLO: Dict[str, Dict[str, str]] = {
+    "raw_beam_minipc_1": {"beam_projector": "raw_beam_projector_1", "minipc": "raw_minipc_1"},
+    "raw_beam_minipc_2": {"beam_projector": "raw_beam_projector_2", "minipc": "raw_minipc_2"},
+    "raw_beam_charger_1": {"beam_projector": "raw_beam_projector_1", "laptop_charger": "raw_laptop_charge_3"},
+    "raw_beam_charger_2": {"beam_projector": "raw_beam_projector_2", "laptop_charger": "raw_laptop_charge_3"},
+    "raw_smps3_1": {"beam_projector": "raw_beam_projector_1", "minipc": "raw_minipc_1",
+                    "laptop_charger": "raw_laptop_charge_3"},
+    "raw_smps3_2": {"beam_projector": "raw_beam_projector_2", "minipc": "raw_minipc_2",
+                    "laptop_charger": "raw_laptop_charge_3"},
+}
+#: 조합 중 LOW/HIGH 가 섞인 것 (겹친 펄스 피크가 LOW 포화를 넘는다)
+RAW_COMBO_RANGE_MIXED = {"raw_beam_charger_2", "raw_smps3_1", "raw_smps3_2"}
+
+
+# ── 복합 녹화의 사용자 제공 타임라인 ─────────────────────────────────────────
+# ⚠ 파일명이 `tesr_19.csv` 다 (오타, 원본 그대로 둔다).
+# 사용자가 준 표는 `seq` 와 "분" 두 열인데, 실제로는 **seq 가 2Hz 프레임 번호**이고
+# `t_s = (seq − 60) / 2` [초] 다 (주신 "분" 값 × 2 = t_s 초). 파일과 대조해 확인했다:
+#   seq 226 -> t 83.0s, seq 334 -> 137.0s, seq 506 -> 223.4s, seq 738 -> 339.0s ✓
+# 계단도 맞는다 (프로젝터 −46/+45W, 미니PC −9/+16W).
+# ⚠ 충전기 OFF(seq 430) 만 −11W 계단 뒤 223초까지 86 -> 57W 로 **완만히** 내려간다 —
+#   깨끗한 계단이 아니다. 그 구간을 델타 서명에 쓰지 마라.
+TEST19_TIMELINE = [
+    (60, 0.0, "start", None, "기록 시작 — 3종 전부 ON"),
+    (226, 83.0, "beam_projector", "off", "ΔP −46W (사용자 표 −40W)"),
+    (334, 137.0, "beam_projector", "on", "ΔP +45W (사용자 표 +52W)"),
+    (430, 185.0, "laptop_charger", "off", "ΔP −11W 뒤 223초까지 완만한 하강 — 계단 아님"),
+    (506, 223.4, "laptop_charger", "on", "ΔP +36W (사용자 표 +25W)"),
+    (629, 284.5, "minipc", "off", "ΔP −9W (11W -> 0)"),
+    (738, 339.0, "minipc", "on", "ΔP +16W (0 -> 19W)"),
+]
+
+
+def test19_events():
+    """`tesr_19.csv` 의 (seq, t_s, 기기, on/off, 비고). 라벨 없는 COMPOSITE_EVAL 의 참값."""
+    return list(TEST19_TIMELINE)
 
 
 # ── LOW 레인지 위상 교정값의 규약 (12.184.12~13, **12.184.16 에서 정정**) ──────────────
@@ -234,16 +317,22 @@ def phase_fix_of(stem: str) -> float:
 LOW_CAL_DEG_CANONICAL = 0.44      #: 정본 = 펌웨어 원래 기본값 (순저항으로 잰 값)
 LOW_CAL_DEG_LEGACY = 0.44         #: 2026-09-04 저녁 이전 모든 녹화의 값 (= 정본)
 LOW_CAL_DEG_FLASHED = 2.62        #: 2026-09-04 저녁에 잘못 올린 값. 되돌리기 전까지 찍은 파일에만 해당
-#: 이 시각 이후의 첫 host_time 이면 2.62 보드로 찍은 것으로 본다. ⚠ 잠정 — 실제 플래시 시각을 모른다. test_19/20
-#: (17:57~18:21) 은 아직 0.44 였다 (프로젝터 대기 위상 +65.8° 가 플래시 전과 같다). 보드를 0.44 로 되돌리면
-#: LOW_CAL_FLASHED_ACTIVE 를 False 로 — 그러면 시각 판정을 안 한다.
+#: 이 시각 이후의 첫 host_time 이면 2.62 보드로 찍은 것으로 본다. ⚠ 잠정 — 실제 플래시 시각을 모른다.
+#: 보드를 0.44 로 되돌리면 LOW_CAL_FLASHED_ACTIVE 를 False 로 — 그러면 시각 판정을 안 한다.
 LOW_CAL_FIXED_AT = "2026-09-04 18:30:00"
-LOW_CAL_FLASHED_ACTIVE = False    #: 2026-09-04 저녁 보드를 0.44 로 되돌렸다 — 2.62 로 찍힌 파일은 없다 (마지막 녹화 test_20 18:21)
+LOW_CAL_FLASHED_ACTIVE = False    #: 2026-09-04 저녁 보드를 0.44 로 되돌렸다
 #: stem -> 녹화 당시 LOW 교정값 [°]. 자동 판정(host_time)을 덮는다.
+#
+# ⚠ 12.185.2 (2026-09-05): 대기전류 h1 위상(+65.8°)으로 판정한 옛 근거는 **성립하지 않는다**.
+#   대기 부하가 파일마다 다르고(미니PC 대기 h3/h1 0.278 vs 프로젝터 대기 0.348), 같은 파일 안에서도
+#   바뀐다(프로젝터 대기0 vs 대기 크기비 0.85). h1 하나로는 h 선형 회전을 못 잰다.
+#   같은 기기·같은 동작점의 **계단 델타**로 다시 재니 test_19/20 은 minipc_4C 대비 −2.4~−2.9°/차수
+#   (크기비 1.01~1.03, 즉 순수 회전) 였고, 장소 전압 차가 내는 몫은 회로 모델로 +0.33°/차수뿐이었다.
+#   -> 두 파일은 다른 교정 판에서 찍혔다. 사용자가 삭제하기로 했다 (`run_cal_epoch_probe`).
+#   beam_projector_4C 는 이 방법으로 판정이 안 된다 (프로젝터 서명이 예열로 같은 파일 안에서 +0.7°/차수
+#   흐른다). 사용자 진술("교정값 바뀌기 전에 측정")에만 근거한다 — 회로 모델에서 참고 기기로만 쓴다.
 LOW_CAL_OVERRIDE: Dict[str, float] = {
-    "beam_projector_4C": LOW_CAL_DEG_LEGACY,     # 17:15 녹화, 플래시 전 (대기 위상 +65° = 원래 규약)
-    "test_19": LOW_CAL_DEG_LEGACY,               # 17:57 — 프로젝터 대기 +65.8° = 원래 규약 (12.184.15)
-    "test_20": LOW_CAL_DEG_LEGACY,               # 18:11 — 같은 세션
+    "beam_projector_4C": LOW_CAL_DEG_LEGACY,     # 17:15 녹화 — 사용자 진술로만 "플래시 전" (자료로는 미확인)
 }
 
 
