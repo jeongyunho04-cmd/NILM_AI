@@ -513,6 +513,9 @@ class LoadSynthesizer:
                     coupled_c[a] = self.grid_sim.apply_cross_appliance_coupling(
                         a, layer_c[a], kappa
                     )
+                    # 저항 부하는 그 콘센트의 h3 전압 왜곡을 그대로 비춘다 (①a, 12.185.21).
+                    # 배율(kappa) 뒤에 건다 — 왜곡은 전압 크기가 아니라 파형의 성질이다.
+                    coupled_c[a] = self.grid_sim.apply_site_distortion(a, coupled_c[a], env)
 
             total_complex = noise_c.copy()
             for a in self.known_appliances:

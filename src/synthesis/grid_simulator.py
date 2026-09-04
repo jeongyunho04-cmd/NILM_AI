@@ -46,6 +46,13 @@ class VoltageCluster:
     #: 장소 B 에서 2.1배 과대였다. 전압·임피던스와 같은 이유로 무리에 묶는다.
     #: `None` 이면 `BACKGROUND_W_RANGE` 기본값 (미측정 콘센트).
     background_w_range: Optional[Tuple[float, float]] = None
+    #: 이 콘센트의 **h3 전압 왜곡** — 저항 부하가 보는 값 (①a, 12.185.21).
+    #: 순저항은 자기 서명이 없다: `I_h = V_h/R` 이라 정규화 서명이 곧 그 콘센트의 전압이다.
+    #: 저항 녹화 11개(장소 A 8 · B 2 · C 1)를 `|I_h| = a_h + d_h·|I_1|` 로 갈라 잰 `d_3`:
+    #:     장소 A 0.000   장소 B 0.003   장소 C 0.031      <- 10배
+    #: h5 이상은 세 장소가 겹쳐서(0.3~2.2%) 장소축이 서지 않는다 — 계측 경로의 인공물이다.
+    #: 그래서 **h3 하나만** 싣는다. 0 이면 아무것도 안 한다.
+    v_distortion_h3: float = 0.0
 
 
 # data/*.csv 의 파일별 평균 전압과, 복합 부하 실측(test*.csv)에서 회귀로 구한
@@ -77,12 +84,27 @@ class VoltageCluster:
 # 실재하는 콘센트다. 장소 B 를 **더한다.**
 OBSERVED_VOLTAGE_CLUSTERS: Tuple[VoltageCluster, ...] = (
     VoltageCluster("outlet_low_221v", mean_v=221.3, std_v=2.4, weight=0.35,
-                   r_grid_ohm=1.55, background_w_range=(4.0, 6.0)),
+                   r_grid_ohm=1.55, background_w_range=(4.0, 6.0),
+                   v_distortion_h3=0.000),                      # 장소 A (저항 8개)
     VoltageCluster("outlet_siteB_227v", mean_v=227.5, std_v=1.5, weight=0.25,
-                   r_grid_ohm=0.91, background_w_range=(2.0, 3.5)),
+                   r_grid_ohm=0.91, background_w_range=(2.0, 3.5),
+                   v_distortion_h3=0.003),                      # 장소 B (저항 2개)
+    # 234.7V / 0.45Ω 은 **장소 C** 다 (실측 233.0V / 0.52Ω). 전압·임피던스 축으로는 이미
+    # 있었는데 고조파가 없었다 — 그래서 운영점이 장소 C 에서 포트를 포트로 못 봤다 (12.184.15a).
     VoltageCluster("outlet_high_234v", mean_v=234.7, std_v=1.0, weight=0.20,
-                   r_grid_ohm=0.45, background_w_range=None),   # 미측정
+                   r_grid_ohm=0.45, background_w_range=None,    # 배경은 여전히 미측정
+                   v_distortion_h3=0.031),                      # 장소 C (저항 1개: 포트 4C)
 )
+
+#: 계측 경로가 저항 부하에 얹는 **덧셈** h3 [A rms], 기본파 기준 위상.
+#: 장소 A 8개에서 `|I_h| = a_h + d_h·|I_1|` 회귀로 33.5mA, 위상은 세 기기가 +163.3/+163.4/+165.0°
+#: 로 1.7° 안에 잠겨 있다 (포트 5.9A · 오븐 5.3A · 핫플 2.1A — |I_1| 이 3배 달라도 같다).
+#: **이것이 장소 A·B 저항 부하 h3 의 정체다** — 그 장소의 전압이 아니라 계측기다.
+METER_H3_FLOOR_A: complex = 0.0335 * np.exp(1j * np.radians(164.0))
+#: 장소 C 의 h3 왜곡 벡터 = 실측 서명 3.60%∠−137.2° 에서 위 바닥의 몫(0.52%∠+164°)을 뺀 것.
+SITE_H3_PHASE_RAD: float = np.radians(-129.5)
+#: 탐색 성분의 h3 왜곡 상한 — 실측 세 장소의 최대(장소 C 0.031).
+EXPLORATION_H3_MAX: float = 0.031
 
 #: 계단으로 직접 잰 장소별 선로 임피던스 (12.167). 출처 기록용.
 MEASURED_SITE_Z_OHM = {"A": 1.470, "B": 0.907}
@@ -105,6 +127,8 @@ class VoltageEnvironment:
     source: str                 # 이 전압이 어디서 나왔는지 (클러스터명 / exploration)
     #: 이 콘센트의 상시 배경 부하 범위 W (12.166.4). None 이면 생성기 기본값.
     background_w_range: Optional[Tuple[float, float]] = None
+    #: 이 콘센트의 h3 전압 왜곡 (저항 부하가 보는 값). `VoltageCluster.v_distortion_h3` 참조.
+    v_distortion_h3: float = 0.0
 
 
 class GridSimulator:
@@ -174,7 +198,7 @@ class GridSimulator:
     # ── 환경 샘플링 ─────────────────────────────────────────────────────────
     def sample_environment(self) -> VoltageEnvironment:
         """이번 합성이 놓일 배전 환경 하나를 뽑는다."""
-        base_v, source, cluster_r, cluster_bg = self._sample_base_voltage()
+        base_v, source, cluster_r, cluster_bg, d3 = self._sample_base_voltage()
         # 실측 콘센트에서 뽑았다면 그 회선의 배선 저항을 함께 쓴다.
         # 전압과 임피던스는 같은 회선의 성질이므로 따로 뽑으면 짝이 어긋난다.
         if cluster_r is not None and self.r_grid_range[0] != self.r_grid_range[1]:
@@ -190,20 +214,21 @@ class GridSimulator:
             sag_rate_per_min=self.sag_rate_per_min,
             source=source,
             background_w_range=cluster_bg,
+            v_distortion_h3=d3,
         )
 
     def _sample_base_voltage(
         self,
-    ) -> Tuple[float, str, Optional[float], Optional[Tuple[float, float]]]:
+    ) -> Tuple[float, str, Optional[float], Optional[Tuple[float, float]], float]:
         """실측 이봉분포 + 미측정 영역 탐색 성분에서 기저 전압을 뽑는다.
 
         Returns:
-            (기저 전압, 출처 이름, 배선 저항 or None, 배경 부하 범위 or None)
+            (기저 전압, 출처 이름, 배선 저항 or None, 배경 부하 범위 or None, h3 왜곡)
         """
         cluster_weight = sum(c.weight for c in self.voltage_clusters)
         total = cluster_weight + self.exploration_weight
         if total <= 0:
-            return self.default_ref_voltage, "default", None, None
+            return self.default_ref_voltage, "default", None, None, 0.0
 
         r = np.random.rand() * total
         acc = 0.0
@@ -212,10 +237,13 @@ class GridSimulator:
             if r < acc:
                 v = float(np.random.normal(c.mean_v, c.std_v)) if c.std_v > 0 else c.mean_v
                 return (float(np.clip(v, *EXPLORATION_VOLTAGE_RANGE)), c.name,
-                        c.r_grid_ohm, c.background_w_range)
+                        c.r_grid_ohm, c.background_w_range, c.v_distortion_h3)
 
+        # 탐색 성분(미측정 콘센트)은 h3 왜곡도 미측정이다. 실측 세 장소가 0.000~0.031 이므로
+        # 그 범위에서 균등하게 뽑는다 — 분포의 모양을 모르니 폭만 맞춘다.
         lo, hi = self.exploration_range
-        return float(np.random.uniform(lo, hi)), "exploration", None, None
+        return (float(np.random.uniform(lo, hi)), "exploration", None, None,
+                float(np.random.uniform(0.0, EXPLORATION_H3_MAX)))
 
     # ── 전압 시계열 생성 ────────────────────────────────────────────────────
     def _generate_drift(self, n_samples: int, env: VoltageEnvironment) -> np.ndarray:
@@ -435,6 +463,42 @@ class GridSimulator:
             mod_c[:, 2] *= distortion_factor
 
         return mod_c.astype(np.complex64)
+
+    def apply_site_distortion(
+        self,
+        appliance_type: str,
+        harmonics_complex: np.ndarray,   # (N, 15) complex64
+        env: VoltageEnvironment,
+    ) -> np.ndarray:
+        """저항 부하에 **그 콘센트의 h3 전압 왜곡**을 싣는다 (①a, 12.185.21).
+
+        순저항은 자기 서명이 없다 — `I_h = V_h/R` 이므로 정규화 서명이 곧 그 콘센트의
+        전압이다. 그런데 지금까지 저항 부하는 **장소 A 녹화의 서명을 그대로 재생**했고
+        전압 변화는 스칼라 배율 하나로만 들어갔다 (`apply_cross_appliance_coupling`) —
+        배율은 모든 차수에 공통이라 `|I3|/|I1|` 이 녹화 당시 값에 박제된다.
+        그 대가가 12.184.15(a) 다: 운영점이 장소 C 에서 1590W 포트를 포트로 못 보고
+        포트/드라이기/핫플/오븐이 20초마다 나눠 갖는다.
+
+        실측(저항 녹화 11개)이 말하는 것:
+          · h3 만 장소축이 선다.  d_3 = 장소 A 0.000 / B 0.003 / **C 0.031** (10배)
+          · 장소 A·B 의 h3 은 그 장소의 전압이 아니라 **계측기의 덧셈 바닥**이다
+            (33.5mA ∠+164°, |I_1| 이 2.1~6.4A 로 3배 달라도 절대값이 일정하고
+             위상이 세 기기에서 1.7° 안에 잠겨 있다)
+          · h5 이상은 세 장소가 겹친다 (0.3~2.2%) — 장소축이 안 선다. **싣지 않는다.**
+
+        그래서 h3 하나에 `d_3 · I_1 · e^{jθ}` 를 더한다. 이미 녹화 서명 안에 들어 있는
+        계측 바닥은 건드리지 않는다 (그건 어느 장소에서나 같다).
+        """
+        if harmonics_complex.size == 0 or harmonics_complex.shape[1] < 3:
+            return harmonics_complex
+        if get_load_class(appliance_type) is not LoadClass.RESISTIVE:
+            return harmonics_complex
+        d3 = float(getattr(env, "v_distortion_h3", 0.0))
+        if d3 <= 0.0:
+            return harmonics_complex
+        out = np.asarray(harmonics_complex, dtype=np.complex64).copy()
+        out[:, 2] += (d3 * np.exp(1j * SITE_H3_PHASE_RAD) * out[:, 0]).astype(np.complex64)
+        return out
 
     def apply_power_voltage_response(
         self,
