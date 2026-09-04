@@ -25,7 +25,7 @@ data/ 의 원본 파일별 평균 전압을 재어 보면 두 무리로 갈린�
 4. 외부 부하 사그 : 이웃 세대/냉장고 기동 등 우리가 측정하지 않은 부하로 인한 순간 강하
 """
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from src.preprocessing.file_registry import LoadClass, get_load_class
@@ -129,6 +129,9 @@ class VoltageEnvironment:
     background_w_range: Optional[Tuple[float, float]] = None
     #: 이 콘센트의 h3 전압 왜곡 (저항 부하가 보는 값). `VoltageCluster.v_distortion_h3` 참조.
     v_distortion_h3: float = 0.0
+    #: 이 세션의 **전압 텍스처** — 원시 전압 파형의 stem (①b, 12.185.22).
+    #: SMPS 전류를 여기에 반응시킨다. `""` 면 아무것도 안 한다.
+    texture_stem: str = ""
 
 
 class GridSimulator:
@@ -170,7 +173,15 @@ class GridSimulator:
         max_external_sag_v: float = 10.0,     # 외부 사그 총 강하량 상한 (겹침 누적 방지)
         measurement_frame_cycles: int = 30,   # 실측 센서의 전압 갱신 주기 (0.5초 = 30사이클)
         sampling_hz: float = 60.0,
+        # ①b 전압 텍스처. None 이면 `coupling.TEXTURE_STEMS`, () 면 끈다.
+        texture_stems: Optional[Sequence[str]] = None,
+        texture_model=None,
     ):
+        if texture_stems is None:
+            from src.synthesis.coupling import TEXTURE_STEMS
+            texture_stems = TEXTURE_STEMS
+        self.texture_stems = tuple(texture_stems)
+        self._texture_model = texture_model
         self.default_ref_voltage = default_ref_voltage
         self.r_grid_range = (r_grid, r_grid) if r_grid is not None else r_grid_range
         self.x_grid_range = (x_grid, x_grid) if x_grid is not None else x_grid_range
@@ -215,7 +226,23 @@ class GridSimulator:
             source=source,
             background_w_range=cluster_bg,
             v_distortion_h3=d3,
+            texture_stem=self._sample_texture(),
         )
+
+    def _sample_texture(self) -> str:
+        """이번 합성이 놓일 **전압 텍스처**를 하나 뽑는다 (①b, 12.185.22).
+
+        텍스처는 장소가 아니라 **세션**에 묶인다 (`REPLY_vtemplate_rc_2026-09-05.md` §3:
+        22:22 / 23:20 / 00:30 의 무리가 서로 다르고, 같은 무리 안에서는 어떤 기기가 켜져
+        있든 같다). 그래서 콘센트 무리와 독립으로 뽑는다.
+
+        ⚠ 지금 갖고 있는 텍스처는 전부 **장소 C, 2시간 안**의 것이다 (원시 스냅샷 18개).
+        장소 A·B 는 원시 파형이 없다 (2Hz 파일에 vhdeg 도 없다). 이것이 P8 이고,
+        저쪽 요청 A′(10~15분마다 20주기 원시 스냅샷)가 겨누는 자리다.
+        """
+        if not self.texture_stems:
+            return ""
+        return str(self.texture_stems[int(np.random.randint(len(self.texture_stems)))])
 
     def _sample_base_voltage(
         self,
@@ -463,6 +490,58 @@ class GridSimulator:
             mod_c[:, 2] *= distortion_factor
 
         return mod_c.astype(np.complex64)
+
+    @property
+    def texture_model(self):
+        """`coupling.TextureModel` — 첫 호출에서 만든다 (임포트를 무겁게 하지 않는다)."""
+        if self._texture_model is None:
+            from src.synthesis.coupling import TextureModel
+            self._texture_model = TextureModel()
+        return self._texture_model
+
+    def apply_voltage_texture(
+        self,
+        appliance_type: str,
+        harmonics_complex: np.ndarray,   # (N, 15) complex64
+        power_w: np.ndarray,             # (N,) float — 이 기기의 교류 입력 전력
+        env: VoltageEnvironment,
+    ) -> np.ndarray:
+        """SMPS 전류를 **이 세션의 전압 텍스처**에 반응시킨다 (①b, 12.185.22).
+
+        지금까지 SMPS 는 녹화 페이저를 재생하고 전압은 스칼라 배율(1/kappa)로만 들어갔다.
+        그런데 커패시터 입력 정류기의 도통각은 전압 **파형**에 초선형으로 반응한다
+        (12.185.16: h17+ 의 0.27% 가 h9~h15 에서 크기 14%·위상 20~37°).
+
+        실측이 그 크기를 못박는다 (12.185.22). 조합 스냅샷 `raw_beam_minipc_1/2` 에서
+        단독 녹화의 합이 조합 실측과 13.5% 어긋나는데,
+          · 텍스처 델타만 더하면 **2.7%** 로 내려가고
+          · 공유 임피던스 결합(Z·I)만 더하면 12.7% 로 거의 안 내려간다 (1/10 크기)
+        즉 12.185.12 의 "[B] 가 [C] 보다 4배 좋다" 는 결합이 아니라 **텍스처**였다.
+
+        `I_i(생성) = I_i(녹화 재생) + [I_i(이 텍스처) − I_i(기준 텍스처)]`.
+        차분이라 모델의 공통 편향(단독 재현 1.4~4.6%)이 상쇄된다.
+        """
+        if harmonics_complex.size == 0 or not getattr(env, "texture_stem", ""):
+            return harmonics_complex
+        if get_load_class(appliance_type) is not LoadClass.SMPS:
+            return harmonics_complex
+        from src.synthesis.coupling import SMPS_DEVICES
+        if appliance_type not in SMPS_DEVICES:
+            return harmonics_complex          # 회로 파라미터가 없는 SMPS 는 건드리지 않는다
+        tm = self.texture_model
+        p = np.asarray(power_w, dtype=np.float64)
+        on = (p > 0.5) & (np.abs(harmonics_complex[:, 0]) > 1e-6)
+        if not on.any():
+            return harmonics_complex
+        out = np.asarray(harmonics_complex, dtype=np.complex64).copy()
+        # 전력 구간마다 한 번만 계산한다 (표본마다 부르면 창당 수십 초가 된다)
+        bins = np.round(p / tm.p_bin_w).astype(np.int64)
+        for b in np.unique(bins[on]):
+            m = on & (bins == b)
+            d = tm.delta(appliance_type, float(b * tm.p_bin_w), env.texture_stem)
+            if d is not None:
+                out[m] += d.astype(np.complex64)
+        return out
 
     def apply_site_distortion(
         self,

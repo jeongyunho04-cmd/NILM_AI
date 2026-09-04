@@ -516,6 +516,10 @@ class LoadSynthesizer:
                     # 저항 부하는 그 콘센트의 h3 전압 왜곡을 그대로 비춘다 (①a, 12.185.21).
                     # 배율(kappa) 뒤에 건다 — 왜곡은 전압 크기가 아니라 파형의 성질이다.
                     coupled_c[a] = self.grid_sim.apply_site_distortion(a, coupled_c[a], env)
+                    # SMPS 는 이 세션의 전압 **파형**에 도통각으로 반응한다 (①b, 12.185.22).
+                    coupled_c[a] = self.grid_sim.apply_voltage_texture(
+                        a, coupled_c[a], gt_active_p[a], env
+                    )
 
             total_complex = noise_c.copy()
             for a in self.known_appliances:
