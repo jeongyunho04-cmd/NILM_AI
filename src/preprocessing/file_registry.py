@@ -238,7 +238,7 @@ LOW_CAL_DEG_FLASHED = 2.62        #: 2026-09-04 저녁에 잘못 올린 값. 되
 #: (17:57~18:21) 은 아직 0.44 였다 (프로젝터 대기 위상 +65.8° 가 플래시 전과 같다). 보드를 0.44 로 되돌리면
 #: LOW_CAL_FLASHED_ACTIVE 를 False 로 — 그러면 시각 판정을 안 한다.
 LOW_CAL_FIXED_AT = "2026-09-04 18:30:00"
-LOW_CAL_FLASHED_ACTIVE = True
+LOW_CAL_FLASHED_ACTIVE = False    #: 2026-09-04 저녁 보드를 0.44 로 되돌렸다 — 2.62 로 찍힌 파일은 없다 (마지막 녹화 test_20 18:21)
 #: stem -> 녹화 당시 LOW 교정값 [°]. 자동 판정(host_time)을 덮는다.
 LOW_CAL_OVERRIDE: Dict[str, float] = {
     "beam_projector_4C": LOW_CAL_DEG_LEGACY,     # 17:15 녹화, 플래시 전 (대기 위상 +65° = 원래 규약)
