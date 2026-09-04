@@ -46,7 +46,8 @@ from src.model.inputs import (FINE_CYCLES, LEGACY_FINE_CHANNELS, ZERO_EVEN_HARMO
                               LEGACY_FINE_CYCLES, LEGACY_TARGET_LOOKAHEAD,
                               TARGET_LOOKAHEAD)
 from src.model.net import NILMNet, appliance_state_counts
-from src.model.realdata import dense_targets, upsample_to_cycles
+from src.model.realdata import (dense_targets, load_site_transfer,
+                                site_transfer_from_ckpt, upsample_to_cycles)
 from src.run_baseline import S_I
 
 # 헤지로 판정한다 - 이 밖이면 "결정했다", 안이면 "망설였다"
@@ -100,6 +101,8 @@ def load_model(ckpt_path: str, dev: str):
                     fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
     model.load_state_dict(ck["model"])
     model.eval()
+    # 체크포인트가 자기 입력 프레임을 안다 (12.181). `forward_file` 이 기본으로 쓴다.
+    model.site_transfer = site_transfer_from_ckpt(ck)
     return model, apps, ck
 
 
@@ -109,9 +112,15 @@ EVEN_CHANNELS = [1, 3, 5, 7, 9, 11, 13] + [16, 18, 20, 22, 24, 26, 28] + [35]
 
 @torch.no_grad()
 def forward_file(model, stem: str, dev: str, stride: int = 30,
-                 zero_ch: Optional[List[int]] = None) -> dict:
-    """파일 하나를 촘촘히 훑어 게이트와 원시 전력을 그대로 돌려준다."""
-    rw = dense_targets(stem, stride=stride)
+                 zero_ch: Optional[List[int]] = None, site_transfer="ckpt") -> dict:
+    """파일 하나를 촘촘히 훑어 게이트와 원시 전력을 그대로 돌려준다.
+
+    `site_transfer="ckpt"` 면 체크포인트가 적응에 쓴 장소 보정을 그대로 건다
+    (`load_model` 이 `model.site_transfer` 에 붙여 둔다). None 이면 안 건다.
+    """
+    if isinstance(site_transfer, str) and site_transfer == "ckpt":
+        site_transfer = getattr(model, "site_transfer", None)
+    rw = dense_targets(stem, stride=stride, site_transfer=site_transfer)
     G, R, SB, PL, PN, POBS, OH = [], [], [], [], [], [], []
     for i in range(0, len(rw), 512):
         idx = np.arange(i, min(i + 512, len(rw)))
@@ -337,6 +346,11 @@ def main() -> int:
     ap.add_argument("--absorb", type=float, default=0.0, metavar="FRAC",
                     help="총전력 잔차를 고조파가 닮은 SMPS 에 흡수시킨다 (12.104절). "
                          "0.5 면 잔차 8.88 -> 7.35W. 0 이면 끔")
+    ap.add_argument("--site-transfer", default="", metavar="NPY",
+                    help="장소 전달비로 실측 페이저를 되돌린다 (12.181). 체크포인트에 "
+                         "저장된 값을 **덮어쓴다** — 1단계 모델을 보정 입력으로 채점할 때 쓴다.")
+    ap.add_argument("--site-transfer-stems", default="test_15,test_16,test_17,test_18",
+                    metavar="LIST", help="--site-transfer 를 걸 파일 (기본 장소 B)")
     ap.add_argument("--stride", type=int, default=30)
     ap.add_argument("--out", default="results/gate_check.json")
     a = ap.parse_args()
@@ -358,6 +372,12 @@ def main() -> int:
     for ckpt in a.ckpt:
         model, apps, ck = load_model(ckpt, dev)
         tag = Path(ckpt).stem
+        if a.site_transfer:
+            T = load_site_transfer(a.site_transfer)
+            model.site_transfer = {s: T for s in a.site_transfer_stems.split(",") if s}
+            tag += "+site"
+        if getattr(model, "site_transfer", None):
+            print(f"  ** 장소 전달비 보정: {sorted(model.site_transfer)} **")
         if model_smps is not None:
             if list(apps_smps) != list(apps):
                 raise SystemExit("두 체크포인트의 가전 목록이 다릅니다")

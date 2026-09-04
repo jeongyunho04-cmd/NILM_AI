@@ -33,7 +33,14 @@ def fold(det, stems, mode="soft"):
                   for s in stems], float)
     row = {"n": int(w.sum()), "stems": stems}
     for app in COLS:
+        # **그 파일에 없는 기기는 F1 에 안 넣는다.** `n_true_on == 0` 이면
+        # gate_check 이 f1 을 0.0 으로 적는데(오탐이 하나라도 있으면), 그것은
+        # 검출력이 아니라 유령이고 `ghost`/`absent` 열이 따로 센다. 안 거르면
+        # test_5 의 포트 오탐 2창(1초)이 장소 A 포트 F1 을 0.949 -> 0.502 로
+        # 끌어내려 "시드 다중해" 로 잘못 읽힌다 (12.179 에서 겪었다).
         f = np.array([det[s][mode]["per_app_f1"].get(app, {}).get("f1", np.nan)
+                      if det[s][mode]["per_app_f1"].get(app, {}).get("n_true_on", 0) > 0
+                      else np.nan
                       for s in stems], float)
         m = np.isfinite(f)
         row[app] = float(np.average(f[m], weights=w[m])) if m.any() else float("nan")

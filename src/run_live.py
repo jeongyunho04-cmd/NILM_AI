@@ -47,6 +47,7 @@ import torch
 from src.preprocessing.file_registry import NOISE_FLOOR_EXTERNAL_W
 from src.model.inputs import build_inputs, target_index
 from src.run_gate_check import load_model
+from src.model.realdata import SITE_TRANSFER_KEY, load_site_transfer
 
 WINDOW_CYCLES = 3600           # 60초 (12.8절에서 확정)
 CYCLE_HZ = 60.0                # 계통 1주기 = 1행
@@ -410,6 +411,11 @@ def main() -> int:
     ap.add_argument("--no-reorder", action="store_true",
                     help="t_s 로 자리를 잡지 않고 파일 순서대로 쌓는다 (옛 동작. "
                          "순서 뒤바뀜의 영향을 비교할 때만)")
+    ap.add_argument("--site-transfer", default="", metavar="NPY",
+                    help="이 장소의 전달비 T_h (12.181, `run_site_transfer_probe` 산출물). "
+                         "주면 체크포인트에 저장된 값 대신 쓴다 — 시연 장소에서 새로 잰 것.")
+    ap.add_argument("--no-site-transfer", action="store_true",
+                    help="체크포인트에 전달비가 있어도 안 건다 (장소 A 형 콘센트, T ~= 1)")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
 
@@ -422,6 +428,18 @@ def main() -> int:
         assert_not_sealed(path)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     model, apps, ck = load_model(a.ckpt, dev)
+    # ── 장소 전달비 (12.181) ── 체크포인트가 그 보정으로 적응했으면 실시간 입력에도 건다.
+    T_live = None
+    if not a.no_site_transfer:
+        if a.site_transfer:
+            T_live = load_site_transfer(a.site_transfer)
+            print(f"[장소 전달비] {a.site_transfer} (인수)")
+        elif ck.get(SITE_TRANSFER_KEY):
+            _st = np.asarray(ck[SITE_TRANSFER_KEY]["T"], dtype=np.float64)
+            T_live = _st[:, 0] + 1j * _st[:, 1]
+            print(f"[장소 전달비] 체크포인트의 값 ({ck[SITE_TRANSFER_KEY].get('npz')}, "
+                  f"적응 파일 {ck[SITE_TRANSFER_KEY].get('stems')}). "
+                  f"다른 장소면 --site-transfer 로 새로 잰 값을 주거나 --no-site-transfer.")
     model_s = smps_ix = None
     if a.ckpt_smps:
         model_s, apps_s, ck_s = load_model(a.ckpt_smps, dev)
@@ -517,6 +535,10 @@ def main() -> int:
                 continue
 
             win = ring.window()[None]                     # (1, 33, 3600)
+            if T_live is not None:                        # 페이저를 합성 프레임으로 (12.181)
+                win = win.copy()
+                _c = (win[:, 0:15] + 1j * win[:, 15:30]) / T_live[None, :, None]
+                win[:, 0:15], win[:, 15:30] = _c.real, _c.imag
             fine, wide = build_inputs(win)
             with torch.no_grad():
                 o = model(torch.from_numpy(fine).to(dev), torch.from_numpy(wide).to(dev))

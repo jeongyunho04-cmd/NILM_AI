@@ -63,6 +63,10 @@ HOLDOUT_DIR = "processed_data/holdout60"
 SMPS_ONLY_W = 150.0
 
 
+from src.model.realdata import (SITE_TRANSFER_KEY, load_site_transfer,  # noqa: E402
+                                site_transfer_to_ckpt)
+
+
 def real_sample_weights(p_observed, mode: str, boost: float = 4.0):
     """실측 창별 가중 (12.94절). 평균 1 로 정규화해 `w_cons` 의 뜻을 유지한다.
 
@@ -119,7 +123,8 @@ def score_real_files(model, apps, dev, stride: int = 30) -> dict:
     for stem in sorted(ev):
         if is_sealed(stem):
             continue
-        rw = dense_targets(stem, stride=stride)
+        rw = dense_targets(stem, stride=stride,
+                           site_transfer=getattr(model, "site_transfer", None))
         P, ON = [], []
         for i in range(0, len(rw), 512):
             f, w, tg = real_targets(rw.batch(np.arange(i, min(i + 512, len(rw)))), dev)
@@ -431,6 +436,12 @@ def main() -> int:
                     help="세밀 입력의 이 채널들을 0 으로 (쉼표). 1단계에서 같은 "
                          "인자로 학습한 모델을 2단계에서도 같은 입력으로 돌리려면 "
                          "여기서도 줘야 한다 (12.114 재시험의 조인 대조)")
+    ap.add_argument("--site-transfer", default="", metavar="NPY",
+                    help="장소 전달비 T_h 로 실측 페이저(입력 33채널과 obs_harm)를 합성 "
+                         "프레임으로 되돌린다 (12.181). `run_site_transfer_probe` 의 산출물. "
+                         "체크포인트에 저장되어 채점·실시간 추론이 같은 보정을 건다.")
+    ap.add_argument("--site-transfer-stems", default="test_15,test_16,test_17,test_18",
+                    metavar="LIST", help="--site-transfer 를 걸 파일 (기본 장소 B)")
     ap.add_argument("--cache", default="cache/train60")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="adapt")
@@ -457,13 +468,20 @@ def main() -> int:
 
     held = [x.strip() for x in a.holdout_real.split(",") if x.strip()]
     hl = [x.strip() for x in a.human_label_files.split(",") if x.strip()]
+    st_map = None
+    if a.site_transfer:
+        _T = load_site_transfer(a.site_transfer)
+        st_map = {s.strip(): _T for s in a.site_transfer_stems.split(",") if s.strip()}
     rw = RealWindows(stride=a.real_stride, exclude=held or None,
                      appliances=apps if a.w_real_on > 0 else None,
                      human_on_scope=a.real_on_scope if a.w_real_on > 0 else "off",
                      human_on_stems=hl or None,
-                     human_on_shuffle=a.human_label_shuffle)
+                     human_on_shuffle=a.human_label_shuffle,
+                     site_transfer=st_map)
     adapted = list(rw.stems)
     print(rw.describe())
+    if st_map:
+        print(f"  ** 장소 전달비 보정 (12.181): {a.site_transfer} -> {rw.site_transfer_stems} **")
     if a.w_real_on > 0:
         print(f"  ** 사람 라벨 지도 켜짐: w_real_on={a.w_real_on:g} "
               f"scope={a.real_on_scope} (SMPS_PLAN 4.5) **"
@@ -596,6 +614,8 @@ def main() -> int:
                     prior_beta=ck.get("prior_beta", 0.5),
                     fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
     model.load_state_dict(ck["model"])
+    # 채점(`score_real_files`)도 같은 프레임을 봐야 한다 (12.181). 체크포인트에도 저장한다.
+    model.site_transfer = st_map
     print(f"1단계 체크포인트: {a.init} (ep{ck.get('epoch')}, width {ck.get('width')})")
 
     crit = NILMLoss(
@@ -851,6 +871,9 @@ def main() -> int:
                 "zero_even_harmonics": ck.get("zero_even_harmonics", False),
                 "fine_channels": model.fine_channels,
                 "target_lookahead": TARGET_LOOKAHEAD, "fine_cycles": FINE_CYCLES,
+                # 장소 전달비 (12.181). 이 값으로 적응했으므로 채점·실시간도 같은 보정을 건다.
+                SITE_TRANSFER_KEY: (site_transfer_to_ckpt(st_map, a.site_transfer)
+                                    if st_map else None),
                 "select": "final", "stage": 2, "init": a.init},
                out / f"{a.tag}.pt")
 

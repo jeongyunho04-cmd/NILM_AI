@@ -55,6 +55,59 @@ HUMAN_ON_DEFAULT_STEMS = ("test_5", "test_6", "test_7", "test_8", "test_13")
 HUMAN_ON_CONTROL_STEMS = ("test_9", "test_11", "test_12")
 
 
+# ── 장소 전달비 입력 보정 (12.179 / 12.181) ─────────────────────────────────
+# 같은 SMPS 가 같은 전력으로 켜져도 콘센트의 전압 고조파에 따라 h9~h15 전류 페이저가
+# 돈다 (장소 B: h11 이상 위상 +100°, |h13~h15| 2~3배). 합성은 격리 녹화 장소(= 장소 A)
+# 환경만 알고, 모델의 미니PC p_raw 머리와 드라이기 게이트가 그 차수를 읽는다.
+# `T_h = median(실측)/median(합성)` 를 단일 SMPS 창에서 재서(`run_site_transfer_probe`)
+# 실측 페이저를 `I_h / T_h` 로 되돌린 뒤 지금처럼 입력을 만든다. h1 은 안 건드린다.
+#
+# **체크포인트가 자기 입력 프레임을 안다.** 2단계가 이 보정으로 적응했으면 그 값을
+# 체크포인트에 넣고(`SITE_TRANSFER_KEY`), 채점기·실시간 추론이 같은 보정을 자동으로
+# 건다. 프레임이 어긋나면 조용히 틀리므로(12.45.3 과 같은 부류) 여기에 묶는다.
+SITE_TRANSFER_KEY = "site_transfer"
+
+
+def load_site_transfer(path: str) -> np.ndarray:
+    """(15,) complex. `run_site_transfer_probe` 가 저장한 `T_h`. h1 은 1 로 고정한다."""
+    T = np.asarray(np.load(path), dtype=np.complex128).reshape(-1)
+    if T.shape[0] != 15:
+        raise ValueError(f"전달비는 15차수여야 합니다: {path} -> {T.shape}")
+    T = T.copy()
+    T[0] = 1.0 + 0j                     # 전력 라벨의 기준인 기본파는 절대 안 건드린다
+    if np.any(np.abs(T) < 1e-6):
+        raise ValueError(f"전달비에 0 이 있습니다: {path}")
+    return T
+
+
+def apply_site_transfer(harmonics_ri: np.ndarray, T: np.ndarray) -> np.ndarray:
+    """(N,15,2) 실측 페이저를 합성(장소 A) 프레임으로 되돌린다: `I_h <- I_h / T_h`."""
+    hr = np.asarray(harmonics_ri, np.float32)
+    c = (hr[..., 0].astype(np.complex128) + 1j * hr[..., 1]) / np.asarray(T)[None, :]
+    out = np.empty_like(hr)
+    out[..., 0], out[..., 1] = c.real, c.imag
+    return out
+
+
+def site_transfer_from_ckpt(ck: dict) -> Optional[Dict[str, np.ndarray]]:
+    """체크포인트의 `site_transfer` -> {stem: T}. 없으면 None."""
+    st = ck.get(SITE_TRANSFER_KEY)
+    if not st:
+        return None
+    T = np.asarray(st["T"], dtype=np.float64)                      # (15, 2)
+    Tc = T[:, 0] + 1j * T[:, 1]
+    return {s: Tc for s in st["stems"]}
+
+
+def site_transfer_to_ckpt(mapping: Dict[str, np.ndarray], path: str) -> dict:
+    """{stem: T} -> 체크포인트에 넣을 값. 한 장소(같은 T)만 담는다."""
+    stems = sorted(mapping)
+    T = mapping[stems[0]]
+    if any(not np.allclose(mapping[s], T) for s in stems):
+        raise ValueError("한 체크포인트에는 한 장소의 전달비만 담는다")
+    return {"npz": path, "stems": stems, "T": np.stack([T.real, T.imag], 1).tolist()}
+
+
 class RealWindows:
     """실측 복합 부하에서 뽑은 창 묶음. 기기별 라벨은 없다."""
 
@@ -70,8 +123,13 @@ class RealWindows:
         human_on_scope: str = "off",
         human_on_stems: Optional[Sequence[str]] = None,
         human_on_shuffle: bool = False,
+        site_transfer: Optional[Dict[str, np.ndarray]] = None,
     ):
         """`exclude` 는 적응에서 뺄 파일이다 (leave-one-file-out).
+
+        `site_transfer` 는 {stem: T_h (15,) complex} — 그 파일의 페이저를 `1/T_h` 로
+        되돌린다 (위 `SITE_TRANSFER_KEY` 주석). 입력 33채널과 `obs_harm` 둘 다에
+        건다: `L_harm` 의 지문 `sig` 가 장소 A 프레임이므로 관측도 같은 프레임이어야 한다.
 
         2단계는 봉인 안 된 실측 3파일 전부로 학습하고 **같은 3파일로 채점**한다.
         도메인 적응이라 transductive 자체는 정당하지만, `w_cons`/`w_harm`/`w_hedge`
@@ -103,8 +161,13 @@ class RealWindows:
 
         F, W, P, H, S, C, V, Q = [], [], [], [], [], [], [], []
         self.per_file: Dict[str, int] = {}
+        self.site_transfer_stems: List[str] = []
         for stem in stems:
             raw = load_nilm_npz(str(d / f"{stem}.npz"))
+            if site_transfer and stem in site_transfer:
+                raw = {k: raw[k] for k in raw}
+                raw["harmonics_ri"] = apply_site_transfer(raw["harmonics_ri"], site_transfer[stem])
+                self.site_transfer_stems.append(stem)
             x = self._to_33ch(raw)
             n = x.shape[1]
             lo = self.target_in_window
@@ -296,10 +359,12 @@ class RealWindows:
 
 
 def dense_targets(stem: str, npz_dir: str = DEFAULT_DIR,
-                  window_cycles: int = WINDOW_CYCLES, stride: int = 30) -> RealWindows:
+                  window_cycles: int = WINDOW_CYCLES, stride: int = 30,
+                  site_transfer: Optional[Dict[str, np.ndarray]] = None) -> RealWindows:
     """파일 하나를 촘촘히(기본 0.5초 간격) 잘라 낸다. 실측 채점용."""
     return RealWindows(npz_dir=npz_dir, stems=[stem],
-                       window_cycles=window_cycles, stride=stride, require_valid=False)
+                       window_cycles=window_cycles, stride=stride, require_valid=False,
+                       site_transfer=site_transfer)
 
 
 def upsample_to_cycles(values: np.ndarray, targets: np.ndarray, n_cycles: int) -> np.ndarray:
