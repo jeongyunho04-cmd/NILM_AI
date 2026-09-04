@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-NILM 수신기 (노트북 쪽) - 프로토콜 v4
+NILM 수신기 (노트북 쪽) - 프로토콜 v5
 =====================================
 STM32 -> ESP-01S 가 TCP 클라이언트로 접속해 오는 것을 받아 CSV로 저장한다.
 펌웨어 NILM_ECE_IF/Core/Inc/nilm_link.h 의 프레임 형식과 1:1로 맞춰져 있다.
 
-프레임 (전부 리틀엔디언, 총 3213바이트):
+프레임 (전부 리틀엔디언, 총 3243바이트):
 
-    [A5 5A] [ver=04] [len=3206]   공통부 86B   주기별 104B x 30 = 3120B  [CRC16]
+    [A5 5A] [ver=05] [len=3236]   공통부 116B  주기별 104B x 30 = 3120B  [CRC16]
     └─ 헤더 5B ─────────────────┘              └─ cycles[0] .. cycles[29] ┘  2B
 
     CRC16-CCITT(다항식 0x1021, init 0xFFFF), ver 바이트부터 페이로드 끝까지.
@@ -18,9 +18,21 @@ ACK (수신기 -> 보드, 5바이트): [06] [seq u32 LE]
     frame_stream() 과 ack_for() 의 주석에 있다.
     v3 펌웨어와는 호환되지 않는다. 양쪽을 같이 올려야 한다.
 
-  - 공통부(SLOW) : 0.5초 평균. 주파수 / Vrms / 전압 THD·고조파 / 품질 플래그.
-                   over_cycle_map 은 측정범위 초과(두 전류 경로 모두 클리핑)가
-                   발생한 주기를 표시하는 30비트 비트맵.
+v4 -> v5 변경 (펌웨어와 같이 올릴 것):
+  - 공통부에 전압 고조파 위상 vh_cdeg[15] 30바이트가 붙어 86B -> 116B.
+    CSV 에 vhdeg1..vhdeg15 열이 생긴다. 기준은 전류와 같은 관례라
+    vhdeg1 은 정의상 항상 0 이다(0 이 아니면 어딘가 틀린 것).
+  - vh / vhdeg / thd_v 의 계산 창이 30주기(500ms) -> 마지막 6주기(100ms)로
+    줄었다. 발행 주기는 2Hz 그대로다. 대전력 기기 on/off 계단이 평균에
+    뭉개지지 않게 하려는 것이라, 그 계단으로 선로 임피던스를 추정할 때
+    진폭이 살아난다. 대신 전압 고조파 잡음이 sqrt(5)=2.24배로 는다.
+    vrms 와 전력량(p_w/phase_deg)은 예전대로 30주기 창이다.
+  - 주기별 예비 2바이트가 off_low(ADC_low 추적 DC 오프셋)로 확정됐다.
+    부호 있는 int16 이고 16으로 나누면 ADC 카운트(1카운트=402.8uV)다.
+
+  - 공통부(SLOW) : 0.5초에 1개. 주파수 / Vrms / 전압 THD·고조파 크기와 위상 /
+                   품질 플래그. over_cycle_map 은 측정범위 초과(두 전류 경로
+                   모두 클리핑)가 발생한 주기를 표시하는 30비트 비트맵.
   - 주기별(CYCLE): 계통 1주기(1/60초)마다의 전류 고조파 15차 rms/위상, P,
                    Irms, V-I 위상차, 범위초과 샘플 수. 평균하지 않은 원본.
 
@@ -58,7 +70,7 @@ import time
 
 # ── 프로토콜 상수 (펌웨어 nilm_link.h 와 반드시 일치) ────────────────────────
 MAGIC = b"\xa5\x5a"
-PROTO_VER = 4
+PROTO_VER = 5
 ACK_BYTE = b"\x06"     # ACK 첫 바이트. 뒤에 그 프레임의 seq(u32 LE)가 붙는다
 
 
@@ -128,20 +140,23 @@ HARMONICS = 15
 CYCLES = 30
 CYCLE_HZ = 60.0        # 주기별 데이터의 시간 해상도
 
-# NILM_WireSlow: seq, freq, vrms, thd_v, vh[15], over_range, clip_volt,
-#                range, flags, over_map
-SLOW_FMT = "<I3f15fHHBBI"
-SLOW_SIZE = struct.calcsize(SLOW_FMT)            # = 86
+# NILM_WireSlow: seq, freq, vrms, thd_v, vh[15], vh_cdeg[15],
+#                over_range, clip_volt, range, flags, over_map
+SLOW_FMT = "<I3f15f15hHHBBI"
+SLOW_SIZE = struct.calcsize(SLOW_FMT)            # = 116
 
 # NILM_WireCycle: irms, p_w, phase_cdeg, range, over_count,
-#                 ih[15], ih_cdeg[15], reserved
-CYC_FMT = "<ffhBB15f15hH"
+#                 ih[15], ih_cdeg[15], off_low_q4
+# 마지막 필드는 부호 있는 int16 ('h') 이다. 예전에는 미사용 예비 바이트라
+# 'H'(부호 없음)로 뒀는데, 지금은 ADC_low 의 DC 오프셋 편차가 실려 온다.
+# 이 값은 음수가 될 수 있어서 'H' 로 읽으면 -320 이 65216 으로 나온다.
+CYC_FMT = "<ffhBB15f15hh"
 CYC_SIZE = struct.calcsize(CYC_FMT)              # = 104
 
-PAYLOAD_SIZE = SLOW_SIZE + CYCLES * CYC_SIZE     # = 3206
-FRAME_SIZE = 5 + PAYLOAD_SIZE + 2                # = 3213
+PAYLOAD_SIZE = SLOW_SIZE + CYCLES * CYC_SIZE     # = 3236
+FRAME_SIZE = 5 + PAYLOAD_SIZE + 2                # = 3243
 
-assert SLOW_SIZE == 86, f"SLOW_SIZE={SLOW_SIZE}, 펌웨어와 어긋남"
+assert SLOW_SIZE == 116, f"SLOW_SIZE={SLOW_SIZE}, 펌웨어와 어긋남"
 assert CYC_SIZE == 104, f"CYC_SIZE={CYC_SIZE}, 펌웨어와 어긋남"
 
 # 이 시간 동안 무수신이면 죽은 연결로 보고 끊는다.
@@ -208,11 +223,14 @@ def parse_payload(payload: bytes) -> dict:
         "vrms": s[2],
         "thd_v": s[3],
         "vh_rms": s[4:4 + HARMONICS],
-        "over_range": s[4 + HARMONICS],
-        "clip_volt": s[5 + HARMONICS],
-        "range": s[6 + HARMONICS],
-        "flags": s[7 + HARMONICS],
-        "over_map": s[8 + HARMONICS],
+        # 전압 고조파 위상 [도]. 기준은 전류(ih_deg)와 같은 관례이므로
+        # vh_deg[0](=1차)은 정의상 0 이다.
+        "vh_deg": [x / 100.0 for x in s[4 + HARMONICS:4 + 2 * HARMONICS]],
+        "over_range": s[4 + 2 * HARMONICS],
+        "clip_volt": s[5 + 2 * HARMONICS],
+        "range": s[6 + 2 * HARMONICS],
+        "flags": s[7 + 2 * HARMONICS],
+        "over_map": s[8 + 2 * HARMONICS],
     }
     d["pll_locked"] = bool(d["flags"] & 0x01)
     d["cal_applied"] = bool(d["flags"] & 0x02)
@@ -231,6 +249,11 @@ def parse_payload(payload: bytes) -> dict:
             "over": c[4],
             "ih_rms": c[5:5 + HARMONICS],
             "ih_deg": [x / 100.0 for x in c[5 + HARMONICS:5 + 2 * HARMONICS]],
+            # ADC_low 추적 DC 오프셋의 8192 기준 편차 [ADC 카운트].
+            # 1카운트 = 402.8uV = LOW 경로에서 576uA.
+            # 펌웨어가 1/16 카운트로 실어 보내므로 16으로 나눈다. 주기별
+            # 값이 아니라 "지금" 값이라 한 프레임 안 30개가 모두 같다.
+            "off_low": c[5 + 2 * HARMONICS] / 16.0,
         })
         off += CYC_SIZE
     d["cycles"] = cycles
@@ -416,6 +439,12 @@ CSV_HEADER = (
     + [f"ih{h}" for h in range(1, HARMONICS + 1)]
     + [f"ihdeg{h}" for h in range(1, HARMONICS + 1)]
     + [f"vh{h}" for h in range(1, HARMONICS + 1)]
+    # 새 열은 반드시 "붙이기만" 한다. 여기까지 63열 + off_low 64열이 예전
+    # CSV(test_18.csv 등)와 글자 하나까지 같은 순서라, 그 CSV를 읽던 코드가
+    # 이름으로 읽든 열 번호로 읽든 그대로 돌아간다. 새로 생긴 vhdeg 는
+    # 그 뒤 65~79열이고, 예전 CSV에는 그 열이 없을 뿐이다.
+    + ["off_low"]
+    + [f"vhdeg{h}" for h in range(1, HARMONICS + 1)]
 )
 
 
@@ -461,7 +490,9 @@ def write_frame(writer, d: dict, t_recv: float, t0_dev):
         f".{int((t_recv % 1) * 1000):03d}"
     base = (d["seq"] - t0_dev) * 0.5
     over_set = set(d["over_cycles"])
+    # 창 공통 값이라 30행이 같다 - 루프 밖에서 한 번만 포맷한다.
     vh = [f"{x:.4f}" for x in d["vh_rms"]]
+    vhdeg = [f"{x:.2f}" for x in d["vh_deg"]]
 
     for i, c in enumerate(d["cycles"]):
         writer.writerow(
@@ -473,7 +504,9 @@ def write_frame(writer, d: dict, t_recv: float, t0_dev):
              d["range"], d["over_range"], d["clip_volt"]]
             + [f"{x:.6f}" for x in c["ih_rms"]]
             + [f"{x:.2f}" for x in c["ih_deg"]]
-            + vh)
+            + vh
+            + [f"{c['off_low']:.4f}"]
+            + vhdeg)
 
 
 # ── 콘솔 요약 ───────────────────────────────────────────────────────────────
@@ -488,7 +521,11 @@ def summary_line(d: dict) -> str:
            f"I1={last['ih_rms'][0]:8.4f}A "
            f"ph={last['phase_deg']:7.2f}d "
            f"rng={'HIGH' if d['range'] else 'LOW '}"
-           f"{'*' if d['cal_applied'] else ' '}")
+           f"{'*' if d['cal_applied'] else ' '}"
+           # ADC_low 추적 DC 오프셋 [카운트]. 부하가 걸린 채로 이 값이 계속
+           # 움직이면 오프셋이 갱신되고 있는 것이고, 딱 멈춰 있으면 얼어
+           # 있는 것이다. LOW/HIGH 이음매의 계단(짝수 고조파)을 좌우한다.
+           f" off={last['off_low']:+7.2f}")
     if d["over_cycles"]:
         idx = ",".join(str(i) for i in d["over_cycles"])
         msg += f"  !! OVER-RANGE @cycle[{idx}]"
@@ -539,8 +576,8 @@ def classify_loss(ev: dict) -> tuple:
     한다 - 수신기는 보드의 큐 상태를 볼 수 없으므로 그 이상은 단정할 수
     없고, 가르려면 펌웨어의 drop 카운터가 필요하다:
       - drop 이 같이 올랐다 -> 큐 축출. 큐가 3/4 이상 차서 가장 오래된 것을
-                               버린 것이고, 설계된 동작이다(항상 최근
-                               15초를 유지한다).
+                               버린 것이고, 설계된 동작이다(큐 40장 = 항상
+                               최근 20초를 유지한다).
       - drop 은 그대로다    -> 보드는 내보냈는데 도착하지 않았다.
                                ESP 가 UART 입력을 흘린 것(버퍼 넘침)이다.
     """
@@ -727,7 +764,7 @@ def local_ips():
 # ── 메인 ────────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(
-        description="NILM WiFi 수신기 (프로토콜 v3) - 주기별 데이터를 CSV로 저장")
+        description="NILM WiFi 수신기 (프로토콜 v5) - 주기별 데이터를 CSV로 저장")
     ap.add_argument("--port", type=int, default=5000, help="TCP 포트 (기본 5000)")
     ap.add_argument("--csv", metavar="FILE",
                     help="CSV 파일명. 이름만 주면 data/ 안에 저장한다"
