@@ -69,6 +69,20 @@ class NumpyDatasetExporter:
             harmonics_ri[:, idx, 1] = i_val  # 허수부 채널
             harmonics_complex[:, idx] = r_val + 1j * i_val
 
+        # 1b. 전압 고조파 복소 텐서 (N, 15). 크기 `vh{k}` 는 모든 펌웨어가 내보내고,
+        #     위상 `vhdeg{k}` 는 4차 펌웨어(2026-09-04)부터 있다. 위상이 없으면 0 으로 두고
+        #     메타에 `voltage_phase_available: False` 를 적는다 — 소비자가 구분할 수 있게.
+        #     (vh 블록은 0.5초 창의 공통값이라 30사이클마다 같은 값이 반복된다.)
+        voltage_complex = np.zeros((n_samples, self.harmonics_count), dtype=np.complex64)
+        has_vmag = all(f"vh{k}" in df.columns for k in range(1, self.harmonics_count + 1))
+        has_vphase = has_vmag and all(f"vhdeg{k}" in df.columns for k in range(1, self.harmonics_count + 1))
+        if has_vmag:
+            for k in range(1, self.harmonics_count + 1):
+                mag = df[f"vh{k}"].values.astype(np.float32)
+                rad = (np.radians(df[f"vhdeg{k}"].values.astype(np.float32))
+                       if has_vphase else np.zeros(n_samples, np.float32))
+                voltage_complex[:, k - 1] = mag * np.cos(rad) + 1j * mag * np.sin(rad)
+
         # 2. 물리 전력 특징 행렬 (N, 6)
         power_cols = ["p_w", "q_var", "s_va", "power_factor", "vrms", "thd_i"]
         power_features = np.zeros((n_samples, len(power_cols)), dtype=np.float32)
@@ -115,6 +129,8 @@ class NumpyDatasetExporter:
             "harmonics_ri_shape": list(harmonics_ri.shape),
             "harmonics_ri_format": "(N, harmonics_15, [Real, Imag])",
             "valid_sample_ratio": round(float(is_valid.mean()), 4),
+            "voltage_available": bool(has_vmag),
+            "voltage_phase_available": bool(has_vphase),
         })
         if "noise_floor_w" in df.columns and n_samples:
             meta_dict.setdefault("noise_floor_w", float(df["noise_floor_w"].iloc[0]))
@@ -122,6 +138,7 @@ class NumpyDatasetExporter:
         return {
             "harmonics_ri": harmonics_ri,
             "harmonics_complex": harmonics_complex,
+            "voltage_harmonics_complex": voltage_complex,
             "power_features": power_features,
             "harmonic_ratios": harmonic_ratios,
             "is_on": is_on,

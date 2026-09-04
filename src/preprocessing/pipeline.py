@@ -58,6 +58,18 @@ class PreprocessingPipeline:
 
         # Load raw CSV
         df_raw = pd.read_csv(path)
+        # 보드 교정 상태가 틀린 채 녹화된 파일은 등록부가 정한 만큼 위상을 되돌린다 (12.184.3).
+        # 그리고 2026-09-04 17:00 이전 파일은 LOW 교정 규약(0.44 -> 2.62°)에 맞춰 range==0 사이클을
+        # −2.18°×h 돌린다 (12.184.13). 둘 다 read_raw_csv 와 같은 규칙이다.
+        from src.preprocessing.file_registry import low_cal_shift_deg, phase_fix_of
+        from src.preprocessing.raw_phasors import apply_phase_rotation
+        _fix = phase_fix_of(stem)
+        if _fix:
+            df_raw = apply_phase_rotation(df_raw, _fix)
+        _ht = str(df_raw["host_time"].iloc[0]) if "host_time" in df_raw.columns and len(df_raw) else None
+        _shift = low_cal_shift_deg(stem, _ht)
+        if _shift and "range" in df_raw.columns:
+            df_raw = apply_phase_rotation(df_raw, _shift, mask=df_raw["range"].to_numpy() == 0)
 
         # 계측 보드 전원 방식에 따른 바닥 전력은 레지스트리가 정한다.
         df_clean, clean_stats = self.cleaner.clean_dataframe(

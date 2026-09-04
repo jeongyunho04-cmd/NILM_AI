@@ -325,7 +325,8 @@ class DataCleaner:
         # 고조파 실효값 음수 클램핑 (크기값이므로 음수는 물리적으로 불가능)
         for col in [c for c in df_clean.columns if c.startswith("ih") and not c.startswith("ihdeg")]:
             df_clean.loc[df_clean[col] < 0, col] = 0.0
-        for col in [c for c in df_clean.columns if c.startswith("vh")]:
+        # ⚠ 4차 펌웨어(2026-09-04)부터 `vhdeg1~15` 가 있다 — 위상은 음수가 정상이므로 빼야 한다.
+        for col in [c for c in df_clean.columns if c.startswith("vh") and not c.startswith("vhdeg")]:
             df_clean.loc[df_clean[col] < 0, col] = 0.0
         df_clean.loc[df_clean["irms"] < 0, "irms"] = 0.0
 

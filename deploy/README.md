@@ -40,7 +40,7 @@ python run_predict.py --csv data/live.csv
 
 > 수신기는 **TCP 서버**다 (시리얼이 아니다). 보드의 ESP-01S 가 이 PC 로 접속해
 > 온다 — 방화벽에서 5000 포트를 열어야 한다. 프레임 형식은 펌웨어
-> `NILM_ECE_IF/Core/Inc/nilm_link.h` 와 1:1 이고, 프로토콜 v4 다.
+> `NILM_ECE_IF/Core/Inc/nilm_link.h` 와 1:1 이고, 프로토콜 v5 다 (2026-09-04: 공통부에 vh_cdeg[15] 추가, 116B / 프레임 3243B).
 
 동작 확인만 하려면 기존 녹화를 재생한다 (보드 없이 된다).
 

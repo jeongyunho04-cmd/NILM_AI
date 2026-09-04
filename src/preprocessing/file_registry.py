@@ -17,13 +17,26 @@ data/ 안의 모든 CSV가 "어떤 성격의 측정인지"를 결정하는 단�
 1. DEVICE         : 단일 가전 단독 측정. 학습/합성용 세그먼트 풀에 들어간다.
 2. NOISE          : 무부하 기준 노이즈. 계측 보드 자체 소비 전력의 기준값.
 3. COMPOSITE_EVAL : 여러 가전이 동시에 돌아간 실측. 검증 전용이며 세그먼트 풀 진입 금지.
-4. UNKNOWN        : 미등록. 기본적으로 오류를 발생시킨다.
+4. QUARANTINE     : 정체는 알지만 **어느 풀에도 넣지 않는** 파일 (12.184). 파이프라인은
+                    건너뛰고, 탐침만 이름을 지정해 읽는다. 풀에 넣으려면 `QUARANTINED_FILES`
+                    에서 빼면 된다 — 등록 자체는 DEVICE_FILES/NOISE_FILES 에 그대로 있다.
+5. UNKNOWN        : 미등록. 기본적으로 오류를 발생시킨다.
+
+[장소]
+녹화가 세 장소에서 이뤄졌고 장소마다 전압 고조파가 다르다 (12.179.4, 12.184). `site_of()`
+가 stem -> 'A'/'B'/'C' 를 준다. 판정 근거는 vrms 와 vh3/vh9/vh15 의 지문이다:
+    A  218~224V  vh3 3.9~4.5  vh9 1.4~2.1  vh15 1.4~2.1   (격리 녹화 대부분, test_3~13)
+    B  225~228V  vh3 4.1~4.6  vh9 3.2      vh15 0.2~0.3   (test_14~18, 9/02 의 포트·핫플 녹화)
+    C  234~239V  vh3 9~10     vh9 2.7~3.3  vh15 0.2~0.3   (8/26 의 charger_4/hair_dryer_1, 9/04 의 *_C)
+
+[위상 복원]
+`PHASE_FIX_DEG_PER_ORDER` — 펌웨어 위상 교정이 틀린 채 녹화된 파일을 읽을 때 되돌린다 (12.184.3).
 """
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Union
-import re
+import re  # noqa: E402
 
 
 class FileRole(str, Enum):
@@ -31,6 +44,7 @@ class FileRole(str, Enum):
     DEVICE = "device"                   # 단일 가전 단독 측정 -> 합성 세그먼트 풀 사용 가능
     NOISE = "noise"                     # 무부하 기준 노이즈 -> 배경 노이즈 풀로만 사용
     COMPOSITE_EVAL = "composite_eval"   # 복합 부하 실측 -> 검증 전용, 세그먼트 풀 진입 금지
+    QUARANTINE = "quarantine"           # 정체는 알지만 풀 진입 보류 -> 파이프라인이 건너뛴다
     UNKNOWN = "unknown"                 # 미등록 -> 처리 거부
 
 
@@ -114,6 +128,34 @@ DEVICE_FILES: Dict[str, DeviceSpec] = {
     # 끝을 채운다. 체크리스트 B-1 의 "충전 상태를 바꿔 가며" 항목이다.
     "laptop_charger_4_fixed":  DeviceSpec("laptop_charger",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=8.0),
     "oven_3_fixed":            DeviceSpec("oven",             LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
+    # ── 2026-09-04 장소 C, 펌웨어 v5 (vhdeg1~15 추가) ────────────────────────────
+    # 충전기: 96분, 배터리 30~40% -> 97% 를 끝까지 (72W 정속 60분 뒤 CV 테이퍼 68 -> 27W).
+    # ⚠ 녹화 직전에 **부하 없이 USER 버튼 위상 교정**이 눌려 LOW 레인지 전체가 −10.8°×h
+    # 돌아 있다 (12.184.3: 같은 부팅의 대기전류 위상이 +10.8 -> +0.6 로 떨어졌고, 옛 녹화
+    # laptop_charger_4_fixed 와 크기 1.00~1.07 / 위상 h 선형 잔차 0.5°). 읽을 때
+    # PHASE_FIX_DEG_PER_ORDER 로 되돌린다 — 되돌리면 옛 녹화와 모든 차수 1° 안.
+    # 격리 이유는 그것이 아니라 **장소 C 혼입**(0‴): 풀 편입은 사용자 결정.
+    "laptop_charger_5C":       DeviceSpec("laptop_charger",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=8.0),
+    # 드라이기: 5분, 강(1009W, HIGH)/약(513W 반파, LOW·HIGH 불감대) 교대. 리셋 뒤라 교정은
+    # 기본값 — 강 기본파 위상 −0.01° (순저항 확인). 약 모드가 LOW/HIGH 라벨을 오가며
+    # 같은 원시 신호에 0.44°/2.62° 를 번갈아 적용해 2.2° 얼룩이 보인다 (12.184.7).
+    "hair_dryer_4C":           DeviceSpec("hair_dryer",       LoadClass.RESISTIVE, daily_usage_hours=0.1),
+    # 미니PC: 19분, 새 부팅(13:50, seq 0). IDLE 9.2W 8분 -> 부하 12~30W 계단 -> 끝 2분은 어댑터
+    # 대기(2.6W). 교정은 기본값 — 기본파가 장소 A 곡선과 +1.4° 안이고 어댑터 대기 위상도
+    # 장소 A 와 맞는다 (12.184.8). LOW 레인지만.
+    "minipc_4C":               DeviceSpec("minipc",           LoadClass.SMPS,      low_load=True,  daily_usage_hours=10.0),
+    # 전기포트: 6분, 1485W 6.4A HIGH, on/off 계단 3회 (7.8 / 229.5 / 373s). 순저항 검정용 (12.184.11):
+    # 두 채널이 h3 에서 V1 의 3%, h5~h15 에서 0.3~0.6% 어긋난다. 무부하 대기전류 위상 +10.2° = 기본 교정.
+    "electric_kettle_4C":      DeviceSpec("electiric_kettle", LoadClass.RESISTIVE, daily_usage_hours=0.15),
+    # 프로젝터: 16분, ON 49W(LOW) 4구간 + 대기 3.1W. 17:15~17:31 녹화 — 펌웨어 LOW 교정을 바꾸기 **전**이다
+    # (대기 위상 +65° = 장소 A 대기 +65.5°, 옛 규약). LOW_CAL_OVERRIDE 로 0.44 를 못박는다 (12.184.14).
+    "beam_projector_4C":       DeviceSpec("beam_projector",   LoadClass.SMPS,      low_load=True,  daily_usage_hours=2.0),
+    # ── 2026-09-02 장소 B 단독 녹화 (3차 펌웨어). 지금까지 **미등록**이라 `run_preprocess_and_label`
+    # 이 data/ 전체를 돌면 여기서 멈췄다. 선로 임피던스(12.167, z_site2)에만 썼고 풀에는 안 들어갔다.
+    # 풀 편입은 사용자 결정으로 남긴다 (QUARANTINED_FILES) — 장소 B 저항 부하가 풀에 들어가면
+    # 저항 서명의 장소 분포가 바뀐다.
+    "electric_kettle_3_new":   DeviceSpec("electiric_kettle", LoadClass.RESISTIVE, daily_usage_hours=0.15),
+    "hotplate_4_new":          DeviceSpec("hotplate",         LoadClass.RESISTIVE, periodic_duty=True, daily_usage_hours=0.5),
 }
 
 
@@ -121,7 +163,103 @@ DEVICE_FILES: Dict[str, DeviceSpec] = {
 NOISE_FILES: Dict[str, float] = {
     "noise_noselfpower": NOISE_FLOOR_EXTERNAL_W,
     "noise_selfpower": NOISE_FLOOR_SELFPOWER_W,
+    # 2026-09-04 장소 C, 4차 펌웨어, 외부 전원, 5분. 중앙 1.70W / |I1| 7.3mA (k≈1.0).
+    # 격리 상태 — 노이즈 풀의 `noise_signature`(1.41W, k 1.37)를 조용히 바꾸지 않도록.
+    "noise_noselfpower_C": NOISE_FLOOR_EXTERNAL_W,
 }
+
+
+# ── 격리 목록: 등록은 됐지만 어느 풀에도 넣지 않는다 (stem -> 이유) ──────────────
+# 파이프라인(`run_preprocess_and_label`, `process_directory`)은 이 파일을 건너뛴다.
+# 탐침이 이름을 지정해 원본 CSV 를 읽는 것은 막지 않는다 (`run_circuit_gate_probe`).
+QUARANTINED_FILES: Dict[str, str] = {
+    "laptop_charger_5C":   "장소 C 녹화 — 풀(장소 A)에 섞을지는 사용자 결정 (0‴). 위상은 PHASE_FIX 로 복원됨 — 12.184.3",
+    "hair_dryer_4C":       "장소 C 녹화 — 풀 혼입은 사용자 결정 (0‴) — 12.184.7",
+    "minipc_4C":           "장소 C 녹화 — 풀 혼입은 사용자 결정 (0‴) — 12.184.8",
+    "electric_kettle_4C":  "장소 C 녹화 — 풀 혼입은 사용자 결정 (0‴) — 12.184.11",
+    "beam_projector_4C":   "장소 C 녹화 — 풀 혼입은 사용자 결정 (0‴) — 12.184.14",
+    "noise_noselfpower_C": "펌웨어 v5 + 장소 C 배경. 노이즈 풀 서명을 바꾸지 않도록 보류 — 12.184.4",
+    "electric_kettle_3_new": "장소 B 단독 녹화, 지금까지 미등록. 풀 편입은 사용자 결정 (12.184.5)",
+    "hotplate_4_new":        "장소 B 단독 녹화, 지금까지 미등록. 풀 편입은 사용자 결정 (12.184.5)",
+}
+
+
+# ── 장소 ─────────────────────────────────────────────────────────────────────
+# 전압 고조파 지문으로 판정했다 (모듈 docstring). 등록 안 된 stem 은 "" 를 준다.
+SITE_OF_STEM: Dict[str, str] = {
+    **{s: "A" for s in ("test.2", "test3", "test_4", "test_5", "test_6", "test_7", "test_8",
+                        "test_9", "test_10", "test_11", "test_12", "test_13",
+                        "air_conditioner", "beam_projector", "beam_projector_2", "electiric_kettle",
+                        "fan_1", "fan_2", "fan_3", "hair_dryer_2", "hair_dryer_3", "hotplate_1",
+                        "hotplate_2", "laptop_charger_1", "laptop_charger_2", "minipc_1", "minipc_2",
+                        "minipc_3", "oven", "oven_2", "beam_projector_3_fixed", "electric_kettle_2_fixed",
+                        "hotplate_3_fixed", "laptop_charger_3_fixed", "oven_3_fixed",
+                        "noise_noselfpower", "noise_selfpower")},
+    **{s: "B" for s in ("test_14", "test_15", "test_16", "test_17", "test_18",
+                        "electric_kettle_3_new", "hotplate_4_new")},
+    **{s: "C" for s in ("laptop_charger_4_fixed", "hair_dryer_1",
+                        "laptop_charger_5C", "hair_dryer_4C", "minipc_4C", "electric_kettle_4C",
+                        "beam_projector_4C", "noise_noselfpower_C")},
+}
+
+
+def site_of(stem: str) -> str:
+    """stem -> 'A' / 'B' / 'C'. 모르면 ''."""
+    return SITE_OF_STEM.get(_normalize_stem(stem), "")
+
+
+# ── 전류 위상 복원 [°/차수] ───────────────────────────────────────────────────
+# 펌웨어의 위상 교정은 "h차 빈을 −h×delay 만큼 회전" 하는 시간지연 모델이라, 교정값이
+# 틀리면 모든 차수가 h 에 비례해 돈다. 그 파일을 읽을 때 `ihdeg_h += fix × h` 로 되돌린다
+# (`raw_csv.read_raw_csv`, `pipeline.process_file` 이 적용). 값의 근거는 등록부 주석과 설계 12.184.3.
+PHASE_FIX_DEG_PER_ORDER: Dict[str, float] = {
+    "laptop_charger_5C": 10.8,    # 부하 없는 USER 버튼 교정 (2026-09-04 11:59). 0.500 ms 상당
+}
+
+
+def phase_fix_of(stem: str) -> float:
+    """stem -> 되돌릴 위상 [°/차수]. 없으면 0."""
+    return PHASE_FIX_DEG_PER_ORDER.get(_normalize_stem(stem), 0.0)
+
+
+# ── LOW 레인지 위상 교정값의 규약 (12.184.12~13, **12.184.16 에서 정정**) ──────────────
+# 펌웨어는 레인지별 교정값 delay 로 모든 차수를 −h×delay 회전한다. 원래 기본값 LOW 0.44° / HIGH 2.62° 는
+# 펌웨어 작성자가 각 경로에 순저항(납땜인두 / 포트)을 물려 직접 잰 값이다. 2026-09-04 저녁에 "두 경로의
+# 지연이 같아야 한다" 고 보고 LOW 를 2.62 로 바꿨는데 (12.184.12), 그 근거였던 드라이기 불감대 자료는
+# 표본마다 LOW/HIGH 를 이어 붙인 **같은 파형**에 라벨만 번갈아 붙은 것이라 경로 지연을 재 주지 않는다.
+# 2.18° 는 LOW 경로의 안티앨리어싱 RC(1kΩ·100nF, fc 1591Hz) 한 극이 60Hz 에서 내는 2.16° 와 같다 — 즉
+# **원래 0.44 가 옳다** (12.184.16). 정본 = 0.44. 2.62 로 플래시된 보드로 찍은 파일은 읽을 때 `range==0`
+# 사이클을 +2.18°×h 돌려 정본으로 되돌린다.
+# ⚠ 원본 CSV 를 읽는 경로(read_raw_csv, pipeline.process_file)에만 걸린다. npz·캐시·체크포인트는 전부 정본(0.44)이다.
+LOW_CAL_DEG_CANONICAL = 0.44      #: 정본 = 펌웨어 원래 기본값 (순저항으로 잰 값)
+LOW_CAL_DEG_LEGACY = 0.44         #: 2026-09-04 저녁 이전 모든 녹화의 값 (= 정본)
+LOW_CAL_DEG_FLASHED = 2.62        #: 2026-09-04 저녁에 잘못 올린 값. 되돌리기 전까지 찍은 파일에만 해당
+#: 이 시각 이후의 첫 host_time 이면 2.62 보드로 찍은 것으로 본다. ⚠ 잠정 — 실제 플래시 시각을 모른다. test_19/20
+#: (17:57~18:21) 은 아직 0.44 였다 (프로젝터 대기 위상 +65.8° 가 플래시 전과 같다). 보드를 0.44 로 되돌리면
+#: LOW_CAL_FLASHED_ACTIVE 를 False 로 — 그러면 시각 판정을 안 한다.
+LOW_CAL_FIXED_AT = "2026-09-04 18:30:00"
+LOW_CAL_FLASHED_ACTIVE = True
+#: stem -> 녹화 당시 LOW 교정값 [°]. 자동 판정(host_time)을 덮는다.
+LOW_CAL_OVERRIDE: Dict[str, float] = {
+    "beam_projector_4C": LOW_CAL_DEG_LEGACY,     # 17:15 녹화, 플래시 전 (대기 위상 +65° = 원래 규약)
+    "test_19": LOW_CAL_DEG_LEGACY,               # 17:57 — 프로젝터 대기 +65.8° = 원래 규약 (12.184.15)
+    "test_20": LOW_CAL_DEG_LEGACY,               # 18:11 — 같은 세션
+}
+
+
+def low_cal_of(stem: str, host_time_first: Optional[str] = None) -> float:
+    """그 파일이 녹화될 때 적용돼 있던 LOW 교정값 [°]. host_time 이 없으면 정본(0.44)으로 본다."""
+    s = _normalize_stem(stem)
+    if s in LOW_CAL_OVERRIDE:
+        return LOW_CAL_OVERRIDE[s]
+    if not LOW_CAL_FLASHED_ACTIVE or host_time_first is None:
+        return LOW_CAL_DEG_LEGACY
+    return LOW_CAL_DEG_LEGACY if str(host_time_first) < LOW_CAL_FIXED_AT else LOW_CAL_DEG_FLASHED
+
+
+def low_cal_shift_deg(stem: str, host_time_first: Optional[str] = None) -> float:
+    """`range==0` 사이클에 걸 회전 [°/차수] = −(정본 − 녹화 당시). 정본 보드로 찍은 파일이면 0, 2.62 보드면 +2.18."""
+    return -(LOW_CAL_DEG_CANONICAL - low_cal_of(stem, host_time_first))
 
 
 # ── 복합 부하 실측(검증 전용) 파일 판별 규칙 ─────────────────────────────────
@@ -181,7 +319,21 @@ def classify_file(file_path: Union[str, Path]) -> FileClassification:
                 reason=f"복합 부하 실측 패턴 '{pattern.pattern}' 일치 - 검증 전용, 세그먼트 풀 진입 금지",
             )
 
-    # 2) 무부하 기준 노이즈
+    # 2) 격리 — 정체는 알지만 풀 진입 보류. 등록부의 명세는 그대로 달아서 돌려준다.
+    if stem in QUARANTINED_FILES:
+        spec = DEVICE_FILES.get(stem)
+        return FileClassification(
+            stem=stem,
+            role=FileRole.QUARANTINE,
+            appliance_type=spec.appliance_type if spec else stem,
+            load_class=spec.load_class if spec else LoadClass.PASSIVE,
+            noise_floor_w=spec.noise_floor_w if spec else NOISE_FILES.get(stem, NOISE_FLOOR_EXTERNAL_W),
+            periodic_duty=bool(spec and spec.periodic_duty),
+            low_load=bool(spec and spec.low_load),
+            reason=f"격리: {QUARANTINED_FILES[stem]}",
+        )
+
+    # 3) 무부하 기준 노이즈
     if stem in NOISE_FILES:
         return FileClassification(
             stem=stem,
@@ -194,7 +346,7 @@ def classify_file(file_path: Union[str, Path]) -> FileClassification:
             reason="무부하 기준 노이즈 파일 - 배경 노이즈 풀 전용",
         )
 
-    # 3) 등록된 단일 가전
+    # 4) 등록된 단일 가전
     if stem in DEVICE_FILES:
         spec = DEVICE_FILES[stem]
         return FileClassification(
@@ -208,7 +360,7 @@ def classify_file(file_path: Union[str, Path]) -> FileClassification:
             reason=f"등록된 단일 가전 '{spec.appliance_type}'",
         )
 
-    # 4) 미등록 - 추측하지 않는다
+    # 5) 미등록 - 추측하지 않는다
     return FileClassification(
         stem=stem,
         role=FileRole.UNKNOWN,
