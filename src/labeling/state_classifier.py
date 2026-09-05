@@ -117,9 +117,10 @@ class StateClassifier:
             t_series = np.arange(n) / self.sampling_hz
         seam_set = set(np.where(seam_flags > 0)[0].tolist()) if seam_flags is not None else set()
 
-        # 1. 단발성 스파이크 방지용 1초 롤링 미디언
+        # 1. 단발성 스파이크 방지용 롤링 미디언 (기본 1초. `smooth_window_s` 로 기기별 조정 — 핫플 0.05초)
+        win = max(1, int(round(self.sampling_hz * float(getattr(self.config, "smooth_window_s", 1.0)))))
         p_smooth = pd.Series(p_series).rolling(
-            window=int(self.sampling_hz), center=True, min_periods=1
+            window=win, center=True, min_periods=1
         ).median().values
 
         # 2. 히스테리시스 없는 순간 후보 상태 (벡터 연산으로 한 번에)

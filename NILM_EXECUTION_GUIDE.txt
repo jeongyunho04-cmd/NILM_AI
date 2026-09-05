@@ -55,7 +55,12 @@ python -m src.run_preprocess_and_label
 
 * 새 가전을 측정했다면 src\preprocessing\file_registry.py 의 DEVICE_FILES 에 한 줄 추가:
 
-    "microwave": DeviceSpec("microwave", LoadClass.RESISTIVE, periodic_duty=True),
+    "hair_dryer_1": _dev("hair_dryer"),          # 종류는 APPLIANCE_CATALOG 의 9종 중 하나
+    "microwave_1": DeviceSpec("microwave", LoadClass.RESISTIVE, periodic_duty=True),   # 카탈로그 밖 새 종류
+
+  ** 2026-09-06 계측기 교체 뒤 파일명 규약: 수신기 교정본은 `hotplate_1.cal2.csv` 처럼 `.cal2` 꼬리가
+     붙고, 등록 이름(stem)은 꼬리를 뗀 `hotplate_1` 이다. 옛 계측기 파일명(fan_1, test_5 ...)은
+     등록부가 받지 않는다 — READ_ME_FIRST.md.
 
   - LoadClass : RESISTIVE(히터, I∝V·P∝V²) / SMPS(전자기기, P=일정) / MOTOR(모터, ∝V^0.7)
   - periodic_duty : 서모스탯·릴레이로 주기적 ON-OFF 를 반복하면 True (시간 신축 방식이 달라짐)

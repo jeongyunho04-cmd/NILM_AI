@@ -24,7 +24,7 @@ data/ 의 원본 파일별 평균 전압을 재어 보면 두 무리로 갈린�
 3. 자기 부하 강하 : Z_grid 를 통한 순간 전압 강하 (delta_V = R*I_p + X*I_q)
 4. 외부 부하 사그 : 이웃 세대/냉장고 기동 등 우리가 측정하지 않은 부하로 인한 순간 강하
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
@@ -52,9 +52,12 @@ class VoltageCluster:
     #:     장소 A 0.000   장소 B 0.003   장소 C 0.031      <- 10배
     #: h5 이상은 세 장소가 겹쳐서(0.3~2.2%) 장소축이 서지 않는다 — 계측 경로의 인공물이다.
     #: 그래서 **h3 하나만** 싣는다. 0 이면 아무것도 안 한다.
+    #: ⚠ 2026-09-06: 위 수치는 옛 계측기 것이다. 새 무리는 전부 0 (①a 끔) — `OBSERVED_VOLTAGE_CLUSTERS` 주석.
     v_distortion_h3: float = 0.0
 
 
+# ⚠ 아래 두 문단(221V 회귀, 장소 B 계단)은 **옛 계측기(~2026-09-05) 시절의 측정 기록**이다.
+#   그 자료는 폐기됐고 장소 A·B 는 갈 수 없다. 이력으로만 남긴다 — 새 무리는 그 아래.
 # data/*.csv 의 파일별 평균 전압과, 복합 부하 실측(test*.csv)에서 회귀로 구한
 # 배선 저항이다. 임피던스가 큰 회선일수록 부하 시 전압이 더 내려가므로
 # 평균 전압도 낮게 관측된다 - 두 값이 함께 움직이는 것이 물리적으로 맞다.
@@ -82,29 +85,39 @@ class VoltageCluster:
 # `outlet_high_234v` 는 **지우지 않는다.** 기기 녹화 27개 중 7개가 230V 이상이라
 # (에어컨 233.6, 선풍기 233.7/235.6/236.0, 드라이기 234.2/235.4, 충전기 237.0)
 # 실재하는 콘센트다. 장소 B 를 **더한다.**
+# ── ⚠ 2026-09-06 계측기 교체 — 아래 무리는 **새 계측기 자료 11개**로 다시 잰 것이다 (12.186) ────────
+# 옛 무리(221V 장소 A / 227.5V 장소 B / 234.7V 장소 C, h3 왜곡 0/0.003/0.031, 계측 바닥 33.5mA∠164°)는
+# 차동 ADC 계측기 자료였다. 그 계측기는 전압 채널에 h3 2.6%·짝수차 2.6% 의 인공물을 얹고 있었고
+# (12.185.25) 그 인공물이 "장소 지문" 과 "계측 바닥" 으로 들어가 있었다. 자료는 폐기됐다 — READ_ME_FIRST.md.
+#
+# 새 계측기 11개 파일 (전부 사용자 자리 = 옛 표기 '장소 C', 2026-09-05 21:26 ~ 09-06 01:20):
+#   저녁 21:26~23:50   vrms 214.7~218.4   vh3/V1 0.58~0.85% ∠−98~−105°   vh9 0.53~0.63%  vh15 0.35~0.51%
+#   심야 00:30~01:20   vrms 227.8~231.1   vh3/V1 3.18~3.25% ∠−116~−117°  vh9 0.92~1.03%  vh15 0.15~0.17%
+# 같은 콘센트가 시간대에 따라 이렇게 갈린다 — 옛 문서의 "장소" 축은 이제 **세션(시간대)** 축이다.
+# 두 무리로 싣고 미측정 구간은 탐색 성분이 덮는다. 가중치 0.40+0.40+탐색 0.20.
+# · r_grid_ohm: 옛 계측기의 계단 측정(장소 C 0.45~0.52Ω, 12.167/12.184)을 그대로 둔다 — ΔV/ΔI 비라
+#   절대 전압 오차에 덜 민감하지만, **새 계측기 복합 녹화(test_1 계단)로 다시 재야 한다**.
+# · background_w_range: 미측정 (None). 옛 값(장소 A 4~6W / B 2~3.5W)은 옛 복합 녹화의 것이다.
+# · v_distortion_h3: 전부 0 — **①a 를 끈다.** 새 계측기 저항 녹화는 그 세션의 진짜 vh3 을 서명 안에
+#   이미 담고 있어(포트 |I3|/|I1| 3.23% = vh3/V1 3.25%), 옛 방식대로 d3 를 더하면 이중 계상이다.
+#   ①a 를 다시 켜려면 녹화 자체의 vh3 을 빼고 환경의 vh3 을 더하는 **차분**으로 다시 설계해야 한다
+#   (npz 에 이제 vh/vhdeg 가 있다). 이 결정의 대가: 합성 저항 서명의 h3 이 녹화 세션 값에 박제된다
+#   (저녁 0.6% 무리 vs 심야 3.2% 무리가 파일에 따라 섞여 들어간다).
 OBSERVED_VOLTAGE_CLUSTERS: Tuple[VoltageCluster, ...] = (
-    VoltageCluster("outlet_low_221v", mean_v=221.3, std_v=2.4, weight=0.35,
-                   r_grid_ohm=1.55, background_w_range=(4.0, 6.0),
-                   v_distortion_h3=0.000),                      # 장소 A (저항 8개)
-    VoltageCluster("outlet_siteB_227v", mean_v=227.5, std_v=1.5, weight=0.25,
-                   r_grid_ohm=0.91, background_w_range=(2.0, 3.5),
-                   v_distortion_h3=0.003),                      # 장소 B (저항 2개)
-    # 234.7V / 0.45Ω 은 **장소 C** 다 (실측 233.0V / 0.52Ω). 전압·임피던스 축으로는 이미
-    # 있었는데 고조파가 없었다 — 그래서 운영점이 장소 C 에서 포트를 포트로 못 봤다 (12.184.15a).
-    VoltageCluster("outlet_high_234v", mean_v=234.7, std_v=1.0, weight=0.20,
-                   r_grid_ohm=0.45, background_w_range=None,    # 배경은 여전히 미측정
-                   v_distortion_h3=0.031),                      # 장소 C (저항 1개: 포트 4C)
+    VoltageCluster("siteC_evening_216v", mean_v=216.5, std_v=1.5, weight=0.40,
+                   r_grid_ohm=0.50, background_w_range=None, v_distortion_h3=0.0),
+    VoltageCluster("siteC_night_229v", mean_v=229.5, std_v=1.5, weight=0.40,
+                   r_grid_ohm=0.50, background_w_range=None, v_distortion_h3=0.0),
 )
 
-#: 계측 경로가 저항 부하에 얹는 **덧셈** h3 [A rms], 기본파 기준 위상.
-#: 장소 A 8개에서 `|I_h| = a_h + d_h·|I_1|` 회귀로 33.5mA, 위상은 세 기기가 +163.3/+163.4/+165.0°
-#: 로 1.7° 안에 잠겨 있다 (포트 5.9A · 오븐 5.3A · 핫플 2.1A — |I_1| 이 3배 달라도 같다).
-#: **이것이 장소 A·B 저항 부하 h3 의 정체다** — 그 장소의 전압이 아니라 계측기다.
-METER_H3_FLOOR_A: complex = 0.0335 * np.exp(1j * np.radians(164.0))
-#: 장소 C 의 h3 왜곡 벡터 = 실측 서명 3.60%∠−137.2° 에서 위 바닥의 몫(0.52%∠+164°)을 뺀 것.
-SITE_H3_PHASE_RAD: float = np.radians(-129.5)
-#: 탐색 성분의 h3 왜곡 상한 — 실측 세 장소의 최대(장소 C 0.031).
-EXPLORATION_H3_MAX: float = 0.031
+#: 옛 계측기가 저항 부하에 얹던 **덧셈** h3 (33.5mA∠164°, 장소 A 8개 회귀). **새 계측기에는 없다** —
+#: 포트·핫플·오븐의 |I_h/I_1| / |V_h/V_1| 이 h3·h5 에서 0.8~1.0 이다 (2026-09-06). 0 으로 둔다. 값의 이력은 git.
+METER_H3_FLOOR_A: complex = 0j
+#: h3 왜곡의 위상(V1 기준). 옛 장소 C 값은 −129.5°(옛 계측기). 새 계측기에서 잰 vh3 위상은 저녁 −98~−105° /
+#: 심야 −116~−117°. ①a 재설계 때 쓸 자리 — 지금은 d3=0 이라 안 쓰인다.
+SITE_H3_PHASE_RAD: float = np.radians(-110.0)
+#: 탐색 성분의 h3 왜곡 상한. ①a 를 껐으므로 0.
+EXPLORATION_H3_MAX: float = 0.0
 
 #: 계단으로 직접 잰 장소별 선로 임피던스 (12.167). 출처 기록용.
 MEASURED_SITE_Z_OHM = {"A": 1.470, "B": 0.907}
@@ -132,6 +145,11 @@ class VoltageEnvironment:
     #: 이 세션의 **전압 텍스처** — 원시 전압 파형의 stem (①b, 12.185.22).
     #: SMPS 전류를 여기에 반응시킨다. `""` 면 아무것도 안 한다.
     texture_stem: str = ""
+    #: 12.187 — 이 세션의 전압 텍스처 (`vtexture.Texture`, 2Hz 녹화의 vh·vhdeg 에서). None 이면 텍스처 델타 없음.
+    texture: Optional[object] = None
+    texture_id: int = -1
+    #: SMPS 별 NTC 상태 R [Ω] — pkl 의 실측 범위에서 창마다 뽑는다 (README_v12 "R 은 상태다").
+    r_state: Dict[str, float] = field(default_factory=dict)
 
 
 class GridSimulator:
@@ -173,21 +191,28 @@ class GridSimulator:
         max_external_sag_v: float = 10.0,     # 외부 사그 총 강하량 상한 (겹침 누적 방지)
         measurement_frame_cycles: int = 30,   # 실측 센서의 전압 갱신 주기 (0.5초 = 30사이클)
         sampling_hz: float = 60.0,
-        # ①b 전압 텍스처. None 이면 `coupling.TEXTURE_STEMS`, () 면 끈다.
+        # 12.187 회로 모델 배선. `texture_library`: None = "auto"(processed_data/npz 에서 첫 사용 때 읽는다),
+        # `vtexture.VoltageTextureLibrary`, 또는 False(텍스처·결합 둘 다 끔). 옛 인자 texture_stems/texture_model 은
+        # 받되 무시한다 (옛 계측기 원시 stem 텍스처는 폐기됐다).
+        texture_library=None,
+        use_texture: bool = True,
+        use_coupling: bool = True,
+        randomize_r: bool = True,
         texture_stems: Optional[Sequence[str]] = None,
         texture_model=None,
     ):
-        if texture_stems is None:
-            from src.synthesis.coupling import TEXTURE_STEMS
-            texture_stems = TEXTURE_STEMS
-        self.texture_stems = tuple(texture_stems)
+        self._texture_library = texture_library
+        self.use_texture = bool(use_texture) and texture_library is not False
+        self.use_coupling = bool(use_coupling) and texture_library is not False
+        self.randomize_r = bool(randomize_r)
+        self.texture_stems = ()                 # 옛 API 호환
+        self._circuit = None
         # ⚠ 텍스처는 **전용 RNG** 로 뽑는다. 창마다 전역 `np.random` 에서 한 번 더 뽑으면
         # 그 흐름이 밀려 **텍스처를 켜고 끄는 것만으로 기기 선택·시각·증강이 전부 달라진다** —
         # 텍스처의 효과만 보려는 A/B 비교가 오염된다. 씨앗은 전역에서 **생성자에서 한 번만**
         # 받아 `np.random.seed()` 의 재현성을 지키고, `texture_stems` 가 비어도 똑같이 받아서
         # 켜고 끔이 전역 흐름을 한 칸도 옮기지 않게 한다.
         self._tex_rng = np.random.default_rng(int(np.random.randint(0, 2 ** 31 - 1)))
-        self._texture_model = texture_model
         self.default_ref_voltage = default_ref_voltage
         self.r_grid_range = (r_grid, r_grid) if r_grid is not None else r_grid_range
         self.x_grid_range = (x_grid, x_grid) if x_grid is not None else x_grid_range
@@ -222,33 +247,48 @@ class GridSimulator:
             r = float(np.clip(np.random.normal(cluster_r, cluster_r * 0.15), 0.1, 3.0))
         else:
             r = float(np.random.uniform(*self.r_grid_range))
+        x = float(np.random.uniform(*self.x_grid_range))
+        # 12.187: 텍스처·R 상태의 난수는 이 창의 (기저 전압, R, X) 에서 **파생**한다. 전역 흐름을 한 칸도 안 쓰고
+        # (켜고 끄기가 기기 선택·시각을 안 옮긴다), 워커 수·프로세스와 무관하게 같은 창이면 같은 텍스처다
+        # (`test_worker_count_does_not_change_the_generated_training_set`). 생성자에서 뽑는 _tex_rng 는 안 쓴다.
+        _key = np.array([base_v, r, x], dtype=np.float64).view(np.uint64)
+        _rng = np.random.default_rng(int(np.bitwise_xor.reduce(_key) & np.uint64(0x7FFFFFFF)))
+        tex = self._sample_texture(base_v, _rng)
+        r_state: Dict[str, float] = {}
+        if tex is not None and self.randomize_r:
+            from src.synthesis.coupling import SMPS_DEVICES
+            for d_ in SMPS_DEVICES:
+                r_ = self.circuit.sample_r(d_, _rng)
+                if r_ is not None:
+                    r_state[d_] = float(r_)
         return VoltageEnvironment(
             base_voltage_v=base_v,
             r_grid_ohm=r,
-            x_grid_ohm=float(np.random.uniform(*self.x_grid_range)),
+            x_grid_ohm=x,
             drift_std_v=self.voltage_variation_std,
             drift_tau_s=self.drift_tau_s,
             sag_rate_per_min=self.sag_rate_per_min,
             source=source,
             background_w_range=cluster_bg,
             v_distortion_h3=d3,
-            texture_stem=self._sample_texture(),
+            texture_stem=(tex.stem if tex is not None else ""),
+            texture=tex,
+            texture_id=(tex.id if tex is not None else -1),
+            r_state=r_state,
         )
 
-    def _sample_texture(self) -> str:
-        """이번 합성이 놓일 **전압 텍스처**를 하나 뽑는다 (①b, 12.185.22).
+    def _sample_texture(self, base_v: Optional[float] = None, rng: Optional[np.random.Generator] = None):
+        """이번 합성이 놓일 **전압 텍스처** 하나 (12.187). 기저 전압(저녁 216V / 심야 229V)에 가까운 세션에서 뽑는다.
 
-        텍스처는 장소가 아니라 **세션**에 묶인다 (`REPLY_vtemplate_rc_2026-09-05.md` §3:
-        22:22 / 23:20 / 00:30 의 무리가 서로 다르고, 같은 무리 안에서는 어떤 기기가 켜져
-        있든 같다). 그래서 콘센트 무리와 독립으로 뽑는다.
-
-        ⚠ 지금 갖고 있는 텍스처는 전부 **장소 C, 2시간 안**의 것이다 (원시 스냅샷 18개).
-        장소 A·B 는 원시 파형이 없다 (2Hz 파일에 vhdeg 도 없다). 이것이 P8 이고,
-        저쪽 요청 A′(10~15분마다 20주기 원시 스냅샷)가 겨누는 자리다.
+        텍스처는 장소가 아니라 **세션(시간대)** 에 묶인다 — 같은 콘센트가 저녁엔 vh3 0.7%, 심야엔 3.2% 다
+        (READ_ME_FIRST §2). 2Hz 녹화의 vh·vhdeg 가 전부 텍스처 라이브러리다 (`vtexture`). 전용 RNG 로 뽑는다.
         """
-        if not self.texture_stems:
-            return ""
-        return str(self.texture_stems[int(self._tex_rng.integers(len(self.texture_stems)))])
+        if not self.use_texture:
+            return None
+        lib = self.texture_library
+        if lib is None or len(lib) == 0:
+            return None
+        return lib.sample(rng if rng is not None else self._tex_rng, vrms_target=base_v)
 
     def _sample_base_voltage(
         self,
@@ -498,12 +538,27 @@ class GridSimulator:
         return mod_c.astype(np.complex64)
 
     @property
-    def texture_model(self):
-        """`coupling.TextureModel` — 첫 호출에서 만든다 (임포트를 무겁게 하지 않는다)."""
-        if self._texture_model is None:
-            from src.synthesis.coupling import TextureModel
-            self._texture_model = TextureModel()
-        return self._texture_model
+    def texture_library(self):
+        """`vtexture.VoltageTextureLibrary` — None 이면 processed_data/npz 에서 첫 호출 때 읽는다. False 면 None."""
+        if self._texture_library is False:
+            return None
+        if self._texture_library is None:
+            from src.synthesis.vtexture import default_library
+            self._texture_library = default_library()
+        return self._texture_library
+
+    @property
+    def circuit(self):
+        """`coupling.SmpsCircuit` — v12g 모델 + 델타 캐시. 첫 호출에서 만든다."""
+        if self._circuit is None:
+            from src.synthesis.coupling import SmpsCircuit
+            self._circuit = SmpsCircuit()
+        return self._circuit
+
+    def texture_file_id(self, stem: str) -> int:
+        """녹화 stem -> 텍스처 라이브러리의 파일 id (델타의 기준). 모르면 −1."""
+        lib = self.texture_library if (self.use_texture or self.use_coupling) else None
+        return -1 if lib is None else int(lib.file_id(stem))
 
     def apply_voltage_texture(
         self,
@@ -511,43 +566,91 @@ class GridSimulator:
         harmonics_complex: np.ndarray,   # (N, 15) complex64
         power_w: np.ndarray,             # (N,) float — 이 기기의 교류 입력 전력
         env: VoltageEnvironment,
+        rec_ids: Optional[np.ndarray] = None,   # (N,) int — 각 사이클이 어느 녹화(파일 id)에서 왔는가
     ) -> np.ndarray:
-        """SMPS 전류를 **이 세션의 전압 텍스처**에 반응시킨다 (①b, 12.185.22).
+        """SMPS 전류를 **이 세션의 전압 텍스처**에 반응시킨다 (12.187, 옛 ①b 의 새 계측기 판).
 
-        지금까지 SMPS 는 녹화 페이저를 재생하고 전압은 스칼라 배율(1/kappa)로만 들어갔다.
-        그런데 커패시터 입력 정류기의 도통각은 전압 **파형**에 초선형으로 반응한다
-        (12.185.16: h17+ 의 0.27% 가 h9~h15 에서 크기 14%·위상 20~37°).
+            I_i(생성) = I_i(녹화 재생) + [ I_sim(p_i, 합성 텍스처·v1) − I_sim(p_i, 녹화 텍스처·v1) ]
 
-        실측이 그 크기를 못박는다 (12.185.22). 조합 스냅샷 `raw_beam_minipc_1/2` 에서
-        단독 녹화의 합이 조합 실측과 13.5% 어긋나는데,
-          · 텍스처 델타만 더하면 **2.7%** 로 내려가고
-          · 공유 임피던스 결합(Z·I)만 더하면 12.7% 로 거의 안 내려간다 (1/10 크기)
-        즉 12.185.12 의 "[B] 가 [C] 보다 4배 좋다" 는 결합이 아니라 **텍스처**였다.
-
-        `I_i(생성) = I_i(녹화 재생) + [I_i(이 텍스처) − I_i(기준 텍스처)]`.
-        차분이라 모델의 공통 편향(단독 재현 1.4~4.6%)이 상쇄된다.
+        차분이라 모델(v12g)의 공통 편향은 상쇄되고 전압 파형의 차이에 대한 응답만 남는다. 두 항 모두 같은
+        v1(기저 전압)에서 계산한다 — V1 크기의 효과는 `apply_cross_appliance_coupling` 의 kappa 몫이다.
+        기준 텍스처는 **그 활성화가 녹화된 파일** 의 것이다 (`rec_ids`). 전력 5W 구간 × 녹화 파일마다 한 번만 부른다.
         """
-        if harmonics_complex.size == 0 or not getattr(env, "texture_stem", ""):
+        if harmonics_complex.size == 0 or not self.use_texture or rec_ids is None:
             return harmonics_complex
-        if get_load_class(appliance_type) is not LoadClass.SMPS:
+        tex = getattr(env, "texture", None)
+        if tex is None or get_load_class(appliance_type) is not LoadClass.SMPS:
             return harmonics_complex
-        from src.synthesis.coupling import SMPS_DEVICES
-        if appliance_type not in SMPS_DEVICES:
+        circ = self.circuit
+        if not circ.has(appliance_type):
             return harmonics_complex          # 회로 파라미터가 없는 SMPS 는 건드리지 않는다
-        tm = self.texture_model
+        from src.synthesis.coupling import P_BIN_W
+        lib = self.texture_library
         p = np.asarray(power_w, dtype=np.float64)
-        on = (p > 0.5) & (np.abs(harmonics_complex[:, 0]) > 1e-6)
+        rid = np.asarray(rec_ids, dtype=np.int64)
+        on = (p > 0.5) & (np.abs(harmonics_complex[:, 0]) > 1e-6) & (rid >= 0)
         if not on.any():
             return harmonics_complex
         out = np.asarray(harmonics_complex, dtype=np.complex64).copy()
-        # 전력 구간마다 한 번만 계산한다 (표본마다 부르면 창당 수십 초가 된다)
-        bins = np.round(p / tm.p_bin_w).astype(np.int64)
-        for b in np.unique(bins[on]):
-            m = on & (bins == b)
-            d = tm.delta(appliance_type, float(b * tm.p_bin_w), env.texture_stem)
+        v1 = float(env.base_voltage_v)
+        R = (getattr(env, "r_state", None) or {}).get(appliance_type)
+        pb = np.round(p / P_BIN_W).astype(np.int64)
+        keys = pb * 100000 + rid
+        for k in np.unique(keys[on]):
+            m = on & (keys == k)
+            b_, r_id = int(k // 100000), int(k % 100000)
+            rel_rec = lib.file_rel_by_id(r_id)
+            d = circ.texture_delta(appliance_type, float(b_ * P_BIN_W), tex.rel, tex.id, rel_rec, r_id, v1, R)
             if d is not None:
                 out[m] += d.astype(np.complex64)
         return out
+
+    def apply_smps_coupling(
+        self,
+        layers: Dict[str, np.ndarray],   # {기기: (N, 15) complex64}
+        powers: Dict[str, np.ndarray],   # {기기: (N,) float — 교류 입력 전력}
+        env: VoltageEnvironment,
+    ) -> Dict[str, np.ndarray]:
+        """SMPS 둘 이상이 같이 켜진 사이클에 **공유 임피던스 결합** 델타를 더한다 (12.187, FCM/가이드 §6.1).
+
+            V_term = V_src − Z(h)·Σ_i I_i     (고정점 3회, Z = r_grid + j·2π·60·h·L, L = x_grid/(2π·60))
+            I_i(생성) += I_i(V_term) − I_i(V_src)
+
+        기기별 전력 5W 구간의 조합을 키로 캐시한다. 결합 상대가 없는 사이클(SMPS 1개)은 그대로 둔다.
+        """
+        if not self.use_coupling:
+            return layers
+        tex = getattr(env, "texture", None)
+        if tex is None:
+            return layers
+        from src.synthesis.coupling import SMPS_DEVICES, P_BIN_W
+        circ = self.circuit
+        devs = [d for d in SMPS_DEVICES if d in layers and d in powers and circ.has(d)]
+        if len(devs) < 2:
+            return layers
+        P = np.stack([np.asarray(powers[d], dtype=np.float64) for d in devs], 1)      # (N, k)
+        on = P > 0.5
+        rows = np.flatnonzero(on.sum(1) >= 2)
+        if not len(rows):
+            return layers
+        pb = np.where(on, np.round(P / P_BIN_W).astype(np.int64), -1)
+        out = {d: np.asarray(layers[d], dtype=np.complex64).copy() for d in devs}
+        v1 = float(env.base_voltage_v)
+        l_line = float(env.x_grid_ohm) / (2.0 * np.pi * 60.0)
+        R = getattr(env, "r_state", None) or {}
+        keys, inv = np.unique(pb[rows], axis=0, return_inverse=True)
+        inv = np.asarray(inv).reshape(-1)
+        for ki, key in enumerate(keys):
+            m_rows = rows[inv == ki]
+            pw = {d: float(key[j] * P_BIN_W) for j, d in enumerate(devs) if key[j] >= 0}
+            if len(pw) < 2:
+                continue
+            deltas = circ.coupling_delta(pw, tex.rel, tex.id, v1, float(env.r_grid_ohm), l_line, R)
+            for d, delta in deltas.items():
+                out[d][m_rows] += delta.astype(np.complex64)
+        res = dict(layers)
+        res.update(out)
+        return res
 
     def apply_site_distortion(
         self,
@@ -556,6 +659,9 @@ class GridSimulator:
         env: VoltageEnvironment,
     ) -> np.ndarray:
         """저항 부하에 **그 콘센트의 h3 전압 왜곡**을 싣는다 (①a, 12.185.21).
+
+        ⚠ 2026-09-06: 새 계측기 무리는 전부 `v_distortion_h3=0` 이라 **지금은 no-op** 이다. 아래 실측
+        ("계측기의 덧셈 바닥" 등)은 옛 계측기 이야기다 — `OBSERVED_VOLTAGE_CLUSTERS` 주석과 12.186.
 
         순저항은 자기 서명이 없다 — `I_h = V_h/R` 이므로 정규화 서명이 곧 그 콘센트의
         전압이다. 그런데 지금까지 저항 부하는 **장소 A 녹화의 서명을 그대로 재생**했고

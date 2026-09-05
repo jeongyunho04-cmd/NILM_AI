@@ -20,7 +20,10 @@ _label_provenance    human_switching_log_signal_refined (새 등급)
    근방을 `uncertain` 으로 두고 어느 쪽으로도 채점하지 않는다 (12.4절 관례).
 
     python -X utf8 -m src.run_write_labels --refined results/refined_all.json \\
-        --out processed_data/real_events_refined.json
+        --out processed_data/real_events.json
+
+2026-09-06: 옛 `real_events.json` 은 옛 계측기 자료와 함께 삭제됐다. 이제 이 산출물이 **정본 라벨**이다
+(`--out` 기본값이 `processed_data/real_events.json`). `uncertain` 패드는 사용자 진술 ±3초에 맞춰 ±4초.
 """
 from pathlib import Path
 from typing import Dict, List
@@ -37,7 +40,7 @@ import numpy as np
 
 #: 못 맞춘 항목 근방을 이만큼 `uncertain` 으로 둔다 (초). 사람 기록의 시각 오차
 #: p90 이 5초라 그보다 넉넉히 잡는다.
-UNCERTAIN_PAD = 8.0
+UNCERTAIN_PAD = 4.0
 PROV = "human_switching_log_signal_refined"
 
 
@@ -87,10 +90,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--refined", nargs="+", required=True)
-    ap.add_argument("--out", default="processed_data/real_events_refined.json")
+    ap.add_argument("--out", default="processed_data/real_events.json")
     a = ap.parse_args()
 
-    smap = json.load(open("results/seq_time_map.json", encoding="utf-8"))
+    smap = (json.load(open("results/seq_time_map.json", encoding="utf-8"))
+            if Path("results/seq_time_map.json").exists() else {})
     files: Dict[str, Dict] = {}
     for path in a.refined:
         R = json.load(open(path, encoding="utf-8"))

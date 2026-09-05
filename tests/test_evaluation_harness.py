@@ -243,54 +243,60 @@ def test_real_events_file_is_wellformed():
                         f"{stem}/{app}/{key} 구간이 파일 범위를 벗어납니다: [{t0}, {t1}]")
 
 
+def _first_labeled():
+    """지금 있는 라벨 중 첫 파일 (2026-09-06 부터 라벨은 `run_write_labels` 산출물 하나다 — 규칙 4)."""
+    ev = load_events()
+    stem = sorted(ev)[0]
+    return stem, ev[stem]
+
+
 def test_uncertain_regions_are_not_scored():
-    """오븐의 팬/조명 구간은 채점에서 빠져야 한다.
+    """`uncertain` 구간은 채점에서 빠지고, 확실히 켜진 구간은 uncertain 안이어도 채점된다.
 
-    타임라인은 히터 통전만 적어 두었다. 그 사이 구간을 OFF 로 채점하면
-    모델이 맞게 예측해도 오답이 된다.
+    옛 판은 `test3`(옛 계측기 자료, 삭제)의 오븐 팬/조명 구간을 박아 두었다. 지금은 있는 라벨로 잰다.
     """
-    apps = ["minipc", "beam_projector", "oven"]
-    n = int(413.0 * 60)
-    on, scorable = build_on_off_truth("test3", apps, n)
-    j = apps.index("oven")
-    assert on[:, j].any(), "오븐 통전 구간이 없습니다"
-    assert (~scorable[:, j]).any(), "오븐 불확실 구간이 표시되지 않았습니다"
-    # 통전 구간은 불확실 안에 있어도 채점 대상이어야 한다
-    assert scorable[on[:, j], j].all()
-
-    # 미니PC 도 불확실 구간이 있다 (설계 문서 12.25절).
-    # 이 단언은 원래 "미니PC 는 전 구간 확실" 이었는데, 그 전제가 틀렸다 —
-    # `test3` 첫 63초는 총전력이 4.3W 라 미니PC(최저 유휴 7.8W)가 켜져 있을 수
-    # 없었고, 정답이 그것을 ON 으로 적고 있었다. 테스트가 그 오류를 고정하고 있었다.
-    jm = apps.index("minipc")
-    assert (~scorable[:, jm]).any(), "미니PC 판정보류 구간이 사라졌습니다 (12.25절 정정)"
-    assert scorable[on[:, jm], jm].all(), "미니PC ON 구간이 채점에서 빠졌습니다"
-    assert not on[:int(63.0 * 60), jm].any(), "미니PC 가 없던 첫 63초가 다시 ON 이 됐습니다"
+    stem, spec = _first_labeled()
+    apps = list(spec["appliances_present"])
+    n = int(spec["cycles"])
+    on, scorable = build_on_off_truth(stem, apps, n)
+    assert on.any(), "켜진 구간이 하나도 없습니다"
+    for a in apps:
+        j = apps.index(a)
+        if spec["intervals"].get(a, {}).get("uncertain"):
+            assert (~scorable[:, j]).any(), f"{a} 불확실 구간이 표시되지 않았습니다"
+        # 확실히 켜진 구간은 불확실 안에 있어도 채점 대상이어야 한다
+        assert scorable[on[:, j], j].all()
 
 
 def test_on_off_scoring_rewards_a_correct_predictor():
-    apps = ["minipc", "beam_projector", "oven"]
-    n = int(413.0 * 60)
-    truth, _ = build_on_off_truth("test3", apps, n)
-    good = score_on_off(truth, "test3", apps)
-    assert good["minipc"]["f1"] == pytest.approx(1.0)
-    assert good["beam_projector"]["f1"] == pytest.approx(1.0)
-    bad = score_on_off(np.zeros_like(truth), "test3", apps)
-    assert bad["beam_projector"]["f1"] == 0.0
-    assert good["oven"]["ignored_uncertain"] > 0
+    stem, spec = _first_labeled()
+    apps = list(spec["appliances_present"])
+    n = int(spec["cycles"])
+    truth, _ = build_on_off_truth(stem, apps, n)
+    good = score_on_off(truth, stem, apps)
+    bad = score_on_off(np.zeros_like(truth), stem, apps)
+    for j, a in enumerate(apps):
+        if truth[:, j].any():
+            assert good[a]["f1"] == pytest.approx(1.0), a
+            assert bad[a]["f1"] == 0.0, a
 
 
 def test_event_delta_p_scoring():
-    """빔프로젝터가 t=102.7s 에 +46.7W 로 켜지는 것을 재현하는 예측기는 통과해야 한다."""
-    apps = ["minipc", "beam_projector", "oven"]
-    n = int(413.0 * 60)
-    pred = np.zeros((n, 3))
-    pred[int(102.7 * 60):, apps.index("beam_projector")] = 46.7
-    pred[int(63.4 * 60):, apps.index("oven")] = 1157.4
-    rows = {r["appliance"]: r for r in score_events(pred, "test3", apps)}
-    assert abs(rows["beam_projector"]["error_w"]) < 1.0
-    assert rows["beam_projector"]["sign_correct"]
-    assert abs(rows["oven"]["error_rel"]) < 0.02
+    """라벨의 사건(t_s, ΔP)을 그대로 재현하는 예측기는 ΔP 오차 없이 통과해야 한다."""
+    stem, spec = _first_labeled()
+    apps = list(spec["appliances_present"])
+    n = int(spec["cycles"])
+    pred = np.zeros((n, len(apps)))
+    evs = [e for e in spec["events"] if e["kind"] in ("on", "off") and e.get("delta_p_w") is not None]
+    assert evs, "ΔP 가 있는 사건이 없습니다"
+    for e in evs:                                   # 계단을 그대로 쌓는다
+        j = apps.index(e["appliance"])
+        pred[int(e["t_s"] * 60):, j] += float(e["delta_p_w"])
+    rows = score_events(pred, stem, apps)
+    assert rows, "채점된 사건이 없습니다"
+    for r in rows:
+        assert abs(r["error_w"]) < 1.0, r
+        assert r["sign_correct"], r
 
 
 def test_real_scoring_refuses_sealed_file():

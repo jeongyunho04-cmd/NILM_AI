@@ -381,6 +381,8 @@ class LoadSynthesizer:
             a: np.full(N, self.grid_sim.default_ref_voltage, dtype=np.float32)
             for a in self.known_appliances
         }
+        # 12.187: 각 사이클이 어느 녹화 파일에서 왔는가 (텍스처 델타의 기준 텍스처). −1 = 없음(대기 등).
+        rec_tex = {a: np.full(N, -1, dtype=np.int16) for a in self.known_appliances}
 
         # 4. 대기 레이어: 꽂혀 있지만 꺼진 상태
         for app in self.known_appliances:
@@ -468,6 +470,7 @@ class LoadSynthesizer:
             v_ref_series[app][t_start:t_end] = np.where(
                 (vref_slice > 150.0) & (vref_slice < 280.0), vref_slice, aug_act.v_ref_v
             )
+            rec_tex[app][t_start:t_end] = self.grid_sim.texture_file_id(aug_act.source_file)
 
         # 6. 배경 노이즈 (계측계 자체 소비). 전체에서 딱 한 번만 더한다.
         noise_c = np.zeros((N, NUM_HARMONICS), dtype=np.complex64)
@@ -518,8 +521,10 @@ class LoadSynthesizer:
                     coupled_c[a] = self.grid_sim.apply_site_distortion(a, coupled_c[a], env)
                     # SMPS 는 이 세션의 전압 **파형**에 도통각으로 반응한다 (①b, 12.185.22).
                     coupled_c[a] = self.grid_sim.apply_voltage_texture(
-                        a, coupled_c[a], gt_active_p[a], env
+                        a, coupled_c[a], gt_active_p[a], env, rec_tex[a]
                     )
+                # SMPS 끼리의 공유 임피던스 결합 (12.187, FCM). 텍스처 델타 뒤에 건다.
+                coupled_c = self.grid_sim.apply_smps_coupling(coupled_c, gt_active_p, env)
 
             total_complex = noise_c.copy()
             for a in self.known_appliances:

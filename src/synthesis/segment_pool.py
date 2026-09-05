@@ -33,6 +33,15 @@ import numpy as np
 from src.preprocessing.numpy_exporter import load_nilm_npz
 from src.preprocessing.file_registry import FileRole, get_load_class, is_periodic_duty
 
+def _has_run(mask: np.ndarray, min_len: int) -> bool:
+    """불 배열에 길이 `min_len` 이상의 연속 True 가 있는가."""
+    if mask.size < min_len or not mask.any():
+        return False
+    idx = np.flatnonzero(mask)
+    runs = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
+    return max(len(r) for r in runs) >= min_len
+
+
 # 활성화로 인정할 최소 길이 (0.5초)
 MIN_ACTIVATION_CYCLES = 30
 # 주기 부하의 통전 펄스를 하나의 '세션'으로 묶을 때 허용하는 최대 공백.
@@ -329,11 +338,22 @@ class SegmentPool:
 
         # 2차: 기기별 활성화 구간과 대기 지문 추출
         raw_standby: Dict[str, List[StandbyProfile]] = {}
+        self.file_noise_references: Dict[str, NoiseReference] = {}
+        self.noise_source: Dict[str, str] = {}
         for stem, data, meta in device_entries:
             appliance_type = meta.get("appliance_type", stem)
             korean_name = meta.get("korean_name", stem)
             v_ref = float(meta.get("v_ref_v", 220.0))
-            noise_ref = self._pick_noise_reference(float(meta.get("noise_floor_w", 1.4)))
+            # 규칙 2: 그 파일의 '플러그 뽑은 꼬리' 가 있으면 그것이 이 파일의 계측계 기준이다.
+            # 없으면(꼬리를 빼먹은 녹화) 바닥이 같은 전역 노이즈 파일로 대체한다 — 대비책.
+            own = self._noise_reference_from_tail(stem, data)
+            if own is not None:
+                noise_ref = own
+                self.file_noise_references[stem] = own
+                self.noise_source[stem] = "trailing_unplugged"
+            else:
+                noise_ref = self._pick_noise_reference(float(meta.get("noise_floor_w", 1.4)))
+                self.noise_source[stem] = f"global:{noise_ref.name}"
 
             profile = self._extract_standby_profile(appliance_type, data, noise_ref, v_ref)
             if profile is not None:
@@ -395,6 +415,29 @@ class SegmentPool:
             residual_variance=residual_var,
         )
 
+    def _noise_reference_from_tail(self, stem: str, data: dict) -> Optional[NoiseReference]:
+        """npz 의 `is_unplugged==1` 구간(계측계만 남은 꼬리)으로 그 파일 전용 기준을 만든다. 없으면 None."""
+        if "is_unplugged" not in data:
+            return None
+        m = np.asarray(data["is_unplugged"]) == 1
+        if "is_valid" in data:
+            m = m & (np.asarray(data["is_valid"]) == 1)
+        if int(m.sum()) < MIN_STANDBY_SAMPLES:
+            return None
+        hc = data["harmonics_complex"][m]
+        median_phasor = (np.median(np.real(hc), axis=0) + 1j * np.median(np.imag(hc), axis=0)).astype(np.complex64)
+        residual_var = float(np.mean(np.abs(hc - median_phasor) ** 2))
+        pf = data["power_features"][m]
+        return NoiseReference(
+            name=f"{stem}:tail",
+            noise_floor_w=float(np.median(pf[:, 0])),
+            median_phasor=median_phasor,
+            harmonics_ri=data["harmonics_ri"][m],
+            harmonics_complex=hc,
+            power_features=pf,
+            residual_variance=residual_var,
+        )
+
     def _pick_noise_reference(self, noise_floor_w: float) -> NoiseReference:
         """이 기기 측정에 적용된 바닥 전력과 가장 가까운 노이즈 기준을 고른다.
 
@@ -424,6 +467,9 @@ class SegmentPool:
         # 품질 게이팅에 걸린 샘플은 제외한다.
         if "is_valid" in data:
             idle_mask = idle_mask & (data["is_valid"] == 1)
+        # 플러그를 뽑은 꼬리는 기기의 대기가 아니라 계측계다 (규칙 2). 대기 지문에서 뺀다.
+        if "is_unplugged" in data:
+            idle_mask = idle_mask & (np.asarray(data["is_unplugged"]) == 0)
 
         n_idle = int(idle_mask.sum())
         if n_idle < MIN_STANDBY_SAMPLES:
@@ -564,7 +610,13 @@ class SegmentPool:
         # 오븐은 히터가 꺼져도 팬/조명이 남아 is_on 이 1로 유지되므로 애초에
         # 세션 하나가 통째로 잡히고(블록 2개 < 3), 여기서 손대지 않는다.
         if duty_period:
-            blocks = self._merge_duty_blocks(blocks, duty_period, valid)
+            # 오븐처럼 '켜졌지만 통전은 아닌' 상태(팬·조명, state 1)가 있는 기기는 펄스 사이에 state 0(플러그만)이
+            # 끼면 사용자가 껐다 켠 것이다 — 공백이 짧아도 잇지 않는다. 핫플은 그런 상태가 없어 릴레이 공백도 state 0 이라
+            # 공백 길이로만 가른다. (2026-09-06: oven_1 의 세 세션(12초·25초 꺼짐)이 하나로 묶여 있었다.)
+            from src.labeling.state_definitions import get_appliance_config
+            carrier = get_appliance_config(appliance_type).on_state_min_id is not None
+            state = np.asarray(data["state_id"]) if (carrier and "state_id" in data) else None
+            blocks = self._merge_duty_blocks(blocks, duty_period, valid, state)
 
         for block in blocks:
             if len(block) < MIN_ACTIVATION_CYCLES:
@@ -608,7 +660,8 @@ class SegmentPool:
 
     @staticmethod
     def _merge_duty_blocks(
-        blocks: List[np.ndarray], duty_period: int, valid: np.ndarray
+        blocks: List[np.ndarray], duty_period: int, valid: np.ndarray,
+        state_id: Optional[np.ndarray] = None,
     ) -> List[np.ndarray]:
         """주기 부하의 통전 펄스들을 하나의 동작 세션으로 이어 붙인다.
 
@@ -620,6 +673,8 @@ class SegmentPool:
             핫플레이트1  공백 최대  89사이클(1.5초)   주기 약 125사이클
             핫플레이트2  공백 대부분 78사이클, 세션 단절 1건 620사이클(10.3초)
         주기의 2배(약 250사이클)면 릴레이 공백은 전부 잇고 세션 단절은 남긴다.
+        `state_id` 를 주면 공백 안에 state 0(플러그만 꽂힌 상태)이 하나라도 있으면 잇지 않는다 — 팬·조명 같은
+        운반 상태가 있는 기기(오븐)에서 사용자의 끔/켬 을 가르는 물리적 경계다.
         """
         limit = int(min(PERIODIC_MERGE_GAP_FACTOR * duty_period, PERIODIC_MERGE_GAP_CAP_CYCLES))
         merged: List[np.ndarray] = []
@@ -631,7 +686,8 @@ class SegmentPool:
             gap = b0 - end - 1
             # 공백이 짧고 그 안이 전부 유효 계측일 때만 잇는다.
             # 품질 게이팅에 걸린 구간을 가로질러 이으면 보간값이 세션에 들어온다.
-            if 0 <= gap <= limit and bool(valid[end + 1:b0].all()):
+            truly_off = state_id is not None and _has_run(state_id[end + 1:b0] == 0, 60)
+            if 0 <= gap <= limit and bool(valid[end + 1:b0].all()) and not truly_off:
                 end = b1
                 continue
             merged.append(np.arange(start, end + 1, dtype=np.int64))

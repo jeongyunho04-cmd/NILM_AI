@@ -31,6 +31,17 @@ class ApplianceStateConfig:
     #: 그 결과 "오븐 ON 인데 전력 0W" 인 창이 절반이 되고, 모델이 저항 부하를
     #: 전부 오븐으로 읽는 원인이 됐다 (12.110.2: 재현율 1.000 정밀도 0.277).
     on_state_min_id: Optional[int] = None
+    #: 상태 판정 전 전력 평활 창(초). 기본 1초 롤링 중앙값. 릴레이가 2~5사이클(0.03~0.08초)씩 닫히는 핫플의
+    #: 저단 통전은 1초 창이 지워 버린다 (2026-09-06 hotplate_1 727~797초가 전부 OFF 로 찍혔다) — 그런 기기는 짧게.
+    smooth_window_s: float = 1.0
+    #: **바닥 준위로 가르는 상태** (2026-09-06, MEASUREMENT_RULES.md 규칙 5). 지정하면 통전이 아닌 사이클을
+    #: 파일 바닥을 뺀 전력(`p_target_w`)의 `armed_window_s` 구름 10백분위(펄스에 안 흔들리는 바닥)로 나눈다:
+    #: 바닥 >= `armed_floor_w` 이면 이 상태(스위치 켜짐·릴레이 열림), 아니면 state 0(플러그만 꽂힘).
+    #: 핫플 실측: 스위치 내림 1.54W/7.3mA/|I3| 1.8mA, 릴레이 휴지 1.95~1.98W/9.2mA/|I3| 1.0mA — 바닥을 빼면
+    #: 0.15 대 0.56W. 세그먼트 풀은 펄스 사이에 state 0 이 1초 이상 끼면 사용자가 끈 것으로 보고 세션을 가른다.
+    armed_state_id: Optional[int] = None
+    armed_floor_w: float = 0.3
+    armed_window_s: float = 4.0
 
 
 # ── Appliance Specific State Configurations ─────────────────────────────────
@@ -98,15 +109,23 @@ STATE_CONFIGURATIONS: Dict[str, ApplianceStateConfig] = {
             StateRule(2, "HIGH_HEAT_TURBO", 750.0, 3000.0, "2단 열풍/터보 고열 모드", nominal_w=1000.0),
         ],
     ),
+    # 핫플레이트 (2026-09-06 개정). 세 상태: 플러그만(스위치 내림) / 스위치 켜짐·릴레이 열림(ARMED) / 통전.
+    # ON(is_on) 은 여전히 통전만이다 (on_state_min_id=2) — 옛 12.13.1 의 '통전 단위' 라벨 그대로.
+    # OFF/ARMED 경계 0.3W 는 **파일 바닥을 뺀 전력** 기준이고 `annotator` 의 후처리가 정한다 (armed_state_id).
+    # 분류기 자체는 원시 p_w 로 통전(50W)만 가른다. 평활 0.05초·체류 1사이클: 저단 릴레이가 2~5사이클씩만 닫힌다.
     "hotplate": ApplianceStateConfig(
         appliance_type="hotplate",
         korean_name="핫플레이트",
-        on_threshold_w=50.0,
-        min_state_duration_s=0.3,
+        on_threshold_w=0.3,
+        on_state_min_id=2,
+        min_state_duration_s=0.02,
         hysteresis_w=10.0,
+        smooth_window_s=0.05,
+        armed_state_id=1,
         states=[
-            StateRule(0, "OFF_STANDBY", 0.0, 50.0, "대기 상태 또는 서모스탯 OFF 주기", nominal_w=2.0),
-            StateRule(1, "HEATING_ACTIVE", 50.0, 3000.0, "히터 통전 발열 주기", nominal_w=465.0),
+            StateRule(0, "OFF_STANDBY", 0.0, 0.3, "플러그만 꽂힘 - 스위치 내림 (바닥 뺀 전력 <0.3W)", nominal_w=0.15),
+            StateRule(1, "ARMED_IDLE", 0.3, 50.0, "스위치 켜짐, 릴레이 열림 (서모스탯 휴지)", nominal_w=0.56),
+            StateRule(2, "HEATING_ACTIVE", 50.0, 3000.0, "히터 통전 발열 주기", nominal_w=465.0),
         ],
     ),
     "laptop_charger": ApplianceStateConfig(

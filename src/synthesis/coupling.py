@@ -1,260 +1,193 @@
 # -*- coding: utf-8 -*-
-"""SMPS 사이의 공유 임피던스 결합 (①b, 12.185.12 / 12.185.22).
+"""SMPS 전류를 회로 모델(v12g)로 **환경에 맞게 보정**한다 — 텍스처 델타 + 공유 임피던스 결합 (12.187, 2026-09-06).
 
-**무엇이 빠져 있었나.** 지금 생성기는 기기별 녹화 페이저를 그냥 더한다 = 단순 중첩.
-12.185.12 가 원시 조합 스냅샷 6개로 그 대가를 쟀다 (조합에 맞춘 자유 파라미터 0개):
+왜 '교체' 가 아니라 '델타' 인가
+-----------------------------
+회로 모델(`circuit_model/circ12_*.pkl`, 잔차 2.1~4.5%, h13+ ±30%)로 전류를 통째로 만들면 그 오차가 훈련 신호에
+그대로 들어간다. 녹화 페이저는 그 기기·그 순간의 진짜 전류다. 그래서 **녹화를 재생하고, 환경이 다를 때
+달라지는 몫만 모델의 차분으로 더한다** (옛 12.185.12 의 결론을 새 계측기·새 모델로 옮긴 것):
 
-    [A] 단순 중첩 (지금 생성기)          12.7 ~ 15.9%
-    [B] 모델 + 조합 V_term                3.5 ~  8.3%     <- 4배
-    [C] 모델 + 단독 V_term               12.8 ~ 15.7%  = [A]
+    I_i(생성) = I_i(녹화 재생, kappa 보정)
+              + [ I_sim(p_i, 합성 텍스처·v1) − I_sim(p_i, 녹화 텍스처·v1) ]        (텍스처 델타)
+              + [ I_sim(p_i, V_term) − I_sim(p_i, V_src) ]                      (결합 델타, V_term = V_src − Z·ΣI)
 
-[B]와 [C]는 회로도 파라미터도 같고 **단자 전압만** 다르다. 개선이 전적으로 거기서 온다.
+차분이라 모델의 공통 편향은 상쇄되고, 전압 **파형**(텍스처)과 **공유 임피던스**(Z·I)에 대한 응답만 남는다.
+두 항 모두 같은 v1(합성 기저 전압)에서 계산한다 — V1 크기의 효과는 `apply_cross_appliance_coupling` 의 kappa 가
+이미 맡고 있어 여기서 다시 넣으면 이중 계상이다.
 
-**⚠ 그런데 그 단자 전압 차의 정체는 공유 임피던스가 아니었다** (12.185.22). 조합 녹화의
-실측 전압과 단독 녹화의 전압은 V1 의 0.87~1.03% 다른데 `Z·I_total` 이 설명하는 몫은
-0.05~0.08% 뿐이다 (1/12). 나머지는 **세션이 다르다** 는 사실이다 — 단독은 22~23시,
-조합은 00시 녹화다. 실측으로 갈랐다 (`raw_beam_minipc_1/2`, 전력 재배분 없는 두 조합):
+새 계측기에서 달라진 것
+---------------------
+· 텍스처 소스가 원시 스냅샷(삭제)이 아니라 **2Hz 녹화의 vh·vhdeg** (`vtexture.VoltageTextureLibrary`). 모든 녹화가
+  텍스처이고, 델타의 기준은 임의의 대표 소스가 아니라 **그 활성화가 녹화된 파일 자체의 텍스처** 다.
+· 모델은 `fcm.load_models()` 기본(v12g, `DeviceModel12`). 15차 소스 규약이라 h17+ 가 필요 없다.
+· R(NTC 온도 상태)은 pkl 의 실측 범위에서 창마다 뽑아 두 항에 같이 쓴다 (README_v12 "R 은 상태다").
+· 옛 ①b 의 "결합은 텍스처의 1/10" 은 옛 계측기 자료의 결론이라 **미검증**이다 — 결합도 같이 넣고 `run_mixval12`
+  로 새 자료(test_1/test_2)에서 크기를 다시 잰다.
 
-    단순 중첩            13.5%
-    + 결합(Z·I) 만       12.7%      <- 거의 안 내려간다
-    + 텍스처만            2.7%      <- 이것이 [B] 의 정체다
-    + 둘 다               2.8%      <- 소스가 이미 측정된 단자 전압이라 결합이 이중 계상된다
-
-그래서 이 모듈은 **둘을 나눠 준다**: `CouplingModel`(공유 임피던스, 작지만 실체) 과
-`TextureModel`(세션·장소 전압 파형, 지배적). 생성기 기본은 텍스처다.
-
-**전면 교체가 아니라 증강.** 시뮬 절대 전류로 갈아 끼우면 우리 모델의 단독 오차(1.4~4.6%)가
-훈련 신호에 통째로 들어간다. 대신 **빠진 몫만** 더한다:
-
-    ΔI_i = I_i(조합 V_term) − I_i(단독 V_term)
-    I_i(생성) = I_i(녹화 재생) + ΔI_i
-
-ΔI 는 차분이라 모델의 공통 편향이 상쇄된다.
-
-**비용.** `fcm.forward` 는 3기기 3반복에 0.1초라 표본(60Hz)마다 못 부른다. 창 안에서 켜진
-조합·전력·Z 가 같은 구간은 같은 ΔI 를 쓰고, (조합, 전력구간, Z구간) 을 키로 캐시한다.
-전력 구간 5W · Z 구간 0.25Ω 이면 몇천 창 뒤 거의 전부 적중한다.
+비용
+----
+시뮬 1회 ≈ 1ms (numba). (기기, 전력 5W 구간, 텍스처 id, 녹화 파일 id, v1 2V 구간, R 0.1Ω 구간) 을 키로 캐시한다.
+텍스처는 파일당 60초에 하나라 수십~수백 개뿐이고, 몇천 창 뒤에는 거의 전부 적중한다.
 """
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Optional, Tuple
 import numpy as np
 
 from src.synthesis import fcm
 
 H = 15
-#: 캐시 구간. 전력 5W 는 우리 동작점 간격(7~25W, 17~70W)의 1/3 이라 결합 곡선을 뭉개지 않는다.
-P_BIN_W = 5.0
-Z_BIN_OHM = 0.25
-#: `fcm.load_models()` 가 아는 기기 (원시 파형으로 맞춘 셋)
+F = 60.0
+P_BIN_W = 5.0          #: 전력 구간 — 동작점 간격(7~25W, 17~70W)의 1/3
+V_BIN_V = 2.0          #: 기저 전압 구간
+R_BIN_OHM = 0.10       #: NTC 상태 R 구간
+Z_BIN_OHM = 0.25       #: 선로 R 구간
+L_BIN_H = 100e-6       #: 선로 L 구간
+#: 회로 모델이 있는 SMPS (`circuit_model/circ12_<dev>.pkl`)
 SMPS_DEVICES = ("laptop_charger", "beam_projector", "minipc")
-#: ΔI 를 계산할 때 쓰는 대표 소스. [B2] 가 "소스에 둔감" 이라고 하면 하나로 충분하다.
-DEFAULT_SOURCE = "raw_beam_projector_1"
-#: 선로 인덕턴스는 미측정이다 (∠Z₁ 을 vhdeg1≡0 규약상 못 잰다, 12.185.14).
-#: 부록A §5 의 R 범위 0.7~2.0Ω 에 맞춰 L 은 0~400µH 로 흔든다.
+#: 선로 인덕턴스 범위 (미측정 — ∠Z₁ 은 vhdeg1≡0 규약상 못 잰다). `GridSimulator.x_grid_range` 0.02~0.15Ω ↔ 53~400µH.
 L_LINE_RANGE = (0.0, 400e-6)
+#: 옛 API 호환용 — 옛 계측기 원시 stem 목록은 비었다 (파일 삭제). 텍스처는 `vtexture` 가 준다.
+TEXTURE_STEMS: Tuple[str, ...] = ()
 
 
-def forward_per_device(powers: Dict[str, float], models: Dict[str, fcm.DeviceModel],
-                       V_src, Z: np.ndarray, n_iter: int = 3
-                       ) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
-    """`fcm.forward` 의 기기별 판. 반환 ({기기: (15,) 전류}, V_term 스펙트럼).
-
-    `fcm.forward` 는 총합만 돌려주는데 우리는 기기별 정답(`gt_harmonics_ri`)에 나눠 실어야
-    하므로 고정점 마지막 반복의 개별 전류가 필요하다.
-    """
-    Vs = fcm.to_spectrum(V_src)
-    Zf = np.zeros(len(Vs), complex)
-    Z = np.asarray(Z, complex)
-    Zf[1:len(Z) + 1] = Z[:len(Vs) - 1]
-
-    def each(V) -> Optional[Dict[str, np.ndarray]]:
-        out = {}
-        for d, p in powers.items():
-            I = models[d].current(p, V)
-            if I is None:
-                return None
-            out[d] = I
-        return out
-
-    cur = each(Vs)
-    if cur is None:
-        return {}, Vs
-    V_term = Vs
-    for _ in range(n_iter):
-        If = np.zeros(len(Vs), complex)
-        If[1:H + 1] = sum(cur.values())
-        V_new = Vs - Zf * If
-        V_new[2::2] = 0.0                      # 짝수차는 아날로그 전단의 인공물 (규칙 77)
-        nxt = each(V_new)
-        if nxt is None:
-            break
-        V_term, cur = V_new, nxt
-    return cur, V_term
+def _pbin(p: float) -> int:
+    return int(round(float(p) / P_BIN_W))
 
 
-class CouplingModel:
-    """결합 보정 ΔI 를 계산하고 캐시한다."""
+class SmpsCircuit:
+    """v12g 모델 위의 델타 계산기 + 캐시. 생성기(`GridSimulator`)가 하나 들고 쓴다."""
 
-    def __init__(self, models: Optional[Dict[str, fcm.DeviceModel]] = None,
-                 source: Optional[np.ndarray] = None, p_bin_w: float = P_BIN_W,
-                 z_bin_ohm: float = Z_BIN_OHM, max_cache: int = 200_000):
+    def __init__(self, models: Optional[Dict[str, object]] = None, max_cache: int = 300_000,
+                 n_iter: int = 3):
         self._models = models
-        self._source = source
-        self.p_bin_w = float(p_bin_w)
-        self.z_bin_ohm = float(z_bin_ohm)
         self.max_cache = int(max_cache)
-        self._cache: Dict[tuple, Dict[str, np.ndarray]] = {}
+        self.n_iter = int(n_iter)
+        self._tex_cache: Dict[tuple, np.ndarray] = {}
+        self._cpl_cache: Dict[tuple, Dict[str, np.ndarray]] = {}
         self.hits = 0
         self.misses = 0
         self.failures = 0
 
-    # ── 지연 적재 (모델·소스는 첫 호출에서 읽는다. 생성기 임포트를 무겁게 하지 않는다) ──
     @property
-    def models(self) -> Dict[str, fcm.DeviceModel]:
+    def models(self) -> Dict[str, object]:
         if self._models is None:
-            self._models = fcm.load_models()
+            self._models = fcm.load_models()          # circuit_model/circ12_*.pkl
         return self._models
 
-    @property
-    def source(self) -> np.ndarray:
-        if self._source is None:
-            self._source = fcm.source_from_raw(DEFAULT_SOURCE)
-        return self._source
+    def has(self, device: str) -> bool:
+        return device in SMPS_DEVICES and device in self.models
 
-    def _key(self, powers: Dict[str, float], r_line: float, l_line: float) -> tuple:
-        return (tuple(sorted((d, int(round(p / self.p_bin_w)))
-                             for d, p in powers.items() if p > 0.5)),
-                int(round(r_line / self.z_bin_ohm)),
-                int(round(l_line / 100e-6)))
+    def sample_r(self, device: str, rng: np.random.Generator) -> Optional[float]:
+        m = self.models.get(device)
+        return None if m is None or not hasattr(m, "sample_R") else float(m.sample_R(rng))
 
-    def delta(self, powers: Dict[str, float], r_line: float,
-              l_line: float = 0.0) -> Dict[str, np.ndarray]:
-        """{기기: (15,) complex ΔI}. 결합 상대가 없으면 빈 dict.
+    # ── 원시 호출 ─────────────────────────────────────────────────────────
+    def current(self, device: str, p: float, rel: np.ndarray, v1: float,
+                R: Optional[float] = None) -> Optional[np.ndarray]:
+        """(15,) complex 계측 영역 전류. 실패하면 None."""
+        m = self.models.get(device)
+        if m is None or p <= 0.5:
+            return None
+        try:
+            I = m.current(float(p), np.asarray(rel, complex) * float(v1), R=R)
+        except Exception:
+            I = None
+        if I is None or not np.all(np.isfinite(I)):
+            self.failures += 1
+            return None
+        return np.asarray(I, complex)
 
-        `powers` 는 **교류 입력 전력** [W]. 모르는 기기는 무시한다.
-        """
-        p = {d: float(v) for d, v in powers.items()
-             if d in SMPS_DEVICES and v is not None and v > 0.5}
-        if len(p) < 2:                                  # 결합할 상대가 없다 ([B5a])
-            return {}
-        key = self._key(p, r_line, l_line)
-        got = self._cache.get(key)
+    # ── 텍스처 델타 ───────────────────────────────────────────────────────
+    def texture_delta(self, device: str, p: float, rel_env: np.ndarray, env_id: int,
+                      rel_rec: np.ndarray, rec_id: int, v1: float,
+                      R: Optional[float] = None) -> Optional[np.ndarray]:
+        """I_sim(p, rel_env·v1) − I_sim(p, rel_rec·v1). 구간 대표값으로 계산해 같은 키가 같은 답을 준다."""
+        if not self.has(device) or p <= 0.5 or rel_env is None or rel_rec is None:
+            return None
+        pb = _pbin(p); vb = int(round(v1 / V_BIN_V)); rb = -1 if R is None else int(round(R / R_BIN_OHM))
+        key = ("tex", device, pb, int(env_id), int(rec_id), vb, rb)
+        got = self._tex_cache.get(key)
         if got is not None:
             self.hits += 1
             return got
         self.misses += 1
-        # 키의 구간 대표값으로 계산한다 (같은 키가 항상 같은 답을 주도록)
-        pq = {d: max(round(v / self.p_bin_w) * self.p_bin_w, self.p_bin_w) for d, v in p.items()}
-        rq = max(round(r_line / self.z_bin_ohm) * self.z_bin_ohm, self.z_bin_ohm)
-        lq = round(l_line / 100e-6) * 100e-6
-        out = self._compute(pq, rq, lq)
-        if len(self._cache) < self.max_cache:
-            self._cache[key] = out
+        pq = max(pb * P_BIN_W, P_BIN_W); vq = vb * V_BIN_V; rq = None if R is None else rb * R_BIN_OHM
+        a = self.current(device, pq, rel_env, vq, rq)
+        b = self.current(device, pq, rel_rec, vq, rq)
+        out = None if (a is None or b is None) else (a - b).astype(np.complex64)
+        if len(self._tex_cache) < self.max_cache:
+            self._tex_cache[key] = out
         return out
 
-    def _compute(self, powers: Dict[str, float], r_line: float,
-                 l_line: float) -> Dict[str, np.ndarray]:
-        Z = fcm.line_impedance(r_line, l_line, H)
-        src = self.source
+    # ── 결합 델타 ─────────────────────────────────────────────────────────
+    def coupling_delta(self, powers: Dict[str, float], rel_env: np.ndarray, env_id: int, v1: float,
+                       r_line: float, l_line: float, R: Optional[Dict[str, float]] = None
+                       ) -> Dict[str, np.ndarray]:
+        """{기기: I_i(V_term) − I_i(V_src)}. SMPS 가 둘 미만이면 빈 dict (결합할 상대가 없다).
+
+        V_term = V_src − Z(h)·Σ_i I_i, Z(h) = r_line + j·2π·60·h·l_line, 고정점 `n_iter` 회 (2회면 잠긴다, 가이드 §6.1).
+        내부는 fcm12 규약대로 **참전류**(measured=False)로 돌고, 델타는 계측 영역(measured=True)으로 낸다.
+        """
+        p = {d: float(v) for d, v in powers.items() if self.has(d) and v is not None and v > 0.5}
+        if len(p) < 2:
+            return {}
+        pb = tuple(sorted((d, _pbin(v)) for d, v in p.items()))
+        rb = tuple(sorted((d, -1 if (R is None or R.get(d) is None) else int(round(R[d] / R_BIN_OHM))) for d in p))
+        key = ("cpl", pb, rb, int(env_id), int(round(v1 / V_BIN_V)),
+               int(round(r_line / Z_BIN_OHM)), int(round(l_line / L_BIN_H)))
+        got = self._cpl_cache.get(key)
+        if got is not None:
+            self.hits += 1
+            return got
+        self.misses += 1
+        pq = {d: max(b * P_BIN_W, P_BIN_W) for d, b in pb}
+        rq = {d: (None if b < 0 else b * R_BIN_OHM) for d, b in rb}
+        vq = int(round(v1 / V_BIN_V)) * V_BIN_V
+        zr = int(round(r_line / Z_BIN_OHM)) * Z_BIN_OHM
+        zl = int(round(l_line / L_BIN_H)) * L_BIN_H
+        out = self._compute_coupling(pq, rel_env, vq, zr, zl, rq)
+        if len(self._cpl_cache) < self.max_cache:
+            self._cpl_cache[key] = out
+        return out
+
+    def _compute_coupling(self, powers: Dict[str, float], rel_env: np.ndarray, v1: float,
+                          r_line: float, l_line: float, R: Dict[str, Optional[float]]) -> Dict[str, np.ndarray]:
+        h = np.arange(1, H + 1)
+        Z = r_line + 1j * 2 * np.pi * F * h * l_line
+        V_src = np.asarray(rel_env, complex) * float(v1)
+        ms = self.models
         try:
-            combo, _ = forward_per_device(powers, self.models, src, Z)
-            if not combo:
-                raise RuntimeError("고정점 발산")
-            # 단독: 같은 소스, Z 없음 (다른 기기가 없을 때 이 기기가 보는 단자 전압)
-            solo = {}
+            def total_true(V):
+                s = np.zeros(H, complex)
+                for d, p in powers.items():
+                    I = ms[d].simulate_true(p, V, R=R.get(d)) if hasattr(ms[d], "simulate_true") else None
+                    if I is None:
+                        raise RuntimeError(d)
+                    s += I
+                return s
+            I_tot = total_true(V_src)
+            V_term = V_src.copy()
+            for _ in range(self.n_iter):
+                V_term = V_src - Z * I_tot
+                I_tot = total_true(V_term)
+            out = {}
             for d, p in powers.items():
-                one, _ = forward_per_device({d: p}, self.models, src, Z)
-                if not one:
-                    raise RuntimeError(f"단독 발산 {d}")
-                solo[d] = one[d]
+                a = self.current(d, p, V_term / float(v1), v1, R.get(d))
+                b = self.current(d, p, rel_env, v1, R.get(d))
+                if a is None or b is None:
+                    raise RuntimeError(d)
+                out[d] = (a - b).astype(np.complex64)
+            return out
         except Exception:
             self.failures += 1
             return {}
-        return {d: (combo[d] - solo[d]).astype(np.complex64) for d in powers}
 
     def stats(self) -> Dict[str, float]:
         n = self.hits + self.misses
         return {"hits": self.hits, "misses": self.misses, "failures": self.failures,
-                "hit_rate": (self.hits / n) if n else 0.0, "size": len(self._cache)}
+                "hit_rate": (self.hits / n) if n else 0.0,
+                "size": len(self._tex_cache) + len(self._cpl_cache)}
 
 
-# ── 전압 텍스처 ──────────────────────────────────────────────────────────────
-#: **①b 의 지배 축은 결합이 아니라 텍스처다** (12.185.22).
-#:
-#: 조합 녹화의 실측 단자 전압과 단독 녹화의 전압은 V1 의 0.87~1.03% 만큼 다른데,
-#: 그중 `Z·I_total` 이 설명하는 몫은 **0.05~0.08% 뿐이다 (1/12)**. Z·I 를 빼도 차가
-#: 0.89~1.02% 로 거의 그대로 남는다. 남는 것은 **세션이 다르다** 는 사실이다
-#: (단독 22:17~23:21, 조합 00:29~00:33; `REPLY_vtemplate_rc_2026-09-05.md` §3 이 같은 것을
-#: 텍스처가 녹화 시각으로 묶인다고 적었다).
-#:
-#: 그런데 그 0.9% 가 전류를 크게 바꾼다 — 도통각이 전압 왜곡에 초선형이라(12.185.16)
-#: h17+ 의 0.27% 가 h9~h15 에서 크기 14%·위상 20~37° 를 만든다. 그래서 12.185.12 의
-#: "[B] 3.5~8.3% 대 [C] 12.8~15.7%" 는 결합이 아니라 **텍스처가 낸 4배**였다.
-#:
-#: 결합과 같은 방식으로 더한다:  ΔI_i = I_i(다른 텍스처) − I_i(기준 텍스처)
-TEXTURE_STEMS: Tuple[str, ...] = (
-    # 22:19~22:22 무리
-    "raw_beam_projector_1", "raw_beam_projector_2", "raw_minipc_1", "raw_minipc_2",
-    # 23:19~23:21 무리
-    "raw_minipc_3", "raw_minipc_4", "raw_minipc_5", "raw_laptop_charger_4", "raw_laptop_charger_5",
-    # 00:29~00:33 무리 (조합 녹화)
-    "raw_beam_minipc_1", "raw_beam_charger_1", "raw_smps3_1",
-)
-#: 텍스처 델타의 기준. 이 소스에서의 전류가 "녹화 재생" 에 해당한다고 본다.
-TEXTURE_REF = DEFAULT_SOURCE
-
-
-class TextureModel:
-    """전압 텍스처가 바꾸는 전류 ΔI_i = I_i(텍스처 k) − I_i(기준 텍스처).
-
-    캐시 키는 (기기, 전력구간, 텍스처). 기기별로 독립이라 조합 폭발이 없다 —
-    `CouplingModel` 과 달리 기기 하나씩 계산한다.
-    """
-
-    def __init__(self, models: Optional[Dict[str, fcm.DeviceModel]] = None,
-                 stems: Sequence[str] = TEXTURE_STEMS, ref: str = TEXTURE_REF,
-                 p_bin_w: float = P_BIN_W):
-        self._models = models
-        self.stems = tuple(stems)
-        self.ref = ref
-        self.p_bin_w = float(p_bin_w)
-        self._src: Dict[str, np.ndarray] = {}
-        self._cache: Dict[tuple, np.ndarray] = {}
-        self.hits = 0
-        self.misses = 0
-
-    @property
-    def models(self) -> Dict[str, fcm.DeviceModel]:
-        if self._models is None:
-            self._models = fcm.load_models()
-        return self._models
-
-    def source(self, stem: str) -> np.ndarray:
-        if stem not in self._src:
-            self._src[stem] = fcm.source_from_raw(stem)
-        return self._src[stem]
-
-    def delta(self, device: str, p_ac: float, stem: str) -> Optional[np.ndarray]:
-        """(15,) complex ΔI. 기준 텍스처면 0, 모르는 기기면 None."""
-        if device not in SMPS_DEVICES or p_ac <= 0.5:
-            return None
-        if stem == self.ref:
-            return np.zeros(H, np.complex64)
-        key = (device, int(round(p_ac / self.p_bin_w)), stem)
-        got = self._cache.get(key)
-        if got is not None:
-            self.hits += 1
-            return got
-        self.misses += 1
-        p = max(round(p_ac / self.p_bin_w) * self.p_bin_w, self.p_bin_w)
-        m = self.models[device]
-        a = m.current(p, self.source(stem))
-        b = m.current(p, self.source(self.ref))
-        out = (np.zeros(H, np.complex64) if a is None or b is None
-               else (a - b).astype(np.complex64))
-        self._cache[key] = out
-        return out
-
-    def stats(self) -> Dict[str, float]:
-        n = self.hits + self.misses
-        return {"hits": self.hits, "misses": self.misses,
-                "hit_rate": (self.hits / n) if n else 0.0, "size": len(self._cache)}
+# ── 옛 이름 호환 (탐침용). 새 코드는 SmpsCircuit 을 쓴다 ─────────────────────
+TextureModel = SmpsCircuit
+CouplingModel = SmpsCircuit

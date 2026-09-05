@@ -87,9 +87,36 @@ def plot_appliance_states(
     if output_path is not None:
         out_p = Path(output_path)
         out_p.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(out_p, dpi=150, bbox_inches="tight")
+        savefig_retry(out_p, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return str(out_p)
 
     plt.close(fig)
     return None
+
+
+def savefig_retry(path, tries: int = 6, wait_s: float = 0.5, **kw) -> None:
+    """`plt.savefig` 를 잠깐 잠긴 파일에 대해 다시 시도한다.
+
+    2026-09-06 전처리·합성이 두 번 `OSError: [Errno 22] Invalid argument: ...png` 로 죽었다 — 갓 쓴 PNG 를
+    인덱서나 뷰어가 잡고 있는 순간에 다시 열려던 것이고, 몇 초 뒤엔 그냥 써졌다. 마지막 시도는 임시 이름으로
+    쓴 뒤 바꿔 끼운다.
+    """
+    import os
+    import time
+    import matplotlib.pyplot as plt
+    p = str(path)
+    for i in range(tries):
+        try:
+            plt.savefig(p, **kw)
+            return
+        except OSError as exc:
+            if i == tries - 1:
+                tmp = p + ".tmp.png"
+                plt.savefig(tmp, **kw)
+                try:
+                    os.replace(tmp, p)
+                except OSError:
+                    raise exc
+                return
+            time.sleep(wait_s * (i + 1))

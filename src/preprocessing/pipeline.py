@@ -61,8 +61,12 @@ class PreprocessingPipeline:
         # 보드 교정 상태가 틀린 채 녹화된 파일은 등록부가 정한 만큼 위상을 되돌린다 (12.184.3).
         # 그리고 2026-09-04 17:00 이전 파일은 LOW 교정 규약(0.44 -> 2.62°)에 맞춰 range==0 사이클을
         # −2.18°×h 돌린다 (12.184.13). 둘 다 read_raw_csv 와 같은 규칙이다.
-        from src.preprocessing.file_registry import low_cal_shift_deg, phase_fix_of
+        from src.preprocessing.file_registry import check_measurement_era, low_cal_shift_deg, phase_fix_of
         from src.preprocessing.raw_phasors import apply_phase_rotation
+        # 2026-09-06 계측기 교체: 옛 계측기(차동 ADC) 자료는 폐기됐다. 첫 host_time 으로 막는다 (READ_ME_FIRST.md).
+        check_measurement_era(
+            str(df_raw["host_time"].iloc[0]) if "host_time" in df_raw.columns and len(df_raw) else None,
+            path.name)
         _fix = phase_fix_of(stem)
         if _fix:
             df_raw = apply_phase_rotation(df_raw, _fix)
@@ -73,7 +77,8 @@ class PreprocessingPipeline:
 
         # 계측 보드 전원 방식에 따른 바닥 전력은 레지스트리가 정한다.
         df_clean, clean_stats = self.cleaner.clean_dataframe(
-            df_raw, custom_noise_floor=classification.noise_floor_w
+            df_raw, custom_noise_floor=classification.noise_floor_w,
+            detect_unplugged_tail=(classification.role == FileRole.DEVICE),   # 규칙 2: 단독 기기 녹화만
         )
 
         # Extract physical and harmonic features

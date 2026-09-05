@@ -55,8 +55,13 @@ def read_raw_csv(
     usecols: Optional[Sequence[str]] = None,
     session: Optional[int] = -1,
     phase_fix: bool = True,
+    drop_startup: bool = True,
 ) -> Tuple[pd.DataFrame, Dict]:
     """정본 순서로 읽는다. 반환 인덱스는 0..N-1 로 다시 매긴다.
+
+    `drop_startup` 이 True 면 `seq == 0` 프레임(첫 0.5초)을 버린다 — 계측기가 측정을 시작하는 단계라
+    pll 미락·전압 클립·vrms 2~3V 오차가 실린다 (사용자 관찰, 2026-09-06; `cleaner.STARTUP_SEQ_DROP`).
+    전처리(`DataCleaner`)와 같은 규칙이다 — 여기서 안 버리면 npz 와 시간축이 0.5초 어긋난다.
 
     `usecols` 를 줘도 `seq`/`cycle` 은 자동으로 포함한다 — 정렬에 필요하다.
     `phase_fix` 가 True 면 등록부 `PHASE_FIX_DEG_PER_ORDER` 의 위상 복원을 건다
@@ -85,6 +90,13 @@ def read_raw_csv(
             keep = [c for c in df.columns if c in set(usecols) | {"seq", "cycle"}]
             df = df[keep]
 
+    n_startup = 0
+    if drop_startup:
+        from src.preprocessing.cleaner import STARTUP_SEQ_DROP
+        m_start = df["seq"].to_numpy(np.int64) < STARTUP_SEQ_DROP
+        n_startup = int(m_start.sum())
+        if n_startup:
+            df = df.loc[~m_start].reset_index(drop=True)
     sid = assign_sessions(df["seq"].to_numpy(np.int64))
     df = df.assign(_session=sid)
     # 세션을 키에 넣어야 리셋 후 겹치는 seq 가 중복으로 오인되지 않는다.
@@ -116,6 +128,7 @@ def read_raw_csv(
         "seq_lo": int(s.min()), "seq_hi": int(s.max()),
         "phase_fix_deg_per_order": fix_deg,
         "low_cal_shift_deg_per_order": low_shift,      # range==0 사이클에 건 회전 (12.184.13)
+        "startup_rows_dropped": n_startup,             # seq 0 프레임 (규칙 3)
         # npz 의 행 i 는 `(seq - seq_lo)*30 + cycle` 이다 (이음매·결손이 없을 때).
         "contiguous": bool(len(df) == (int(s.max()) - int(s.min()) + 1) * CYCLES_PER_FRAME),
     }

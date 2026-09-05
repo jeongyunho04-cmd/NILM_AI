@@ -23,6 +23,10 @@ NILM NumPy 전용 바이너리 데이터셋 변환기 (.npz / .npy)
    - is_valid: (N,) int8 [1: 계측 신뢰 가능, 0: 품질 게이팅에 걸렸거나 보간된 값]
    - is_segment_seam: (N,) int8 [타임라인 이어붙인 자리 표시]
    - t_rel_s: (N,) float32 [60Hz 연속 상대 시간]
+   - seq / cycle: (N,) int32 / int8 [수신기 프레임 번호와 프레임 안 사이클. 사람 타임라인(seq 단위)과
+       맞출 때 `t = (seq − seq[0])·0.5` 의 근거. seq 0 프레임은 전처리가 버린다 (규칙 3)]
+   - is_unplugged: (N,) int8 [녹화 끝의 '플러그 뽑은 꼬리' = 계측계만 남은 구간 (규칙 2).
+       세그먼트 풀이 이 구간을 **그 파일의** 노이즈 기준으로 쓰고 대기 지문에서는 뺀다]
 """
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
@@ -119,6 +123,14 @@ class NumpyDatasetExporter:
             if "is_segment_seam" in df.columns else np.zeros(n_samples, dtype=np.int8)
         )
 
+        # 4b. 프레임 번호와 꼬리 표시 (규칙 2·3)
+        seq = (df["seq"].values.astype(np.int32) if "seq" in df.columns
+               else np.full(n_samples, -1, dtype=np.int32))
+        cycle = (df["cycle"].values.astype(np.int8) if "cycle" in df.columns
+                 else np.full(n_samples, -1, dtype=np.int8))
+        is_unplugged = (df["is_unplugged"].values.astype(np.int8) if "is_unplugged" in df.columns
+                        else np.zeros(n_samples, dtype=np.int8))
+
         # 5. 메타데이터 JSON 직렬화
         meta_dict = metadata or {}
         meta_dict.update({
@@ -134,6 +146,11 @@ class NumpyDatasetExporter:
         })
         if "noise_floor_w" in df.columns and n_samples:
             meta_dict.setdefault("noise_floor_w", float(df["noise_floor_w"].iloc[0]))
+        if "noise_floor_source" in df.columns and n_samples:
+            meta_dict.setdefault("noise_floor_source", str(df["noise_floor_source"].iloc[0]))
+        if n_samples:
+            meta_dict.setdefault("seq_first", int(seq[0]))
+            meta_dict.setdefault("unplugged_cycles", int(is_unplugged.sum()))
 
         return {
             "harmonics_ri": harmonics_ri,
@@ -148,6 +165,9 @@ class NumpyDatasetExporter:
             "is_valid": is_valid,
             "is_segment_seam": segment_seam,
             "t_rel_s": t_rel_s,
+            "seq": seq,
+            "cycle": cycle,
+            "is_unplugged": is_unplugged,
             "metadata_json": json.dumps(meta_dict, ensure_ascii=False),
         }
 

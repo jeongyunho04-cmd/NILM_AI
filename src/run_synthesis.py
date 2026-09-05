@@ -90,7 +90,8 @@ def plot_synthetic_scenario(sample: SyntheticLoadSample, title: str, output_path
     plt.tight_layout()
     out_p = Path(output_path)
     out_p.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(out_p, dpi=150, bbox_inches="tight")
+    from src.visualization.plot_labeled_data import savefig_retry
+    savefig_retry(out_p, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return str(out_p)
 
@@ -141,6 +142,15 @@ def run_full_synthesis(
     augmentor = DataAugmentor(duration_scale_range=(0.6, 2.2), power_scale_std=0.05)
     synthesizer = LoadSynthesizer(segment_pool=pool, grid_simulator=grid_sim, augmentor=augmentor)
     scenario_gen = ScenarioGenerator(synthesizer=synthesizer)
+    # 12.187: 회로 모델(v12g) 배선 — 텍스처 라이브러리와 델타 스위치 상태
+    try:
+        _lib = synthesizer.grid_sim.texture_library
+        _tx = '켬' if synthesizer.grid_sim.use_texture else '끔'
+        _cp = '켬' if synthesizer.grid_sim.use_coupling else '끔'
+        print('\n  [12.187] 전압 텍스처: ' + (_lib.describe() if _lib is not None else '끔')
+              + '  (텍스처 델타 ' + _tx + ', 결합 델타 ' + _cp + ')')
+    except Exception as _exc:  # noqa: BLE001
+        print('\n  [12.187] 전압 텍스처: 못 읽음 (' + str(_exc) + ')')
 
     print("\n" + "=" * 80)
     print("[NILM AI] Generating Benchmark Household Scenarios")

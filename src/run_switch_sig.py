@@ -44,28 +44,26 @@ from src import env_guard  # noqa: F401
 
 import numpy as np
 
+from src.preprocessing.file_registry import DEVICE_FILES, resolve_csv
 from src.preprocessing.raw_csv import read_raw_csv
 
 BLOCK = 30                      #: 0.5초 = seq 한 칸
 ORDERS = tuple(range(1, 16))
-#: 기기별 단독녹화. `_new` 는 **장소 B** 다 (12.155). 장소가 달라도 항등식으로 옮긴다.
-ISOLATED: Dict[str, List[str]] = {
-    "air_conditioner": ["air_conditioner"],
-    "beam_projector": ["beam_projector", "beam_projector_2", "beam_projector_3_fixed"],
-    "electiric_kettle": ["electiric_kettle", "electric_kettle_2_fixed",
-                         "electric_kettle_3_new"],
-    "fan": ["fan_1", "fan_2", "fan_3"],
-    "hair_dryer": ["hair_dryer_1", "hair_dryer_2", "hair_dryer_3"],
-    "hotplate": ["hotplate_1", "hotplate_2", "hotplate_3_fixed", "hotplate_4_new"],
-    "laptop_charger": ["laptop_charger_1", "laptop_charger_2",
-                       "laptop_charger_3_fixed", "laptop_charger_4_fixed"],
-    "minipc": ["minipc_1", "minipc_2", "minipc_3"],
-    "oven": ["oven", "oven_2", "oven_3_fixed"],
-}
+#: 기기별 단독녹화 — **등록부(DEVICE_FILES)에서 만든다** (2026-09-06, 옛 하드코딩 목록은 폐기된 자료였다).
+ISOLATED: Dict[str, List[str]] = {}
+for _stem, _spec in DEVICE_FILES.items():
+    ISOLATED.setdefault(_spec.appliance_type, []).append(_stem)
 
 
-def to_blocks(stem: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """(P, V, I) 를 0.5초 블록 중앙값으로. I 는 (n, 15) 복소.
+def _csv(stem: str) -> str:
+    p = resolve_csv(stem)
+    if p is None:
+        raise FileNotFoundError(f"data/ 에 {stem}(.cal2).csv 가 없다")
+    return str(p)
+
+
+def to_blocks(stem: str, return_lo: bool = False):
+    """(P, V, I) 를 0.5초 블록 중앙값으로. I 는 (n, 15) 복소. `return_lo` 면 첫 seq 도 준다.
 
     ⚠ **블록을 행 순서가 아니라 `seq` 로 색인한다.** 패킷이 빠진 파일이 있어
     (test_7 은 11개) 행으로 세면 시간축이 그만큼 **줄어든다** — 기존 라벨과
@@ -74,7 +72,7 @@ def to_blocks(stem: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     빠진 블록은 NaN 으로 두고 앞뒤에서 채운다.
     """
     cols = ["p_w", "vrms"] + [f"ih{h}" for h in ORDERS] + [f"ihdeg{h}" for h in ORDERS]
-    d, info = read_raw_csv(f"data/{stem}.csv", usecols=cols)
+    d, info = read_raw_csv(_csv(stem), usecols=cols)
     seq = d["seq"].to_numpy(np.int64)
     lo, hi = int(seq.min()), int(seq.max())
     nb = hi - lo + 1
@@ -101,7 +99,7 @@ def to_blocks(stem: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         + 1j * agg(d[f"ih{h}"].to_numpy(np.float64)
                    * np.sin(np.deg2rad(d[f"ihdeg{h}"].to_numpy(np.float64))))
         for h in ORDERS], 1)
-    return P, V, I
+    return (P, V, I, lo) if return_lo else (P, V, I)
 
 
 def to_cycles(stem: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -112,7 +110,7 @@ def to_cycles(stem: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     뭉쳐 섞인 계단이 되는데, 사람이 스위치를 두 개 누르는 간격은 그보다 훨씬 크다.
     """
     cols = ["p_w", "vrms"] + [f"ih{h}" for h in ORDERS] + [f"ihdeg{h}" for h in ORDERS]
-    d, _ = read_raw_csv(f"data/{stem}.csv", usecols=cols)
+    d, _ = read_raw_csv(_csv(stem), usecols=cols)
     seq = d["seq"].to_numpy(np.int64)
     cyc = d["cycle"].to_numpy(np.int64)
     idx = (seq - int(seq.min())) * BLOCK + cyc
@@ -479,7 +477,7 @@ def main() -> int:
         for st in stems:
             if want is not None and st not in want:
                 continue
-            if not Path(f"data/{st}.csv").exists():
+            if resolve_csv(st) is None:
                 continue
             P, V, I = to_blocks(st)
             ix = steps(P, a.min_dp, a.win, a.guard)

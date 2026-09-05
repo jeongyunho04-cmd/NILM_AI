@@ -12,6 +12,15 @@
 3. **전력 규약**: 인수 `p` 는 **교류 입력 전력**이다 (NILM 이 다루는 양). 시뮬의 `P` 는 직류 부하
    전력이라 3~5% 다르므로 안쪽에서 되풀이해 맞춘다 (`fit_raw` 와 같은 규약).
 
+⚠ 2026-09-06 계측기 교체
+---------------------
+`results/_circuit_raw_C.json` 의 파라미터와 `circuit_sim`(v3 토폴로지)은 **옛 계측기(차동 ADC) 원시**로
+맞춘 것이다 — 전압 짝수차 인공물·원시 위상 스큐 규약(−0.313 표본)이 전제에 들어 있다. 새 계측기로 다시
+맞춘 모델은 `circuit_model/circ12_<dev>.pkl` (v12g: 선로측 Cx + 정류 루프 + 포화 L + 선형 덧셈 G,
+잔차 2.1~4.5%) 이고 `load_models()` 의 **기본이 그것**이다 (`DeviceModel12`). 옛 json 은
+`load_models("results/_circuit_raw_C.json")` 로만 읽히며 경고를 낸다. `to_spectrum` 의 짝수차 소거는
+새 계측기에서도 무해하다 (전압 vh2/vh1 0.03%).
+
 Y 를 생성에 쓰지 마라
 ---------------------
 사용자 `fcm_check` 와 가이드 §5.2: V3 를 1% 만 흔들어도 `I ≈ J − Y·ΔV` 가 h9 에서 27%, h13 에서
@@ -33,7 +42,8 @@ from src.synthesis.circuit_sim import F, NPC, simulate, to_wave
 H = 15
 HFULL = 128                     #: 소스 전압 스펙트럼의 최고 차수 (원시 256표본/주기의 나이퀴스트)
 NCYC = 10                       #: 시뮬 주기 수 (8주기면 잠긴다)
-RAW_FIT_JSON = "results/_circuit_raw_C.json"
+RAW_FIT_JSON = "results/_circuit_raw_C.json"   #: (옛 계측기) 원시 적합 결과 — 참고용
+V12_DIR = "circuit_model"                       #: 새 계측기 v12g 모델 (`circ12_<dev>.pkl`)
 
 
 def odd_only(V: np.ndarray) -> np.ndarray:
@@ -151,17 +161,85 @@ class DeviceModel:
         return J, Y
 
 
-def load_models(path: str = RAW_FIT_JSON, key: str = "fit_fixrd") -> Dict[str, DeviceModel]:
-    """원시 적합 결과에서 기기 모델을 읽는다.
+class DeviceModel12:
+    """새 계측기 v12g 회로 모델(`circuit_model/fcm12.FCM`)의 어댑터. `DeviceModel.current()` 와 같은 서명.
 
-    기본은 `fit_fixrd` — **rd 를 물리값 0.3Ω 에 고정한 정본**이다 (12.185.19). 자유 적합은
-    R 과 rd 가 도통 구간에서 직렬로만 보여 맞바뀌고(미니PC R 2.71 / rd 6.67Ω), rd 6.67Ω 은
-    실리콘 정류 다이오드의 물리 범위(0.1~0.5Ω) 밖이다. 고정해도 훈련·LOO 가 그대로다.
-    `key`: fit_fixrd(정본) / fit_free / fit_fixcx / fit_fixboth.
+    `V` 는 `to_spectrum` 이 받는 것 아무거나 — 그중 **h1..h15 만** 시뮬에 들어간다 (v12 는 15차 소스가
+    규약이다; README_v12 §규약 3). 반환은 계측 영역(RC τ=60µs 적용) 전류 h1..h15, 펌웨어 위상 관례.
+    `p_ac` 는 기기 총전력(배경 제외) — v12 는 AC 전력을 그대로 받는다 (fit12 가 `mean(v·i)` 로 맞췄다).
     """
-    import json
-    d = json.load(open(path, encoding="utf-8"))["devices"]
-    return {k: DeviceModel(k, tuple(v[key]["par5"])) for k, v in d.items()}
+
+    def __init__(self, name: str, fcm12_model):
+        self.name = name
+        self.m = fcm12_model
+        self.par5 = None                   # v3 파라미터가 아니다 — `params` 를 봐라
+        self.params = tuple(fcm12_model.params)   # (C, R, L0, Isat, Cx, rd, G)
+
+    def current(self, p_ac: float, V, n_match: int = 3, ncyc: int = NCYC,
+                R: Optional[float] = None, include_bg: bool = False) -> Optional[np.ndarray]:
+        X = to_spectrum(V)
+        V15 = X[1:H + 1]
+        I = self.m.simulate(float(p_ac), V15, measured=True, R=R, include_bg=include_bg)
+        return None if I is None else np.asarray(I, complex)
+
+    def sample_R(self, rng):
+        """세션 상태 R (NTC 온도) 를 실측 범위에서 뽑는다 — 생성기용 (README_v12 "R 은 상태다")."""
+        return self.m.sample_R(rng)
+
+    def simulate_true(self, p_ac: float, V15, R: Optional[float] = None) -> Optional[np.ndarray]:
+        """회로 **참전류** (계측 RC 를 걸기 전) h1..h15 — 결합 고정점 안에서 V_term 을 갱신할 때 쓴다 (fcm12.forward 규약).
+        `V15` 는 (15,) complex 절대 전압, h배 위상 관례 (∠V1 이 0 이 아니어도 그대로 넣는다)."""
+        I = self.m.simulate(float(p_ac), np.asarray(V15, complex), measured=False, R=R)
+        return None if I is None else np.asarray(I, complex)
+
+
+def load_models_v12(path: str = V12_DIR) -> Dict[str, DeviceModel12]:
+    """`circuit_model/circ12_<dev>.pkl` 전부. 없으면 빈 dict 가 아니라 실패한다 (조용히 옛 모델로 가지 않게)."""
+    import glob
+    import os
+    from circuit_model.fcm12 import FCM
+    files = sorted(glob.glob(os.path.join(path, "circ12_*.pkl")))
+    if not files:
+        raise FileNotFoundError(f"{path} 에 circ12_*.pkl 이 없다 — circuit_model/sp_model_v12.zip 을 풀어라")
+    out = {}
+    for f in files:
+        m = FCM.from_pickle(f)
+        out[m.device] = DeviceModel12(m.device, m)
+    return out
+
+
+def load_models(path: str = V12_DIR, key: str = "fit_fixrd") -> Dict[str, object]:
+    """기기 회로 모델. **기본은 새 계측기 v12g** (`circuit_model/`, 2026-09-06).
+
+    `path` 가 디렉터리면 v12 pkl 을, `.json` 이면 옛 계측기 원시 적합(`results/_circuit_raw_C.json`)을 읽는다.
+    옛 것의 `key`: fit_fixrd(당시 정본, rd 0.3Ω 고정) / fit_free / fit_fixcx / fit_fixboth — 옛 계측기
+    (차동 ADC) 자료라 **재검토 대상**이다 (READ_ME_FIRST.md). 경고를 내고 읽어 준다.
+    """
+    if str(path).lower().endswith(".json"):
+        import json
+        import warnings
+        warnings.warn(f"{path}: 옛 계측기(차동 ADC) 원시로 맞춘 회로 모델이다 — 2026-09-06 이후 정본은 "
+                      f"circuit_model/circ12_*.pkl (load_models() 기본)", RuntimeWarning, stacklevel=2)
+        d = json.load(open(path, encoding="utf-8"))["devices"]
+        return {k: DeviceModel(k, tuple(v[key]["par5"])) for k, v in d.items()}
+    return load_models_v12(path)
+
+
+def source_from_raw12(path: str, tau: float = 60e-6, npc: int = 256, h_full: int = HFULL) -> np.ndarray:
+    """새 계측기 원시(단일 입력 포맷, 수신기 파생열 `v_v`) -> 생성기용 소스 전압 스펙트럼.
+
+    주기 평균 파형 -> 역RC(τ, `circuit_model.circuit12.rc_periodic`) -> `to_spectrum`. 옛 `source_from_raw`
+    (반파 대칭화 + 옛 RC 규약) 의 v12 판이다. 대칭화는 하지 않는다 — 새 계측기 전압에 짝수차 인공물이 없다.
+    """
+    import pandas as pd
+    from circuit_model.circuit12 import rc_periodic
+    d = pd.read_csv(path, usecols=["v_v"])
+    nc = len(d) // npc
+    if nc < 1:
+        raise ValueError(f"{path}: 한 주기({npc}표본)도 안 된다")
+    v = d["v_v"].to_numpy(np.float64)[:nc * npc].reshape(nc, npc).mean(0)
+    vt = rc_periodic(v, 1.0 / (F * npc), tau, inverse=True) if tau else v
+    return to_spectrum(vt, h_full)
 
 
 # ── 결합 생성기 ──────────────────────────────────────────────────────────────

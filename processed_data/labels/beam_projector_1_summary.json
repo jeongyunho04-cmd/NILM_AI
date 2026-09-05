@@ -1,0 +1,73 @@
+{
+  "raw_rows": 48480,
+  "cleaned_rows": 48390,
+  "duration_s": 806.5,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 60,
+  "invalid_samples_dropped": 60,
+  "invalid_samples_interpolated": 0,
+  "interpolated_cycles": 0,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "startup_frames_dropped": 30,
+  "noise_floor_registry_w": 1.6,
+  "noise_floor_applied_w": 1.463805,
+  "noise_floor_source": "trailing_unplugged",
+  "trailing_noise": {
+    "n_cycles": 1376,
+    "start_t_rel_s": 783.5666666666667,
+    "p_w": 1.463805,
+    "i1_ma": 6.3745,
+    "i1_deg": -1.2689990722728446,
+    "vrms": 229.988
+  },
+  "source_file": "beam_projector_1.cal2.csv",
+  "file_role": "device",
+  "appliance_type": "beam_projector",
+  "load_class": "smps",
+  "classification_reason": "등록된 단일 가전 'beam_projector'",
+  "output_file": null,
+  "feature_columns_count": 140,
+  "v_ref_v": 230.96,
+  "p_mean": 33.98,
+  "p_max": 50.88,
+  "irms_mean": 0.2651,
+  "korean_name": "빔프로젝터",
+  "total_samples": 48390,
+  "on_percentage": 76.95,
+  "state_distribution": {
+    "OFF_STANDBY": {
+      "state_id": 0,
+      "description": "대기 전원 상태",
+      "count": 11154,
+      "percentage": 23.05,
+      "duration_min": 3.1
+    },
+    "WARMUP_COOLDOWN": {
+      "state_id": 1,
+      "description": "부팅 예열 또는 전원 끈 후 팬 냉각",
+      "count": 2841,
+      "percentage": 5.87,
+      "duration_min": 0.79
+    },
+    "LAMP_ON": {
+      "state_id": 2,
+      "description": "램프 점등 및 정상 화면 투사",
+      "count": 34395,
+      "percentage": 71.08,
+      "duration_min": 9.55
+    }
+  },
+  "events_summary": {
+    "total_events": 35,
+    "on_events": 11,
+    "off_events": 11,
+    "mode_change_events": 13,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\beam_projector_1_annotated.csv",
+  "npz_file": "processed_data\\npz\\beam_projector_1.npz",
+  "events_json": "processed_data\\labels\\beam_projector_1_events.json"
+}

@@ -209,6 +209,15 @@ def load_raw(stem: str, data_dir: str = "data", ncyc_sim: int = NCYC_SIM,
     import pandas as pd
     from src.preprocessing.file_registry import RAW_RANGE_MIXED, RAW_SKEW_SAMP_LOW
 
+    # ⚠ 2026-09-06: 이 로더는 **옛 계측기(차동 ADC) 원시 포맷** 전용이다 (`high,v_r1,low,v_r2`, LSB 402.8µV,
+    #   전압 반파 대칭화, 원시 위상 스큐 −0.313 표본). 새 계측기 원시(단일 입력 `low,v,high,bias`)는
+    #   `circuit_model/fit12.py` 로 맞추고 `fcm.source_from_raw12` 로 소스를 만든다. 여기서는 거부한다.
+    _cols = set(pd.read_csv(f"{data_dir}/{stem}.csv", nrows=0).columns)
+    if "bias" in _cols or "v_r1" not in _cols:
+        raise ValueError(
+            f"{stem}: 새 계측기(단일 입력 ADC) 원시 포맷이다 — fit_raw 는 옛 차동 ADC 포맷 전용. "
+            "circuit_model/fit12.py 와 fcm.source_from_raw12 를 써라 (READ_ME_FIRST.md)")
+
     if i_skew_samp is None:
         # 펌웨어 위상 교정은 2Hz 블록에만 걸린다 — 원시에는 채널 어긋남이 남아 있다.
         # 장소 C 포트 원시로 직접 쟀고(∠I₁−∠V₁ = +2.87°) 부호·기전이 확인됐다 (12.185.25).

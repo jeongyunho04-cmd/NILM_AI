@@ -18,6 +18,14 @@ STM32 및 ESP-01S에서 60Hz 주기로 수신된 원본 전력 CSV 데이터를 
    - 짧은 결측/무효 구간은 선형 보간, 긴 구간은 세그먼트를 끊어 버린다.
 5. 물리적 글리치 및 이상치 필터링 (filter_glitches_and_spikes).
 6. 센서 노이즈 바닥 차감 및 기기 순수 전력 보정 (calibrate_and_zero).
+
+[2026-09-06 녹화 규약 — MEASUREMENT_RULES.md 규칙 2·3]
+7. seq 0 프레임 배제 (drop_startup_frames): 계측기가 측정을 시작하는 첫 0.5초는 pll 미락·전압 클립·
+   vrms 2~3V 오차가 실린다. 보간하지 않고 버린다. 세션 앞머리의 무효 구간도 버린다 (앞에 기댈 값이 없다).
+8. 플러그 뽑은 꼬리 검출 (detect_trailing_unplugged): 단독 녹화는 끝내기 전에 기기 플러그를 뽑고 ~10초를
+   더 찍는다. 그 꼬리(계측계만 남은 구간)를 `is_unplugged=1` 로 표시하고 그 중앙값을 **이 파일의** 노이즈
+   바닥으로 쓴다 — 계측계 자체 전류가 세션마다 1.3~1.6W / 6.2~7.5mA / −21~+13° 로 다르다. 꼬리가 없는
+   파일(충전기_1: 충전 중 종료, 오븐_1: 대기 상태로 종료)은 등록부 상수로 돌아간다 (`noise_floor_source`).
 """
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
@@ -29,6 +37,20 @@ REORDER_TOLERANCE_FRAMES = 32
 
 # 계통 전압으로 물리적으로 성립 가능한 범위. 벗어나면 계측 실패로 간주한다.
 VALID_VRMS_RANGE = (150.0, 280.0)
+
+#: 이 값보다 작은 seq 프레임은 버린다 (= seq 0). 계측기 시작 단계 (규칙 3). 세션마다 적용된다.
+STARTUP_SEQ_DROP = 1
+
+# ── 플러그 뽑은 꼬리 (규칙 2) ─────────────────────────────────────────────
+#: 꼬리로 인정할 최소 길이 (사이클). 규약은 ~10초, 실측 최소 12초 — 5초면 넉넉하다.
+UNPLUGGED_MIN_CYCLES = 300
+#: 계측계만 남은 구간의 판정: P <= 등록부 바닥 + 이 값 (W), |I1| <= 기준 × 배수.
+#: 실측 꼬리 1.33~1.60W / 6.2~7.5mA. 걸러야 할 것: 프로젝터 대기 3.0W/27mA, 미니PC 3.4W/31mA,
+#: 오븐 대기 2.5W/14.4mA, 드라이기 꽂힘 1.64W/11.5mA (X-cap). 핫플·포트·선풍기의 꽂힌 OFF 는
+#: 계측계와 같은 값이라 구분이 안 되지만 그 경우 어느 쪽을 써도 같다.
+UNPLUGGED_P_MARGIN_W = 0.6
+UNPLUGGED_I1_FACTOR = 1.3
+UNPLUGGED_I1_REF_A = {"external": 0.0075, "selfpower": 0.0110}   # noise_* 파일 실측 |I1|
 
 
 class DataCleaner:
@@ -54,8 +76,12 @@ class DataCleaner:
         self,
         df: pd.DataFrame,
         custom_noise_floor: Optional[float] = None,
+        detect_unplugged_tail: bool = True,
     ) -> Tuple[pd.DataFrame, Dict[str, Union[int, float]]]:
         """단일 데이터프레임에 대한 전처리 및 정제 파이프라인 전체를 실행합니다.
+
+        `detect_unplugged_tail`: 단독 기기 녹화만 True (규칙 2). 노이즈 파일은 파일 전체가 계측계라 끄고,
+        복합 녹화는 꼬리 규약이 없다.
 
         Returns:
             cleaned_df: 60Hz 연속 시간축과 결측치 없이 정제된 DataFrame
@@ -66,6 +92,9 @@ class DataCleaner:
 
         # 1단계: 보드 리셋으로 seq 가 되감긴 지점을 찾아 세션을 나눈다 (정렬보다 먼저!)
         df_sessioned, session_count = self.assign_sessions(df)
+
+        # 1b단계: seq 0 프레임(계측기 시작 단계)을 버린다 (규칙 3)
+        df_sessioned, startup_dropped = self.drop_startup_frames(df_sessioned)
 
         # 2단계: 세션 안에서 seq/cycle 기준 정렬 및 중복 패킷 제거
         df_sorted, dup_count = self.sort_and_deduplicate(df_sessioned)
@@ -79,8 +108,19 @@ class DataCleaner:
         # 5단계: 물리적으로 불가능한 순간 음수 전력 및 스위치 아크 노이즈 제거
         df_filtered, filter_stats = self.filter_glitches_and_spikes(df_grid)
 
+        # 5b단계: 녹화 끝의 '플러그 뽑은 꼬리' (규칙 2). 있으면 이 파일의 바닥이 된다.
+        if detect_unplugged_tail:
+            df_filtered, tail = self.detect_trailing_unplugged(df_filtered, noise_floor_w=noise_p)
+        else:
+            df_filtered = df_filtered.copy()
+            df_filtered["is_unplugged"] = np.zeros(len(df_filtered), dtype=np.int8)
+            tail = None
+        floor_applied = float(tail["p_w"]) if tail is not None else noise_p
+        floor_source = "trailing_unplugged" if tail is not None else "registry"
+
         # 6단계: 센서 자체 소비 전력 바닥값 차감하여 순수 기기 소비 전력(p_target_w) 생성
-        df_calibrated = self.calibrate_and_zero(df_filtered, noise_floor_w=noise_p)
+        df_calibrated = self.calibrate_and_zero(df_filtered, noise_floor_w=floor_applied,
+                                                source=floor_source)
 
         stats = {
             "raw_rows": raw_rows,
@@ -95,7 +135,11 @@ class DataCleaner:
             "timeline_segments": interp_stats["segments"],
             "glitch_spikes_fixed": filter_stats["glitches_fixed"],
             "negative_power_clamped": filter_stats["negative_p_clamped"],
-            "noise_floor_applied_w": noise_p,
+            "startup_frames_dropped": startup_dropped,
+            "noise_floor_registry_w": noise_p,
+            "noise_floor_applied_w": floor_applied,
+            "noise_floor_source": floor_source,
+            "trailing_noise": tail,
         }
 
         return df_calibrated, stats
@@ -131,6 +175,21 @@ class DataCleaner:
         out = df.copy()
         out["session_id"] = session_id
         return out, int(session_id.max()) + 1
+
+    # ── 1b단계: 시작 프레임 폐기 ───────────────────────────────────────────
+    def drop_startup_frames(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+        """`seq < STARTUP_SEQ_DROP`(= seq 0) 행을 버린다. 리셋으로 seq 가 되감긴 세션마다 걸린다.
+
+        실측(2026-09-06, 13파일): seq 0 은 pll_locked=0 이 30사이클, 전압 클립 창 1개, vrms 가 다음
+        프레임과 2~3V 다르다. 보간으로 메우면 그 값이 첫 0.5초를 지어내므로 **버린다**.
+        """
+        if len(df) == 0 or "seq" not in df.columns:
+            return df, 0
+        m = df["seq"].values.astype(np.int64) < STARTUP_SEQ_DROP
+        n = int(m.sum())
+        if n == 0:
+            return df, 0
+        return df.loc[~m].reset_index(drop=True), n
 
     # ── 2단계: 정렬 및 중복 제거 ─────────────────────────────────────────────
     def sort_and_deduplicate(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
@@ -191,6 +250,8 @@ class DataCleaner:
         for run in runs:
             if len(run) > max_run:
                 drop_mask[run] = True   # 너무 길다 - 버리고 타임라인을 끊는다
+            elif run[0] == 0:
+                drop_mask[run] = True   # 앞머리 - 기댈 값이 없어 보간이 아니라 날조가 된다 (규칙 3)
             else:
                 interp_mask[run] = True  # 짧다 - 보간으로 메운다
 
@@ -353,12 +414,61 @@ class DataCleaner:
 
         return df_clean, {"negative_p_clamped": neg_count, "glitches_fixed": spike_count}
 
+    # ── 5b단계: 플러그 뽑은 꼬리 ───────────────────────────────────────────
+    def detect_trailing_unplugged(
+        self, df: pd.DataFrame, noise_floor_w: float,
+    ) -> Tuple[pd.DataFrame, Optional[Dict[str, float]]]:
+        """녹화 **끝**에서 계측계만 남은 구간(기기 플러그를 뽑은 뒤)을 찾아 `is_unplugged` 로 표시한다.
+
+        판정: 끝에서부터 `p_w <= 바닥 + UNPLUGGED_P_MARGIN_W` 이고 `ih1 <= 기준 |I1| × UNPLUGGED_I1_FACTOR`
+        인 행이 이어지는 동안. 무효 표본은 조건을 깨지 않고 지나간다. 유효 표본이 UNPLUGGED_MIN_CYCLES
+        미만이거나 **파일 전체**가 조건을 만족하면(노이즈 파일) 꼬리로 보지 않는다.
+        반환 stats: n_cycles, start_t_rel_s, p_w(중앙), i1_ma, i1_deg(원형 평균), vrms.
+        """
+        out = df.copy()
+        n = len(out)
+        out["is_unplugged"] = np.zeros(n, dtype=np.int8)
+        if n == 0 or "ih1" not in out.columns:
+            return out, None
+        mode = "selfpower" if noise_floor_w > 2.0 else "external"
+        i1_ref = UNPLUGGED_I1_REF_A[mode]
+        p = pd.to_numeric(out["p_w"], errors="coerce").fillna(np.inf).values
+        i1 = pd.to_numeric(out["ih1"], errors="coerce").fillna(np.inf).values
+        valid = (out["is_valid"].values == 1) if "is_valid" in out.columns else np.ones(n, dtype=bool)
+        ok = (p <= noise_floor_w + UNPLUGGED_P_MARGIN_W) & (i1 <= i1_ref * UNPLUGGED_I1_FACTOR)
+        k = n
+        while k > 0 and (ok[k - 1] or not valid[k - 1]):
+            k -= 1
+        if k == 0:
+            return out, None                         # 파일 전체가 계측계뿐 - 꼬리가 아니라 노이즈 파일
+        tail_valid = np.arange(k, n)[valid[k:]]
+        if len(tail_valid) < UNPLUGGED_MIN_CYCLES:
+            return out, None
+        out.loc[out.index[k:], "is_unplugged"] = np.int8(1)
+        deg = np.deg2rad(pd.to_numeric(out["ihdeg1"], errors="coerce").values[tail_valid]) \
+            if "ihdeg1" in out.columns else np.zeros(len(tail_valid))
+        z = np.exp(1j * deg[np.isfinite(deg)])
+        stats = {
+            "n_cycles": int(len(tail_valid)),
+            "start_t_rel_s": float(out["t_rel_s"].values[k]) if "t_rel_s" in out.columns else None,
+            "p_w": float(np.median(p[tail_valid])),
+            "i1_ma": float(1e3 * np.median(i1[tail_valid])),
+            "i1_deg": float(np.degrees(np.angle(z.mean()))) if len(z) else 0.0,
+            "vrms": float(np.median(out["vrms"].values[tail_valid])) if "vrms" in out.columns else None,
+        }
+        return out, stats
+
     # ── 6단계: 노이즈 바닥 차감 ─────────────────────────────────────────────
-    def calibrate_and_zero(self, df: pd.DataFrame, noise_floor_w: float) -> pd.DataFrame:
-        """계측 센서 자체 소비 전력 바닥값을 차감해 순수 기기 유효 전력(p_target_w)을 산출합니다."""
+    def calibrate_and_zero(self, df: pd.DataFrame, noise_floor_w: float,
+                           source: str = "registry") -> pd.DataFrame:
+        """계측 센서 자체 소비 전력 바닥값을 차감해 순수 기기 유효 전력(p_target_w)을 산출합니다.
+
+        `noise_floor_w` 는 그 파일의 '플러그 뽑은 꼬리' 중앙값(있으면)이거나 등록부 상수다. 출처를 열에 남긴다.
+        """
         df_cal = df.copy()
         df_cal["p_target_w"] = np.maximum(0.0, df_cal["p_w"] - noise_floor_w)
         # 이 데이터에 적용된 바닥값을 남겨 두어야 합성 단계에서
         # 보드 자체 소비를 기기마다 중복으로 더하는 실수를 피할 수 있다.
         df_cal["noise_floor_w"] = float(noise_floor_w)
+        df_cal["noise_floor_source"] = str(source)
         return df_cal

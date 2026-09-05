@@ -39,6 +39,8 @@ SAMPLING_HZ = 60.0
 
 #: 사람이 스위치를 누르며 적은 라벨만 지도에 쓴다 (`_label_provenance_levels`).
 HUMAN_PROVENANCE = "human_switching_log"
+#: 받아들이는 출처. 2026-09-06 부터 라벨은 `run_write_labels` 의 정밀화본 하나뿐이다.
+HUMAN_PROVENANCES = ("human_switching_log", "human_switching_log_signal_refined")
 SMPS_APPLIANCES = ("beam_projector", "laptop_charger", "minipc")
 
 #: 지도에 쓰는 사람 라벨 파일 — **SMPS 3종이 들어 있는 다섯 개만**.
@@ -49,6 +51,9 @@ SMPS_APPLIANCES = ("beam_projector", "laptop_charger", "minipc")
 #: 들어간다. 그 파일까지 지도하면 대조가 죽는다. 실제로 열어 보면 scope=smps
 #: 에서도 두 파일에 846 개 셀이 붙는데 전부 OFF 라벨이라 '유령을 지워라' 라는
 #: 강한 감독이 된다 — 대조가 오히려 가장 많이 움직인다.
+#: ⚠ 2026-09-06: 아래 두 목록은 옛 계측기 복합 녹화(삭제)의 것이다. 새 복합 녹화(`test_1`)는 아직 사람
+#:   스위치 로그가 없어 `real_events.json` 이 비어 있다 — 로그가 오면 여기와 대조 목록을 다시 채운다.
+#:   없는 stem 은 `_build_human_on` 이 그냥 건너뛰므로 지금은 무해하다.
 HUMAN_ON_DEFAULT_STEMS = ("test_5", "test_6", "test_7", "test_8", "test_13")
 
 #: 대조로 남겨야 하는 파일. 여기에 지도가 붙으면 경고한다.
@@ -262,7 +267,7 @@ class RealWindows:
             if spec is None:
                 continue
             # **사람 로그만 쓴다.** ai_inferred 는 모델이 만든 것이라 자기지도가 된다.
-            if spec.get("_label_provenance") != HUMAN_PROVENANCE:
+            if spec.get("_label_provenance") not in HUMAN_PROVENANCES:
                 continue
             if allow is not None and stem not in allow:
                 continue

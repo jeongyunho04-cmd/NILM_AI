@@ -31,8 +31,13 @@ Needleman-Wunsch. 사람 항목을 건너뛰는 벌점은 크고(기록한 것�
 
 쓰는 법
 ------
-    python -X utf8 -m src.run_refine_labels --stems test_5          # 자 검증
+    python -X utf8 -m src.run_switch_sig                                   # 전이 지문 (단독 녹화에서)
     python -X utf8 -m src.run_refine_labels --all --out results/refined_labels.json
+    python -X utf8 -m src.run_write_labels --refined results/refined_labels.json
+
+2026-09-06: 타임라인은 `user_timeline.txt`(--timeline), 시각 오차 ±3초(--max-dt 3.5), `seq_lo` 는
+자료에서 직접(첫 seq, seq 0 은 버린다 — 규칙 3). `seq0 X 켬` 처럼 시작 프레임 이전의 켬은
+'시작부터 켜짐'(already_on) 이다. MEASUREMENT_RULES.md 규칙 4.
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -184,6 +189,12 @@ def cost_device(u, dp: float, v: float, app: str, ref: Dict,
     return best, c_p
 
 
+#: 스위치(켬/끔) 사건이 집을 수 있는 |ΔP(기기)| 의 상한 [W]. 오븐의 히터(±1100W)는 서모스탯이 저 혼자
+#: 끊고 붙이는 것이라 사람의 켬/끔 이 아니다 — 사람의 스위치는 제어보드·팬·조명(≈14W) 갈래에만 나타난다.
+#: 2026-09-06 test_1 에서 `오븐 끔`(195초)이 191.3초의 히터 −1100W(+핫플 펄스) 계단을 집었다. 진짜 스위치는
+#: 198.0초의 −13W 다 (핫플 펄스 사이 바닥에서만 보인다 -> `rescue_envelope`).
+SWITCH_DP_MAX_W: Dict[str, float] = {"oven": 100.0}
+
 #: 부류 — 고조파로 갈리는 단위. SMPS 3종은 이 안에서 안 갈린다.
 CLASS = {"beam_projector": "smps", "laptop_charger": "smps", "minipc": "smps",
          "air_conditioner": "ac", "fan": "fan",
@@ -206,7 +217,9 @@ def dp_device(s: Dict, app: str, ref: Dict) -> Tuple[float, str]:
     저항 부하는 반대로 총전력 계단이 곧 제 몫이라 그대로 쓴다.
     """
     cls = CLASS.get(app, "res")
-    if cls == "res" or s["u"] is None or s["u"].get("h3") is None:
+    # h3 로 되돌리는 것은 h3 가 지배적인 부류(SMPS·에어컨)뿐이다. 선풍기(|u3| 0.08)의 h3 는 SMPS h3 와 벡터로
+    # 섞여 크기가 줄 수도 있어 부호가 뒤집힌다 (2026-09-06 test_2 선풍기 켬 306초: |I3| 297->292mA -> '꺼짐' 으로 오판).
+    if cls not in ("smps", "ac") or s["u"] is None or s["u"].get("h3") is None:
         return s["dp_w"], "total"
     # 갈래 중 |ΔP| 가 가장 가까운 것의 u₃ 를 쓴다
     m3 = float(ref[app]["branches"][0].get("u3", 0.9)) if app in ref else 0.9
@@ -238,7 +251,7 @@ def detect(stem: str, min_dp: float, K: int, g: int,
       전이를 같이 지워서 `핫플 꺼짐` 의 부호가 뒤집혔다. 리플과 듀티를 지속성만으로
       가르지 못한다 — 미결로 남긴다.
     """
-    Pb, Vb, Ib = to_blocks(stem)
+    Pb, Vb, Ib, lo = to_blocks(stem, return_lo=True)
     cand = steps_multi(Pb, Ib, min_dp, min_di3, K, g)
     Pc, Vc, Ic = to_cycles(stem)
     n = len(Pc)
@@ -271,7 +284,7 @@ def detect(stem: str, min_dp: float, K: int, g: int,
     tr = measure(Pc, Vc, Ic, ed, W=12, G=6, wmax=60, ed_p=ep, ed_3=e3)
     for t in tr:
         t["u"] = u_of(t["di_re"], t["di_im"])
-    return tr, Pc, Vc
+    return tr, Pc, Vc, lo
 
 
 def pair_cost(e: Dict, s: Dict, seq_lo: int, ref: Dict,
@@ -286,11 +299,14 @@ def pair_cost(e: Dict, s: Dict, seq_lo: int, ref: Dict,
         pol = 8.0
     elif e["kind"] == "off" and dpd > 0:
         pol = 8.0
+    lim = SWITCH_DP_MAX_W.get(e["appliance"])
+    if lim is not None and e["kind"] in ("on", "off") and abs(dpd) > lim:
+        pol += 20.0                                   # 히터 갈래는 스위치가 아니다
     return 1.5 * cu + 2.0 * cp + w_time * dt + pol, cu, cp, dt
 
 
 def assign(tl: List[Dict], det: List[Dict], seq_lo: int, ref: Dict,
-           max_dt_s: float = 7.0, max_cost: float = 9.0):
+           max_dt_s: float = 3.5, max_cost: float = 9.0):
     """**사람 항목마다** 그 자리 근방에서 그 기기다운 계단을 고른다.
 
     ⚠ 창은 **±7초**다. 사람 기록의 시각 오차가 중앙 1초 / p90 4~6초라 그 안에 다
@@ -332,6 +348,81 @@ def assign(tl: List[Dict], det: List[Dict], seq_lo: int, ref: Dict,
     return out, bad
 
 
+def _rescue_entry(t_s: float, dp: float, v: float) -> Dict:
+    """구제로 만든 계단을 `measure()` 산출과 같은 꼴로. 고조파는 항등식 Re(ΔI₁)=ΔP/V 만 채운다."""
+    di_re = [dp / max(v, 1.0)] + [0.0] * 14
+    return {"t_block": t_s / 0.5, "dp_w": float(dp), "v_rms": float(v),
+            "di_re": di_re, "di_im": [0.0] * 15, "i3_before": 0.0, "i3_after": 0.0,
+            "u": {"h1": None, "h3": None}, "_rescue": True}
+
+
+def rescue_pulses(e: Dict, Pc: np.ndarray, Vc: np.ndarray, seq_lo: int, max_dt_s: float,
+                  min_pulse_w: float = 200.0, base_s: float = 6.0) -> Optional[Dict]:
+    """릴레이 듀티 부하(핫플)의 켬/끔 — **짧은 펄스**는 2Hz 계단 검출이 못 본다 (0.5초 펄스, 2초 주기).
+
+    켬 = 창 안에서 국소 바닥보다 `min_pulse_w` 이상 솟은 **첫 펄스의 시작**, 끔 = **마지막 펄스의 끝**.
+    바닥은 켬이면 그 앞 `base_s`, 끔이면 그 뒤 `base_s` 의 중앙값. 2026-09-06 test_1 핫플 켬(421초 -> 424.5),
+    끔(720초 -> 720.5) 이 이것으로 잡혔다.
+    """
+    t0 = (e["seq"] - seq_lo) * 0.5
+    n = len(Pc)
+    # 릴레이는 다이얼을 돌린 뒤 잠깐 있다 붙는다 — 켬은 뒤로, 끔은 앞으로 `relay_s` 만큼 더 본다.
+    # (2026-09-06 test_1: 사람 421초, 첫 펄스 424.5초 = +3.5초. 사람 오차 ±3초 + 릴레이)
+    relay_s = 2.0
+    lo = max(0, int((t0 - max_dt_s - (relay_s if e["kind"] == "off" else 0.0)) * 60))
+    hi = min(n, int((t0 + max_dt_s + (relay_s if e["kind"] == "on" else 0.0)) * 60) + 1)
+    if hi - lo < 30:
+        return None
+    if e["kind"] == "on":
+        base = float(np.median(Pc[max(0, lo - int(base_s * 60)):lo])) if lo > 30 else float(np.median(Pc[lo:lo + 30]))
+        hot = np.flatnonzero(Pc[lo:hi] - base > min_pulse_w)
+        if not len(hot):
+            return None
+        k = lo + int(hot[0])
+        dp = float(np.median(Pc[k:min(n, k + 24)]) - base)
+    elif e["kind"] == "off":
+        base = float(np.median(Pc[hi:min(n, hi + int(base_s * 60))])) if hi + 30 < n else float(np.median(Pc[hi - 30:hi]))
+        hot = np.flatnonzero(Pc[lo:hi] - base > min_pulse_w)
+        if not len(hot):
+            return None
+        k = lo + int(hot[-1]) + 1
+        dp = float(base - np.median(Pc[max(0, k - 24):k]))
+    else:
+        return None
+    return _rescue_entry(k / 60.0, dp, float(np.median(Vc[max(0, k - 30):k + 30])))
+
+
+def rescue_envelope(e: Dict, Pc: np.ndarray, Vc: np.ndarray, seq_lo: int, max_dt_s: float,
+                    half_s: float = 4.0, pct: float = 10.0, dp_range=(8.0, 60.0)) -> Optional[Dict]:
+    """릴레이 펄스 **사이의 바닥**에서만 보이는 작은 계단(오븐 제어보드·팬·조명 ±14W).
+
+    시각 k 마다 **앞 `half_s` 의 `pct` 백분위와 뒤 `half_s` 의 `pct` 백분위의 차**를 본다. 낮은 백분위는
+    핫플 펄스(ON 75% 까지)가 돌아도 OFF 틈의 바닥을 가리키고, 구름 최소와 달리 펄스 가장자리의 순간
+    하강(2026-09-06 test_1: 38W 바닥 밑 22W 딥)에 안 속는다. 두 창이 대칭이라 계단 시각에 |차| 가 최대다.
+    부호는 켬/끔, 크기는 `dp_range` 안. `오븐 끔`(195초)이 이것으로 197.5초(−13W)에 잡혔다.
+    """
+    t0 = (e["seq"] - seq_lo) * 0.5
+    n = len(Pc)
+    h = int(half_s * 60)
+    best = None
+    for k in range(max(h, int((t0 - max_dt_s) * 60)), min(n - h, int((t0 + max_dt_s) * 60) + 1), 6):
+        dp = float(np.percentile(Pc[k:k + h], pct) - np.percentile(Pc[k - h:k], pct))
+        if (e["kind"] == "on" and dp < 0) or (e["kind"] == "off" and dp > 0):
+            continue
+        if not (dp_range[0] <= abs(dp) <= dp_range[1]):
+            continue
+        if best is None or abs(dp) > abs(best[1]):
+            best = (k, dp)
+    if best is None:
+        return None
+    k, dp = best
+    return _rescue_entry(k / 60.0, dp, float(np.median(Vc[max(0, k - 30):k + 30])))
+
+
+#: 구제 순서 — 기기 부류별. 핫플은 펄스, 오븐은 포락선. 다른 기기는 구제하지 않는다 (h3 로 잡혀야 정상).
+RESCUE = {"hotplate": (rescue_pulses,), "oven": (rescue_envelope,)}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -348,10 +439,14 @@ def main() -> int:
                          "test_11/12/13 은 seq 기록이 남아 있지 않지만 라벨 자체가 "
                          "사람 기록에서 정밀화된 것이라(오차 중앙 0.3~0.4초) 앵커로 "
                          "쓸 수 있다. 시각은 다시 잡고 **ΔP 를 기기 몫으로 고친다**")
+    ap.add_argument("--timeline", default="user_timeline.txt",
+                    help="사람 타임라인 (`test_1.csv` 머리 + `seq:기기 켬/끔` 줄)")
+    ap.add_argument("--max-dt", type=float, default=3.5,
+                    help="사람 시각과 신호 계단의 최대 거리 (초). 사용자 진술 ±3초 + 여유")
     ap.add_argument("--out", default="")
     a = ap.parse_args()
 
-    tl_all, bad = parse_timeline()
+    tl_all, bad = parse_timeline(a.timeline)
     if bad:
         print(f"⚠ 타임라인에서 못 읽은 줄 {len(bad)}개")
     if a.from_labels:
@@ -367,7 +462,8 @@ def main() -> int:
             if rows:
                 tl_all[st] = sorted(rows, key=lambda r: r["seq"])
     ref = build_ref(a.sig)
-    smap = json.load(open("results/seq_time_map.json", encoding="utf-8"))
+    smap = (json.load(open("results/seq_time_map.json", encoding="utf-8"))
+            if Path("results/seq_time_map.json").exists() else {})   # 옛 자료의 잔재 - 없으면 자료에서
 
     stems = a.stems or (sorted(tl_all) if a.all else ["test_5"])
     out_doc = {}
@@ -375,15 +471,32 @@ def main() -> int:
         if st not in tl_all:
             print(f"{st}: 타임라인 없음"); continue
         tl = tl_all[st]
-        seq_lo = smap.get(st, {}).get("seq_lo", 0)
-        det, P, V = detect(st, a.min_dp, a.win, a.guard, a.min_di3)
-        got, bad = assign(tl, det, seq_lo, ref)
+        det, P, V, lo = detect(st, a.min_dp, a.win, a.guard, a.min_di3)
+        seq_lo = int(smap.get(st, {}).get("seq_lo", lo))
+        # 시작 프레임(seq_lo) 이전/그 자리의 '켬' 은 시작부터 켜져 있던 것이다 (`seq0 충전기 켬`).
+        for e in tl:
+            if e["kind"] == "on" and e["seq"] <= seq_lo:
+                e["kind"] = "already_on"
+        got, bad = assign(tl, det, seq_lo, ref, max_dt_s=a.max_dt)
+        # 구제 — 계단 검출이 못 본 릴레이 펄스·바닥 계단 (핫플·오븐). 확정된 짝은 건드리지 않는다.
+        n_rescued = 0
+        for i, e in enumerate(tl):
+            if i in got or e["kind"] not in ("on", "off"):
+                continue
+            for fn in RESCUE.get(e["appliance"], ()):
+                s_ = fn(e, P, V, seq_lo, a.max_dt)
+                if s_ is not None:
+                    det.append(s_)
+                    dt = abs(s_["t_block"] * 0.5 - (e["seq"] - seq_lo) * 0.5)
+                    got[i] = (len(det) - 1, 0.1 * dt, 0.0, 0.0, dt)
+                    n_rescued += 1
+                    break
         n_m, n_tl = len(got), sum(1 for i, e in enumerate(tl)
                                   if e["kind"] in ("on", "off", "mode") and i not in got)
         n_dt = len(det) - n_m
         print("\n" + "=" * 104)
         print(f"■ {st}   사람 {len(tl)}  신호계단 {len(det)}  "
-              f"맞춤 {n_m}  사람만 {n_tl}  신호만 {n_dt}   (seq_lo={seq_lo})")
+              f"맞춤 {n_m} (구제 {n_rescued})  사람만 {n_tl}  신호만 {n_dt}   (seq_lo={seq_lo})")
         print("=" * 104)
         print(f"{'사람 seq':>8} {'기기':<16}{'동작':<11}{'신호 t_s':>9}{'ΔP총':>9}"
               f"{'ΔP기기':>9} {'출처':<5}{'u3':>6}{'Δt':>7}{'비용':>7}  비고")
@@ -397,7 +510,7 @@ def main() -> int:
                 zz = np.asarray(s_["di_re"]) + 1j * np.asarray(s_["di_im"])
                 u3 = float(abs(zz[2]) / max(abs(zz[0]), 1e-9))
                 dpd, how = dp_device(s_, e["appliance"], ref)
-                flag = "  ⚠ 순서 위반" if i in bad else ""
+                flag = ("  ⚠ 순서 위반" if i in bad else "") + ("  구제" if s_.get("_rescue") else "")
                 print(f"{e['seq']:>8} {e['appliance'][:15]:<16}"
                       f"{(e['kind'] + ('/' + e['mode'] if e['mode'] else '')):<11}"
                       f"{t:>9.1f}{s_['dp_w']:>9.1f}{dpd:>9.1f} {how:<5}"
@@ -405,7 +518,7 @@ def main() -> int:
                 rows.append({"seq": e["seq"], "appliance": e["appliance"],
                              "kind": e["kind"], "mode": e["mode"], "t_s": t,
                              "dp_total_w": s_["dp_w"], "dp_device_w": dpd,
-                             "dp_from": how, "cost": c, "cu": cu, "cp": cp,
+                             "dp_from": ("rescue" if s_.get("_rescue") else how), "cost": c, "cu": cu, "cp": cp,
                              "dt_s": dts, "order_violation": i in bad,
                              "matched": True})
             else:

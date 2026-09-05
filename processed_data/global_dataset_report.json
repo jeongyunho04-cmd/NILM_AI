@@ -1,98 +1,98 @@
 {
-  "processed_files_count": 27,
+  "processed_files_count": 14,
   "sampling_hz": 60.0,
   "devices": {
-    "air_conditioner": {
+    "air_conditioner_1": {
       "appliance_type": "air_conditioner",
       "korean_name": "에어컨",
       "file_role": "device",
       "load_class": "motor",
-      "rows": 226770,
-      "duration_min": 62.99,
-      "p_mean": 422.53,
-      "p_max": 1022.07,
-      "v_ref_v": 233.62,
+      "rows": 100140,
+      "duration_min": 27.82,
+      "p_mean": 319.64,
+      "p_max": 645.26,
+      "v_ref_v": 228.16,
       "invalid_samples_flagged": 0,
       "invalid_samples_dropped": 0,
       "sessions_detected": 1,
-      "on_percentage": 87.7,
-      "events_count": 39,
-      "npz_file": "processed_data\\npz\\air_conditioner.npz",
+      "on_percentage": 90.64,
+      "events_count": 17,
+      "npz_file": "processed_data\\npz\\air_conditioner_1.npz",
       "state_distribution": {
         "OFF_STANDBY": {
           "state_id": 0,
           "description": "대기 상태 또는 전원 꺼짐",
-          "count": 27891,
-          "percentage": 12.3,
-          "duration_min": 7.75
+          "count": 9377,
+          "percentage": 9.36,
+          "duration_min": 2.6
         },
         "FAN_ONLY": {
           "state_id": 1,
           "description": "송풍/팬 단독 동작 모드",
-          "count": 32129,
-          "percentage": 14.17,
-          "duration_min": 8.92
+          "count": 13149,
+          "percentage": 13.13,
+          "duration_min": 3.65
         },
         "COOLING_LOW": {
           "state_id": 2,
           "description": "인버터 컴프레서 저부하 냉방",
-          "count": 22316,
-          "percentage": 9.84,
-          "duration_min": 6.2
+          "count": 29842,
+          "percentage": 29.8,
+          "duration_min": 8.29
         },
         "COOLING_MID": {
           "state_id": 3,
           "description": "인버터 컴프레서 중부하 냉방",
-          "count": 59040,
-          "percentage": 26.04,
-          "duration_min": 16.4
+          "count": 32140,
+          "percentage": 32.1,
+          "duration_min": 8.93
         },
         "COOLING_HIGH": {
           "state_id": 4,
           "description": "인버터 컴프레서 고부하/터보 냉방",
-          "count": 85394,
-          "percentage": 37.66,
-          "duration_min": 23.72
+          "count": 15632,
+          "percentage": 15.61,
+          "duration_min": 4.34
         }
       }
     },
-    "beam_projector": {
+    "beam_projector_1": {
       "appliance_type": "beam_projector",
       "korean_name": "빔프로젝터",
       "file_role": "device",
       "load_class": "smps",
-      "rows": 42720,
-      "duration_min": 11.87,
-      "p_mean": 42.04,
-      "p_max": 252.38,
-      "v_ref_v": 223.11,
-      "invalid_samples_flagged": 0,
-      "invalid_samples_dropped": 0,
+      "rows": 48390,
+      "duration_min": 13.44,
+      "p_mean": 33.98,
+      "p_max": 50.88,
+      "v_ref_v": 230.96,
+      "invalid_samples_flagged": 60,
+      "invalid_samples_dropped": 60,
       "sessions_detected": 1,
-      "on_percentage": 88.65,
-      "events_count": 18,
-      "npz_file": "processed_data\\npz\\beam_projector.npz",
+      "on_percentage": 76.95,
+      "events_count": 35,
+      "npz_file": "processed_data\\npz\\beam_projector_1.npz",
       "state_distribution": {
         "OFF_STANDBY": {
           "state_id": 0,
           "description": "대기 전원 상태",
-          "count": 4849,
-          "percentage": 11.35,
-          "duration_min": 1.35
+          "count": 11154,
+          "percentage": 23.05,
+          "duration_min": 3.1
         },
         "WARMUP_COOLDOWN": {
           "state_id": 1,
           "description": "부팅 예열 또는 전원 끈 후 팬 냉각",
-          "count": 1398,
-          "percentage": 3.27,
-          "duration_min": 0.39
+          "count": 2841,
+          "percentage": 5.87,
+          "duration_min": 0.79
         },
         "LAMP_ON": {
           "state_id": 2,
           "description": "램프 점등 및 정상 화면 투사",
-          "count": 36473,
-          "percentage": 85.38,
-          "duration_min": 10.13
+          "count": 34395,
+          "percentage": 71.08,
+          "duration_min": 9.55
         }
       }
     },
@@ -101,144 +101,71 @@
       "korean_name": "빔프로젝터",
       "file_role": "device",
       "load_class": "smps",
-      "rows": 40860,
-      "duration_min": 11.35,
-      "p_mean": 38.75,
-      "p_max": 50.65,
-      "v_ref_v": 223.46,
-      "invalid_samples_flagged": 60,
-      "invalid_samples_dropped": 0,
+      "rows": 35520,
+      "duration_min": 9.87,
+      "p_mean": 40.32,
+      "p_max": 48.01,
+      "v_ref_v": 228.62,
+      "invalid_samples_flagged": 30,
+      "invalid_samples_dropped": 30,
       "sessions_detected": 1,
-      "on_percentage": 80.21,
-      "events_count": 9,
+      "on_percentage": 87.41,
+      "events_count": 3,
       "npz_file": "processed_data\\npz\\beam_projector_2.npz",
       "state_distribution": {
         "OFF_STANDBY": {
           "state_id": 0,
           "description": "대기 전원 상태",
-          "count": 8085,
-          "percentage": 19.79,
-          "duration_min": 2.25
+          "count": 4472,
+          "percentage": 12.59,
+          "duration_min": 1.24
         },
         "WARMUP_COOLDOWN": {
           "state_id": 1,
           "description": "부팅 예열 또는 전원 끈 후 팬 냉각",
-          "count": 701,
-          "percentage": 1.72,
-          "duration_min": 0.19
+          "count": 238,
+          "percentage": 0.67,
+          "duration_min": 0.07
         },
         "LAMP_ON": {
           "state_id": 2,
           "description": "램프 점등 및 정상 화면 투사",
-          "count": 32074,
-          "percentage": 78.5,
-          "duration_min": 8.91
+          "count": 30810,
+          "percentage": 86.74,
+          "duration_min": 8.56
         }
       }
     },
-    "beam_projector_3_fixed": {
-      "appliance_type": "beam_projector",
-      "korean_name": "빔프로젝터",
-      "file_role": "device",
-      "load_class": "smps",
-      "rows": 38970,
-      "duration_min": 10.82,
-      "p_mean": 37.75,
-      "p_max": 238.31,
-      "v_ref_v": 223.96,
-      "invalid_samples_flagged": 30,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 79.96,
-      "events_count": 21,
-      "npz_file": "processed_data\\npz\\beam_projector_3_fixed.npz",
-      "state_distribution": {
-        "OFF_STANDBY": {
-          "state_id": 0,
-          "description": "대기 전원 상태",
-          "count": 7808,
-          "percentage": 20.04,
-          "duration_min": 2.17
-        },
-        "WARMUP_COOLDOWN": {
-          "state_id": 1,
-          "description": "부팅 예열 또는 전원 끈 후 팬 냉각",
-          "count": 1631,
-          "percentage": 4.19,
-          "duration_min": 0.45
-        },
-        "LAMP_ON": {
-          "state_id": 2,
-          "description": "램프 점등 및 정상 화면 투사",
-          "count": 29531,
-          "percentage": 75.78,
-          "duration_min": 8.2
-        }
-      }
-    },
-    "electiric_kettle": {
+    "electric_kettle_1": {
       "appliance_type": "electiric_kettle",
       "korean_name": "전기포트",
       "file_role": "device",
       "load_class": "resistive",
-      "rows": 29370,
-      "duration_min": 8.16,
-      "p_mean": 896.54,
-      "p_max": 1289.26,
-      "v_ref_v": 212.54,
+      "rows": 27720,
+      "duration_min": 7.7,
+      "p_mean": 895.34,
+      "p_max": 1486.41,
+      "v_ref_v": 228.03,
       "invalid_samples_flagged": 0,
       "invalid_samples_dropped": 0,
       "sessions_detected": 1,
-      "on_percentage": 71.12,
-      "events_count": 26,
-      "npz_file": "processed_data\\npz\\electiric_kettle.npz",
+      "on_percentage": 61.36,
+      "events_count": 22,
+      "npz_file": "processed_data\\npz\\electric_kettle_1.npz",
       "state_distribution": {
         "OFF": {
           "state_id": 0,
           "description": "전원 꺼짐 / 대기 상태",
-          "count": 8481,
-          "percentage": 28.88,
-          "duration_min": 2.36
+          "count": 10710,
+          "percentage": 38.64,
+          "duration_min": 2.98
         },
         "BOILING_HEATING": {
           "state_id": 1,
           "description": "히터 발열 및 물 끓임 동작",
-          "count": 20889,
-          "percentage": 71.12,
-          "duration_min": 5.8
-        }
-      }
-    },
-    "electric_kettle_2_fixed": {
-      "appliance_type": "electiric_kettle",
-      "korean_name": "전기포트",
-      "file_role": "device",
-      "load_class": "resistive",
-      "rows": 24330,
-      "duration_min": 6.76,
-      "p_mean": 1038.29,
-      "p_max": 1303.82,
-      "v_ref_v": 214.69,
-      "invalid_samples_flagged": 0,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 80.92,
-      "events_count": 12,
-      "npz_file": "processed_data\\npz\\electric_kettle_2_fixed.npz",
-      "state_distribution": {
-        "OFF": {
-          "state_id": 0,
-          "description": "전원 꺼짐 / 대기 상태",
-          "count": 4642,
-          "percentage": 19.08,
-          "duration_min": 1.29
-        },
-        "BOILING_HEATING": {
-          "state_id": 1,
-          "description": "히터 발열 및 물 끓임 동작",
-          "count": 19688,
-          "percentage": 80.92,
-          "duration_min": 5.47
+          "count": 17010,
+          "percentage": 61.36,
+          "duration_min": 4.72
         }
       }
     },
@@ -247,139 +174,45 @@
       "korean_name": "선풍기",
       "file_role": "device",
       "load_class": "motor",
-      "rows": 79140,
-      "duration_min": 21.98,
-      "p_mean": 25.57,
-      "p_max": 47.58,
-      "v_ref_v": 233.68,
-      "invalid_samples_flagged": 270,
+      "rows": 34860,
+      "duration_min": 9.68,
+      "p_mean": 26.03,
+      "p_max": 47.47,
+      "v_ref_v": 228.75,
+      "invalid_samples_flagged": 180,
       "invalid_samples_dropped": 0,
       "sessions_detected": 1,
-      "on_percentage": 94.52,
-      "events_count": 58,
+      "on_percentage": 84.31,
+      "events_count": 15,
       "npz_file": "processed_data\\npz\\fan_1.npz",
       "state_distribution": {
         "OFF": {
           "state_id": 0,
           "description": "전원 꺼짐",
-          "count": 4340,
-          "percentage": 5.48,
-          "duration_min": 1.21
+          "count": 5470,
+          "percentage": 15.69,
+          "duration_min": 1.52
         },
         "SPEED_LOW": {
           "state_id": 1,
           "description": "1단 미풍 운전",
-          "count": 54653,
-          "percentage": 69.06,
-          "duration_min": 15.18
+          "count": 9064,
+          "percentage": 26.0,
+          "duration_min": 2.52
         },
         "SPEED_MID": {
           "state_id": 2,
           "description": "2단 약풍 운전",
-          "count": 10104,
-          "percentage": 12.77,
-          "duration_min": 2.81
+          "count": 12458,
+          "percentage": 35.74,
+          "duration_min": 3.46
         },
         "SPEED_HIGH": {
           "state_id": 3,
           "description": "3단 강풍 운전",
-          "count": 10043,
-          "percentage": 12.69,
-          "duration_min": 2.79
-        }
-      }
-    },
-    "fan_2": {
-      "appliance_type": "fan",
-      "korean_name": "선풍기",
-      "file_role": "device",
-      "load_class": "motor",
-      "rows": 35490,
-      "duration_min": 9.86,
-      "p_mean": 29.72,
-      "p_max": 45.29,
-      "v_ref_v": 235.63,
-      "invalid_samples_flagged": 0,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 96.89,
-      "events_count": 10,
-      "npz_file": "processed_data\\npz\\fan_2.npz",
-      "state_distribution": {
-        "OFF": {
-          "state_id": 0,
-          "description": "전원 꺼짐",
-          "count": 1102,
-          "percentage": 3.11,
-          "duration_min": 0.31
-        },
-        "SPEED_LOW": {
-          "state_id": 1,
-          "description": "1단 미풍 운전",
-          "count": 1705,
-          "percentage": 4.8,
-          "duration_min": 0.47
-        },
-        "SPEED_MID": {
-          "state_id": 2,
-          "description": "2단 약풍 운전",
-          "count": 32519,
-          "percentage": 91.63,
-          "duration_min": 9.03
-        },
-        "SPEED_HIGH": {
-          "state_id": 3,
-          "description": "3단 강풍 운전",
-          "count": 164,
-          "percentage": 0.46,
-          "duration_min": 0.05
-        }
-      }
-    },
-    "fan_3": {
-      "appliance_type": "fan",
-      "korean_name": "선풍기",
-      "file_role": "device",
-      "load_class": "motor",
-      "rows": 52980,
-      "duration_min": 14.72,
-      "p_mean": 37.79,
-      "p_max": 56.02,
-      "v_ref_v": 235.96,
-      "invalid_samples_flagged": 60,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 95.72,
-      "events_count": 17,
-      "npz_file": "processed_data\\npz\\fan_3.npz",
-      "state_distribution": {
-        "OFF": {
-          "state_id": 0,
-          "description": "전원 꺼짐",
-          "count": 2267,
-          "percentage": 4.28,
-          "duration_min": 0.63
-        },
-        "SPEED_LOW": {
-          "state_id": 1,
-          "description": "1단 미풍 운전",
-          "count": 885,
-          "percentage": 1.67,
-          "duration_min": 0.25
-        },
-        "SPEED_MID": {
-          "state_id": 2,
-          "description": "2단 약풍 운전",
-          "count": 884,
-          "percentage": 1.67,
-          "duration_min": 0.25
-        },
-        "SPEED_HIGH": {
-          "state_id": 3,
-          "description": "3단 강풍 운전",
-          "count": 48944,
-          "percentage": 92.38,
-          "duration_min": 13.6
+          "count": 7868,
+          "percentage": 22.57,
+          "duration_min": 2.19
         }
       }
     },
@@ -388,118 +221,38 @@
       "korean_name": "헤어드라이기",
       "file_role": "device",
       "load_class": "resistive",
-      "rows": 7470,
-      "duration_min": 2.08,
-      "p_mean": 764.47,
-      "p_max": 1070.3,
-      "v_ref_v": 234.22,
-      "invalid_samples_flagged": 90,
-      "invalid_samples_dropped": 0,
+      "rows": 29370,
+      "duration_min": 8.16,
+      "p_mean": 515.89,
+      "p_max": 1035.36,
+      "v_ref_v": 227.5,
+      "invalid_samples_flagged": 30,
+      "invalid_samples_dropped": 30,
       "sessions_detected": 1,
-      "on_percentage": 78.13,
-      "events_count": 8,
+      "on_percentage": 71.47,
+      "events_count": 35,
       "npz_file": "processed_data\\npz\\hair_dryer_1.npz",
       "state_distribution": {
         "OFF": {
           "state_id": 0,
           "description": "전원 꺼짐",
-          "count": 1634,
-          "percentage": 21.87,
-          "duration_min": 0.45
+          "count": 8380,
+          "percentage": 28.53,
+          "duration_min": 2.33
         },
         "LOW_HEAT_COOL": {
           "state_id": 1,
           "description": "냉풍 또는 1단 온풍/저열 모드",
-          "count": 308,
-          "percentage": 4.12,
-          "duration_min": 0.09
+          "count": 10742,
+          "percentage": 36.57,
+          "duration_min": 2.98
         },
         "HIGH_HEAT_TURBO": {
           "state_id": 2,
           "description": "2단 열풍/터보 고열 모드",
-          "count": 5528,
-          "percentage": 74.0,
-          "duration_min": 1.54
-        }
-      }
-    },
-    "hair_dryer_2": {
-      "appliance_type": "hair_dryer",
-      "korean_name": "헤어드라이기",
-      "file_role": "device",
-      "load_class": "resistive",
-      "rows": 11190,
-      "duration_min": 3.11,
-      "p_mean": 592.16,
-      "p_max": 1084.4,
-      "v_ref_v": 235.35,
-      "invalid_samples_flagged": 0,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 72.78,
-      "events_count": 22,
-      "npz_file": "processed_data\\npz\\hair_dryer_2.npz",
-      "state_distribution": {
-        "OFF": {
-          "state_id": 0,
-          "description": "전원 꺼짐",
-          "count": 3046,
-          "percentage": 27.22,
-          "duration_min": 0.85
-        },
-        "LOW_HEAT_COOL": {
-          "state_id": 1,
-          "description": "냉풍 또는 1단 온풍/저열 모드",
-          "count": 3194,
-          "percentage": 28.54,
-          "duration_min": 0.89
-        },
-        "HIGH_HEAT_TURBO": {
-          "state_id": 2,
-          "description": "2단 열풍/터보 고열 모드",
-          "count": 4950,
-          "percentage": 44.24,
-          "duration_min": 1.38
-        }
-      }
-    },
-    "hair_dryer_3": {
-      "appliance_type": "hair_dryer",
-      "korean_name": "헤어드라이기",
-      "file_role": "device",
-      "load_class": "resistive",
-      "rows": 7830,
-      "duration_min": 2.17,
-      "p_mean": 503.21,
-      "p_max": 938.55,
-      "v_ref_v": 218.35,
-      "invalid_samples_flagged": 0,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 73.46,
-      "events_count": 7,
-      "npz_file": "processed_data\\npz\\hair_dryer_3.npz",
-      "state_distribution": {
-        "OFF": {
-          "state_id": 0,
-          "description": "전원 꺼짐",
-          "count": 2078,
-          "percentage": 26.54,
-          "duration_min": 0.58
-        },
-        "LOW_HEAT_COOL": {
-          "state_id": 1,
-          "description": "냉풍 또는 1단 온풍/저열 모드",
-          "count": 2700,
-          "percentage": 34.48,
-          "duration_min": 0.75
-        },
-        "HIGH_HEAT_TURBO": {
-          "state_id": 2,
-          "description": "2단 열풍/터보 고열 모드",
-          "count": 3052,
-          "percentage": 38.98,
-          "duration_min": 0.85
+          "count": 10248,
+          "percentage": 34.89,
+          "duration_min": 2.85
         }
       }
     },
@@ -508,97 +261,38 @@
       "korean_name": "핫플레이트",
       "file_role": "device",
       "load_class": "resistive",
-      "rows": 49350,
-      "duration_min": 13.71,
-      "p_mean": 195.23,
-      "p_max": 475.1,
-      "v_ref_v": 219.01,
-      "invalid_samples_flagged": 0,
-      "invalid_samples_dropped": 0,
+      "rows": 48840,
+      "duration_min": 13.57,
+      "p_mean": 188.36,
+      "p_max": 463.03,
+      "v_ref_v": 215.61,
+      "invalid_samples_flagged": 60,
+      "invalid_samples_dropped": 60,
       "sessions_detected": 1,
-      "on_percentage": 45.26,
-      "events_count": 544,
+      "on_percentage": 41.74,
+      "events_count": 719,
       "npz_file": "processed_data\\npz\\hotplate_1.npz",
       "state_distribution": {
         "OFF_STANDBY": {
           "state_id": 0,
-          "description": "대기 상태 또는 서모스탯 OFF 주기",
-          "count": 27013,
-          "percentage": 54.74,
-          "duration_min": 7.5
+          "description": "플러그만 꽂힘 - 스위치 내림 (바닥 뺀 전력 <0.3W)",
+          "count": 3707,
+          "percentage": 7.59,
+          "duration_min": 1.03
+        },
+        "ARMED_IDLE": {
+          "state_id": 1,
+          "description": "스위치 켜짐, 릴레이 열림 (서모스탯 휴지)",
+          "count": 24747,
+          "percentage": 50.67,
+          "duration_min": 6.87
         },
         "HEATING_ACTIVE": {
-          "state_id": 1,
+          "state_id": 2,
           "description": "히터 통전 발열 주기",
-          "count": 22337,
-          "percentage": 45.26,
-          "duration_min": 6.2
-        }
-      }
-    },
-    "hotplate_2": {
-      "appliance_type": "hotplate",
-      "korean_name": "핫플레이트",
-      "file_role": "device",
-      "load_class": "resistive",
-      "rows": 35490,
-      "duration_min": 9.86,
-      "p_mean": 148.08,
-      "p_max": 479.4,
-      "v_ref_v": 221.33,
-      "invalid_samples_flagged": 0,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 30.39,
-      "events_count": 420,
-      "npz_file": "processed_data\\npz\\hotplate_2.npz",
-      "state_distribution": {
-        "OFF_STANDBY": {
-          "state_id": 0,
-          "description": "대기 상태 또는 서모스탯 OFF 주기",
-          "count": 24703,
-          "percentage": 69.61,
-          "duration_min": 6.86
-        },
-        "HEATING_ACTIVE": {
-          "state_id": 1,
-          "description": "히터 통전 발열 주기",
-          "count": 10787,
-          "percentage": 30.39,
-          "duration_min": 3.0
-        }
-      }
-    },
-    "hotplate_3_fixed": {
-      "appliance_type": "hotplate",
-      "korean_name": "핫플레이트",
-      "file_role": "device",
-      "load_class": "resistive",
-      "rows": 36360,
-      "duration_min": 10.1,
-      "p_mean": 112.73,
-      "p_max": 490.33,
-      "v_ref_v": 224.5,
-      "invalid_samples_flagged": 60,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 20.03,
-      "events_count": 358,
-      "npz_file": "processed_data\\npz\\hotplate_3_fixed.npz",
-      "state_distribution": {
-        "OFF_STANDBY": {
-          "state_id": 0,
-          "description": "대기 상태 또는 서모스탯 OFF 주기",
-          "count": 29078,
-          "percentage": 79.97,
-          "duration_min": 8.08
-        },
-        "HEATING_ACTIVE": {
-          "state_id": 1,
-          "description": "히터 통전 발열 주기",
-          "count": 7282,
-          "percentage": 20.03,
-          "duration_min": 2.02
+          "count": 20386,
+          "percentage": 41.74,
+          "duration_min": 5.66
         }
       }
     },
@@ -607,38 +301,38 @@
       "korean_name": "노트북충전기",
       "file_role": "device",
       "load_class": "smps",
-      "rows": 174750,
-      "duration_min": 48.54,
-      "p_mean": 47.41,
-      "p_max": 299.31,
-      "v_ref_v": 221.92,
-      "invalid_samples_flagged": 60,
-      "invalid_samples_dropped": 0,
+      "rows": 58800,
+      "duration_min": 16.33,
+      "p_mean": 52.07,
+      "p_max": 68.18,
+      "v_ref_v": 215.66,
+      "invalid_samples_flagged": 30,
+      "invalid_samples_dropped": 30,
       "sessions_detected": 1,
-      "on_percentage": 98.59,
-      "events_count": 150,
+      "on_percentage": 87.84,
+      "events_count": 45,
       "npz_file": "processed_data\\npz\\laptop_charger_1.npz",
       "state_distribution": {
         "IDLE_UNPLUGGED": {
           "state_id": 0,
           "description": "미연결 무부하 또는 완충 대기",
-          "count": 2472,
-          "percentage": 1.41,
-          "duration_min": 0.69
+          "count": 7149,
+          "percentage": 12.16,
+          "duration_min": 1.99
         },
         "TRICKLE_IDLE_CHARGE": {
           "state_id": 1,
           "description": "저속 트리클 충전 / 유휴 상태 충전",
-          "count": 34900,
-          "percentage": 19.97,
-          "duration_min": 9.69
+          "count": 5956,
+          "percentage": 10.13,
+          "duration_min": 1.65
         },
         "FAST_ACTIVE_CHARGE": {
           "state_id": 2,
           "description": "고속 충전 / CPU 부하 동작 중 충전",
-          "count": 137378,
-          "percentage": 78.61,
-          "duration_min": 38.16
+          "count": 45695,
+          "percentage": 77.71,
+          "duration_min": 12.69
         }
       }
     },
@@ -647,118 +341,38 @@
       "korean_name": "노트북충전기",
       "file_role": "device",
       "load_class": "smps",
-      "rows": 12060,
-      "duration_min": 3.35,
-      "p_mean": 22.55,
-      "p_max": 333.45,
-      "v_ref_v": 222.84,
-      "invalid_samples_flagged": 1530,
-      "invalid_samples_dropped": 1410,
+      "rows": 15150,
+      "duration_min": 4.21,
+      "p_mean": 34.67,
+      "p_max": 68.71,
+      "v_ref_v": 229.61,
+      "invalid_samples_flagged": 0,
+      "invalid_samples_dropped": 0,
       "sessions_detected": 1,
-      "on_percentage": 51.63,
-      "events_count": 31,
+      "on_percentage": 65.84,
+      "events_count": 18,
       "npz_file": "processed_data\\npz\\laptop_charger_2.npz",
       "state_distribution": {
         "IDLE_UNPLUGGED": {
           "state_id": 0,
           "description": "미연결 무부하 또는 완충 대기",
-          "count": 5833,
-          "percentage": 48.37,
-          "duration_min": 1.62
+          "count": 5175,
+          "percentage": 34.16,
+          "duration_min": 1.44
         },
         "TRICKLE_IDLE_CHARGE": {
           "state_id": 1,
           "description": "저속 트리클 충전 / 유휴 상태 충전",
-          "count": 2981,
-          "percentage": 24.72,
+          "count": 2984,
+          "percentage": 19.7,
           "duration_min": 0.83
         },
         "FAST_ACTIVE_CHARGE": {
           "state_id": 2,
           "description": "고속 충전 / CPU 부하 동작 중 충전",
-          "count": 3246,
-          "percentage": 26.92,
-          "duration_min": 0.9
-        }
-      }
-    },
-    "laptop_charger_3_fixed": {
-      "appliance_type": "laptop_charger",
-      "korean_name": "노트북충전기",
-      "file_role": "device",
-      "load_class": "smps",
-      "rows": 46950,
-      "duration_min": 13.04,
-      "p_mean": 43.86,
-      "p_max": 330.58,
-      "v_ref_v": 220.81,
-      "invalid_samples_flagged": 60,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 88.53,
-      "events_count": 43,
-      "npz_file": "processed_data\\npz\\laptop_charger_3_fixed.npz",
-      "state_distribution": {
-        "IDLE_UNPLUGGED": {
-          "state_id": 0,
-          "description": "미연결 무부하 또는 완충 대기",
-          "count": 5386,
-          "percentage": 11.47,
-          "duration_min": 1.5
-        },
-        "TRICKLE_IDLE_CHARGE": {
-          "state_id": 1,
-          "description": "저속 트리클 충전 / 유휴 상태 충전",
-          "count": 8762,
-          "percentage": 18.66,
-          "duration_min": 2.43
-        },
-        "FAST_ACTIVE_CHARGE": {
-          "state_id": 2,
-          "description": "고속 충전 / CPU 부하 동작 중 충전",
-          "count": 32802,
-          "percentage": 69.87,
-          "duration_min": 9.11
-        }
-      }
-    },
-    "laptop_charger_4_fixed": {
-      "appliance_type": "laptop_charger",
-      "korean_name": "노트북충전기",
-      "file_role": "device",
-      "load_class": "smps",
-      "rows": 33150,
-      "duration_min": 9.21,
-      "p_mean": 59.05,
-      "p_max": 75.02,
-      "v_ref_v": 237.03,
-      "invalid_samples_flagged": 60,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 87.29,
-      "events_count": 10,
-      "npz_file": "processed_data\\npz\\laptop_charger_4_fixed.npz",
-      "state_distribution": {
-        "IDLE_UNPLUGGED": {
-          "state_id": 0,
-          "description": "미연결 무부하 또는 완충 대기",
-          "count": 4215,
-          "percentage": 12.71,
-          "duration_min": 1.17
-        },
-        "TRICKLE_IDLE_CHARGE": {
-          "state_id": 1,
-          "description": "저속 트리클 충전 / 유휴 상태 충전",
-          "count": 1021,
-          "percentage": 3.08,
-          "duration_min": 0.28
-        },
-        "FAST_ACTIVE_CHARGE": {
-          "state_id": 2,
-          "description": "고속 충전 / CPU 부하 동작 중 충전",
-          "count": 27914,
-          "percentage": 84.21,
-          "duration_min": 7.75
+          "count": 6991,
+          "percentage": 46.15,
+          "duration_min": 1.94
         }
       }
     },
@@ -767,238 +381,78 @@
       "korean_name": "미니PC",
       "file_role": "device",
       "load_class": "smps",
-      "rows": 48540,
-      "duration_min": 13.48,
-      "p_mean": 10.6,
-      "p_max": 217.63,
-      "v_ref_v": 221.38,
-      "invalid_samples_flagged": 0,
-      "invalid_samples_dropped": 0,
+      "rows": 96150,
+      "duration_min": 26.71,
+      "p_mean": 16.54,
+      "p_max": 29.49,
+      "v_ref_v": 217.6,
+      "invalid_samples_flagged": 30,
+      "invalid_samples_dropped": 30,
       "sessions_detected": 1,
-      "on_percentage": 85.01,
-      "events_count": 49,
+      "on_percentage": 91.42,
+      "events_count": 64,
       "npz_file": "processed_data\\npz\\minipc_1.npz",
       "state_distribution": {
         "OFF_STANDBY": {
           "state_id": 0,
           "description": "전원 꺼짐 또는 절전 모드",
-          "count": 7277,
-          "percentage": 14.99,
-          "duration_min": 2.02
+          "count": 8249,
+          "percentage": 8.58,
+          "duration_min": 2.29
         },
         "IDLE": {
           "state_id": 1,
           "description": "바탕화면 대기 및 경부하 상태",
-          "count": 26238,
-          "percentage": 54.05,
-          "duration_min": 7.29
+          "count": 24023,
+          "percentage": 24.98,
+          "duration_min": 6.67
         },
         "ACTIVE_LOAD": {
           "state_id": 2,
           "description": "프로그램 실행 및 CPU 연산 부하",
-          "count": 15025,
-          "percentage": 30.95,
-          "duration_min": 4.17
+          "count": 63878,
+          "percentage": 66.44,
+          "duration_min": 17.74
         }
       }
     },
-    "minipc_2": {
-      "appliance_type": "minipc",
-      "korean_name": "미니PC",
+    "oven_1": {
+      "appliance_type": "oven",
+      "korean_name": "오븐",
       "file_role": "device",
-      "load_class": "smps",
-      "rows": 152400,
-      "duration_min": 42.33,
-      "p_mean": 14.28,
-      "p_max": 31.19,
-      "v_ref_v": 221.87,
-      "invalid_samples_flagged": 30,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 98.43,
-      "events_count": 233,
-      "npz_file": "processed_data\\npz\\minipc_2.npz",
-      "state_distribution": {
-        "OFF_STANDBY": {
-          "state_id": 0,
-          "description": "전원 꺼짐 또는 절전 모드",
-          "count": 2395,
-          "percentage": 1.57,
-          "duration_min": 0.67
-        },
-        "IDLE": {
-          "state_id": 1,
-          "description": "바탕화면 대기 및 경부하 상태",
-          "count": 80419,
-          "percentage": 52.77,
-          "duration_min": 22.34
-        },
-        "ACTIVE_LOAD": {
-          "state_id": 2,
-          "description": "프로그램 실행 및 CPU 연산 부하",
-          "count": 69586,
-          "percentage": 45.66,
-          "duration_min": 19.33
-        }
-      }
-    },
-    "minipc_3": {
-      "appliance_type": "minipc",
-      "korean_name": "미니PC",
-      "file_role": "device",
-      "load_class": "smps",
-      "rows": 76860,
-      "duration_min": 21.35,
-      "p_mean": 16.36,
-      "p_max": 30.15,
-      "v_ref_v": 223.78,
+      "load_class": "resistive",
+      "rows": 65940,
+      "duration_min": 18.32,
+      "p_mean": 347.05,
+      "p_max": 1123.17,
+      "v_ref_v": 216.07,
       "invalid_samples_flagged": 0,
       "invalid_samples_dropped": 0,
       "sessions_detected": 1,
-      "on_percentage": 96.22,
-      "events_count": 48,
-      "npz_file": "processed_data\\npz\\minipc_3.npz",
-      "state_distribution": {
-        "OFF_STANDBY": {
-          "state_id": 0,
-          "description": "전원 꺼짐 또는 절전 모드",
-          "count": 2904,
-          "percentage": 3.78,
-          "duration_min": 0.81
-        },
-        "IDLE": {
-          "state_id": 1,
-          "description": "바탕화면 대기 및 경부하 상태",
-          "count": 31256,
-          "percentage": 40.67,
-          "duration_min": 8.68
-        },
-        "ACTIVE_LOAD": {
-          "state_id": 2,
-          "description": "프로그램 실행 및 CPU 연산 부하",
-          "count": 42700,
-          "percentage": 55.56,
-          "duration_min": 11.86
-        }
-      }
-    },
-    "oven": {
-      "appliance_type": "oven",
-      "korean_name": "오븐",
-      "file_role": "device",
-      "load_class": "resistive",
-      "rows": 129000,
-      "duration_min": 35.83,
-      "p_mean": 297.02,
-      "p_max": 1195.36,
-      "v_ref_v": 223.27,
-      "invalid_samples_flagged": 0,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 24.85,
-      "events_count": 105,
-      "npz_file": "processed_data\\npz\\oven.npz",
+      "on_percentage": 30.8,
+      "events_count": 56,
+      "npz_file": "processed_data\\npz\\oven_1.npz",
       "state_distribution": {
         "OFF_STANDBY": {
           "state_id": 0,
           "description": "대기 전원 상태",
-          "count": 3110,
-          "percentage": 2.41,
-          "duration_min": 0.86
+          "count": 5047,
+          "percentage": 7.65,
+          "duration_min": 1.4
         },
         "FAN_LIGHT": {
           "state_id": 1,
           "description": "히터 꺼짐 주기 - 조명등 및 컨벡션 팬만 동작",
-          "count": 93828,
-          "percentage": 72.73,
-          "duration_min": 26.06
+          "count": 40584,
+          "percentage": 61.55,
+          "duration_min": 11.27
         },
         "HEATING": {
           "state_id": 2,
           "description": "서모스탯 통전 - 히터 가열",
-          "count": 32062,
-          "percentage": 24.85,
-          "duration_min": 8.91
-        }
-      }
-    },
-    "oven_2": {
-      "appliance_type": "oven",
-      "korean_name": "오븐",
-      "file_role": "device",
-      "load_class": "resistive",
-      "rows": 57330,
-      "duration_min": 15.93,
-      "p_mean": 444.45,
-      "p_max": 1158.22,
-      "v_ref_v": 223.09,
-      "invalid_samples_flagged": 60,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 38.5,
-      "events_count": 48,
-      "npz_file": "processed_data\\npz\\oven_2.npz",
-      "state_distribution": {
-        "OFF_STANDBY": {
-          "state_id": 0,
-          "description": "대기 전원 상태",
-          "count": 5277,
-          "percentage": 9.2,
-          "duration_min": 1.47
-        },
-        "FAN_LIGHT": {
-          "state_id": 1,
-          "description": "히터 꺼짐 주기 - 조명등 및 컨벡션 팬만 동작",
-          "count": 29979,
-          "percentage": 52.29,
-          "duration_min": 8.33
-        },
-        "HEATING": {
-          "state_id": 2,
-          "description": "서모스탯 통전 - 히터 가열",
-          "count": 22074,
-          "percentage": 38.5,
-          "duration_min": 6.13
-        }
-      }
-    },
-    "oven_3_fixed": {
-      "appliance_type": "oven",
-      "korean_name": "오븐",
-      "file_role": "device",
-      "load_class": "resistive",
-      "rows": 53790,
-      "duration_min": 14.94,
-      "p_mean": 359.17,
-      "p_max": 1169.97,
-      "v_ref_v": 221.33,
-      "invalid_samples_flagged": 60,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 30.52,
-      "events_count": 48,
-      "npz_file": "processed_data\\npz\\oven_3_fixed.npz",
-      "state_distribution": {
-        "OFF_STANDBY": {
-          "state_id": 0,
-          "description": "대기 전원 상태",
-          "count": 6339,
-          "percentage": 11.78,
-          "duration_min": 1.76
-        },
-        "FAN_LIGHT": {
-          "state_id": 1,
-          "description": "히터 꺼짐 주기 - 조명등 및 컨벡션 팬만 동작",
-          "count": 31032,
-          "percentage": 57.69,
-          "duration_min": 8.62
-        },
-        "HEATING": {
-          "state_id": 2,
-          "description": "서모스탯 통전 - 히터 가열",
-          "count": 16419,
-          "percentage": 30.52,
-          "duration_min": 4.56
+          "count": 20309,
+          "percentage": 30.8,
+          "duration_min": 5.64
         }
       }
     },
@@ -1007,11 +461,11 @@
       "korean_name": "무부하노이즈(외부전원)",
       "file_role": "noise",
       "load_class": "passive",
-      "rows": 61440,
-      "duration_min": 17.07,
-      "p_mean": 1.4,
-      "p_max": 1.71,
-      "v_ref_v": 222.24,
+      "rows": 10710,
+      "duration_min": 2.98,
+      "p_mean": 1.59,
+      "p_max": 1.78,
+      "v_ref_v": 218.25,
       "invalid_samples_flagged": 0,
       "invalid_samples_dropped": 0,
       "sessions_detected": 1,
@@ -1022,159 +476,86 @@
         "BASELINE_NOISE": {
           "state_id": 0,
           "description": "무부하 센서 노이즈 바닥",
-          "count": 61440,
+          "count": 10710,
           "percentage": 100.0,
-          "duration_min": 17.07
+          "duration_min": 2.98
         }
       }
     },
-    "noise_selfpower": {
+    "noise_selfpower_1": {
       "appliance_type": "noise_selfpower",
       "korean_name": "무부하노이즈(자체전원)",
       "file_role": "noise",
       "load_class": "passive",
-      "rows": 40140,
-      "duration_min": 11.15,
-      "p_mean": 2.37,
-      "p_max": 3.06,
-      "v_ref_v": 221.89,
+      "rows": 14250,
+      "duration_min": 3.96,
+      "p_mean": 2.41,
+      "p_max": 2.6,
+      "v_ref_v": 218.42,
       "invalid_samples_flagged": 0,
       "invalid_samples_dropped": 0,
       "sessions_detected": 1,
       "on_percentage": 0.0,
       "events_count": 0,
-      "npz_file": "processed_data\\npz\\noise_selfpower.npz",
+      "npz_file": "processed_data\\npz\\noise_selfpower_1.npz",
       "state_distribution": {
         "BASELINE_NOISE": {
           "state_id": 0,
           "description": "보드 자체 소비전력 노이즈 바닥",
-          "count": 40140,
+          "count": 14250,
           "percentage": 100.0,
-          "duration_min": 11.15
+          "duration_min": 3.96
+        }
+      }
+    },
+    "noise_selfpower_2": {
+      "appliance_type": "noise_selfpower",
+      "korean_name": "무부하노이즈(자체전원)",
+      "file_role": "noise",
+      "load_class": "passive",
+      "rows": 16470,
+      "duration_min": 4.58,
+      "p_mean": 2.21,
+      "p_max": 2.79,
+      "v_ref_v": 219.45,
+      "invalid_samples_flagged": 30,
+      "invalid_samples_dropped": 30,
+      "sessions_detected": 1,
+      "on_percentage": 0.0,
+      "events_count": 0,
+      "npz_file": "processed_data\\npz\\noise_selfpower_2.npz",
+      "state_distribution": {
+        "BASELINE_NOISE": {
+          "state_id": 0,
+          "description": "보드 자체 소비전력 노이즈 바닥",
+          "count": 16470,
+          "percentage": 100.0,
+          "duration_min": 4.58
         }
       }
     }
   },
   "composite_eval_files": {
-    "test.2": {
-      "rows": 27960,
-      "duration_s": 466.0,
-      "p_mean": 306.65,
-      "p_max": 1235.17,
-      "v_ref_v": 222.55,
-      "npz_file": "processed_data\\composite_eval\\test.2.npz",
+    "test_1": {
+      "rows": 48000,
+      "duration_s": 800.0,
+      "p_mean": 505.64,
+      "p_max": 1549.65,
+      "v_ref_v": 215.22,
+      "npz_file": "processed_data\\composite_eval\\test_1.npz",
       "excluded_from_segment_pool": true
     },
-    "test": {
-      "rows": 72660,
-      "duration_s": 1211.0,
-      "p_mean": 714.62,
-      "p_max": 1923.97,
-      "v_ref_v": 233.61,
-      "npz_file": "processed_data\\composite_eval\\test.npz",
-      "excluded_from_segment_pool": true
-    },
-    "test3": {
-      "rows": 24780,
-      "duration_s": 413.0,
-      "p_mean": 527.14,
-      "p_max": 1218.5,
-      "v_ref_v": 221.62,
-      "npz_file": "processed_data\\composite_eval\\test3.npz",
-      "excluded_from_segment_pool": true
-    },
-    "test_10": {
-      "rows": 14430,
-      "duration_s": 240.5,
-      "p_mean": 1027.82,
-      "p_max": 3088.22,
-      "v_ref_v": 217.67,
-      "npz_file": "processed_data\\composite_eval\\test_10.npz",
-      "excluded_from_segment_pool": true
-    },
-    "test_11": {
-      "rows": 18990,
-      "duration_s": 316.5,
-      "p_mean": 925.82,
-      "p_max": 2630.93,
-      "v_ref_v": 216.38,
-      "npz_file": "processed_data\\composite_eval\\test_11.npz",
-      "excluded_from_segment_pool": true
-    },
-    "test_12": {
-      "rows": 22050,
-      "duration_s": 367.5,
-      "p_mean": 1586.44,
-      "p_max": 2899.23,
-      "v_ref_v": 209.69,
-      "npz_file": "processed_data\\composite_eval\\test_12.npz",
-      "excluded_from_segment_pool": true
-    },
-    "test_13": {
-      "rows": 49080,
-      "duration_s": 818.0,
-      "p_mean": 86.38,
-      "p_max": 145.76,
-      "v_ref_v": 223.38,
-      "npz_file": "processed_data\\composite_eval\\test_13.npz",
-      "excluded_from_segment_pool": true
-    },
-    "test_4": {
-      "rows": 42090,
-      "duration_s": 701.5,
-      "p_mean": 623.24,
-      "p_max": 1769.69,
-      "v_ref_v": 219.44,
-      "npz_file": "processed_data\\composite_eval\\test_4.npz",
-      "excluded_from_segment_pool": true
-    },
-    "test_5": {
-      "rows": 34170,
-      "duration_s": 569.5,
-      "p_mean": 641.1,
-      "p_max": 1790.87,
-      "v_ref_v": 218.43,
-      "npz_file": "processed_data\\composite_eval\\test_5.npz",
-      "excluded_from_segment_pool": true
-    },
-    "test_6": {
-      "rows": 47430,
-      "duration_s": 790.5,
-      "p_mean": 456.26,
-      "p_max": 1664.34,
-      "v_ref_v": 220.27,
-      "npz_file": "processed_data\\composite_eval\\test_6.npz",
-      "excluded_from_segment_pool": true
-    },
-    "test_7": {
-      "rows": 40530,
-      "duration_s": 675.5,
-      "p_mean": 78.39,
-      "p_max": 332.58,
-      "v_ref_v": 222.6,
-      "npz_file": "processed_data\\composite_eval\\test_7.npz",
-      "excluded_from_segment_pool": true
-    },
-    "test_8": {
-      "rows": 38730,
-      "duration_s": 645.5,
-      "p_mean": 91.07,
-      "p_max": 146.54,
-      "v_ref_v": 222.78,
-      "npz_file": "processed_data\\composite_eval\\test_8.npz",
-      "excluded_from_segment_pool": true
-    },
-    "test_9": {
-      "rows": 20220,
-      "duration_s": 337.0,
-      "p_mean": 1154.04,
-      "p_max": 2720.63,
-      "v_ref_v": 217.01,
-      "npz_file": "processed_data\\composite_eval\\test_9.npz",
+    "test_2": {
+      "rows": 51810,
+      "duration_s": 863.5,
+      "p_mean": 397.13,
+      "p_max": 2522.42,
+      "v_ref_v": 229.72,
+      "npz_file": "processed_data\\composite_eval\\test_2.npz",
       "excluded_from_segment_pool": true
     }
   },
-  "total_cleaned_samples": 1604730,
-  "total_duration_hours": 7.43,
-  "total_events_detected": 2334
+  "total_cleaned_samples": 602310,
+  "total_duration_hours": 2.79,
+  "total_events_detected": 1029
 }

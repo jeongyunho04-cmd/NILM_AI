@@ -27,7 +27,7 @@ NAMES: List[Tuple[str, str]] = [
     ("미니PC", "minipc"), ("미니컴", "minipc"),
     ("전기포트", "electiric_kettle"), ("포트", "electiric_kettle"),
     ("주전자", "electiric_kettle"),
-    ("핫플레이트", "hotplate"), ("핫플", "hotplate"),
+    ("핫플레이트", "hotplate"), ("핫플", "hotplate"), ("하플레이트", "hotplate"), ("하플", "hotplate"),
     ("드라이기", "hair_dryer"), ("헤어드라이기", "hair_dryer"),
     ("선풍기", "fan"), ("에어컨", "air_conditioner"), ("오븐", "oven"),
 ]
@@ -41,7 +41,8 @@ MODE_WORDS = {"강": "high", "약": "low", "중": "mid", "강풍": "high",
 WORK_WORDS = ("작업시작", "작업 시작", "작업종료", "작업 종료", "작업끝", "작업 끝")
 
 HEAD = re.compile(r"^(test[._0-9]*)\.csv", re.IGNORECASE)
-LINE = re.compile(r"^\s*(\d+)\s*[:：]?\s*(.+?)\s*$")
+#: `70:핫플 켬`, `seq0 충전기 켬` 둘 다 읽는다 (2026-09-06 `user_timeline.txt` 표기).
+LINE = re.compile(r"^\s*(?:seq)?\s*(\d+)\s*[:：]?\s*(.+?)\s*$", re.IGNORECASE)
 
 
 def _norm(s: str) -> str:
