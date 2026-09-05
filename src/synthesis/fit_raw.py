@@ -69,11 +69,47 @@ def halfwave(x: np.ndarray) -> np.ndarray:
     return (np.asarray(x, float) - np.roll(x, len(x) // 2)) / 2.0
 
 
-def rc_filter(x: np.ndarray, inverse: bool = False, fc: float = RC_FC_HZ) -> np.ndarray:
-    """1극 저역통과 `1/(1+jf/fc)` 를 걸거나(계측 모사) 벗긴다(참값 복원). 빈 k = k·60Hz."""
+def rc_filter(x: np.ndarray, inverse: bool = False, fc: float = RC_FC_HZ,
+              order: int = 1) -> np.ndarray:
+    """`1/(1+jf/fc)^order` 를 걸거나(계측 모사) 벗긴다(참값 복원). 빈 k = k·60Hz.
+
+    `order` 는 극 개수. 기본 1 은 펌웨어가 아는 안티앨리어싱 RC(1kΩ·100nF) 하나다.
+    12.184.16 에 따르면 LOW 전류 경로는 HIGH 의 ADC 노드 뒤에서 한 단 더 증폭되므로
+    **전류 채널의 극이 전압보다 하나 많을 수 있다** — `run_meas_rc_probe` 가 그것을 잰다.
+    """
     X = np.fft.rfft(x)
-    Hh = 1.0 / (1.0 + 1j * np.arange(len(X)) * F / fc)
+    Hh = (1.0 / (1.0 + 1j * np.arange(len(X)) * F / fc)) ** int(order)
     return np.fft.irfft(X / Hh if inverse else X * Hh, len(x))
+
+
+#: 변환기 버든 저항 [Ω] — 사용자 제공 LTspice 넷리스트 (ADC 앞단).
+#: 적합된 코너 `f_c` 는 자화 인덕턴스를 말한다: `L_m = R_burden / (2π·f_c)`.
+R_BURDEN_CT = 27.0        #: R8, SCT-013-100 2차 버든
+R_BURDEN_ZMPT = 220.0     #: R12, ZMPT-101B 2차 버든
+
+
+def hp_filter(x: np.ndarray, fc: float, inverse: bool = False) -> np.ndarray:
+    """변성기 고역통과 `jf/(jf + fc)` 를 걸거나 벗긴다.
+
+    CT·전압변성기는 직류를 못 통과시킨다 — 자화 인덕턴스 `L_m` 과 버든 `R` 이 만드는
+    1차 고역통과이고 코너가 `f_c = R/(2π·L_m)` 이다. 넷리스트는 둘 다 **이상 전류원**으로
+    두므로 이 항이 통째로 빠져 있다 (RC·연산증폭기는 넷리스트가 정확히 준다).
+
+    **위상 앞섬이 저차에서 크고 고차에서 사라진다** — 극(RC)이나 순수 지연과 모양이
+    다르므로 자료가 셋을 가를 수 있다. f_c=30Hz 면 h1 +26.6° h3 +14.0° h15 +1.9°.
+    """
+    if fc <= 0.0:
+        return np.asarray(x, float)
+    X = np.fft.rfft(x)
+    f = np.arange(len(X)) * F
+    Hh = np.ones(len(X), complex)
+    Hh[1:] = (1j * f[1:]) / (1j * f[1:] + fc)
+    Hh[0] = 0.0 if not inverse else 0.0       # 직류는 어차피 0 (반파 대칭화)
+    if inverse:
+        Y = np.zeros_like(X)
+        Y[1:] = X[1:] / Hh[1:]
+        return np.fft.irfft(Y, len(x))
+    return np.fft.irfft(X * Hh, len(x))
 
 
 def upsample(x: np.ndarray, npc: int = NPC) -> np.ndarray:
@@ -108,6 +144,17 @@ class RawPoint:
     scatter: float          # 주기 간 산포 / rms (재현 바닥)
     oob: float              # h16 이상 성분 / rms (모델이 낼 수 없는 바닥)
     range_mixed: bool
+    #: 시뮬 전류에 걸 계측 RC (전류 채널). 전압 쪽은 `vsrc` 를 만들 때 이미 벗겨 두었다.
+    i_fc: float = RC_FC_HZ
+    i_order: int = 1
+    #: CT(SCT-013-100) 고역통과 코너 [Hz]. 0 이면 끈다. `L_m = 27Ω/(2π·f)`.
+    i_hp_fc: float = 0.0
+    #: 전류 채널이 전압 채널보다 늦게 표본화되는 양 [원시 표본, 15360Hz]. ADC 채널 스큐.
+    #: 넷리스트(사용자 제공 LTspice)로 확인한 바 세 채널의 아날로그 전달함수는 1k·100n 1극으로
+    #: 같고 차이가 h15 에서 0.5° 뿐이다 — 그러니 남는 차수 의존 위상은 **아날로그가 아니다**.
+    #: 순수 지연은 위상이 f 에 선형이라 우리 대역(h1~h15)에서 극 하나와 모양이 거의 같다
+    #: (극 1591.55Hz: h1 −2.16° h15 −29.5° / 지연 91µs: h1 −1.97° h15 −29.5°).
+    i_skew_samp: float = 0.0
 
 
 #: 계측계 자체의 배경 전류 (`noise_noselfpower_C`, 기기 없음): 1.70W, |I1| 7.3mA ∠+10.9°.
@@ -136,8 +183,21 @@ def wave_from_phasors(X: np.ndarray, ns: int = NS) -> np.ndarray:
     return np.fft.irfft(Y, ns)
 
 
+def shift_samples(x: np.ndarray, n: float) -> np.ndarray:
+    """대역제한 분수 표본 이동. `n>0` 이면 신호가 **늦어진다**."""
+    if n == 0.0:
+        return np.asarray(x, float)
+    X = np.fft.rfft(x)
+    k = np.arange(len(X))
+    return np.fft.irfft(X * np.exp(-2j * np.pi * k * n / len(x)), len(x))
+
+
 def load_raw(stem: str, data_dir: str = "data", ncyc_sim: int = NCYC_SIM,
-             bg: Optional[np.ndarray] = None, vband: Optional[int] = None) -> RawPoint:
+             bg: Optional[np.ndarray] = None, vband: Optional[int] = None,
+             v_fc: float = RC_FC_HZ, v_order: int = 1,
+             i_fc: float = RC_FC_HZ, i_order: int = 1,
+             bg_rc: bool = False, i_skew_samp: float = 0.0,
+             v_hp_fc: float = 0.0, i_hp_fc: float = 0.0) -> RawPoint:
     """`bg` 를 주면 그 배경 페이저를 실측 전류에서 뺀다 (`background_phasors()`).
 
     `vband` 를 주면 시뮬 소스 전압을 그 차수까지로 자른다. **생성기와 규약을 맞추는 스위치다**:
@@ -155,19 +215,28 @@ def load_raw(stem: str, data_dir: str = "data", ncyc_sim: int = NCYC_SIM,
     I = d["i_a"].to_numpy(np.float64).reshape(nc, NS)
     vm, im = halfwave(np.median(V, 0)), halfwave(np.median(I, 0))
     if bg is not None:
-        im = im - wave_from_phasors(bg)
+        bw = wave_from_phasors(bg)
+        # ⚠ 배경은 **2Hz 파일**에서 왔고 펌웨어가 크기를 이미 보상한 값이다. 원시 전류에는
+        # 보상이 없으므로 규약이 어긋난다 (h15 에서 |H|=0.87, 13%). `bg_rc=True` 면 배경에도
+        # 같은 RC 를 걸어 규약을 맞춘다 ([M6]).
+        if bg_rc:
+            bw = rc_filter(bw, fc=i_fc, order=i_order)
+        im = im - bw
     irms = float(np.sqrt(np.mean(im ** 2)))
     scatter = float(np.sqrt(np.mean(np.std(I, 0) ** 2)) / irms)
     X = phasors(im, NS // 2)
     oob = float(np.sqrt(np.sum(np.abs(X[BAND:]) ** 2)) / irms)
-    vt = rc_filter(vm, inverse=True)
+    vt = rc_filter(vm, inverse=True, fc=v_fc, order=v_order)
+    if v_hp_fc > 0.0:
+        vt = hp_filter(vt, v_hp_fc, inverse=True)   # ZMPT-101B 를 벗겨 참 전압으로
     if vband is not None:
         Vf_ = np.fft.rfft(vt)
         Vf_[vband + 1:] = 0
         vt = np.fft.irfft(Vf_, len(vt))
     vsrc = np.tile(upsample(vt), ncyc_sim)
     return RawPoint(stem, vm, im, float(np.mean(vm * im)), vsrc, irms, nc, scatter, oob,
-                    stem in RAW_RANGE_MIXED)
+                    stem in RAW_RANGE_MIXED, float(i_fc), int(i_order),
+                    float(i_hp_fc), float(i_skew_samp))
 
 
 # ── Cx 직접 측정 (가이드 §10.2) ──────────────────────────────────────────────
@@ -248,7 +317,11 @@ def sim_current(par5: Sequence[float], pt: RawPoint, match_power: bool = True,
     r = simulate(P, *par5, vsrc=pt.vsrc, **kw)
     if not r["ok"]:
         return None
-    return rc_filter(downsample(r["i"][-NPC:]))
+    out = downsample(r["i"][-NPC:])
+    if pt.i_hp_fc > 0.0:
+        out = hp_filter(out, pt.i_hp_fc)           # CT 를 걸어 계측값으로
+    out = rc_filter(out, fc=pt.i_fc, order=pt.i_order)
+    return shift_samples(out, pt.i_skew_samp) if pt.i_skew_samp else out
 
 
 def point_residual(par5, pt: RawPoint, band: int = BAND, match_power: bool = True,
