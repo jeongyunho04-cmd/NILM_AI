@@ -196,7 +196,7 @@ def load_raw(stem: str, data_dir: str = "data", ncyc_sim: int = NCYC_SIM,
              bg: Optional[np.ndarray] = None, vband: Optional[int] = None,
              v_fc: float = RC_FC_HZ, v_order: int = 1,
              i_fc: float = RC_FC_HZ, i_order: int = 1,
-             bg_rc: bool = False, i_skew_samp: float = 0.0,
+             bg_rc: bool = False, i_skew_samp: Optional[float] = None,
              v_hp_fc: float = 0.0, i_hp_fc: float = 0.0) -> RawPoint:
     """`bg` 를 주면 그 배경 페이저를 실측 전류에서 뺀다 (`background_phasors()`).
 
@@ -207,7 +207,12 @@ def load_raw(stem: str, data_dir: str = "data", ncyc_sim: int = NCYC_SIM,
     증폭된다 (12.185.16). 전체 파형으로 맞춘 파라미터를 V15 생성기에 쓰면 그만큼 어긋난다.
     """
     import pandas as pd
-    from src.preprocessing.file_registry import RAW_RANGE_MIXED
+    from src.preprocessing.file_registry import RAW_RANGE_MIXED, RAW_SKEW_SAMP_LOW
+
+    if i_skew_samp is None:
+        # 펌웨어 위상 교정은 2Hz 블록에만 걸린다 — 원시에는 채널 어긋남이 남아 있다.
+        # 장소 C 포트 원시로 직접 쟀고(∠I₁−∠V₁ = +2.87°) 부호·기전이 확인됐다 (12.185.25).
+        i_skew_samp = RAW_SKEW_SAMP_LOW
 
     d = pd.read_csv(f"{data_dir}/{stem}.csv", usecols=["cyc", "n", "i_a", "v_v", "range"])
     nc = int(d["cyc"].max()) + 1

@@ -258,6 +258,10 @@ def raw_snapshots_of(device: str) -> List[str]:
 #: 조합 녹화는 **단자 전압 V_term 을 직접 잰다** — 고정점 반복 없이 결합을 검정할 수 있다 (12.185.12).
 #: 전력 배분: 프로젝터·미니PC 는 단독 스냅샷 전력으로 고정하고 나머지를 충전기에 준다
 #: (충전기만 배터리 상태로 변한다). 충전기는 여기서 28~33W 로 단독 스냅샷 17W 보다 크다.
+#: 장소 C 순저항 원시 (⚠ 파일명 오타 `elcetric` 은 원본 그대로). 1485W / 6.4A / HIGH 86%.
+#: **계측 판정의 정본** — v–i 정렬·전압 채널 인공물·짝수차를 모델 없이 가른다 (12.185.25).
+RAW_RESISTIVE_FILES: List[str] = ["raw_elcetric_kettle_1", "raw_elcetric_kettle_2"]
+
 RAW_COMBO_FILES: Dict[str, List[str]] = {
     "raw_beam_minipc_1": ["beam_projector", "minipc"],
     "raw_beam_minipc_2": ["beam_projector", "minipc"],
@@ -558,3 +562,29 @@ def get_usage_probabilities() -> Dict[str, float]:
 def get_all_appliance_types() -> List[str]:
     """등록된 모든 가전 종류."""
     return sorted(APPLIANCE_SPECS.keys())
+
+
+# ── 원시 파형의 위상 교정 (12.185.25) ────────────────────────────────────────
+# 펌웨어의 위상 교정(`NILM_CAL_DEFAULT_LOW_DEG` 0.44° / HIGH 2.62°, 차수당)은 **2Hz 고조파
+# 블록에만** 걸린다 — 주파수영역에서 `ihdeg_h -= cal·h` 로 도는 연산이라 시간영역 원시
+# 표본에는 적용될 수 없다. 그래서 **원시 파형에는 전류-전압 채널 어긋남이 그대로 남아 있다.**
+#
+# 장소 C 포트 원시(`raw_elcetric_kettle_1/2`, 순저항 1485W)로 직접 쟀다. 순저항은
+# `i(t) = v(t)/R` 이 모든 표본에서 성립하므로 회로 모델 없이 잰다:
+#     ∠I₁ − ∠V₁ = +2.864° / +2.871°   (두 파일, 기본파 SNR ~1000)
+#     펌웨어 HIGH 상수                  2.62°     <- 방향 일치, 크기 90%
+# **전류가 전압보다 앞선다.** 그러므로 늦은 v 로 계산한 시뮬 전류는 실측보다 늦고,
+# 비교 전에 **앞당겨야** 한다 (`fit_raw.sim_current` 의 `i_skew_samp` 가 음수).
+#
+# 원시 스냅샷 18개는 전부 LOW 레인지다 (피크 0.27~1.91A < 2.22A, `range!=0` ≤0.1%).
+# 그래서 LOW 상수를 쓴다. 표본 하나 = 360°·60Hz/15360Hz = 1.406°/차수.
+#
+# 유보 자료(조합 6개, 적합에 안 들어감)로 확인: 스큐 0 -> 5.92%, −0.313 -> 4.21% (−29%).
+# 그리고 L 이 780/536/1014 -> 846/616/1245µH 로 **올라간다** — 자리표들이 L 을 무너뜨린 것과
+# 정반대다 (12.185.23·24 의 nvt·계측극·fc·양의 스큐).
+# ⚠ 유보 자료의 최소는 −0.500 표본(0.70°/차수)이고 펌웨어 상수는 −0.313 이다. 0.19 표본
+#    차이는 미결이다 — 가르려면 **LOW 레인지 순저항**(백열전구·납땜인두 0.3~1A) 원시가 필요하다.
+RAW_PHASE_CAL_DEG_PER_ORDER: Dict[str, float] = {"LOW": 0.44, "HIGH": 2.62}
+RAW_SAMPLES_PER_CYCLE = 256
+#: 원시 비교에 쓸 기본 스큐 [표본]. 음수 = 시뮬 전류를 앞당긴다.
+RAW_SKEW_SAMP_LOW = -RAW_PHASE_CAL_DEG_PER_ORDER["LOW"] * RAW_SAMPLES_PER_CYCLE / 360.0
