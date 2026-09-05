@@ -70,6 +70,13 @@ SCATTER: Dict[str, List[float]] = {
 #:   Gp   초크 병렬 33Ω = 0.03S (실물 감쇠 저항의 흔한 값)
 #:   alpha 0 = 정전류 (DC-DC 루프가 느릴 때의 극단)
 PHYSICAL: Dict[str, float] = {"nvt": 0.08, "Gp": 0.03, "alpha": 0.0, "Vf": 0.9}
+#: [2c] Shockley(v6). 브리지를 `V_d = nVt·ln(1 + I/Is)` **하나**로 본다 — `rd` 와 `Vf` 를 뺀다.
+#: 물리 다이오드의 동적 저항 `n·V_T/i` 는 로그항의 미분이지 별도 항이 아니므로 `rd` 를 같이
+#: 두면 다이오드를 두 번 세는 것이다 (저쪽 `circuit6.py`, 가이드 §12.1 과 같은 모형).
+#: 물리 범위: nVt 0.052~0.104V (n=1~2, 다이오드 2개), Is 1e-10~1e-6 A.
+SHOCKLEY_EXTRAS = ("nvt", "i0", "Vf")
+SHOCKLEY_RD = 0.02          #: rd 하한 = 사실상 제거 (1A 에서 0.02V, 로그항의 1/35)
+SHOCKLEY_STARTS = [(0.052, 1e-8), (0.052, 1e-6), (0.104, 1e-8), (0.104, 1e-6), (0.025, 1e-4)]
 #: `run_raw_fit_probe.starts_for` 와 같은 격자 (폴드 기본 적합용)
 GUIDE_RAW = {"laptop_charger": (66.3e-6, 5.06, 988e-6, 0.164e-6, 0.43),
              "beam_projector": (53.3e-6, 7.18, 711e-6, 0.240e-6, 0.30),
@@ -242,6 +249,33 @@ def main() -> None:
         d["dc_ripple_pct"] = rip
         print(f"    직류 리플 추정 {min(rip):.1f}~{max(rip):.1f}% of V_dc "
               f"-> alpha 의 지렛대는 (1±리플)^alpha 뿐이다")
+
+        # ── 2c Shockley (v6) — rd·Vf 를 빼고 다이오드를 하나로 ────────────────
+        print()
+        print(f"  [2c] Shockley — 브리지를 nVt·ln(1+I/Is) 하나로 (rd -> {SHOCKLEY_RD}Ω, Vf 자유)")
+        fix_s = {4: SHOCKLEY_RD}
+        b_s = fit(pts, base_starts(dev, cd.get("cx_measured", np.nan)),
+                  band=a.band, fixed=fix_s)          # 같은 rd 고정에서의 기본
+        st_s = [(b_s.par5, {"nvt": nv, "i0": i0, "Vf": 0.0}) for nv, i0 in SHOCKLEY_STARTS]
+        r_s = fit_nested(pts, b_s.par5, SHOCKLEY_EXTRAS, starts=st_s, band=a.band, fixed=fix_s)
+        gain_s = 1 - np.sqrt(r_s.loss / l_now)
+        bad_s = in_physical_range(r_s.extras)
+        print(f"    rd={SHOCKLEY_RD}Ω 기본  {fmt5(b_s.par5)}  훈련 {100 * np.sqrt(b_s.loss):.2f}%")
+        print(f"    Shockley        {fmt5(r_s.par5)}  훈련 {100 * np.sqrt(r_s.loss):.2f}% "
+              f"({100 * gain_s:+.2f}% vs 정본)")
+        print(f"    {'':16s} {fmtex(r_s.extras)}"
+              + (f"   ⚠[E5] 물리 밖 {bad_s}" if bad_s else "   물리 범위 안"))
+        # 물리값 강제 (nVt 0.076 = n=1.5 × 2다이오드, Is 1e-6) 에서 par5 만 다시
+        r_f = fit(pts, [(b_s.par5, {"nvt": 0.076, "i0": 1e-6, "Vf": 0.0})],
+                  band=a.band, fixed=fix_s, extras=())
+        l_forced = fr.loss_at(r_f.par5, {"nvt": 0.076, "i0": 1e-6, "Vf": 0.0}, pts, a.band)
+        print(f"    물리값 강제 (nVt 0.076, Is 1e-6): 훈련 {100 * np.sqrt(l_forced):.2f}%")
+        d["shockley"] = {"base_rd_low": {"par5": list(b_s.par5), "loss": b_s.loss},
+                         "fit": {"par5": list(r_s.par5), "extras": r_s.extras, "loss": r_s.loss,
+                                 "gain_train": float(gain_s), "unphysical": bad_s,
+                                 "at_bound": r_s.at_bound, "guard_fired": r_s.guard_fired,
+                                 "rms": {k: list(v) for k, v in r_s.rms.items()}},
+                         "forced_physical_loss": l_forced}
 
         # ── 3 [E6] 겨냥 ────────────────────────────────────────────────────
         print(f"\n  [3][E6] 점별 RMS 와 par5 변화")

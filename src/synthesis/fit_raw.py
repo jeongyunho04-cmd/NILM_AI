@@ -57,7 +57,10 @@ RAW_EXTRAS: Tuple[str, ...] = ("nvt", "Gp", "alpha")
 #: **같은 브리지의 세 가지 기술**이다. 둘을 고정한 채 셋째만 맞추면 "요소가 필요하다" 는
 #: 결론이 그 고정 때문일 수 있다 — 그래서 `Vf` 도 풀 수 있게 둔다 (기본은 고정 1.4V).
 SPEC: Dict[str, Tuple[str, float, float, float, float]] = dict(EXTRA_SPEC)
-SPEC["Vf"] = ("lin", 0.2, 3.0, VF_DEFAULT, 0.8)
+SPEC["Vf"] = ("lin", 0.0, 3.0, VF_DEFAULT, 0.8)
+#: 지수항의 기준 전류 [A]. 중립 0.01 은 옛 자리표(`circuit_sim.I0_KNEE`), 물리 포화전류는
+#: 1e-9~1e-5. `nvt` 와 로그로 얽혀 있으므로 둘을 같이 풀면 곡선 가족 하나를 맞추는 것이다.
+SPEC["i0"] = ("log", 1e-10, 1e-2, 0.01, 1e-6)
 
 
 # ── 신호 처리 ────────────────────────────────────────────────────────────────
@@ -197,7 +200,7 @@ def sim_kwargs(extras: Optional[Dict[str, float]]) -> Dict[str, float]:
     """
     if not extras:
         return {}
-    kw = {k: float(v) for k, v in extras.items() if k in ("nvt", "alpha", "Vf")}
+    kw = {k: float(v) for k, v in extras.items() if k in ("nvt", "alpha", "Vf", "i0")}
     if float(extras.get("Gp", 0.0)) > 0.0:
         kw["Rp"] = 1.0 / float(extras["Gp"])
     return kw
@@ -215,7 +218,9 @@ def warm_extras(names: Sequence[str] = ()) -> Dict[str, float]:
 
 def in_physical_range(extras: Dict[str, float]) -> List[str]:
     """[E5] 물리 범위 밖인 요소 이름. 밖이면 '요소' 가 아니라 '자리표' 로 읽는다."""
-    lim = {"nvt": (0.03, 0.15), "Gp": (0.0, 0.05), "alpha": (0.0, 1.0), "Vf": (0.6, 2.1)}
+    # nvt 는 브리지 다이오드 **2개**의 n·V_T 합 = 2×(1~2)×0.026 = 0.052~0.104V
+    lim = {"nvt": (0.05, 0.10), "Gp": (0.0, 0.05), "alpha": (0.0, 1.0), "Vf": (0.0, 2.1),
+           "i0": (1e-9, 1e-5)}
     out = []
     for n, v in extras.items():
         if n not in lim or v == SPEC[n][3]:    # 중립은 '꺼짐' 이라 판정 대상이 아니다

@@ -64,24 +64,50 @@ V0_LOAD = 300.0     #: 직류 부하 지수의 기준 전압 [V] (E3)
 
 
 @njit(cache=True)
-def _diode_ib(drive, rd, nvt):
-    """도통 전압 여유 `drive` 에서 브리지 전류. nvt>0 이면 v = rd·i + nvt·ln(1+i/I0) 를 뉴턴으로 푼다 (E1)."""
+def _diode_ib(drive, rd, nvt, i0, ib0=-1.0, nit=8):
+    """도통 전압 여유 `drive` 에서 브리지 전류 — `v = rd·i + nvt·ln(1 + i/i0)` 를 푼다.
+
+    `i0` 는 지수항의 기준 전류다. 옛 기본값 `I0_KNEE = 0.01A` 는 "무릎을 조금 둥글게" 하는
+    자리표였고, **Shockley 로 읽으려면 포화전류(1e-9~1e-5A)** 여야 한다. 그때 `rd` 는 빼야
+    한다 — 물리 다이오드의 동적 저항 `n·Vt/i` 는 로그항의 **미분**이지 별도 항이 아니다
+    (`d/di [nvt·ln(1+i/i0)] = nvt/(i0+i)`). 둘을 같이 두면 다이오드를 두 번 세는 것이고,
+    그래서 rd=0.3Ω 을 고정한 채 맞춘 nvt 가 물리값의 1/4~1/2 로 나왔다 (12.185.20).
+
+    뉴턴의 출발점: rd=0 일 때의 해석해 `i0·(e^{drive/nvt} − 1)` 을 쓰고 `drive/rd` 로 자른다.
+    둘 다 참 해보다 크므로 f ≥ 0 에서 감쇠 하강하면 단조 수렴한다 (옛 선형 출발점은
+    i0 가 작으면 여러 자릿수 아래에서 시작해 4회로 못 올라온다).
+    """
     if drive <= 0.0:
         return 0.0
     if nvt <= 0.0:
         return drive / rd
-    ib = drive / (rd + nvt / I0_KNEE)
-    for _ in range(4):
-        f = rd * ib + nvt * np.log(1.0 + ib / I0_KNEE) - drive
-        fp = rd + nvt / (I0_KNEE + ib)
-        ib -= f / fp
+    if ib0 > 0.0:
+        ib = ib0                       # 겹쳐 시작 — 노드 뉴턴 안에서는 직전 반복의 해가 가깝다
+    else:
+        x = drive / nvt
+        if x > 40.0:
+            x = 40.0
+        ib = i0 * (np.exp(x) - 1.0)
+    if rd > 1e-12:
+        lim = drive / rd
+        if ib > lim:
+            ib = lim
+    for _ in range(nit):
+        f = rd * ib + nvt * np.log(1.0 + ib / i0) - drive
+        fp = rd + nvt / (i0 + ib)
+        step = f / fp
+        if step > 0.5 * ib:          # 한 걸음에 절반 아래로 못 내려간다 (감쇠)
+            step = 0.5 * ib
+        ib -= step
         if ib < 0.0:
             ib = 0.0
+        if step * step < 1e-24:
+            break
     return ib
 
 
 @njit(cache=True)
-def _core(vsrc, dt, P, C_dc, R, L, Cx, Vf, rd, vc0, nvt, Rp, alpha, nsub):
+def _core(vsrc, dt, P, C_dc, R, L, Cx, Vf, rd, vc0, nvt, Rp, alpha, i0, nsub):
     """시간 적분. 반환 (선 전류 iL, 브리지 전류 ib).
 
     확장 (기본값이면 원본과 같다): nvt>0 지수 다이오드 무릎(E1), Rp>0 초크 병렬 감쇠(E2),
@@ -121,23 +147,44 @@ def _core(vsrc, dt, P, C_dc, R, L, Cx, Vf, rd, vc0, nvt, Rp, alpha, nsub):
                 it = (vs - vn) / R
                 iL = it
             if Cx > 1e-12:
-                # 도통 여부를 현재 vn 으로 판정한 뒤 노드 전압을 반음해로 갱신.
-                # 지수 다이오드면 직전 ib 에서 선형화한 rd_eff 로 반음해 계수를 잡는다.
-                rd_eff = rd + (nvt / (I0_KNEE + ib) if nvt > 0.0 else 0.0)
-                a = h / (rd_eff * Cx)
-                if vn >= 0.0:
-                    if vn - Vf - vc > 0.0:
-                        vn = (vn + b * it + a * (Vf + vc)) / (1.0 + a)
-                    else:
-                        vn = vn + b * it
+                # 노드 전압을 **음해로** 푼다:  vn = vfree − b·i_b(vn),  vfree = vn + b·it
+                # (부호는 vn 의 부호를 따른다. i_b 는 `_diode_ib` 의 브리지 전류.)
+                #
+                # ⚠ 옛 판은 이것을 `rd_eff` 로 선형화했는데, 선형화 전류를 어디서 잡느냐에
+                # 따라 답이 크게 달라진다. 직전 표본의 ib(≈0 도통 직전)에서 잡으면 지수
+                # 다이오드에서 rd_eff 가 5×10⁴Ω 까지 뛰어 다이오드 가지가 통째로 무시되고,
+                # 예측값에서 잡으면 반대로 과대평가된다. 두 선형화가 nvt 판의 손실을
+                # **18배** 갈랐다 — 그 자리에서 적분이 수렴하지 않았다는 뜻이다 (12.185.23).
+                # 그래서 선형화를 버리고 스칼라 뉴턴으로 직접 푼다. 단조 함수라 안정하다.
+                vfree = vn + b * it
+                sgn = 1.0 if vfree >= 0.0 else -1.0
+                drive = sgn * vfree - Vf - vc
+                if drive <= 0.0:
+                    vn = vfree
+                    ib = 0.0
                 else:
-                    if -vn - Vf - vc > 0.0:
-                        vn = (vn + b * it - a * (Vf + vc)) / (1.0 + a)
-                    else:
-                        vn = vn + b * it
-                ib = _diode_ib(abs(vn) - Vf - vc, rd, nvt)
+                    # g(u) = u − |vfree| + b·i_b(u − Vf − vc) = 0,  u = |vn| ≥ 0
+                    u = sgn * vfree
+                    ibn = ib if ib > 0.0 else -1.0     # 직전 표본의 브리지 전류로 시작
+                    for _ in range(6):
+                        ibn = _diode_ib(u - Vf - vc, rd, nvt, i0, ibn, 3)
+                        g = u - sgn * vfree + b * ibn
+                        if g <= 0.0:
+                            break
+                        # dg/du = 1 + b·di/dv,  di/dv = 1/(rd + nvt/(i0+i))
+                        dv = rd + (nvt / (i0 + ibn) if nvt > 0.0 else 0.0)
+                        gp = 1.0 + b / dv
+                        step = g / gp
+                        lo = Vf + vc
+                        if u - step < lo:
+                            step = 0.5 * (u - lo)      # 도통 문턱 아래로 안 내려간다
+                        u -= step
+                        if step < 1e-9:            # 1nV — 노드 전압의 물리 규모보다 훨씬 아래
+                            break
+                    ib = _diode_ib(u - Vf - vc, rd, nvt, i0, ibn, 4)
+                    vn = sgn * u
             else:
-                ib = _diode_ib(abs(vs - it * R) - Vf - vc, rd, nvt)
+                ib = _diode_ib(abs(vs - it * R) - Vf - vc, rd, nvt, i0)
                 it = ib if vs >= 0.0 else -ib
                 iL = it
             # 직류 부하: alpha=1 이면 P/vc (정전력)
@@ -198,7 +245,8 @@ def _phasors(x: np.ndarray, h_max: int = 15) -> np.ndarray:
 def simulate(P: float, C_dc: float, R: float, L: float, Cx: float = 0.0, rd: float = 1.0,
              V_rms: float = 222.0, Vf: float = VF_DEFAULT,
              vsrc: Optional[np.ndarray] = None, h_max: int = 15,
-             nvt: float = 0.0, Rp: float = 0.0, alpha: float = 1.0) -> Dict:
+             nvt: float = 0.0, Rp: float = 0.0, alpha: float = 1.0,
+             i0: float = I0_KNEE, nsub: Optional[int] = None) -> Dict:
     """한 동작점을 푼다.
 
     반환 dict:
@@ -209,15 +257,17 @@ def simulate(P: float, C_dc: float, R: float, L: float, Cx: float = 0.0, rd: flo
       p_w, irms, thd, cond_deg     평균 전력, 전류 rms, THD(h2..h_max / h1), 반주기 도통각[°]
       i, v      마지막 NDFT 주기의 파형
     확장 요소 (12.184.10): nvt 지수 다이오드 무릎 [V], Rp 초크 병렬 감쇠 [Ω] (0=없음), alpha 직류 부하 지수.
+    `i0` 는 지수항의 기준 전류 — 기본 0.01A 는 옛 자리표이고, Shockley 로 읽으려면
+    포화전류(1e-9~1e-5A)로 두고 `rd` 를 하한에 묶어야 한다 (`_diode_ib` 주석).
     """
     if vsrc is None:
         vsrc = ideal_wave(V_rms)
     vsrc = np.ascontiguousarray(vsrc, dtype=np.float64)
     dt = 1.0 / (F * NPC)
-    ns = substeps(float(L), float(Cx), dt)
+    ns = substeps(float(L), float(Cx), dt) if nsub is None else int(nsub)
     iL, ib = _core(vsrc, dt, float(P), float(C_dc), max(float(R), 1e-3), float(L), float(Cx),
                    float(Vf), max(float(rd), 1e-3), float(np.max(np.abs(vsrc))) - float(Vf),
-                   float(nvt), float(Rp), float(alpha), ns)
+                   float(nvt), float(Rp), float(alpha), float(i0), ns)
     out: Dict = {"ok": bool(np.all(np.isfinite(iL)))}
     if not out["ok"]:
         out["s"] = np.full(h_max, np.nan, complex)
