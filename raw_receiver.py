@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NILM 원시 파형 수신기 (노트북 쪽) - 유선 ST-Link VCP, 프로토콜 v1
+NILM 원시 파형 수신기 (노트북 쪽) - 유선 ST-Link VCP, 프로토콜 v2
 =================================================================
 보드에 "40주기를 뽑아 달라"고 요청하고, 돌아온 원시 ADC 파형을 CSV로 저장한다.
 펌웨어 NILM_ECE_IF/Core/Inc/nilm_raw.h 의 프레임 형식과 1:1로 맞춰져 있다.
@@ -14,16 +14,21 @@ USB 케이블 하나만 꽂으면 되고, 요약이 아니라 가공 전 ADC 코
 
 프레임 (전부 리틀엔디언, 주기 1개 = 프레임 1개, 총 2071바이트):
 
-    [A5 5B] [ver=01] [len=2064]   페이로드 2064B   [CRC16]
+    [A5 5B] [ver=02] [len=2064]   페이로드 2064B   [CRC16]
     └─ 헤더 5B ────────────────┘                   2B
 
     CRC16-CCITT(0x1021, init 0xFFFF), ver 바이트부터 페이로드 끝까지.
     매직이 A5 5B 라 WiFi 프레임(A5 5A)과 절대 헷갈리지 않는다.
 
 샘플 1개 = 8바이트, u16 4개. ADC 듀얼 동시 모드의 원본 그대로다:
-    high  ADC_high (x3.5 저이득, 랭크1)   v_r1  ADC_V 랭크1 (high 와 동시)
-    low   ADC_low  (x51.7 고이득, 랭크2)  v_r2  ADC_V 랭크2 (low 와 동시)
-전부 14비트 오프셋 바이너리(0..16383). 8192 = 0V, 1카운트 = 402.8uV.
+    low   ADC_low  (x51.7 고이득, 랭크1)  v     ADC_V (low 와 동시)
+    high  ADC_high (x3.5 저이득, 랭크2)   bias  1.65V 바이어스 탭 (high 와 동시)
+전부 14비트 오프셋 바이너리(0..16383). v2 부터 단일 종단이라 코드가 곧 그 핀의
+절대 전압이다: 8192 = 1.65V, 1카운트 = 201.4uV (v1 의 402.8uV 에서 절반).
+
+v1 과 달리 바이어스를 소프트웨어로 뺀다. 그리고 ADC_high 는 신호가 INN 핀에
+물려 있던 보드라 부호를 뒤집어야 LOW 와 규약이 맞고, HIGH 샘플의 전압은
+랭크2 시각으로 보간해야 한다 - 셋 다 convert() 가 펌웨어와 똑같이 한다.
 
 프레임에는 그 순간 펌웨어가 쓰던 추적 DC 오프셋 3개도 실려 온다. 샘플에는
 반영돼 있지 않으므로, 이 스크립트가 그 값으로 펌웨어의 변환과 레인지 판정을
@@ -58,7 +63,7 @@ except ImportError:
 
 # ── 프로토콜 상수 (펌웨어 nilm_raw.h 와 반드시 일치) ─────────────────────────
 MAGIC = b"\xa5\x5b"
-PROTO_VER = 1
+PROTO_VER = 2
 SAMPLES = 256
 META = 16                                  # seq..rsv
 HDR = 5 + META                             # 샘플 시작 오프셋 = 21
@@ -71,16 +76,22 @@ assert HDR == 21 and PAYLOAD == 2064 and FRAME_SIZE == 2071
 # ── 보정 상수 (펌웨어 nilm_acq.c 와 반드시 일치) ────────────────────────────
 ADC_MID = 8192
 VREF = 3.3
-LSB = VREF / 8192.0                        # 402.832 uV
+LSB = VREF / 16384.0                       # 201.416 uV
 CT_RATIO = 2000.0
 R_BURDEN = 27.0
 GAIN_HIGH = 1.0 + 6800.0 / 2700.0          # 3.5185
 GAIN_LOW_EXTRA = 75000.0 / 5100.0          # 14.706
 SENS_HIGH = R_BURDEN * GAIN_HIGH / CT_RATIO        # 0.0475 V/A
-SENS_LOW = SENS_HIGH * GAIN_LOW_EXTRA              # 0.6985 V/A
+# LOW 경로 실측 트림 (펌웨어 nilm_acq.c 의 NILM_LOW_TRIM 과 반드시 일치).
+# 2026-09-05 이전 캡처를 읽을 때는 1.0 으로 두어야 그때 눈금이 재현된다.
+LOW_TRIM = 1.00580
+SENS_LOW = SENS_HIGH * GAIN_LOW_EXTRA * LOW_TRIM   # 0.70258 V/A
 I_SAT_A = 1.65 / SENS_HIGH
-VOLT_SCALE = 307.9
-CLIP_LIMIT = int(1.55 / VREF * 8192.0)             # 3847
+VOLT_SCALE = 309.34      # 2026-09-05 무부하 트림 (그 전 캡처는 307.9)
+CLIP_LIMIT = int(1.55 / VREF * 16384.0)            # 7695
+
+# 랭크1 -> 랭크2 시간차 / 샘플 주기 = 9.472us / 65.104us (nilm_acq.c 와 동일)
+V_INTERP_F = 0.14549
 
 RANGE_LOW, RANGE_HIGH, RANGE_OVER = 0, 1, 2
 
@@ -136,14 +147,14 @@ def parse_frame(fr: bytes) -> dict:
     """CRC 까지 통과한 프레임 1개 -> dict. 샘플은 아직 원본 코드 그대로."""
     seq, arr, idx, n, oh, ol, ov, flags, _rsv = struct.unpack_from(
         "<IHBBhhhBB", fr, 5)
-    # 256샘플 x (high, v_r1, low, v_r2)
+    # 256샘플 x (low, v, high, bias)
     s = struct.unpack_from(f"<{SAMPLES * 4}H", fr, HDR)
     return {
         "seq": seq, "arr": arr, "idx": idx, "n": n,
         # 1/16 카운트 단위로 실려 온다
         "off_high": oh / 16.0, "off_low": ol / 16.0, "off_volt": ov / 16.0,
         "gap_before": bool(flags & 0x01),
-        "high": s[0::4], "v_r1": s[1::4], "low": s[2::4], "v_r2": s[3::4],
+        "low": s[0::4], "v": s[1::4], "high": s[2::4], "bias": s[3::4],
     }
 
 
@@ -218,41 +229,61 @@ def capture(ser, timeout=6.0, verbose=True):
 def convert(f):
     """프레임 1개의 256샘플을 펌웨어와 똑같은 규칙으로 해석한다.
 
-    핵심은 클리핑 판정을 추적 오프셋이 아니라 고정 8192 로 한다는 것이다.
-    펌웨어가 그렇게 하는 이유(추적 오프셋을 쓰면 검출기가 자기 문턱을 만들어
-    폭주한다)는 nilm_acq.c 의 NILM_CLIP_LIMIT_CNT 주석에 있다. 여기서도
-    똑같이 해야 재현이 된다.
+    v2(단일 종단)부터 세 가지가 달라졌다:
+      1. 바이어스 코드를 빼야 예전의 차동값이 복원된다 (주기 평균으로)
+      2. ADC_high 는 신호가 INN 핀에 물려 있던 보드라 부호를 뒤집어야
+         LOW 와 부호 규약이 맞는다 (안 뒤집으면 레인지 혼재 주기가 깨진다)
+      3. HIGH 샘플은 랭크2 시각이라 전압을 그쪽으로 선형 보간한다
+
+    클리핑 판정은 바이어스를 빼기 전의 raw 코드로, 추적 오프셋이 아니라
+    고정 8192 로 한다. 펌웨어가 그렇게 하는 이유(추적 오프셋을 쓰면 검출기가
+    자기 문턱을 만들어 폭주한다)는 nilm_acq.c 의 NILM_CLIP_LIMIT_CNT 주석에
+    있다. 여기서도 똑같이 해야 재현이 된다.
     """
     off_h = ADC_MID + f["off_high"]
     off_l = ADC_MID + f["off_low"]
     off_v = ADC_MID + f["off_volt"]
+    low, volt, high, bias = f["low"], f["v"], f["high"], f["bias"]
+    # 바이어스는 샘플별이 아니라 주기 평균으로 뺀다 (펌웨어와 동일.
+    # 근거는 nilm_acq.c 의 bias_sum 주석: 바이어스 채널 AC 의 87%가
+    # 우리 자신의 읽기 잡음이라, 샘플별로 빼면 HIGH 경로 잡음만 늘었다)
+    bi = sum(bias) / float(SAMPLES)
     out = []
     for k in range(SAMPLES):
-        hi, vr1, lo, vr2 = f["high"][k], f["v_r1"][k], f["low"][k], f["v_r2"][k]
-        d_hi = hi - ADC_MID
+        lo, vv, hi = low[k], volt[k], high[k]
         d_lo = lo - ADC_MID
+        d_hi = hi - ADC_MID
         clip_lo = abs(d_lo) >= CLIP_LIMIT
         clip_hi = abs(d_hi) >= CLIP_LIMIT
+
+        c_lo = ADC_MID + (lo - bi)
+        c_hi = ADC_MID - (hi - bi)          # 부호 반전
+        c_v = ADC_MID + (vv - bi)
+
         if not clip_lo:
             rng = RANGE_LOW
-            i_a = (lo - off_l) * LSB / SENS_LOW
-            v_v = (vr2 - off_v) * LSB * VOLT_SCALE      # 같은 랭크(2)
-        elif not clip_hi:
-            rng = RANGE_HIGH
-            i_a = (hi - off_h) * LSB / SENS_HIGH
-            v_v = (vr1 - off_v) * LSB * VOLT_SCALE      # 같은 랭크(1)
+            i_a = (c_lo - off_l) * LSB / SENS_LOW
+            v_v = (c_v - off_v) * LSB * VOLT_SCALE      # 같은 랭크(1)
         else:
-            rng = RANGE_OVER
-            i_a = I_SAT_A if d_hi >= 0 else -I_SAT_A
-            v_v = (vr1 - off_v) * LSB * VOLT_SCALE
+            if not clip_hi:
+                rng = RANGE_HIGH
+                i_a = (c_hi - off_h) * LSB / SENS_HIGH
+            else:
+                rng = RANGE_OVER
+                # c_hi 가 부호 반전이라 위쪽 레일이 전류의 음의 최대다
+                i_a = I_SAT_A if d_hi <= 0 else -I_SAT_A
+            # 랭크2 시각으로 전압 보간 (마지막 샘플은 직전 기울기로 외삽)
+            v_next = volt[k + 1] if k + 1 < SAMPLES else 2 * vv - volt[k - 1]
+            v_b = vv + V_INTERP_F * (v_next - vv)
+            v_v = ((ADC_MID + (v_b - bi)) - off_v) * LSB * VOLT_SCALE
         out.append((rng, i_a, v_v,
-                    (lo - off_l) * LSB / SENS_LOW,      # 두 경로를 각각
-                    (hi - off_h) * LSB / SENS_HIGH))    # 보고 싶을 때가 있다
+                    (c_lo - off_l) * LSB / SENS_LOW,    # 두 경로를 각각
+                    (c_hi - off_h) * LSB / SENS_HIGH))  # 보고 싶을 때가 있다
     return out
 
 
 CSV_HEADER = ["t_s", "cyc", "seq", "n",
-              "high", "v_r1", "low", "v_r2",            # 원본 ADC 코드
+              "low", "v", "high", "bias",               # 원본 ADC 코드
               "range", "i_a", "v_v",                    # 펌웨어 재현
               "i_low_a", "i_high_a",                    # 두 경로 각각
               "fs_hz", "off_high", "off_low", "off_volt", "gap_before"]
@@ -278,7 +309,7 @@ def write_csv(path, frames):
                 rng, i_a, v_v, i_lo, i_hi = conv[k]
                 w.writerow([
                     f"{t + k * dt:.7f}", f["idx"], f["seq"], k,
-                    f["high"][k], f["v_r1"][k], f["low"][k], f["v_r2"][k],
+                    f["low"][k], f["v"][k], f["high"][k], f["bias"][k],
                     rng, f"{i_a:.6f}", f"{v_v:.4f}",
                     f"{i_lo:.6f}", f"{i_hi:.6f}",
                     f"{fs:.2f}", f"{f['off_high']:.4f}",
@@ -297,10 +328,10 @@ def write_npz(path, frames):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     np.savez_compressed(
         path,
-        high=np.array([f["high"] for f in frames], dtype=np.uint16),
-        v_r1=np.array([f["v_r1"] for f in frames], dtype=np.uint16),
         low=np.array([f["low"] for f in frames], dtype=np.uint16),
-        v_r2=np.array([f["v_r2"] for f in frames], dtype=np.uint16),
+        v=np.array([f["v"] for f in frames], dtype=np.uint16),
+        high=np.array([f["high"] for f in frames], dtype=np.uint16),
+        bias=np.array([f["bias"] for f in frames], dtype=np.uint16),
         seq=np.array([f["seq"] for f in frames], dtype=np.uint32),
         idx=np.array([f["idx"] for f in frames], dtype=np.uint8),
         arr=np.array([f["arr"] for f in frames], dtype=np.uint16),
