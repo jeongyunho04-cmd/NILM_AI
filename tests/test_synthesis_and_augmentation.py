@@ -1309,3 +1309,36 @@ def test_circuit_model_does_not_fail_silently():
     assert circ.stats()["failures"] == 0, (
         f"회로 모델이 조용히 실패했습니다: {circ.stats()} — "
         "`circuit_model/__pycache__` 를 지우고 다시 보십시오 (13.23.5)")
+
+
+def test_scoring_does_not_assume_a_fixed_test_file():
+    """채점기가 **파일 이름**으로 옛 시대 자료 모양을 가정하면 안 된다 (13.24.10).
+
+    2026-09-06 계측기 교체로 `test_1`~`test_5` 가 전부 **다른 녹화**로 갈렸는데
+    이름은 그대로다. 그래서 이름에 건 가정이 셋이나 새 자료를 덮쳤다:
+      · `results/seq_time_map.json` 이 새 test_4 를 옛 seq 로 납치 (13.19)
+      · `run_line_impedance` 가 새 test_5 를 "장소 A" 로 (13.19)
+      · `run_gate_check.oven_on_breakdown` 이 `ev["test_4"]` 하드코딩 -> KeyError (13.24.10)
+
+    이 검사는 **자료의 모양으로 걸러야 한다**는 규약을 지킨다.
+    """
+    from src.evaluation.real_events import load_events
+    from src.run_gate_check import oven_breakdown_ok
+
+    ev = load_events()
+    assert ev, "real_events 가 비었습니다"
+
+    # 모든 파일이 같은 기기를 담고 있지 않다 — 채점기는 그걸 견뎌야 한다
+    sets = {s: frozenset(ev[s]["appliances_present"]) for s in ev}
+    assert len(set(sets.values())) > 1, (
+        "모든 파일의 기기 구성이 같습니다 — 이 검사가 지키려는 상황이 아닙니다")
+
+    for stem in ev:
+        ok = oven_breakdown_ok(stem, ev)          # 던지면 안 된다
+        if ok:
+            iv = ev[stem]["intervals"]
+            assert "_heater_pulses" in iv["oven"], f"{stem}: 통과했는데 키가 없습니다"
+            assert "hotplate" in iv and "electiric_kettle" in iv
+
+    # 없는 이름을 물어도 조용히 False 여야 한다
+    assert not oven_breakdown_ok("test_does_not_exist", ev)

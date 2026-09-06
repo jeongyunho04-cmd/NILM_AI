@@ -256,13 +256,29 @@ def hedge_report(d: dict, apps: List[str]) -> dict:
     return out
 
 
-def oven_on_breakdown(d: dict, apps: List[str], ev: dict) -> dict:
-    """`test_4` 의 오븐 히터 통전 구간에서 핫플/포트가 어떻게 갈리는가.
+def oven_breakdown_ok(stem: str, ev: dict) -> bool:
+    """`oven_on_breakdown` 을 돌릴 수 있는 파일인가.
+
+    ⚠ **옛 계측기 시대(12.9.5)의 진단이다.** 그때의 `test_4` 는 오븐·핫플·포트가
+    겹치는 파일이었고, 라벨에 `_heater_pulses`(히터 통전 구간)가 붙어 있었다.
+    2026-09-06 계측기 교체 뒤의 `test_4` 는 **전혀 다른 녹화**(D2, 프로젝터·충전기·
+    미니PC, 오븐 없음)라 이름만 같다. 그래서 파일 이름이 아니라 **자료의 모양**으로 건다.
+    지금 자료에는 `_heater_pulses` 가 없으므로 이 진단은 건너뛴다.
+    """
+    iv = ev.get(stem, {}).get("intervals", {})
+    return ("_heater_pulses" in iv.get("oven", {})
+            and "on" in iv.get("hotplate", {})
+            and "electiric_kettle" in iv)
+
+
+def oven_on_breakdown(d: dict, apps: List[str], ev: dict, stem: str = "test_4") -> dict:
+    """오븐 히터 통전 구간에서 핫플/포트가 어떻게 갈리는가.
 
     12.9.5 가 "남은 실패 - 하나로 좁혀졌다" 고 한 바로 그 구간이다.
+    `oven_breakdown_ok` 로 걸러 부를 것 — 옛 시대 라벨에만 있는 키를 쓴다.
     """
-    iv = ev["test_4"]["intervals"]
-    n = int(ev["test_4"]["cycles"])
+    iv = ev[stem]["intervals"]
+    n = int(ev[stem]["cycles"])
 
     def mask(pairs):
         m = np.zeros(n, bool)
@@ -535,8 +551,8 @@ def main() -> int:
             s_hard = score_one(d_hard, P_hard, stem, apps, ev, session_merge=sm)
             per_file[stem] = {"soft": s_soft, "hard": s_hard, "hedge": hedge_report(d, apps)}
             rows["soft"].append(s_soft); rows["hard"].append(s_hard)
-            if stem == "test_4":
-                per_file[stem]["oven_on"] = oven_on_breakdown(d, apps, ev)
+            if oven_breakdown_ok(stem, ev):
+                per_file[stem]["oven_on"] = oven_on_breakdown(d, apps, ev, stem)
 
         K = [("absent_sum_w", "오귀속W"), ("absent_fa_rel_max", "최악FA"),
              ("residual_abs_w", "잔차W"), ("on_off_f1_mean", "on/off F1")]
@@ -561,9 +577,10 @@ def main() -> int:
                       f"게이트 {v['mean_gate']:.3f}  정격 {v['mean_rated_w']:7.1f}W "
                       f"-> {v['mean_emitted_w']:7.1f}W 를 낸다")
 
-        ob = per_file.get("test_4", {}).get("oven_on")
+        ob_stem = next((s for s in stems if "oven_on" in per_file.get(s, {})), None)
+        ob = per_file.get(ob_stem, {}).get("oven_on") if ob_stem else None
         if ob:
-            print("\n  [test_4 오븐 히터 통전 구간] — 12.9.5 가 지목한 남은 실패")
+            print(f"\n  [{ob_stem} 오븐 히터 통전 구간] — 12.9.5 가 지목한 남은 실패")
             print(f"    {'구간':18s}{'n':>6s}{'오븐':>16s}{'핫플':>16s}{'포트':>16s}"
                   f"{'예측합':>10s}{'관측P':>10s}")
             for name, v in ob.items():
