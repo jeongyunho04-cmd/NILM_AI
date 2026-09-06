@@ -44,7 +44,8 @@ from src.evaluation.real_events import load_events, score_absent, score_events, 
 from src.evaluation.sealing import is_sealed
 from src.model.losses import LossWeights, NILMLoss, build_state_scales
 from src.model.postproc import HALFWAVE_OHM, RESISTIVE_OHM
-from src.model.inputs import FINE_CYCLES, TARGET_LOOKAHEAD, LEGACY_FINE_CHANNELS
+from src.model.inputs import (FINE_CYCLES, FINE_LAYOUT, LEGACY_FINE_CHANNELS,
+                             TARGET_LOOKAHEAD, WIDE_CHANNELS)
 from src.run_gate_check import assert_target_config
 from src.model.net import (
     NILMNet, appliance_state_counts, harmonic_scales, harmonic_signatures,
@@ -440,6 +441,10 @@ def main() -> int:
                          "기준 전압은 적응 창의 중앙값이라 평균 배율이 1 이고, "
                          "**부하와 상관된 변동만** 새 정보로 들어간다 "
                          "(그냥 지문을 상수배 한 것과 구별하기 위해서다)")
+    ap.add_argument("--zero-wide-channels", default="", metavar="LIST",
+                    help="**광역** 입력의 이 채널들을 0 으로 만든다 (13.12 절제용). "
+                         "**1단계와 반드시 같은 목록을 줘야 한다** — 다르면 2단계가 1단계가 "
+                         "못 본 채널을 쓰게 된다. 크기 블록 12~26, 위상 블록 27~34.")
     ap.add_argument("--zero-channels", default="", metavar="LIST",
                     help="세밀 입력의 이 채널들을 0 으로 (쉼표). 1단계에서 같은 "
                          "인자로 학습한 모델을 2단계에서도 같은 입력으로 돌리려면 "
@@ -472,11 +477,16 @@ def main() -> int:
     ZERO_CH = [int(x) for x in a.zero_channels.split(",") if x.strip()]
     if ZERO_CH:
         print(f"  ** 세밀 채널 {ZERO_CH} 를 0 으로 (조인 대조, 12.114 재시험) **")
+    ZERO_W = [int(x) for x in a.zero_wide_channels.split(",") if x.strip()]
+    if ZERO_W:
+        print(f"  ** 광역 채널 {ZERO_W} 를 0 으로 (13.12 절제) **")
     hs = load_holdout(a.holdout)
     apps = hs.appliances
     prep = prepare_holdout_inputs(hs)
     if ZERO_CH:
         prep[0][:, ZERO_CH] = 0.0
+    if ZERO_W:
+        prep[1][:, ZERO_W] = 0.0
     hs.X = np.zeros((len(prep[0]), 1, 1), np.float32)
 
     held = [x.strip() for x in a.holdout_real.split(",") if x.strip()]
@@ -826,6 +836,9 @@ def main() -> int:
         if ZERO_CH:
             rf[:, ZERO_CH] = 0.0
             sf[:, ZERO_CH] = 0.0
+        if ZERO_W:
+            rwd[:, ZERO_W] = 0.0
+            swd[:, ZERO_W] = 0.0
 
         sw = real_sample_weights(rtg["p_observed"], a.real_weight, a.smps_boost)
 
@@ -889,6 +902,11 @@ def main() -> int:
                 "fine_dropout": ck.get("fine_dropout", 0.0),
                 # 짝수차 배제 (12.77). 부모 체크포인트 값을 그대로 물려받는다.
                 "zero_even_harmonics": ck.get("zero_even_harmonics", False),
+                # 채널 **배치**와 광역 채널 수 (13.12). 물려받지 않고 **현재 코드 값**을 적는다 —
+                # 2단계는 실측 입력을 코드로 만들므로 그때 배치가 이 체크포인트의 배치다.
+                # (부모에서 물려받으면 1단계와 2단계가 다른 코드로 돌아도 안 걸린다.)
+                "fine_layout": FINE_LAYOUT,
+                "wide_channels": WIDE_CHANNELS,
                 "fine_channels": model.fine_channels,
                 "target_lookahead": TARGET_LOOKAHEAD, "fine_cycles": FINE_CYCLES,
                 # 장소 전달비 (12.181). 이 값으로 적응했으므로 채점·실시간도 같은 보정을 건다.
