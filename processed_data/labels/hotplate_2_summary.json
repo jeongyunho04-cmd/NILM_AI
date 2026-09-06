@@ -1,0 +1,73 @@
+{
+  "raw_rows": 60270,
+  "cleaned_rows": 60270,
+  "duration_s": 1004.5,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 0,
+  "invalid_samples_dropped": 0,
+  "invalid_samples_interpolated": 0,
+  "interpolated_cycles": 0,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "startup_frames_dropped": 0,
+  "noise_floor_registry_w": 1.6,
+  "noise_floor_applied_w": 1.3762,
+  "noise_floor_source": "trailing_unplugged",
+  "trailing_noise": {
+    "n_cycles": 1644,
+    "start_t_rel_s": 977.1,
+    "p_w": 1.3762,
+    "i1_ma": 6.361000000000001,
+    "i1_deg": -1.5164122553134813,
+    "vrms": 216.34
+  },
+  "source_file": "hotplate_2.csv",
+  "file_role": "device",
+  "appliance_type": "hotplate",
+  "load_class": "resistive",
+  "classification_reason": "등록된 단일 가전 'hotplate'",
+  "output_file": null,
+  "feature_columns_count": 140,
+  "v_ref_v": 215.84,
+  "p_mean": 130.6,
+  "p_max": 461.12,
+  "irms_mean": 0.6148,
+  "korean_name": "핫플레이트",
+  "total_samples": 60270,
+  "on_percentage": 28.93,
+  "state_distribution": {
+    "OFF_STANDBY": {
+      "state_id": 0,
+      "description": "플러그만 꽂힘 - 스위치 내림 (바닥 뺀 전력 <0.3W)",
+      "count": 15888,
+      "percentage": 26.36,
+      "duration_min": 4.41
+    },
+    "ARMED_IDLE": {
+      "state_id": 1,
+      "description": "스위치 켜짐, 릴레이 열림 (서모스탯 휴지)",
+      "count": 26944,
+      "percentage": 44.71,
+      "duration_min": 7.48
+    },
+    "HEATING_ACTIVE": {
+      "state_id": 2,
+      "description": "히터 통전 발열 주기",
+      "count": 17438,
+      "percentage": 28.93,
+      "duration_min": 4.84
+    }
+  },
+  "events_summary": {
+    "total_events": 744,
+    "on_events": 6,
+    "off_events": 4,
+    "mode_change_events": 734,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\hotplate_2_annotated.csv",
+  "npz_file": "processed_data\\npz\\hotplate_2.npz",
+  "events_json": "processed_data\\labels\\hotplate_2_events.json"
+}

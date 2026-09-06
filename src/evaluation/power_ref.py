@@ -181,9 +181,9 @@ OBSERVED_GUARD_FRAC = 0.9
 #: 2026-09-06 재계산: 새 격리 녹화의 ON 구간 vrms 중앙값. `REFERENCE_W` 와 반드시 짝으로 고친다 —
 #: 한쪽만 바꾸면 `P = V²/R` 보정이 그 비만큼 통째로 틀어진다.
 REFERENCE_V: Dict[str, float] = {
-    "electiric_kettle": 227.7,      # electric_kettle_1 (심야). R = V²/P = 35.59Ω
-    "hotplate": 214.5,              # hotplate_1 (저녁).      R = 101.17Ω
-    "oven": 210.1,                  # oven_1 (저녁).          R = 40.15Ω
+    "electiric_kettle": 227.7,      # electric_kettle_1 (E1). R = V²/P = 35.59Ω
+    "hotplate": 214.5,              # hotplate_1 (D1).        R = 101.17Ω
+    "oven": 210.1,                  # oven_1 (D1).            R = 40.15Ω
 }
 
 

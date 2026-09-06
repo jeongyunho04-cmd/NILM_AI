@@ -444,13 +444,18 @@ def main() -> int:
     ap.add_argument("--max-dt", type=float, default=3.5,
                     help="사람 시각과 신호 계단의 최대 거리 (초). 사용자 진술 ±3초 + 여유")
     ap.add_argument("--out", default="")
+    ap.add_argument("--overrides", default="processed_data/label_overrides.json",
+                    help="창 밖이라 자동으로 못 잡는 자리를 사람이 못 박은 표 "
+                         "{'stem:seq:기기:on|off': 신호 t_s}. 근거는 설계 문서에 적는다")
     a = ap.parse_args()
 
+    OVERRIDES = (json.load(open(a.overrides, encoding="utf-8"))["events"]
+                 if Path(a.overrides).exists() else {})
     tl_all, bad = parse_timeline(a.timeline)
     if bad:
         print(f"⚠ 타임라인에서 못 읽은 줄 {len(bad)}개")
     if a.from_labels:
-        smap0 = json.load(open("results/seq_time_map.json", encoding="utf-8"))
+        smap0 = {}      # 옛 자료의 잔재는 안 본다 (위 주석)
         ev = json.load(open("processed_data/real_events.json", encoding="utf-8"))["files"]
         for st, v in ev.items():
             # ⚠ 기존 라벨의 시각은 **이미 상대 시간**이라 seq_lo 를 더해 둬야
@@ -462,8 +467,11 @@ def main() -> int:
             if rows:
                 tl_all[st] = sorted(rows, key=lambda r: r["seq"])
     ref = build_ref(a.sig)
-    smap = (json.load(open("results/seq_time_map.json", encoding="utf-8"))
-            if Path("results/seq_time_map.json").exists() else {})   # 옛 자료의 잔재 - 없으면 자료에서
+    # ⚠ `results/seq_time_map.json` 은 **옛 계측기 자료(test.2~test_18)의 잔재**라 안 본다
+    #   (2026-09-06 삭제). 그 파일의 `test_4: seq_lo 1511` 이 **같은 이름의 새 녹화**를 덮어
+    #   사람 항목 11개가 전부 '시작부터 켜짐' 으로 뭉갰다. 새 자료는 CSV 에 seq 가 있으므로
+    #   `detect()` 가 첫 seq 를 그대로 준다.
+    smap: Dict[str, Dict] = {}
 
     stems = a.stems or (sorted(tl_all) if a.all else ["test_5"])
     out_doc = {}
@@ -491,6 +499,25 @@ def main() -> int:
                     got[i] = (len(det) - 1, 0.1 * dt, 0.0, 0.0, dt)
                     n_rescued += 1
                     break
+        # 사람 손으로 못 박은 시각 — 창(±max_dt) 밖이라 자동으로는 못 잡는 자리.
+        # 근거는 설계 문서에 적는다 (13.17.4 의 test_5 앞 두 항목).
+        n_manual = 0
+        for i, e in enumerate(tl):
+            if i in got or e["kind"] not in ("on", "off"):
+                continue
+            key = f"{st}:{e['seq']}:{e['appliance']}:{e['kind']}"
+            t_s = OVERRIDES.get(key)
+            if t_s is None:
+                continue
+            blk = t_s / 0.5
+            j = int(np.argmin([abs(d["t_block"] - blk) for d in det])) if det else None
+            if j is None or abs(det[j]["t_block"] - blk) > 4:
+                continue
+            got[i] = (j, 0.0, 0.0, 0.0, abs(det[j]["t_block"] * 0.5 - (e["seq"] - seq_lo) * 0.5))
+            det[j]["manual"] = key
+            n_manual += 1
+        if n_manual:
+            print(f"  (수동 확정 {n_manual}개 — {a.overrides})")
         n_m, n_tl = len(got), sum(1 for i, e in enumerate(tl)
                                   if e["kind"] in ("on", "off", "mode") and i not in got)
         n_dt = len(det) - n_m

@@ -1,5 +1,5 @@
 {
-  "processed_files_count": 14,
+  "processed_files_count": 17,
   "sampling_hz": 60.0,
   "devices": {
     "air_conditioner_1": {
@@ -133,6 +133,46 @@
           "count": 30810,
           "percentage": 86.74,
           "duration_min": 8.56
+        }
+      }
+    },
+    "beam_projector_3": {
+      "appliance_type": "beam_projector",
+      "korean_name": "빔프로젝터",
+      "file_role": "device",
+      "load_class": "smps",
+      "rows": 26550,
+      "duration_min": 7.38,
+      "p_mean": 34.29,
+      "p_max": 49.1,
+      "v_ref_v": 215.52,
+      "invalid_samples_flagged": 30,
+      "invalid_samples_dropped": 30,
+      "sessions_detected": 1,
+      "on_percentage": 76.24,
+      "events_count": 15,
+      "npz_file": "processed_data\\npz\\beam_projector_3.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "대기 전원 상태",
+          "count": 6308,
+          "percentage": 23.76,
+          "duration_min": 1.75
+        },
+        "WARMUP_COOLDOWN": {
+          "state_id": 1,
+          "description": "부팅 예열 또는 전원 끈 후 팬 냉각",
+          "count": 1166,
+          "percentage": 4.39,
+          "duration_min": 0.32
+        },
+        "LAMP_ON": {
+          "state_id": 2,
+          "description": "램프 점등 및 정상 화면 투사",
+          "count": 19076,
+          "percentage": 71.85,
+          "duration_min": 5.3
         }
       }
     },
@@ -296,6 +336,46 @@
         }
       }
     },
+    "hotplate_2": {
+      "appliance_type": "hotplate",
+      "korean_name": "핫플레이트",
+      "file_role": "device",
+      "load_class": "resistive",
+      "rows": 60270,
+      "duration_min": 16.74,
+      "p_mean": 130.6,
+      "p_max": 461.12,
+      "v_ref_v": 215.84,
+      "invalid_samples_flagged": 0,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 1,
+      "on_percentage": 28.93,
+      "events_count": 744,
+      "npz_file": "processed_data\\npz\\hotplate_2.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "플러그만 꽂힘 - 스위치 내림 (바닥 뺀 전력 <0.3W)",
+          "count": 15888,
+          "percentage": 26.36,
+          "duration_min": 4.41
+        },
+        "ARMED_IDLE": {
+          "state_id": 1,
+          "description": "스위치 켜짐, 릴레이 열림 (서모스탯 휴지)",
+          "count": 26944,
+          "percentage": 44.71,
+          "duration_min": 7.48
+        },
+        "HEATING_ACTIVE": {
+          "state_id": 2,
+          "description": "히터 통전 발열 주기",
+          "count": 17438,
+          "percentage": 28.93,
+          "duration_min": 4.84
+        }
+      }
+    },
     "laptop_charger_1": {
       "appliance_type": "laptop_charger",
       "korean_name": "노트북충전기",
@@ -456,6 +536,46 @@
         }
       }
     },
+    "oven_2": {
+      "appliance_type": "oven",
+      "korean_name": "오븐",
+      "file_role": "device",
+      "load_class": "resistive",
+      "rows": 36990,
+      "duration_min": 10.28,
+      "p_mean": 353.44,
+      "p_max": 1125.86,
+      "v_ref_v": 216.26,
+      "invalid_samples_flagged": 0,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 1,
+      "on_percentage": 31.31,
+      "events_count": 30,
+      "npz_file": "processed_data\\npz\\oven_2.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "대기 전원 상태",
+          "count": 10334,
+          "percentage": 27.94,
+          "duration_min": 2.87
+        },
+        "FAN_LIGHT": {
+          "state_id": 1,
+          "description": "히터 꺼짐 주기 - 조명등 및 컨벡션 팬만 동작",
+          "count": 15073,
+          "percentage": 40.75,
+          "duration_min": 4.19
+        },
+        "HEATING": {
+          "state_id": 2,
+          "description": "서모스탯 통전 - 히터 가열",
+          "count": 11583,
+          "percentage": 31.31,
+          "duration_min": 3.22
+        }
+      }
+    },
     "noise_noselfpower": {
       "appliance_type": "noise_noselfpower",
       "korean_name": "무부하노이즈(외부전원)",
@@ -539,8 +659,8 @@
     "test_1": {
       "rows": 48000,
       "duration_s": 800.0,
-      "p_mean": 505.64,
-      "p_max": 1549.65,
+      "p_mean": 505.49,
+      "p_max": 1549.49,
       "v_ref_v": 215.22,
       "npz_file": "processed_data\\composite_eval\\test_1.npz",
       "excluded_from_segment_pool": true
@@ -553,9 +673,36 @@
       "v_ref_v": 229.72,
       "npz_file": "processed_data\\composite_eval\\test_2.npz",
       "excluded_from_segment_pool": true
+    },
+    "test_3": {
+      "rows": 34860,
+      "duration_s": 581.0,
+      "p_mean": 562.75,
+      "p_max": 2358.21,
+      "v_ref_v": 214.71,
+      "npz_file": "processed_data\\composite_eval\\test_3.npz",
+      "excluded_from_segment_pool": true
+    },
+    "test_4": {
+      "rows": 29880,
+      "duration_s": 498.0,
+      "p_mean": 70.35,
+      "p_max": 123.7,
+      "v_ref_v": 216.65,
+      "npz_file": "processed_data\\composite_eval\\test_4.npz",
+      "excluded_from_segment_pool": true
+    },
+    "test_5": {
+      "rows": 18360,
+      "duration_s": 306.0,
+      "p_mean": 1265.39,
+      "p_max": 3243.37,
+      "v_ref_v": 210.68,
+      "npz_file": "processed_data\\composite_eval\\test_5.npz",
+      "excluded_from_segment_pool": true
     }
   },
-  "total_cleaned_samples": 602310,
-  "total_duration_hours": 2.79,
-  "total_events_detected": 1029
+  "total_cleaned_samples": 726120,
+  "total_duration_hours": 3.36,
+  "total_events_detected": 1818
 }

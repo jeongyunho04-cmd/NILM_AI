@@ -971,13 +971,20 @@ def test_duty_period_is_not_frozen_across_augmented_samples():
     if len(acts) < 1:
         pytest.skip("핫플레이트 활성화가 없습니다")
 
-    def spread(randomize: bool):
+    def spread(act, randomize: bool):
+        """**같은 활성화 하나**를 여러 번 증강했을 때의 주기 폭.
+
+        ⚠ 여러 활성화를 섞어서 재면 안 된다 (2026-09-06, 13.17). `hotplate_2` 가
+        들어와 원본이 1개 -> 6개가 되자 '고정' 쪽 폭이 0 -> 53 사이클로 뛰었다 —
+        그것은 증강이 만든 폭이 아니라 **원본끼리의 차이**다. 그때 옛 기준
+        (`varied > 2*frozen`)이 1.998 로 아슬아슬하게 깨졌다. 재는 것은 증강의
+        몫이므로 원본을 고정하고 잰다.
+        """
         aug = DataAugmentor(randomize_duty=randomize)
         np.random.seed(0)
         periods = []
-        for i in range(120):
-            a = acts[i % len(acts)]
-            b = aug.augment_activation(a, target_duration_cycles=3600)
+        for _ in range(40):
+            b = aug.augment_activation(act, target_duration_cycles=3600)
             tp = np.asarray(b.target_power_w)
             hot = tp > 0.5 * np.percentile(tp, 99)
             n_tr = int(np.abs(np.diff(hot.astype(int))).sum())
@@ -985,11 +992,15 @@ def test_duty_period_is_not_frozen_across_augmented_samples():
         p = np.asarray(periods)
         return float(np.percentile(p, 90) - np.percentile(p, 10))
 
-    frozen, varied = spread(False), spread(True)
-    assert varied > 2 * frozen, (
-        f"듀티 주기가 충분히 흔들리지 않습니다: 10~90% 폭 {varied:.1f} vs 고정 {frozen:.1f} 사이클"
-    )
-    assert varied > 30, f"주기 폭이 0.5초에도 못 미칩니다: {varied:.1f} 사이클"
+    worst = None
+    for act in acts:
+        frozen, varied = spread(act, False), spread(act, True)
+        assert varied > 2 * frozen + 10.0, (
+            f"듀티 주기가 충분히 흔들리지 않습니다: 10~90% 폭 {varied:.1f} vs "
+            f"고정 {frozen:.1f} 사이클 (원본 하나 기준)"
+        )
+        worst = varied if worst is None else min(worst, varied)
+    assert worst > 30, f"주기 폭이 0.5초에도 못 미칩니다: {worst:.1f} 사이클"
 
 
 def test_duty_retiming_never_mixes_on_and_off_waveforms():

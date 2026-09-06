@@ -1,0 +1,73 @@
+{
+  "raw_rows": 26610,
+  "cleaned_rows": 26550,
+  "duration_s": 442.5,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 30,
+  "invalid_samples_dropped": 30,
+  "invalid_samples_interpolated": 0,
+  "interpolated_cycles": 0,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "startup_frames_dropped": 30,
+  "noise_floor_registry_w": 1.6,
+  "noise_floor_applied_w": 1.24925,
+  "noise_floor_source": "trailing_unplugged",
+  "trailing_noise": {
+    "n_cycles": 1194,
+    "start_t_rel_s": 422.6,
+    "p_w": 1.24925,
+    "i1_ma": 6.0175,
+    "i1_deg": 16.081380935492298,
+    "vrms": 216.02
+  },
+  "source_file": "beam_projector_3.csv",
+  "file_role": "device",
+  "appliance_type": "beam_projector",
+  "load_class": "smps",
+  "classification_reason": "등록된 단일 가전 'beam_projector'",
+  "output_file": null,
+  "feature_columns_count": 140,
+  "v_ref_v": 215.52,
+  "p_mean": 34.29,
+  "p_max": 49.1,
+  "irms_mean": 0.2675,
+  "korean_name": "빔프로젝터",
+  "total_samples": 26550,
+  "on_percentage": 76.24,
+  "state_distribution": {
+    "OFF_STANDBY": {
+      "state_id": 0,
+      "description": "대기 전원 상태",
+      "count": 6308,
+      "percentage": 23.76,
+      "duration_min": 1.75
+    },
+    "WARMUP_COOLDOWN": {
+      "state_id": 1,
+      "description": "부팅 예열 또는 전원 끈 후 팬 냉각",
+      "count": 1166,
+      "percentage": 4.39,
+      "duration_min": 0.32
+    },
+    "LAMP_ON": {
+      "state_id": 2,
+      "description": "램프 점등 및 정상 화면 투사",
+      "count": 19076,
+      "percentage": 71.85,
+      "duration_min": 5.3
+    }
+  },
+  "events_summary": {
+    "total_events": 15,
+    "on_events": 5,
+    "off_events": 5,
+    "mode_change_events": 5,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\beam_projector_3_annotated.csv",
+  "npz_file": "processed_data\\npz\\beam_projector_3.npz",
+  "events_json": "processed_data\\labels\\beam_projector_3_events.json"
+}

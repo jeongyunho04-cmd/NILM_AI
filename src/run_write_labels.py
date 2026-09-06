@@ -93,8 +93,6 @@ def main() -> int:
     ap.add_argument("--out", default="processed_data/real_events.json")
     a = ap.parse_args()
 
-    smap = (json.load(open("results/seq_time_map.json", encoding="utf-8"))
-            if Path("results/seq_time_map.json").exists() else {})
     files: Dict[str, Dict] = {}
     for path in a.refined:
         R = json.load(open(path, encoding="utf-8"))

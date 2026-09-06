@@ -18,11 +18,17 @@ if sys.platform == "win32":
 import numpy as np
 
 NPZ = "processed_data/composite_eval/{}.npz"
-#: 장소 구분 (12.161). test_14 는 이사 당일이라 어느 쪽도 아니다.
-SITE = {**{s: "A" for s in ("test.2", "test3", "test_4", "test_5", "test_6",
-                            "test_7", "test_8", "test_9", "test_10",
-                            "test_11", "test_12", "test_13")},
-        **{s: "B" for s in ("test_15", "test_16", "test_17", "test_18")}}
+#: 장소는 등록부가 정본이다 (`file_registry.SITE_OF_STEM`). 옛 A/B 표는 **옛 계측기 시대**의
+#: 같은 이름 파일들이라, 새 자료에 그대로 쓰면 test_5 가 '장소 A' 로 찍힌다 (2026-09-06 실제로 그랬다).
+from src.preprocessing.file_registry import site_of as _site_of
+
+
+class _SiteMap(dict):
+    def get(self, k, default=None):
+        return _site_of(k) or default
+
+
+SITE = _SiteMap()
 
 
 def measure(stem, events, min_dp=300.0, min_di=0.5, pre=(3, 12), post=(3, 12)):
