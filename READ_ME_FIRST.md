@@ -141,12 +141,12 @@ h3 위상차 −9~−34° 는 남아 있다 (vh3 가 1.4~7V 로 작아 위상 �
 
 | 결론 (근거 절) | 상태 | 새 계측기에서 | 코드에 한 일 |
 |---|---|---|---|
-| 짝수차는 레인지 전환 단차 인공물 (12.72) | **폐기** | 뿌리는 ADC 공통모드 한계. 인공물 0.03% | `inputs.ZERO_EVEN_HARMONICS` 는 **True 그대로** — 되살리는 것은 재학습 실험 (§6) |
+| 짝수차는 레인지 전환 단차 인공물 (12.72) | **폐기** | 뿌리는 ADC 공통모드 한계. 인공물 0.03% | **2026-09-06 되살렸다 (13.10)**: `ZERO_EVEN_HARMONICS=False`. 캐시·1·2단계 재학습 완료. **대조군은 안 돌렸다** — 이득을 짝수차에 귀속할 수 없다 |
 | 짝수차 지터 `--dither-even-amp` / `cnn_even` 계열 (12.76), 프로젝터↔충전기 |I2|/|I1| 분리 d'>3 | **폐기** | 그 분리는 인공물이었다: 새 계측기 1.5% vs 1.8%, d' 1.65 | 테스트 `test_even_dither_merges_the_pair_ratio` 를 전제 없으면 skip 으로 |
 | 전압 채널 h3 2.6%·짝수차 2.6% 인공물, 반파 대칭화 필수 (12.185.25, 옛 규칙 77) | **폐기** | vh2 0.03%. 대칭화 불필요 (README_v12) | `fit_raw.load_raw` 가 새 포맷을 거부. `fcm.to_spectrum` 짝수차 소거는 무해라 둠 |
 | 계측 h3 바닥 33.5mA∠164°, ①a 장소 h3 왜곡 d3 (12.185.21) | **폐기** | 바닥 없음. 저항 녹화가 세션의 진짜 vh3 을 담는다 | `grid_simulator.METER_H3_FLOOR_A=0`, 무리 d3=0, **①a 끔** (재설계는 차분으로) |
-| 장소 A/B/C 지문 vrms·vh3·vh9·vh15 (12.179.4, 12.184) | **폐기** | 장소 아니라 시간대. 저녁/심야 두 무리 | `OBSERVED_VOLTAGE_CLUSTERS` 216.5/229.5V, `SITE_OF_STEM` 전부 'C' |
-| ①b 전압 텍스처 지배, 결합 1/10 (12.185.22) | **대체** | 텍스처는 2Hz 녹화의 vh·vhdeg 에서(173개). test_2 로 확인: 녹화 중첩 0.248 → 텍스처 델타 0.111 (12.187) | 합성기에 텍스처 델타 + 결합 델타 (v12g). `run_mixval12` 가 자 |
+| 장소 A/B/C 지문 vrms·vh3·vh9·vh15 (12.179.4, 12.184) | **부분 유지** | ⚠ **2026-09-06 정정(13.11, 사용자 확인): 저녁/심야는 시간대가 아니라 다른 장소다.** vrms 216 vs 229V · vh3 0.7 vs 3.0% · Z 1.15 vs 0.42Ω, 겹침 0. 옛 A/B/C 지문값은 옛 계측기 것이라 폐기가 맞지만 **장소 축 자체는 살아 있다** | `SITE_OF_STEM` 을 **D(저녁)/E(심야)** 로 가름, `SITE_PROFILE` 추가, `OBSERVED_VOLTAGE_CLUSTERS` siteD/siteE |
+| ①b 전압 텍스처 지배, 결합 1/10 (12.185.22) | **대체** | 텍스처는 2Hz 녹화의 vh·vhdeg 에서(173개). test_2 로 확인: 녹화 중첩 0.248 → 텍스처 델타 0.111 (13.2) | 합성기에 텍스처 델타 + 결합 델타 (v12g). `run_mixval12` 가 자 |
 | 원시 위상 스큐 −0.313 표본, LOW 0.44 / HIGH 2.62 (12.185.25, 옛 규칙 76, 메모리) | **폐기(옛 보드)** | 새 보드는 스큐 보정 없음(기각 유지). 교정 상수는 미기록 | `RAW_SKEW_SAMP_LOW` 옛 보드 표기, `RAW_SKEW_SAMP_LOW_V12=0`, LOW_CAL 블록 no-op |
 | 회로 파라미터 C/R/L/Cx, rd 0.3 고정 (12.185.19/25) | **대체** | v12g: 포화 L + 선로측 Cx + 덧셈 G, 잔차 2.1~4.5% | `fcm.load_models()` 기본 = `circuit_model/circ12_*.pkl` (`DeviceModel12`) |
 | nvt·Gp·alpha·Shockley·계측 2극·fc·CT 고역 기각 (12.185.20~24) | **부분 유지** | README_v12 가 기각 유지로 적음 (새 자료로 확인) | — |
@@ -176,11 +176,11 @@ src/preprocessing/cleaner.py         seq 0 프레임 폐기, 앞머리 무효 �
 src/preprocessing/raw_csv.py         read_raw_csv(drop_startup=True) — 탐침·정밀화도 같은 시간축
 src/preprocessing/numpy_exporter.py  npz 에 seq / cycle / is_unplugged, 메타에 trailing_noise·noise_floor_source·seq_first
 src/synthesis/segment_pool.py        파일별 꼬리를 그 파일의 노이즈 기준으로 (없으면 전역 파일), 대기 지문에서 꼬리 제외
-src/synthesis/grid_simulator.py      전압 무리 216.5/229.5V, METER_H3_FLOOR_A=0, d3=0 (①a 끔). 12.187: 환경에 텍스처·R 상태,
+src/synthesis/grid_simulator.py      전압 무리 216.5/229.5V, METER_H3_FLOOR_A=0, d3=0 (①a 끔). 13.2: 환경에 텍스처·R 상태,
                                      apply_voltage_texture(녹화 파일 기준 델타), apply_smps_coupling(Z 결합 델타)
 src/synthesis/synthesizer.py         사이클별 출처 파일 id(rec_tex) 추적, 되먹임 루프에 텍스처 델타 → 결합 델타
-src/synthesis/coupling.py            (재작성) SmpsCircuit: v12g 위 텍스처 델타·결합 델타 + 캐시 (12.187)
-src/synthesis/vtexture.py            (신규) 2Hz 녹화의 vh·vhdeg 로 전압 텍스처 라이브러리 (12.187)
+src/synthesis/coupling.py            (재작성) SmpsCircuit: v12g 위 텍스처 델타·결합 델타 + 캐시 (13.2)
+src/synthesis/vtexture.py            (신규) 2Hz 녹화의 vh·vhdeg 로 전압 텍스처 라이브러리 (13.2)
 src/synthesis/fcm.py                 DeviceModel12(+simulate_true) / load_models_v12 / load_models() 기본 v12 / source_from_raw12
 src/run_mixval12.py                  (신규) 혼합검증: 실측 총전류 대 녹화중첩/텍스처델타/모델단독 (규칙 6)
 src/synthesis/fit_raw.py             새 원시 포맷 거부 (옛 차동 ADC 포맷 전용임을 명시)
@@ -209,8 +209,8 @@ python -m src.run_preprocess_and_label   15파일+원시 4 건너뜀, 51초. seq
 python -m src.run_switch_sig             단독 9녹화 -> 전이 240개 (항등식 Re(ΔI₁)·V/ΔP 0.999~1.025)
 python -m src.run_refine_labels --all    test_1: 17/17 맞춤 (구제 3), |Δt| 중앙 1.0초 최대 3.6초
 python -m src.run_write_labels           -> processed_data/real_events.json (사건 17, 구간 기기 4, 불확실 0)
-python -m src.run_synthesis              **9종**, 텍스처 델타 + 결합 델타 켬 (12.187), 파일별 꼬리 노이즈 9/11. 활성화: 오븐 3 · 핫플 2 · 에어컨 3 · 미니PC 4
-python -m src.run_mixval12 --stems test_2 test_1   녹화중첩 0.248/0.105 → 텍스처델타 0.111/0.115, 모델단독 0.116/0.287 (12.187.4)
+python -m src.run_synthesis              **9종**, 텍스처 델타 + 결합 델타 켬 (13.2), 파일별 꼬리 노이즈 9/11. 활성화: 오븐 3 · 핫플 2 · 에어컨 3 · 미니PC 4
+python -m src.run_mixval12 --stems test_2 test_1   녹화중첩 0.248/0.105 → 텍스처델타 0.111/0.115, 모델단독 0.116/0.287 (13.2.4)
    (합성 벤치 135 -> 37 창/초: 시뮬 캐시가 데워지기 전 값. 캐시 빌드 30만 창 ≈ 12분/11워커)
 python -m pytest tests -q                **137 passed / 0 failed / 5 skipped**
 ```
@@ -225,7 +225,7 @@ python -m pytest tests -q                **137 passed / 0 failed / 5 skipped**
 | `results/switch_sig.json`, `results/refined_labels.json` | **새 자료** (2026-09-06) | 라벨 정밀화의 중간 산출물 — 새 녹화가 오면 다시 만든다 |
 | `deploy/nilm_runtime/signatures.npz`, `deploy/nilm_runtime/*.py`(8/26 사본) | 옛 지문·옛 채널 규약(58ch) | 새 운영점이 서면 다시 복사 (메모리 power-monitor-deploy-bundle) |
 | `docs/external/code/vtexture_C.npz`, `vtemplate_C*.npz`, `curveC.npy`, `circ_rc_laptop_charger.pkl` | 옛 계측기 텍스처·템플릿 | 참고용 |
-| `MODEL_TRAINING_DESIGN.md` 12.1~12.185, `HANDOFF_*` ≤ 09-05b, `CIRCUIT_FCM_GUIDE.md`, `TEST_DATASET_TIMELINE_ANALYSIS.txt`, `REPLY_vtemplate_rc_2026-09-05.md`, `PROMPT_open_problems_2026-09-05.md` | 옛 계측기 시절 기록 | 읽을 때 §4 표를 옆에 둔다. 12.186 이 경계다 |
+| `MODEL_TRAINING_DESIGN.md` 12.1~12.185, `HANDOFF_*` ≤ 09-05b, `CIRCUIT_FCM_GUIDE.md`, `TEST_DATASET_TIMELINE_ANALYSIS.txt`, `REPLY_vtemplate_rc_2026-09-05.md`, `PROMPT_open_problems_2026-09-05.md` | 옛 계측기 시절 기록 | 읽을 때 §4 표를 옆에 둔다. 13.1 이 경계다 |
 | `NILM_EXECUTION_GUIDE.txt` | 명령은 유효, 예시 경로·등록 예시는 옛것 | [2-1] 등록 예시를 `_dev("type")` 로 고쳤다 |
 | 삭제된 문서 (git 이력에만): `READ_ME_FIRST.txt`, `SMPS_PLAN_2026-08-31.md`, `MEASUREMENT_CHECKLIST.md`, `OPERATING_POINT.txt`, 옛 `MEASUREMENT_RULES.md` | 사용자가 의도적으로 지움 — 새 자료에서 새 규칙을 쌓는다 | 옛 규칙 1~82 는 `git show 88ec645:MEASUREMENT_RULES.md`. 새 v2 는 규칙 1~4 |
 
@@ -240,7 +240,7 @@ python -m pytest tests -q                **137 passed / 0 failed / 5 skipped**
 2. **결론을 표로 옮긴다** (§4). 상태를 폐기/대체/유지/미검증 중 하나로 적고, "유지" 는 새 자료로 잰 숫자를 옆에 둔다.
 3. **첫 녹화는 순저항**이다. `ihdeg1 = 0`, `ihdeg_h = vhdeg_h`, `|I_h/I_1| = |V_h/V_1|` 셋을 LOW·HIGH 에서 본다.
 4. **코드에 경계를 박는다** — 옛 파일명은 등록부에서 빼고, 옛 시각의 파일은 파이프라인이 거부한다.
-5. 옛 문서는 지우지 않되, 읽는 쪽이 **경계 절 번호**(12.186)를 알게 한다.
+5. 옛 문서는 지우지 않되, 읽는 쪽이 **경계 절 번호**(13.1)를 알게 한다.
 
 ## 8. 다음 순서
 
@@ -251,16 +251,52 @@ python -m pytest tests -q                **137 passed / 0 failed / 5 skipped**
    설정(단·온도·부하)의 가짓수**다. 5회 이상, 설정을 바꿔 가며, 파일 끝에 꼬리 10초. 새 파일은 `DEVICE_FILES` 에 한 줄
 ② python -m src.run_power_check --recompute-ref      REFERENCE_W / SNAP_TARGET_W 재계산 (저항은 V²/R 로)
 ③ 새 복합 녹화가 오면: user_timeline.txt 에 머리(`test_3.csv`)와 줄을 더하고 규칙 4 의 세 명령 (test_2 는 31/31 로 끝났다)
-   생성기를 바꿨으면 `run_mixval12` 로 먼저 잰다 (규칙 6). 새 원시 raw_laptop_charger_5~8 는 fit12 재적합 후보
-④ 캐시·1단계·2단계 — GPU. 돌리기 전에 묻는다 (메모리 ask-before-long-gpu-runs). 머리 수 9 (전부 있다)
-   2단계 사람 라벨 지도를 쓰려면 `realdata.HUMAN_ON_DEFAULT_STEMS` 에 test_1 을 넣는다
-⑤ README_v12 의 남은 일: crb/mixval/vtexture 를 fcm12 로, 충전기 20~40W 스냅샷, CT 위상 +1.4° 상수, --rc-high
+   생성기를 바꿨으면 `run_mixval12` 로 먼저 잰다 (규칙 6)
+④ 2단계 사람 라벨 지도를 쓰려면 `realdata.HUMAN_ON_DEFAULT_STEMS` 를 ("test_1", "test_2") 로. GPU 아님
+⑤ 캐시(30만 창 ≈ 12분/11워커) → 1단계 → 2단계. GPU. 머리 수 9 (전부 있다).
+   **회로 모델 정밀도는 발목이 아니다** — 생성기가 쓰는 [B] 는 두 모델 평가의 **차분**이고 델타 자체가 h1 에서 1~5% 다.
+   혼합검증 기준 심야 0.248 → 0.097 (모든 차수 개선), 저녁 0.105 → 0.120 (본전).
+   발목은 **활성화 수**(①)다. 결과가 나쁘면 인수인계 §4 의 알려진 결함부터 본다 (1순위 미니PC 고차 부족)
+⑥ README_v12 의 남은 일 — **처분 끝 (설계 13.3.7)**: mixval·vtexture 됨, 충전기 20~40W 는 raw 5~8 로 재적합,
+   CT 상수 불필요, --rc-high 불필요. CRB 만 미이식(선택)
+```
+
+**13.3~13.8 에서 바뀐 코드** (전부 커밋 전):
+
+```
+circuit_model/fcm12.py            from_pickle 이 R_range 우선; G_BG_DEFAULT 0.051 → 0.028mS (13.8)
+circuit_model/circ12_*.pkl        충전기 raw5~8 재적합(+alt_fit_raw1to8, evening_raw_check, cross_validation_pct),
+                                  미니PC R 파일별 재적합(+known_gap, prev_fit_rshared), 프로젝터 R_range
+src/synthesis/grid_simulator.py   저녁 r_grid 0.45 → **1.15** (실측), MEASURED_SITE_Z_OHM 에 C_evening
+src/preprocessing/file_registry.py  METER_RC_TAU_S / METER_PHASE_CAL_DEG_V12 / MIGRATE_CAL_DELTA_DEG /
+                                  raw_to_2hz_transfer() / RAW_SEQ_IS_2HZ_LOCAL_CYCLE / RAW12_IN_RECORDING
+src/synthesis/fcm.py              DeviceModel12 주석 (CT 상수 불필요)
+MEASUREMENT_RULES.md              규칙 8 (세션마다 Z 를 잰다)
 ```
 
 ## 9. 사용자에게 필요한 것 / 확인할 것
 
 - 01:10 이후 파일(`beam_projector_2`, `fan_1`, `hair_dryer_1`, `air_conditioner_1`, `laptop_charger_2`)은 `.cal2` 꼬리가 없다 — 같은 수신기 판인지. (열 구성·`cal_applied=1` 은 같아서 같은 자료로 등록했다.)
 - 회로 모델 pkl 을 만든 원시 파일(`1788…_raw_*.csv`)의 위치. `data/raw_laptop_charger_5~8` 은 새로 들어왔고 등록부 `RAW12_SNAPSHOT_FILES` 에 적었다.
-- 새 보드 펌웨어의 **위상 교정 상수·RC 규약** 한 줄 (등록부 LOW_CAL 블록에 적을 값). 결과는 맞다(§3) — 값만 모른다.
-- 짝수차 채널을 되살리는 실험(§4 첫 줄)을 할지 — 캐시+1단계+2단계 ≈ 1시간 GPU, 단일 변수, 대조 파일 필요.
+- ~~새 보드 펌웨어의 위상 교정 상수~~ **기록됐다 (13.4.4): LOW +0.96° / HIGH −1.22°.** `test_1.csv`(교정 전) 대
+  `test_1.cal2.csv` 의 차가 Δihdeg = −0.96°×h (LOW) / +1.22°×h (HIGH), 크기·전압 배수는 1.000000. 즉
+  `migrate_cal.py --phase-low 0.96 --phase-high -1.22`. 이주본과 native 파일의 순저항 ihdeg1 이 같은 자리(±0.1°)라
+  `PHASE_FIX_DEG_PER_ORDER` 는 **비운 채로 옳다**. RC 규약은 13.3.2 그대로 (measured=True 가 2Hz 영역).
+- 원시는 이제 11개가 `data/` 에 있다 (충전기 8 · 미니PC 5 · 프로젝터 2). **주의: 미니PC 5개는 저녁(217V),
+  프로젝터 2개는 심야(231V)** 이고 둘 다 각 pkl 을 만들 때 쓴 그 스냅샷이다 (13.7.1). 즉 세션이 안 늘었다.
+  아직 없는 것: **저녁(216V) 프로젝터**, **심야(229V) 미니PC**, 각 원시 세션의 **순저항(핫플 LOW) 스냅샷** (규칙 7).
+  이 둘이 각 기기의 축퇴를 푸는 유일한 자료다 (13.6.2) — 충전기는 두 세션이 다 있어 이미 풀렸다.
+- ~~원시와 2Hz 를 같은 seq 로~~ **이미 그렇게 찍혀 있었다** (사용자 지적, 13.5). 원시 여덟 개가 전부 그 2Hz 녹화 안에서
+  찍혔고 `raw.seq == 2Hz.seq*30 + 2Hz.cycle` 로 붙는다 (npz 의 `seq` 는 블록 번호라 직접 비교하면 안 된다).
+  두 경로의 전달함수는 상수이고 펌웨어에 그대로 있다 — 등록부 `raw_to_2hz_transfer()`. **계측 경로는 닫혔다.**
+- 펌웨어 소스 위치: `NILM_ECE_IF-fix-even-harmonics-offset-bug` (사용자 제공). 계측 상수의 정본은 거기다 —
+  `NILM_RC_FC_HZ 1591.55`(τ=100µs, 크기만 역보정), `NILM_CAL_DEFAULT_{LOW,HIGH}_DEG 1.40`. 등록부에 옮겨 적었다.
+- **NTC 워밍업 시리즈** — 충전기 65W 고정, 켠 뒤 0/30초/1/2/5/10분 원시 스냅샷 (13.3.8 ③). 프로젝터는 2Hz 로 τ 13~18초가 보였다.
+- ~~짝수차 채널을 되살리는 실험~~ **했고, 형태가 틀렸다는 것을 알았다 (13.11.7/13.12).**
+  짝수차 위상은 기기 속성이 아니라 **플러그 방향**이다 (`I_h -> −(−1)^h I_h`). 배치 v2 에서
+  짝수차는 **크기만** 넣는다. 남은 것은 **대조군**이다 — 같은 캐시에
+  `--zero-channels 1,3,5,7,9,11,13,16,18,20,22,24,26,28,35` 를 걸면 1단계 30분 + 2단계 6분으로
+  단일 변수 A/B 가 된다 (캐시는 다시 안 굽는다). 이것 없이는 이번 수치를 짝수차에 귀속할 수 없다.
+- **복합 녹화가 둘뿐이라 유보 실측이 없다.** 2단계가 test_1·test_2 에 적응했는데 채점도 그 둘이다 —
+  처음 보는 파일에서의 성능을 **못 잰다**. 복합이 하나만 더 오면 leave-one-file-out 이 살아난다.
 - test_1 라벨(§3b)에서 오븐 끔 195.8초는 ±2초 안에서 평평한 자리다(핫플 펄스 사이 바닥 계단). 채점 허용폭 3초 안이다.

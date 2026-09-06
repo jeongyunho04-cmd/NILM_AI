@@ -204,6 +204,14 @@ def main() -> int:
                          "기본 none 은 이전과 동일하다")
     ap.add_argument("--smps-boost", type=float, default=4.0,
                     help="--real-weight smps-boost 의 배수")
+    ap.add_argument("--harm-even-magnitude", action="store_true",
+                    help="L_harm 에서 **짝수차만 크기 공간**으로 잰다 (13.11). 플러그를 "
+                         "반대로 꽂으면 짝수차가 180° 도므로(홀수차는 안 돈다) 짝수차 위상은 "
+                         "기기 속성이 아니다 — 드라이기 약풍에서 격리 대 복합이 179° 어긋났다.")
+    ap.add_argument("--state-signatures", action="store_true",
+                    help="상태별 고조파 지문 (13.11). **1단계와 반드시 같이 켜야 한다** — "
+                         "한쪽만 켜면 2단계가 1단계의 배분을 되돌린다. 드라이기 약풍(반파)과 "
+                         "강풍(순저항)처럼 한 기기의 상태들이 고조파 모양이 다를 때 필요하다.")
     ap.add_argument("--harm-odd-only", action="store_true",
                     help="L_harm 에서 짝수차를 뺀다 (12.75절 — 계획만 있던 절이고 실행 기록은 "
                          "12.78, 단일 변수 재측정은 12.75.5). **2단계가 실측에서 도는 것이므로 "
@@ -443,6 +451,11 @@ def main() -> int:
     ap.add_argument("--site-transfer-stems", default="test_15,test_16,test_17,test_18",
                     metavar="LIST", help="--site-transfer 를 걸 파일 (기본 장소 B)")
     ap.add_argument("--cache", default="cache/train60")
+    ap.add_argument("--holdout", default=HOLDOUT_DIR, metavar="DIR",
+                    help="합성 홀드아웃 디렉터리. **1단계와 같은 것을 줘야 한다** — "
+                         "2단계 지표는 여기서 나오고 1단계 수치와 나란히 읽는다. "
+                         "레시피마다 이름이 다르므로(holdout60_ac / _ph / _v13) "
+                         "기본값에 기대지 말 것 (13.10).")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="adapt")
     ap.add_argument("--out", default="results")
@@ -459,7 +472,7 @@ def main() -> int:
     ZERO_CH = [int(x) for x in a.zero_channels.split(",") if x.strip()]
     if ZERO_CH:
         print(f"  ** 세밀 채널 {ZERO_CH} 를 0 으로 (조인 대조, 12.114 재시험) **")
-    hs = load_holdout(HOLDOUT_DIR)
+    hs = load_holdout(a.holdout)
     apps = hs.appliances
     prep = prepare_holdout_inputs(hs)
     if ZERO_CH:
@@ -527,6 +540,11 @@ def main() -> int:
                 sb[_j] = sb_op[_j]
     qp, qp_ok = reactive_signatures(pool, apps)
     nq = noise_reactive(pool)
+    sig_state = None
+    if a.state_signatures:
+        from src.model.net import harmonic_signatures_by_state
+        sig_state, _used = harmonic_signatures_by_state(pool, apps)
+        print(f"  ** 상태별 지문 (13.11): {int(_used.sum())}개 상태를 따로 맞췄다 **")
     del pool
 
     if a.w_consq > 0:
@@ -623,6 +641,8 @@ def main() -> int:
         signatures=torch.from_numpy(sig), standby_sig=torch.from_numpy(sb),
         noise_sig=torch.from_numpy(nz), harm_scale=torch.from_numpy(hsc),
         harm_odd_only=a.harm_odd_only,
+        signatures_state=(torch.from_numpy(sig_state) if sig_state is not None else None),
+        harm_even_magnitude=a.harm_even_magnitude,
         harm_max_order=a.harm_max_order,
         harm_grad_balance=a.harm_grad_balance,
         harm_deadzone=a.harm_deadzone, harm_weight=a.harm_weight,

@@ -325,9 +325,9 @@ def test_even_dither_merges_the_pair_ratio():
     if base <= 3.0:
         # 2026-09-06 계측기 교체: 프로젝터↔충전기 |I2|/|I1| 의 분리(옛 d' > 3)는 옛 차동 ADC 의 짝수차
         # 인공물(충전기 2.9~5.3% vs 프로젝터 0.7~1.1%)이 만든 것이었다. 새 계측기에서는 1.5% vs 1.8%,
-        # d' 1.65 라 겹칠 것이 없다 — 짝수차 지터 자체가 전제를 잃었다 (READ_ME_FIRST.md §4, 12.186).
+        # d' 1.65 라 겹칠 것이 없다 — 짝수차 지터 자체가 전제를 잃었다 (READ_ME_FIRST.md §4, 13.1).
         import pytest
-        pytest.skip(f"짝수차 비율의 기준 d' 이 {base:.2f} — 새 계측기에는 옛 인공물 분리가 없다 (12.186)")
+        pytest.skip(f"짝수차 비율의 기준 d' 이 {base:.2f} — 새 계측기에는 옛 인공물 분리가 없다 (13.1)")
     assert dith < 1.5, f"지터 뒤 d' 이 안 내려갔다: {dith:.2f}"
 
 
@@ -407,7 +407,8 @@ def test_zeroed_channel_contributes_nothing_to_the_model():
     rng = np.random.default_rng(1)
     fine = torch.from_numpy(rng.standard_normal(
         (2, I.FINE_CHANNELS, I.FINE_CYCLES)).astype(np.float32))
-    wide = torch.from_numpy(rng.standard_normal((2, 12, 120)).astype(np.float32))
+    from src.model.inputs import WIDE_CHANNELS
+    wide = torch.from_numpy(rng.standard_normal((2, WIDE_CHANNELS, 120)).astype(np.float32))
     even = [c for c in I.EVEN_FINE_CHANNELS if c < I.FINE_CHANNELS]
     fine[:, even] = 0.0
     with torch.no_grad():

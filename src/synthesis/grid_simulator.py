@@ -85,7 +85,7 @@ class VoltageCluster:
 # `outlet_high_234v` 는 **지우지 않는다.** 기기 녹화 27개 중 7개가 230V 이상이라
 # (에어컨 233.6, 선풍기 233.7/235.6/236.0, 드라이기 234.2/235.4, 충전기 237.0)
 # 실재하는 콘센트다. 장소 B 를 **더한다.**
-# ── ⚠ 2026-09-06 계측기 교체 — 아래 무리는 **새 계측기 자료 11개**로 다시 잰 것이다 (12.186) ────────
+# ── ⚠ 2026-09-06 계측기 교체 — 아래 무리는 **새 계측기 자료 11개**로 다시 잰 것이다 (13.1) ────────
 # 옛 무리(221V 장소 A / 227.5V 장소 B / 234.7V 장소 C, h3 왜곡 0/0.003/0.031, 계측 바닥 33.5mA∠164°)는
 # 차동 ADC 계측기 자료였다. 그 계측기는 전압 채널에 h3 2.6%·짝수차 2.6% 의 인공물을 얹고 있었고
 # (12.185.25) 그 인공물이 "장소 지문" 과 "계측 바닥" 으로 들어가 있었다. 자료는 폐기됐다 — READ_ME_FIRST.md.
@@ -103,11 +103,18 @@ class VoltageCluster:
 #   ①a 를 다시 켜려면 녹화 자체의 vh3 을 빼고 환경의 vh3 을 더하는 **차분**으로 다시 설계해야 한다
 #   (npz 에 이제 vh/vhdeg 가 있다). 이 결정의 대가: 합성 저항 서명의 h3 이 녹화 세션 값에 박제된다
 #   (저녁 0.6% 무리 vs 심야 3.2% 무리가 파일에 따라 섞여 들어간다).
+# 선로 저항 (새 계측기, 2026-09-06, 13.4): **두 무리의 Z 가 2.7배 다르다.** 계단 앞뒤 3초 창(가드 0.75초)에서
+# 두 창이 모두 조용할 때만 (P 산포 <40W) `Z1 = −ΔV1/Δ|I1|` 을 쟀다.
+#   심야 229V   포트 16계단 0.422 / 드라이기 15계단 0.439 / test_2 13계단 0.424  ->  **0.42Ω**
+#   저녁 216V   오븐(단독) 50계단 1.138±0.071 / test_1 5계단 1.214±0.017        ->  **1.15Ω**
+# 13.3 이 "test_1 은 사건이 겹쳐 못 믿는다(1.23±0.22)" 고 보류하고 0.45 로 뒀던 자리다. 창을 좁히니 test_1 의 산포가
+# 0.017 로 떨어지고, **오븐 단독 저녁 녹화**가 독립적으로 1.14 를 준다 — 저녁 무리의 Z 는 정말 심야의 2.7배다.
+# (저녁은 전압도 13V 낮다. 같은 콘센트가 시간대에 따라 무부하 전압과 선로 임피던스를 함께 바꾼다 — 상류 부하의 몫.)
 OBSERVED_VOLTAGE_CLUSTERS: Tuple[VoltageCluster, ...] = (
-    VoltageCluster("siteC_evening_216v", mean_v=216.5, std_v=1.5, weight=0.40,
-                   r_grid_ohm=0.50, background_w_range=None, v_distortion_h3=0.0),
-    VoltageCluster("siteC_night_229v", mean_v=229.5, std_v=1.5, weight=0.40,
-                   r_grid_ohm=0.50, background_w_range=None, v_distortion_h3=0.0),
+    VoltageCluster("siteD_evening_216v", mean_v=216.5, std_v=1.5, weight=0.40,
+                   r_grid_ohm=1.15, background_w_range=None, v_distortion_h3=0.0),
+    VoltageCluster("siteE_night_229v", mean_v=229.5, std_v=1.5, weight=0.40,
+                   r_grid_ohm=0.42, background_w_range=None, v_distortion_h3=0.0),
 )
 
 #: 옛 계측기가 저항 부하에 얹던 **덧셈** h3 (33.5mA∠164°, 장소 A 8개 회귀). **새 계측기에는 없다** —
@@ -119,8 +126,11 @@ SITE_H3_PHASE_RAD: float = np.radians(-110.0)
 #: 탐색 성분의 h3 왜곡 상한. ①a 를 껐으므로 0.
 EXPLORATION_H3_MAX: float = 0.0
 
-#: 계단으로 직접 잰 장소별 선로 임피던스 (12.167). 출처 기록용.
-MEASURED_SITE_Z_OHM = {"A": 1.470, "B": 0.907}
+#: 계단으로 직접 잰 세션별 선로 임피던스. A·B 는 옛 계측기(12.167, 장소 폐기), C_* 는 새 계측기 (13.3·13.4).
+#: 같은 콘센트인데 저녁이 심야의 2.7배다 — 무부하 전압(216 vs 229V)과 같은 방향으로 움직인다.
+MEASURED_SITE_Z_OHM = {"A": 1.470, "B": 0.907,
+                       "E_night_2026-09-06": 0.424,      # 포트 0.422 / 드라이기 0.439 / test_2 0.424
+                       "D_evening_2026-09-06": 1.15}     # 오븐 1.138 (50계단) / test_1 1.214 (5계단)
 
 # 두 콘센트만 학습하면 모델이 그 두 전압대에만 맞춰진다. 한국 표준 공급 전압
 # 220V +-10%(198~242V) 안에서 측정하지 못한 구간도 일부 섞어 일반화 여력을 남긴다.
@@ -145,7 +155,7 @@ class VoltageEnvironment:
     #: 이 세션의 **전압 텍스처** — 원시 전압 파형의 stem (①b, 12.185.22).
     #: SMPS 전류를 여기에 반응시킨다. `""` 면 아무것도 안 한다.
     texture_stem: str = ""
-    #: 12.187 — 이 세션의 전압 텍스처 (`vtexture.Texture`, 2Hz 녹화의 vh·vhdeg 에서). None 이면 텍스처 델타 없음.
+    #: 13.2 — 이 세션의 전압 텍스처 (`vtexture.Texture`, 2Hz 녹화의 vh·vhdeg 에서). None 이면 텍스처 델타 없음.
     texture: Optional[object] = None
     texture_id: int = -1
     #: SMPS 별 NTC 상태 R [Ω] — pkl 의 실측 범위에서 창마다 뽑는다 (README_v12 "R 은 상태다").
@@ -191,7 +201,7 @@ class GridSimulator:
         max_external_sag_v: float = 10.0,     # 외부 사그 총 강하량 상한 (겹침 누적 방지)
         measurement_frame_cycles: int = 30,   # 실측 센서의 전압 갱신 주기 (0.5초 = 30사이클)
         sampling_hz: float = 60.0,
-        # 12.187 회로 모델 배선. `texture_library`: None = "auto"(processed_data/npz 에서 첫 사용 때 읽는다),
+        # 13.2 회로 모델 배선. `texture_library`: None = "auto"(processed_data/npz 에서 첫 사용 때 읽는다),
         # `vtexture.VoltageTextureLibrary`, 또는 False(텍스처·결합 둘 다 끔). 옛 인자 texture_stems/texture_model 은
         # 받되 무시한다 (옛 계측기 원시 stem 텍스처는 폐기됐다).
         texture_library=None,
@@ -248,7 +258,7 @@ class GridSimulator:
         else:
             r = float(np.random.uniform(*self.r_grid_range))
         x = float(np.random.uniform(*self.x_grid_range))
-        # 12.187: 텍스처·R 상태의 난수는 이 창의 (기저 전압, R, X) 에서 **파생**한다. 전역 흐름을 한 칸도 안 쓰고
+        # 13.2: 텍스처·R 상태의 난수는 이 창의 (기저 전압, R, X) 에서 **파생**한다. 전역 흐름을 한 칸도 안 쓰고
         # (켜고 끄기가 기기 선택·시각을 안 옮긴다), 워커 수·프로세스와 무관하게 같은 창이면 같은 텍스처다
         # (`test_worker_count_does_not_change_the_generated_training_set`). 생성자에서 뽑는 _tex_rng 는 안 쓴다.
         _key = np.array([base_v, r, x], dtype=np.float64).view(np.uint64)
@@ -278,7 +288,7 @@ class GridSimulator:
         )
 
     def _sample_texture(self, base_v: Optional[float] = None, rng: Optional[np.random.Generator] = None):
-        """이번 합성이 놓일 **전압 텍스처** 하나 (12.187). 기저 전압(저녁 216V / 심야 229V)에 가까운 세션에서 뽑는다.
+        """이번 합성이 놓일 **전압 텍스처** 하나 (13.2). 기저 전압(저녁 216V / 심야 229V)에 가까운 세션에서 뽑는다.
 
         텍스처는 장소가 아니라 **세션(시간대)** 에 묶인다 — 같은 콘센트가 저녁엔 vh3 0.7%, 심야엔 3.2% 다
         (READ_ME_FIRST §2). 2Hz 녹화의 vh·vhdeg 가 전부 텍스처 라이브러리다 (`vtexture`). 전용 RNG 로 뽑는다.
@@ -568,7 +578,7 @@ class GridSimulator:
         env: VoltageEnvironment,
         rec_ids: Optional[np.ndarray] = None,   # (N,) int — 각 사이클이 어느 녹화(파일 id)에서 왔는가
     ) -> np.ndarray:
-        """SMPS 전류를 **이 세션의 전압 텍스처**에 반응시킨다 (12.187, 옛 ①b 의 새 계측기 판).
+        """SMPS 전류를 **이 세션의 전압 텍스처**에 반응시킨다 (13.2, 옛 ①b 의 새 계측기 판).
 
             I_i(생성) = I_i(녹화 재생) + [ I_sim(p_i, 합성 텍스처·v1) − I_sim(p_i, 녹화 텍스처·v1) ]
 
@@ -611,7 +621,7 @@ class GridSimulator:
         powers: Dict[str, np.ndarray],   # {기기: (N,) float — 교류 입력 전력}
         env: VoltageEnvironment,
     ) -> Dict[str, np.ndarray]:
-        """SMPS 둘 이상이 같이 켜진 사이클에 **공유 임피던스 결합** 델타를 더한다 (12.187, FCM/가이드 §6.1).
+        """SMPS 둘 이상이 같이 켜진 사이클에 **공유 임피던스 결합** 델타를 더한다 (13.2, FCM/가이드 §6.1).
 
             V_term = V_src − Z(h)·Σ_i I_i     (고정점 3회, Z = r_grid + j·2π·60·h·L, L = x_grid/(2π·60))
             I_i(생성) += I_i(V_term) − I_i(V_src)
@@ -661,7 +671,7 @@ class GridSimulator:
         """저항 부하에 **그 콘센트의 h3 전압 왜곡**을 싣는다 (①a, 12.185.21).
 
         ⚠ 2026-09-06: 새 계측기 무리는 전부 `v_distortion_h3=0` 이라 **지금은 no-op** 이다. 아래 실측
-        ("계측기의 덧셈 바닥" 등)은 옛 계측기 이야기다 — `OBSERVED_VOLTAGE_CLUSTERS` 주석과 12.186.
+        ("계측기의 덧셈 바닥" 등)은 옛 계측기 이야기다 — `OBSERVED_VOLTAGE_CLUSTERS` 주석과 13.1.
 
         순저항은 자기 서명이 없다 — `I_h = V_h/R` 이므로 정규화 서명이 곧 그 콘센트의
         전압이다. 그런데 지금까지 저항 부하는 **장소 A 녹화의 서명을 그대로 재생**했고

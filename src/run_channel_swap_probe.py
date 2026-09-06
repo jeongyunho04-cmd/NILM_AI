@@ -79,7 +79,8 @@ def main() -> int:
                 big |= _mask(iv[x].get("on", []) + iv[x].get("uncertain", []), n)
         comp = {x: (_mask(iv[x].get("on", []), n) if x in iv else np.zeros(n, bool)) for x in SMPS if x != a.app}
         rw = dense_targets(stem, stride=30); t = rw.target_cycle
-        steady = (rw.fine[:, 30].max(1) - rw.fine[:, 30].min(1)) < STEADY
+        from src.model.net import P_CH_FINE
+        steady = (rw.fine[:, P_CH_FINE].max(1) - rw.fine[:, P_CH_FINE].min(1)) < STEADY
         for i, ti in enumerate(t):
             lo, hi = max(0, ti - 360), ti + 360
             if not (steady[i] and on[lo:hi].all() and not big[lo:hi].any() and plo <= rw.p_observed[i] <= phi):

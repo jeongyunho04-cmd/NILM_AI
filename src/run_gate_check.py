@@ -42,7 +42,8 @@ import torch
 from src.evaluation.real_events import (SESSION_MERGE_CYCLES, load_events,
                                         score_absent, score_on_off)
 from src.evaluation.sealing import is_sealed
-from src.model.inputs import (FINE_CYCLES, LEGACY_FINE_CHANNELS, ZERO_EVEN_HARMONICS,
+from src.model.inputs import (FINE_CYCLES, FINE_LAYOUT, LEGACY_FINE_CHANNELS, WIDE_CHANNELS,
+                             ZERO_EVEN_HARMONICS,
                               LEGACY_FINE_CYCLES, LEGACY_TARGET_LOOKAHEAD,
                               TARGET_LOOKAHEAD)
 from src.model.net import NILMNet, appliance_state_counts
@@ -67,6 +68,26 @@ def assert_target_config(ck: dict, ckpt_path: str) -> None:
     # 짝수차 배제 (12.77). **이것이 어긋나면 조용히 틀린다** — 12.74 에서 지터 없이
     # 학습한 모델의 짝수차를 추론에서만 껐더니 충전기가 0.937 -> 0.868 로 무너졌다.
     # 기본값 False 는 이 필드가 없던 시절의 체크포인트가 전부 짝수차를 쓰기 때문이다.
+    # 세밀 채널 배치 (13.12). **가장 먼저 본다** — 채널 수가 같아도 뜻이 다르면
+    # `fine[:, :N]` 슬라이스가 조용히 틀린 것을 넣는다.
+    ck_fl = str(ck.get("fine_layout", "v1"))
+    if ck_fl != str(FINE_LAYOUT):
+        raise SystemExit(
+            f"체크포인트의 세밀 채널 배치가 현재 코드와 다릅니다: {ckpt_path}" + chr(10)
+            + f"  체크포인트  fine_layout={ck_fl!r}" + chr(10)
+            + f"  현재 코드    FINE_LAYOUT={FINE_LAYOUT!r}" + chr(10)
+            + "  그 배치로 구운 캐시와 그때 코드로만 돌릴 수 있습니다 (13.12).")
+
+    # 광역 채널 수 (13.12). 세밀은 슬라이스가 되지만 광역은 안 된다 — 어긋나면
+    # `load_state_dict` 가 죽는다. 먼저 사람이 읽을 수 있는 말로 막는다.
+    ck_wc = int(ck.get("wide_channels", 12))
+    if ck_wc != WIDE_CHANNELS:
+        raise SystemExit(
+            f"체크포인트의 광역 채널 수가 현재 코드와 다릅니다: {ckpt_path}" + chr(10)
+            + f"  체크포인트  wide_channels={ck_wc}" + chr(10)
+            + f"  현재 코드    WIDE_CHANNELS={WIDE_CHANNELS}" + chr(10)
+            + "  광역은 슬라이스로 못 맞춥니다 (13.12).")
+
     ck_ze = bool(ck.get("zero_even_harmonics", False))
     if ck_ze != ZERO_EVEN_HARMONICS:
         raise SystemExit(
@@ -106,8 +127,9 @@ def load_model(ckpt_path: str, dev: str):
     return model, apps, ck
 
 
-#: 짝수 차수(2,4..14)의 Re/Im 채널과 |I2|/|I1|. 12.72 가 계측 인공물로 확정했다.
-EVEN_CHANNELS = [1, 3, 5, 7, 9, 11, 13] + [16, 18, 20, 22, 24, 26, 28] + [35]
+#: 짝수차에서 오는 세밀 채널. 배치 v2 에서는 **크기 블록 16~22 와 `|I2|/|I1|`(28)** 이다
+#: (v1 의 Re/Im 14개가 아니다 — 13.12). 정본은 `inputs.EVEN_FINE_CHANNELS` 다.
+from src.model.inputs import EVEN_FINE_CHANNELS as EVEN_CHANNELS  # noqa: E402
 
 
 @torch.no_grad()

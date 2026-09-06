@@ -52,7 +52,7 @@ from src.model.inputs import (
 )
 
 MAX_STATES = 5
-P_CH_FINE = 30      # 세밀 갈래의 asinh(P/100) 채널 (1.2절)
+P_CH_FINE = 23      # 세밀 갈래의 asinh(P/100) 채널 (배치 v2, 13.12. v1 에서는 30 이었다)
 P_CH_WIDE = 0       # 광역 갈래의 asinh(P/100) 채널 (1.3절)
 WINDOW_STATS = 4    # 헤드에 직접 잇는 원시 창 통계 (아래 forward 참조)
 
@@ -305,6 +305,9 @@ class NILMNet(nn.Module):
             "power": torch.sigmoid(on_logit) * p_raw,
             "power_raw": p_raw,
             "power_states": p_states,
+            # 상태 혼합 (B,K,S). 상태별 지문(13.11)이 이것을 쓴다 — 손실 쪽에서
+            # `power_mix_mask` 를 다시 만들지 않게 여기서 그대로 내보낸다.
+            "power_mix": mix,
             "state": state,
             "on_logit": on_logit,
             "plugged_logit": o[..., self.i_on + 1],
@@ -343,6 +346,50 @@ def harmonic_signatures(pool, appliances: Sequence[str], n_harm: int = 15) -> np
         sig[j, :, 0] = np.median(np.real(per_w), axis=0)
         sig[j, :, 1] = np.median(np.imag(per_w), axis=0)
     return sig
+
+
+def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 15,
+                                 max_states: int = MAX_STATES, min_cycles: int = 200
+                                 ) -> Tuple[np.ndarray, np.ndarray]:
+    """기기 x **상태**별 와트당 고조파 페이저 (K, S, n_harm, 2) 와 쓸 수 있는지 (K, S) bool.
+
+    `harmonic_signatures` 는 기기당 하나라 **한 기기의 상태들이 고조파 모양이 다르면 못 담는다.**
+    드라이기가 그 극단이다 — 약풍은 반파(|I2|/|I1| 0.431), 강풍은 순저항(0.0004)인데
+    중앙값이 약풍에 앉아 강풍 창에서 없는 h2 를 1.8A 예측하게 만들었다 (13.11).
+
+    상태별 사이클이 `min_cycles` 미만이면 기기 전체 지문으로 되돌린다 — 표본이 얇은 상태를
+    억지로 따로 맞추면 그 상태가 잡음을 배운다.
+    """
+    base = harmonic_signatures(pool, appliances, n_harm)          # (K,H,2)
+    sig = np.repeat(base[:, None], max_states, axis=1)            # (K,S,H,2)
+    used = np.zeros((len(appliances), max_states), dtype=bool)
+    for j, app in enumerate(appliances):
+        acts = pool.appliance_activations.get(app, [])
+        if not acts:
+            continue
+        by: dict = {}
+        for a in acts:
+            st = getattr(a, "state_id", None)
+            if st is None:
+                continue
+            m0 = a.target_power_w > 1.0
+            for s in np.unique(np.asarray(st)[m0]).astype(int):
+                if not 0 < s < max_states:
+                    continue
+                m = m0 & (np.asarray(st) == s)
+                if m.any():
+                    by.setdefault(s, ([], []))
+                    by[s][0].append(a.net_harmonics_complex[m])
+                    by[s][1].append(a.target_power_w[m])
+        for s, (cs, ps) in by.items():
+            c = np.concatenate(cs); p = np.concatenate(ps)[:, None]
+            if len(c) < min_cycles:
+                continue
+            per_w = c / np.maximum(p, 1e-6)
+            sig[j, s, :, 0] = np.median(np.real(per_w), axis=0)
+            sig[j, s, :, 1] = np.median(np.imag(per_w), axis=0)
+            used[j, s] = True
+    return sig.astype(np.float32), used
 
 
 def standby_signatures(pool, appliances: Sequence[str], n_harm: int = 15) -> np.ndarray:

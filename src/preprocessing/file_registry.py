@@ -9,7 +9,7 @@ data/ 안의 모든 CSV가 "어떤 성격의 측정인지"를 결정하는 단�
    정체였다. 그 계측기로 찍은 자료는 **전부 삭제**됐고, 그 자료로 세운 결론은 전부 재검토 대상이다.
    옛 파일명 등록은 `LEGACY_*` 로 옮겨 두었다 — `classify_file` 은 그 이름을 **받지 않는다**
    (같은 이름의 새 녹화가 옛 자료로 오인되는 것을 막는다). 새 녹화는 `DEVICE_FILES`/`NOISE_FILES`
-   에 새로 등록한다. 설계 문서 12.186.
+   에 새로 등록한다. 설계 문서 13.1.
 
 [역할이 필요한 이유]
 과거에는 PreprocessingPipeline.DEVICE_MAP 에 등록되지 않은 파일이 들어오면
@@ -268,16 +268,47 @@ def is_legacy_stem(stem: str) -> bool:
 
 
 # ── 장소 ─────────────────────────────────────────────────────────────────────
-# 새 계측기 자료는 전부 사용자 자리(옛 표기 'C')다. 모듈 docstring [장소] 참조 — 이제 축은 시간대다.
+# ⚠ **2026-09-06 정정 (13.11, 사용자 확인).** 한동안 "새 자료는 전부 한 자리이고 축은 시간대" 로
+#   적어 뒀는데 **틀렸다. 저녁과 심야는 다른 장소다.** 자료가 겹침 없이 갈린다:
+#
+#       무리   vrms          vh3          Z          파일
+#       D 저녁  215.2~219.4V  0.59~0.85%   1.15Ω      test_1 · hotplate_1 · laptop_charger_1 ·
+#                                                    oven_1 · minipc_1 · noise 3종
+#       E 심야  227.5~231.0V  2.80~3.25%   0.42Ω      test_2 · hair_dryer_1 · electiric_kettle_1 ·
+#                                                    air_conditioner_1 · beam_projector_1·2 ·
+#                                                    fan_1 · laptop_charger_2
+#
+#   vh3 가 4배 차이인데 사이가 비어 있다 — 같은 콘센트의 시간대 차이로는 안 되는 폭이다.
+#
+# ⚠ **기기와 장소가 엉켜 있다.** 9종 중 `laptop_charger` 만 두 장소에 다 있고 나머지 8종은
+#   한 장소에서만 찍혔다. 그래서 "이 기기의 지문" 과 "그 장소의 전압 왜곡" 이 원리적으로 안 갈린다.
+#   교차 녹화(옮기기 쉬운 기기를 반대 장소에서 한 번씩)가 이것을 끊는 유일한 자료다.
+#
+# 표기는 **D/E 로 새로 붙였다** — 옛 A/B/C(`LEGACY_SITE_OF_STEM_OLD_ADC`)는 옛 계측기 시대의
+# 자리라 같은 글자를 재사용하면 두 시대가 섞인다.
 SITE_OF_STEM: Dict[str, str] = {
-    **{s: "C" for s in DEVICE_FILES},
-    **{s: "C" for s in NOISE_FILES},
-    "test_1": "C",
+    # D — 저녁 장소 (216V, vh3 0.7%, Z 1.15Ω)
+    **{s: "D" for s in ("hotplate_1", "laptop_charger_1", "oven_1", "minipc_1",
+                        "noise_noselfpower", "noise_selfpower_1", "noise_selfpower_2")},
+    "test_1": "D",
+    # E — 심야 장소 (229V, vh3 3.0%, Z 0.42Ω)
+    **{s: "E" for s in ("hair_dryer_1", "electric_kettle_1", "air_conditioner_1",
+                        "beam_projector_1", "beam_projector_2", "fan_1", "laptop_charger_2")},
+    "test_2": "E",
+}
+
+#: 장소별 실측값. `grid_simulator.MEASURED_SITE_Z_OHM` 과 짝이다.
+SITE_PROFILE: Dict[str, dict] = {
+    "D": {"name": "저녁 장소", "v_rms": 216.5, "vh3_pct": 0.72, "z_ohm": 1.15},
+    "E": {"name": "심야 장소", "v_rms": 229.5, "vh3_pct": 3.01, "z_ohm": 0.42},
 }
 
 
 def site_of(stem: str) -> str:
-    """stem -> 'A' / 'B' / 'C'. 모르면 ''. (새 계측기 자료는 전부 'C')"""
+    """stem -> 'D'(저녁 장소) / 'E'(심야 장소). 모르면 ''.
+
+    옛 계측기 자료의 'A'/'B'/'C' 는 `LEGACY_SITE_OF_STEM_OLD_ADC` 에 따로 있다 — 섞지 않는다.
+    """
     return SITE_OF_STEM.get(_normalize_stem(stem), "")
 
 
@@ -655,3 +686,64 @@ RAW_SKEW_SAMP_LOW = -RAW_PHASE_CAL_DEG_PER_ORDER["LOW"] * RAW_SAMPLES_PER_CYCLE 
 RAW_SKEW_SAMP_LOW_V12 = 0.0
 #: 새 계측기 원시의 계측 RC 시정수 [s] (`circuit_model` 규약, LOW/HIGH 비 실측 + 스캔 최적).
 RAW_RC_TAU_V12 = 60e-6
+
+
+# ── 새 보드의 계측 상수 — **펌웨어 소스로 확인** (13.5, 2026-09-06) ────────────────
+# 출처: `NILM_ECE_IF-fix-even-harmonics-offset-bug/Core/{Inc/nilm_dsp.h, Src/nilm_dsp.c}`.
+# 세 ADC 입력이 같은 1kΩ·100nF 저역통과를 지난다 (`NILM_RC_FC_HZ 1591.55f`).
+#: 하드웨어 안티앨리어싱 RC [s] = 1/(2π·1591.55). 위 `RAW_RC_TAU_V12`(60µs)는 이것의 **근사**다 —
+#: 근사인데도 h1~h9 에서 정확한 연산자와 0.4° 안에서 같아 바꾸지 않는다 (13.5.3).
+METER_RC_TAU_S = 100.0e-6
+#: 펌웨어가 스펙트럼에 곱하는 RC **크기** 역보정 `s_rc_gain[h] = |1 + j·2π·f_h·τ|`. 위상은 안 건드린다.
+#: 그래서 2Hz 의 `ih` 는 **참 전류 크기**이고(RC 감쇠가 되돌려져 있다), `ihdeg` 에는 RC 위상이 남아 있다.
+#: 원시 `i_a` 는 보정이 전혀 없다 (아날로그 RC 가 크기·위상 모두 들어 있다).
+#: 펌웨어 `NILM_CAL_DEFAULT_{LOW,HIGH}_DEG`. 두 레인지가 같은 값이다 — 전환되는 이득단이 없는 보드라
+#: 옛 보드의 LOW 0.44 / HIGH 2.62 (2.18° 차)는 실재하지 않았다고 펌웨어 주석이 적고 있다
+#: (같은 표본에서 두 경로를 재구성하니 차이가 0.00±0.03°). 기준 부하는 전기포트 6.45A/1468W 에서 +1.377/+1.402°.
+METER_PHASE_CAL_DEG_V12: Dict[str, float] = {"LOW": 1.40, "HIGH": 1.40}
+#: `ihdeg[h] -= h · METER_PHASE_CAL_DEG_V12[레인지]` 로 들어간다 (nilm_dsp.c 의 `a = -(float)h * cal->delay_rad`).
+#: 교정 상수가 바뀌기 전에 모은 CSV 를 새 눈금으로 옮긴 값 (`migrate_cal.py --phase-low 0.96 --phase-high -1.22`).
+#: 새 값 − 옛 값 = 1.40 − 0.44 = +0.96 (LOW) / 1.40 − 2.62 = −1.22 (HIGH). `.cal2` 꼬리가 그 결과다.
+#: 검산: 이주 뒤 순저항 `ihdeg1` 이 LOW +0.05° / HIGH +0.06° (이주 전에는 +1.01 / −1.16 으로 2.17° 어긋났다).
+MIGRATE_CAL_DELTA_DEG: Dict[str, float] = {"LOW": +0.96, "HIGH": -1.22}
+
+
+def raw_to_2hz_transfer(h_max: int = 15):
+    """2Hz 고조파 / 원시 FFT 고조파 = T(h). 여덟 스냅샷(두 세션, 32~65W)에서 4자리까지 같았다 (13.5.2).
+
+    `T(h) = |1 + j·2π·60h·METER_RC_TAU_S| · exp(−j·h·METER_PHASE_CAL_DEG_V12)`
+    크기는 펌웨어의 RC 역보정, 위상은 위상 교정 상수다. RC **위상**은 두 경로에 똑같이 들어 있어 비에서 상쇄된다.
+    원시로 맞춘 모델을 2Hz 영역에 놓거나 그 반대로 옮길 때 쓴다.
+    """
+    import numpy as np
+    h = np.arange(1, h_max + 1)
+    return (np.abs(1 + 1j * 2 * np.pi * 60.0 * h * METER_RC_TAU_S)
+            * np.exp(-1j * np.radians(h * METER_PHASE_CAL_DEG_V12["LOW"])))
+
+
+#: 원시 스냅샷의 `seq` 는 그 순간 돌고 있던 2Hz 녹화의 **국소 사이클 번호**와 같다:
+#: `raw.seq == 2Hz.seq * 30 + 2Hz.cycle` (오프셋 0). 2Hz CSV 의 `seq` 는 0.5초 블록(30주기)이고
+#: `cycle` 은 블록 안 0..29 다. 원시 여덟 개 전부 전력 무늬 상관 1.0000 으로 확인됐다 (13.5.1).
+#: **npz 의 `seq` 는 블록 번호다** — 원시의 `seq`(사이클)와 직접 비교하면 안 된다.
+RAW_SEQ_IS_2HZ_LOCAL_CYCLE = True
+RAW_2HZ_CYCLES_PER_BLOCK = 30
+
+#: `data/` 에 있는 원시 스냅샷 11개와 그것이 찍힌 2Hz 녹화 (13.7.1). 세션은 Vrms 로 갈린다.
+#: 프로젝터는 심야만, 미니PC 는 저녁만 있다 — 각 기기의 축퇴를 푸는 자료가 그 반대쪽이다 (설계 13.6.2).
+RAW12_IN_RECORDING = {
+    "raw_laptop_charger_1": ("laptop_charger_1", "evening", 215.6),
+    "raw_laptop_charger_2": ("laptop_charger_1", "evening", 214.5),
+    "raw_laptop_charger_3": ("laptop_charger_1", "evening", 215.4),
+    "raw_laptop_charger_4": ("laptop_charger_1", "evening", 215.7),
+    "raw_laptop_charger_5": ("laptop_charger_2", "night", 229.3),
+    "raw_laptop_charger_6": ("laptop_charger_2", "night", 229.5),
+    "raw_laptop_charger_7": ("laptop_charger_2", "night", 229.4),
+    "raw_laptop_charger_8": ("laptop_charger_2", "night", 229.5),
+    "raw_minipc_1": ("minipc_1", "evening", 217.1),
+    "raw_minipc_2": ("minipc_1", "evening", 216.9),
+    "raw_minipc_3": ("minipc_1", "evening", 216.4),
+    "raw_minipc_4": ("minipc_1", "evening", 216.8),
+    "raw_minipc_5": ("minipc_1", "evening", 216.7),
+    "raw_beam_projector_1": ("beam_projector_1", "night", 231.1),
+    "raw_beam_projector_2": ("beam_projector_1", "night", 231.0),
+}

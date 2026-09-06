@@ -51,13 +51,16 @@ SMPS_APPLIANCES = ("beam_projector", "laptop_charger", "minipc")
 #: 들어간다. 그 파일까지 지도하면 대조가 죽는다. 실제로 열어 보면 scope=smps
 #: 에서도 두 파일에 846 개 셀이 붙는데 전부 OFF 라벨이라 '유령을 지워라' 라는
 #: 강한 감독이 된다 — 대조가 오히려 가장 많이 움직인다.
-#: ⚠ 2026-09-06: 아래 두 목록은 옛 계측기 복합 녹화(삭제)의 것이다. 새 복합 녹화(`test_1`)는 아직 사람
-#:   스위치 로그가 없어 `real_events.json` 이 비어 있다 — 로그가 오면 여기와 대조 목록을 다시 채운다.
-#:   없는 stem 은 `_build_human_on` 이 그냥 건너뛰므로 지금은 무해하다.
-HUMAN_ON_DEFAULT_STEMS = ("test_5", "test_6", "test_7", "test_8", "test_13")
+#: **2026-09-06 갱신**: 새 계측기 복합 녹화 둘로 바꿨다. 둘 다 사용자 타임라인을 신호로 정밀화한
+#: `human_switching_log_signal_refined` 이고 (test_1 17/17, test_2 31/31, uncertain 0), SMPS 3종이
+#: 들어 있다. 옛 목록(test_5/6/7/8/13)은 삭제된 옛 계측기 녹화라 지웠다.
+HUMAN_ON_DEFAULT_STEMS = ("test_1", "test_2")
 
-#: 대조로 남겨야 하는 파일. 여기에 지도가 붙으면 경고한다.
-HUMAN_ON_CONTROL_STEMS = ("test_9", "test_11", "test_12")
+#: 대조로 남겨야 하는 파일 — SMPS 가 없어 "이 처방은 SMPS 배분만 겨냥한다" 를 판정하는 자리.
+#: ⚠ 2026-09-06: **비었다.** 옛 목록(test_9/11/12)은 삭제된 녹화다. 새 자료에는 저항만 있는 복합
+#: 녹화가 아직 없다 — test_1·test_2 둘 다 SMPS 를 포함한다. 저항 4종만 켜는 복합을 하나 녹화하면
+#: 대조가 되살아난다. 빈 목록이면 `_build_human_on` 의 경고가 안 걸리므로 그때까지 대조는 없다.
+HUMAN_ON_CONTROL_STEMS: tuple = ()
 
 
 # ── 장소 전달비 입력 보정 (12.179 / 12.181) ─────────────────────────────────

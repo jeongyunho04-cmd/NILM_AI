@@ -219,53 +219,58 @@ def test_trunk_input_layout_is_frozen():
         )
 
 
-def test_legacy_checkpoint_sees_identical_leading_channels():
-    """새 채널은 **뒤에만** 붙어야 한다. 38채널 모델이 44채널 입력을 받아도
-    앞 38채널만 쓰므로, 옛 체크포인트의 입력이 한 칸도 안 움직인다."""
+def test_fine_layout_is_recorded_and_guarded():
+    """배치 v2 는 **앞부분의 뜻을 바꿨다** — 슬라이스 호환이 깨진 것이 의도다 (13.12).
+
+    v1 은 "새 채널은 뒤에만" 규약으로 `fine[:, :38]` 슬라이스 호환을 지켰다. v2 는 짝수차
+    Re/Im 14개를 크기 7개로 갈아끼우면서 그 규약을 **일부러** 깼다 (짝수차 위상은 플러그
+    방향이라 기기 속성이 아니다). 그래서 호환 대신 **가드**가 안전장치다:
+    캐시 meta 와 체크포인트에 `fine_layout` 을 적고 로더가 대조해 거부해야 한다.
+    """
     import numpy as np
-    import torch
-    from src.model.inputs import FINE_CHANNELS, LEGACY_FINE_CHANNELS, build_fine
-    from src.model.net import NILMNet
+    from src.model.inputs import (EVEN_MAG0, EVEN_ORDERS, FINE_CHANNELS, FINE_LAYOUT,
+                                  ODD_ORDERS, WIDE_CHANNELS, build_fine)
 
     rng = np.random.default_rng(0)
     x = rng.normal(0, 0.3, (2, 33, 3600)).astype(np.float32)
     fine = build_fine(x)
-    assert fine.shape[1] == FINE_CHANNELS
+    assert fine.shape[1] == FINE_CHANNELS == 45
+    assert FINE_LAYOUT == "v2"
 
-    # 상수만 38 로 되돌려 만든 것과 앞 38채널이 같아야 한다
-    import src.model.inputs as I
-    keep = I.FINE_CHANNELS
-    try:
-        I.FINE_CHANNELS = LEGACY_FINE_CHANNELS
-        legacy = I.build_fine(x)
-    finally:
-        I.FINE_CHANNELS = keep
-    assert legacy.shape[1] == LEGACY_FINE_CHANNELS
-    np.testing.assert_allclose(fine[:, :LEGACY_FINE_CHANNELS], legacy, rtol=0, atol=0)
+    # 짝수차 크기 블록은 부호가 없다 — 위상을 버렸다는 뜻이다
+    even = fine[:, EVEN_MAG0:EVEN_MAG0 + len(EVEN_ORDERS)]
+    assert even.min() >= 0.0, "짝수차 크기 채널에 음수가 있다 — Re/Im 이 남아 있는 것"
+    assert len(ODD_ORDERS) == 8 and len(EVEN_ORDERS) == 7
 
-    # 38채널 모델이 44채널 입력을 그대로 먹는다
-    m = NILMNet(["a", "b"], [2, 2], fine_channels=LEGACY_FINE_CHANNELS).eval()
-    f = torch.from_numpy(fine)
-    w = torch.randn(2, 12, 120)
+    # 러너 셋이 배치를 기록·대조하는지 (소스 검사 — 가드가 조용히 사라지면 안 된다)
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("src/model/traincache.py", "src/run_train_cnn.py", "src/run_gate_check.py"):
+        src = (root / rel).read_text(encoding="utf-8")
+        assert "fine_layout" in src, f"{rel} 에 배치 가드가 없다"
+
+    # 채널 수만 줄인 모델은 **더 이상 옛 입력을 재현하지 못한다** — v2 의 앞 38개는
+    # v1 의 앞 38개와 뜻이 다르다. 그래서 슬라이스가 아니라 가드가 안전장치다.
+    import torch
+    from src.model.net import NILMNet
+    m = NILMNet(["a", "b"], [2, 2], fine_channels=FINE_CHANNELS).eval()
     with torch.no_grad():
-        o44 = m(f, w)["on_logit"]
-        o38 = m(f[:, :LEGACY_FINE_CHANNELS], w)["on_logit"]
-    torch.testing.assert_close(o44, o38)
+        o = m(torch.from_numpy(fine), torch.randn(2, WIDE_CHANNELS, 120))["on_logit"]
+    assert o.shape == (2, 2)
 
 
 def test_phase_channels_are_load_invariant_and_gated():
-    """고조파 위상 채널(38~43)은 크기를 키워도 안 변하고, 신호가 없으면 0 이다."""
+    """고조파 위상 채널은 크기를 키워도 안 변하고, 신호가 없으면 0 이다 (자리는 13.12 의 PHI0)."""
     import numpy as np
-    from src.model.inputs import FINE_CHANNELS, build_fine
-    if FINE_CHANNELS < 44:
-        return
+    from src.model.inputs import PHI0, PHI_ORDERS, build_fine
+    lo, hi = PHI0, PHI0 + 2 * len(PHI_ORDERS)
     rng = np.random.default_rng(1)
     x = np.zeros((1, 33, 3600), np.float32)
     for h, amp, ph in ((1, 0.30, 0.4), (3, 0.25, -1.1), (5, 0.20, 2.0), (7, 0.15, -2.6)):
         x[0, h - 1] = amp * np.cos(ph)
         x[0, 15 + h - 1] = amp * np.sin(ph)
-    a = build_fine(x)[0, 38:44, -1]
-    b = build_fine(x * 3.0)[0, 38:44, -1]          # 크기만 3배
+    a = build_fine(x)[0, lo:hi, -1]
+    b = build_fine(x * 3.0)[0, lo:hi, -1]          # 크기만 3배
     # 게이트는 차수마다 다르므로 **쌍별 각도**로 본다. 그 각도가 φ_h 자체다.
     for k in range(3):
         ang_a = np.arctan2(a[2 * k + 1], a[2 * k])
@@ -275,7 +280,7 @@ def test_phase_channels_are_load_invariant_and_gated():
     # 게이트는 크기를 따라 커져야 한다 (신호가 클수록 위상을 신뢰한다)
     assert np.linalg.norm(b) > np.linalg.norm(a)
 
-    z = build_fine(np.zeros((1, 33, 3600), np.float32))[0, 38:44]
+    z = build_fine(np.zeros((1, 33, 3600), np.float32))[0, lo:hi]
     assert np.abs(z).max() < 1e-6, "신호가 없으면 위상 채널은 0 이어야 한다"
 
 def test_fine_dropout_is_off_at_inference_and_masks_only_fine():
@@ -284,8 +289,8 @@ def test_fine_dropout_is_off_at_inference_and_masks_only_fine():
     from src.model.net import NILMNet
 
     m = NILMNet(["a", "b"], [2, 2], fine_dropout=1.0)   # 항상 가린다
-    from src.model.inputs import FINE_CHANNELS
-    f, w = torch.randn(4, FINE_CHANNELS, 600), torch.randn(4, 12, 120)
+    from src.model.inputs import FINE_CHANNELS, WIDE_CHANNELS
+    f, w = torch.randn(4, FINE_CHANNELS, 600), torch.randn(4, WIDE_CHANNELS, 120)
 
     m.eval()
     with torch.no_grad():

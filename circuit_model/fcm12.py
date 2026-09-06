@@ -21,7 +21,12 @@ except ImportError:
     from circuit12 import sim_harmonics, F
 
 H = np.arange(1, 16)
-G_BG_DEFAULT = 0.051e-3        # 자체전원 충전기 배경의 동상 컨덕턴스 (11mA/217V)
+#: 빈 회로(멀티탭에 아무 부하도 없을 때) 배경의 동상 컨덕턴스. 1.2~1.6W / 6~7.5mA ∠+12~16° (218V).
+#: ⚠ 2026-09-06 정정: 옛 값 0.051mS 는 `noise_selfpower_*` 에서 나온 것인데, 그 파일들은 자체전원(뉴클레오)
+#: 충전기를 **일부러 같은 멀티탭에 꽂고** 찍은 실험이다. 평소에는 다른 콘센트라 그 2.4W 가 측정에 안 들어온다.
+#: 평소 배경은 `noise_noselfpower` 쪽이고 0.028mS 다. 자체전원을 멀티탭에 꽂은 세션은 스파이크 고조파가
+#: 붙어 G 하나로 안 되므로 `fit12 --bg` 로 파형째 뺀다.
+G_BG_DEFAULT = 0.028e-3
 
 
 class FCM:
@@ -33,7 +38,10 @@ class FCM:
     def from_pickle(cls, path):
         d = pickle.load(open(path, 'rb'))
         Rs = list(d.get('R_files', {}).values()) or [d['params'][1]]
-        return cls(d['device'], d['params'], d.get('tau', 60e-6), (min(Rs), max(Rs)))
+        # 'R_range' 가 있으면 그것이 우선 — 2Hz 녹화에서 본 NTC 상태 범위(워밍업 R_cold → R_hot)까지 넓힌 값 (2026-09-06, 설계 13.3)
+        rr = d.get('R_range')
+        rng_ = (float(rr[0]), float(rr[1])) if rr else (min(Rs), max(Rs))
+        return cls(d['device'], d['params'], d.get('tau', 60e-6), rng_)
 
     def _params(self, R=None, include_bg=False):
         C, R0, L0, Isat, Cx, rd, G = self.params

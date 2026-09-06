@@ -381,7 +381,7 @@ class LoadSynthesizer:
             a: np.full(N, self.grid_sim.default_ref_voltage, dtype=np.float32)
             for a in self.known_appliances
         }
-        # 12.187: 각 사이클이 어느 녹화 파일에서 왔는가 (텍스처 델타의 기준 텍스처). −1 = 없음(대기 등).
+        # 13.2: 각 사이클이 어느 녹화 파일에서 왔는가 (텍스처 델타의 기준 텍스처). −1 = 없음(대기 등).
         rec_tex = {a: np.full(N, -1, dtype=np.int16) for a in self.known_appliances}
 
         # 4. 대기 레이어: 꽂혀 있지만 꺼진 상태
@@ -523,7 +523,7 @@ class LoadSynthesizer:
                     coupled_c[a] = self.grid_sim.apply_voltage_texture(
                         a, coupled_c[a], gt_active_p[a], env, rec_tex[a]
                     )
-                # SMPS 끼리의 공유 임피던스 결합 (12.187, FCM). 텍스처 델타 뒤에 건다.
+                # SMPS 끼리의 공유 임피던스 결합 (13.2, FCM). 텍스처 델타 뒤에 건다.
                 coupled_c = self.grid_sim.apply_smps_coupling(coupled_c, gt_active_p, env)
 
             total_complex = noise_c.copy()

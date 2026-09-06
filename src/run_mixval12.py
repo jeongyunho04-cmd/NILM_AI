@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""혼합 검증 (mixval, v12) — 복합 녹화의 SMPS 창에서 생성기의 세 가지 전류 재현을 실측과 견준다 (12.187, 2026-09-06).
+"""혼합 검증 (mixval, v12) — 복합 녹화의 SMPS 창에서 생성기의 세 가지 전류 재현을 실측과 견준다 (13.2, 2026-09-06).
 
 무엇을 재나
 ----------
@@ -7,7 +7,7 @@
 I_meas(h1..h15) 와 다음을 비교한다:
 
     [A] 녹화 중첩      Σ_i I_rec,i(p_i) · (V_rec/V_meas)                      지금까지의 생성기 = 단순 중첩
-    [B] A + 텍스처 델타 [A] + Σ_i [ I_sim,i(p_i, V15_meas) − I_sim,i(p_i, V15_rec,i) ]     새 생성기 (12.187)
+    [B] A + 텍스처 델타 [A] + Σ_i [ I_sim,i(p_i, V15_meas) − I_sim,i(p_i, V15_rec,i) ]     새 생성기 (13.2)
     [D] 모델 단독       Σ_i I_sim,i(p_i, V15_meas)                                교체안 — 델타보다 나은지 본다
 
 V15_meas 는 그 창의 **측정 단자 전압**이라 공유 임피던스 결합이 이미 들어 있다 — 그래서 여기서는 결합 델타를
@@ -143,7 +143,7 @@ def main() -> int:
     noise = pool._pick_noise_reference(1.6)
     doc: Dict[str, dict] = {}
     print("=" * 110)
-    print("혼합 검증 v12 — SMPS 창의 실측 총전류 대 [A] 녹화 중첩 / [B] +텍스처 델타 / [D] 모델 단독   (12.187)")
+    print("혼합 검증 v12 — SMPS 창의 실측 총전류 대 [A] 녹화 중첩 / [B] +텍스처 델타 / [D] 모델 단독   (13.2)")
     print("=" * 110)
     for stem in a.stems:
         if stem not in ev:

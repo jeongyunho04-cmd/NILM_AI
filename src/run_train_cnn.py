@@ -38,7 +38,8 @@ from src.evaluation import (
     format_table, load_holdout, resistive_confusion,
     score_appliances, summarize, total_power_residual,
 )
-from src.model.inputs import ZERO_EVEN_HARMONICS, FINE_CYCLES, TARGET_LOOKAHEAD, build_inputs
+from src.model.inputs import (ZERO_EVEN_HARMONICS, FINE_CYCLES, FINE_LAYOUT,
+                             TARGET_LOOKAHEAD, WIDE_CHANNELS, build_inputs)
 from src.synthesis.dataset import chunk_seed
 from src.model.traincache import CachedWindows
 from src.model.losses import LossWeights, NILMLoss, build_state_scales
@@ -212,6 +213,20 @@ def main() -> int:
                     help="손실 척도를 (기기,상태)별로 (12.9.9절). --no-per-state-scale 로 끈다")
     ap.add_argument("--block-windows", type=int, default=24_000,
                     help="캐시 블록 셔플 단위. 작을수록 메모리가 덜 든다 (24000 = 약 1.1GB)")
+    ap.add_argument("--off-detach-praw", action="store_true",
+                    help="**꺼진 창에서 `p_raw` 에 경사를 주지 않는다** (13.11). 상태 전력 머리가 "
+                         "죽는 것을 막는다 — 드라이기 HIGH 가 정확히 그렇게 0W 가 됐다. "
+                         "게이트가 꺼진 창을 0 으로 만드는 일을 맡는다.")
+    ap.add_argument("--harm-even-magnitude", action="store_true",
+                    help="L_harm 에서 **짝수차만 크기 공간**으로 잰다 (13.11). 플러그를 "
+                         "반대로 꽂으면 짝수차가 180° 도므로(홀수차는 안 돈다) 짝수차 위상은 "
+                         "기기 속성이 아니다 — 드라이기 약풍에서 격리 대 복합이 179° 어긋났다.")
+    ap.add_argument("--state-signatures", action="store_true",
+                    help="**상태별 고조파 지문** (13.11). 기기당 페이저 하나로는 "
+                         "한 기기의 상태들이 고조파 모양이 다를 때 못 담는다 — 드라이기 "
+                         "약풍(반파 |I2|/|I1| 0.431)과 강풍(0.0004)이 그 극단이고, "
+                         "지문이 약풍에 앉는 바람에 강풍 창에서 정답 배분이 오답보다 "
+                         "L_harm 27배 비쌌다. 상태 표본이 200사이클 미만이면 기기 지문으로 되돌린다.")
     ap.add_argument("--harm-odd-only", action="store_true",
                     help="L_harm 에서 짝수차를 뺀다 (12.75절). 짝수차는 계측 인공물이라 "
                          "(12.72) 손실이 가장 큰 가중을 그것에 걸고 있었다 (12.70.3)")
@@ -228,6 +243,11 @@ def main() -> int:
                          "달라지므로 홀드아웃도 그 값으로 다시 만들어야 한다 (12.45)")
     ap.add_argument("--cache", default="cache/train60",
                     help="학습 캐시 경로. 'none' 이면 실시간 합성 (12.8.2절 참조)")
+    ap.add_argument("--zero-wide-channels", default="", metavar="LIST",
+                    help="**광역** 입력의 이 채널들을 0 으로 만든다 (13.12 절제용). "
+                         "크기 블록 12~26, 위상 블록 27~34 "
+                         "(`inputs.WIDE_MAG_CHANNELS` / `WIDE_PHASE_CHANNELS`). "
+                         "캐시를 다시 굽지 않고 광역 확장의 효과를 가른다.")
     ap.add_argument("--zero-channels", default="", metavar="LIST",
                     help="세밀 입력의 이 채널들을 **0 으로 만든다** (쉼표). "
                          "채널 하나의 효과를 재는 **가장 조인 대조**다 — 채널 수를 "
@@ -256,11 +276,16 @@ def main() -> int:
     ZERO_CH = [int(x) for x in a.zero_channels.split(",") if x.strip()]
     if ZERO_CH:
         print(f"  ** 세밀 채널 {ZERO_CH} 를 0 으로 (조인 대조, 12.114 재시험) **")
+    ZERO_W = [int(x) for x in a.zero_wide_channels.split(",") if x.strip()]
+    if ZERO_W:
+        print(f"  ** 광역 채널 {ZERO_W} 를 0 으로 (13.12 절제) **")
     hs = load_holdout(a.holdout)
     apps = hs.appliances
     prep = prepare_holdout_inputs(hs)
     if ZERO_CH:
         prep[0][:, ZERO_CH] = 0.0        # 학습과 평가가 같은 입력을 봐야 한다
+    if ZERO_W:
+        prep[1][:, ZERO_W] = 0.0
     # 변환이 끝나면 3.8GB 원시 memmap 은 더 필요 없다. 놓아 주어야
     # 그 페이지가 작업집합에 남지 않는다.
     hs.X = np.zeros((len(prep[0]), 1, 1), np.float32)
@@ -306,6 +331,21 @@ def main() -> int:
         print(f"  ** 상시 배경 (12.166): +{background_power():.2f}W, "
               f"|I1| +{np.hypot(_bg[0,0], _bg[0,1])*1000:.1f} mA -> noise_sig **")
     h_scale = harmonic_scales(pool, apps)
+    # 상태별 지문 (13.11). `del pool` 앞에서 만들어야 한다.
+    sig_state = None
+    if a.state_signatures:
+        from src.model.net import harmonic_signatures_by_state
+        sig_state, _used = harmonic_signatures_by_state(pool, apps)
+        print(f"  ** 상태별 지문 (13.11): {int(_used.sum())}개 상태를 따로 맞췄다 **")
+        for _j, _a in enumerate(apps):
+            for _s in range(_used.shape[1]):
+                if not _used[_j, _s]:
+                    continue
+                _c = sig_state[_j, _s, :, 0] + 1j * sig_state[_j, _s, :, 1]
+                _i1 = abs(_c[0])
+                if _i1 > 1e-9:
+                    print(f"       {_a:18s} s{_s}  와트당|I1| {1e3*_i1:.3f} mA/W"
+                          f"   h2/h1 {abs(_c[1])/_i1:.4f}   h3/h1 {abs(_c[2])/_i1:.4f}")
     del pool
 
     model = NILMNet(apps, appliance_state_counts(apps), width=a.width,
@@ -321,6 +361,9 @@ def main() -> int:
         noise_sig=torch.from_numpy(nz_sig),
         harm_scale=torch.from_numpy(h_scale),
         harm_odd_only=a.harm_odd_only,
+        off_detach_praw=a.off_detach_praw,
+        signatures_state=(torch.from_numpy(sig_state) if a.state_signatures else None),
+        harm_even_magnitude=a.harm_even_magnitude,
         weights=LossWeights(harm=a.w_harm, cons=a.w_cons, over=a.w_over,
                             state_power=a.w_state_power),
         s_state=(build_state_scales(apps, [S_I[x] for x in apps])
@@ -339,6 +382,24 @@ def main() -> int:
     cache = None
     if a.cache and a.cache.lower() != "none":
         cache = CachedWindows(a.cache)
+        # 짝수차 규약은 캐시에 **구워져** 있다 (`build_fine` 이 0 으로 만든 것은 못 되돌린다).
+        # 체크포인트에는 현재 코드 값이 적히므로, 둘이 다르면 체크포인트가 거짓을 주장하고
+        # `run_gate_check` 의 검사가 그것을 통과시킨다. 여기서 막는다 (13.10).
+        # 배치 대조 (13.12). 채널 수가 같아도 뜻이 다를 수 있으므로 **먼저** 본다.
+        _cfl = str(cache.meta.get("fine_layout", "v1"))
+        if _cfl != str(FINE_LAYOUT):
+            raise SystemExit(
+                f"캐시의 세밀 채널 배치가 현재 코드와 다릅니다: {a.cache}" + chr(10)
+                + f"  캐시       fine_layout={_cfl!r}" + chr(10)
+                + f"  현재 코드  FINE_LAYOUT={FINE_LAYOUT!r}" + chr(10)
+                + "  앞부분의 뜻이 다르므로 슬라이스로 못 맞춥니다 — 캐시를 다시 구우십시오 (13.12).")
+        _cze = cache.meta.get("zero_even_harmonics")
+        if _cze is not None and bool(_cze) != bool(ZERO_EVEN_HARMONICS):
+            raise SystemExit(
+                f"캐시의 짝수차 구성이 현재 코드와 다릅니다: {a.cache}" + chr(10)
+                + f"  캐시       zero_even_harmonics={bool(_cze)}" + chr(10)
+                + f"  현재 코드  ZERO_EVEN_HARMONICS={bool(ZERO_EVEN_HARMONICS)}" + chr(10)
+                + "  캐시를 다시 굽거나 src/model/inputs.py 를 캐시 값으로 되돌리십시오.")
         print(f"학습 데이터: 캐시 {a.cache} — 독립 창 {len(cache):,}개 "
               f"({cache.meta['bytes']/1e9:.1f}GB) | epoch 당 {a.epoch_windows:,}창 "
               f"-> 전체 {a.epochs * a.epoch_windows / len(cache):.1f}회 재사용")
@@ -383,6 +444,11 @@ def main() -> int:
                     "fine_cycles": FINE_CYCLES,
                     # 짝수차 배제 (12.77). 학습과 추론이 짝을 이뤄야 한다.
                     "zero_even_harmonics": ZERO_EVEN_HARMONICS,
+                    # 세밀 채널 배치 (13.12). 채널 수와 달리 슬라이스로 못 맞춘다.
+                    "fine_layout": FINE_LAYOUT,
+                    # 광역 채널 수 (13.12). 세밀과 달리 슬라이스가 아예 없다 —
+                    # `net.py` 가 conv 입력 채널로 직결한다.
+                    "wide_channels": WIDE_CHANNELS,
                     "select": a.select}, path)
 
     hist, best = [], None
@@ -393,6 +459,8 @@ def main() -> int:
             fine, wide, tgt = to_targets(batch, dev)
             if ZERO_CH:
                 fine[:, ZERO_CH] = 0.0        # 12.114 재시험의 조인 대조
+            if ZERO_W:
+                wide[:, ZERO_W] = 0.0
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
                 out = model(fine, wide)
                 parts = crit(out, tgt)

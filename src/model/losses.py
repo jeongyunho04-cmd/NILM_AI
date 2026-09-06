@@ -144,6 +144,9 @@ class NILMLoss(torch.nn.Module):
         companion_w: Optional[torch.Tensor] = None,     # (K,) 동반 부하 전력 (W)
         res_ohm: Optional[torch.Tensor] = None,         # (K,) 등가저항 Ω, 0 = 안 건다 (12.156)
         res_ohm_half: Optional[torch.Tensor] = None,    # (K,) 반파 상태의 등가저항 (12.157)
+        off_detach_praw: bool = False,                  # 꺼진 창에서 p_raw 를 detach (13.11)
+        signatures_state: Optional[torch.Tensor] = None,  # (K,S,H,2) 상태별 지문 (13.11)
+        harm_even_magnitude: bool = False,              # 짝수차를 크기 공간에서 잰다 (13.11)
     ):
         super().__init__()
         self.register_buffer("s_i", s_i.clamp(min=1e-3))
@@ -231,6 +234,30 @@ class NILMLoss(torch.nn.Module):
         self.register_buffer("res_ohm_half", res_ohm_half if res_ohm_half is not None
                              else torch.zeros(len(s_i)))
         # `L_swap`(12.158) 이 셀 조합. 저항 열의 on/off 전수다 (4종이면 16개).
+        self.off_detach_praw = bool(off_detach_praw)
+        # ── 상태별 지문 (2026-09-06, 13.11) ────────────────────────────────
+        # 기기당 페이저 하나로는 **한 기기의 상태들이 고조파 모양이 다를 때** 못 담는다.
+        # 드라이기 약풍은 반파(|I2|/|I1| 0.431), 강풍은 순저항(0.0004)인데 지문 중앙값이
+        # 약풍에 앉아 있었다 (h2/h1 0.4290). 강풍 창에서 정답 배분의 `L_harm` 이
+        # 오답보다 **27배 비쌌다** (22.792 대 0.855) — 모델은 틀린 목적함수를 정확히
+        # 최적화하고 있었다.
+        #
+        #     옛:  pred_h = Σ_k (게이트_k · p_raw_k) · sig[k,h]
+        #     새:  pred_h = Σ_k Σ_s (게이트_k · 혼합_ks · p_states_ks) · sig[k,s,h]
+        #
+        # `Σ_s 혼합·p_states = p_raw` 이므로 **모든 상태의 지문이 같으면 옛 식과 같다.**
+        self.register_buffer("sig_state", signatures_state
+                             if signatures_state is not None else torch.zeros(0))
+        self.use_state_sig = signatures_state is not None
+        # ── 짝수차는 크기 공간에서 (2026-09-06, 13.11) ─────────────────────
+        # 플러그를 반대로 꽂으면 `I_h -> −(−1)^h I_h` 라 **짝수차만 180° 돈다.**
+        # 드라이기 약풍의 격리 녹화 대 복합 녹화에서 h2 가 −6.63° 대 +172.60°,
+        # h4 가 −177.52° 대 −0.74° 였고 홀수차는 10.7° 안이었다. 크기는 같다.
+        # 즉 짝수차 위상은 기기 속성이 아니다 — 복소로 재면 정답 배분에 벌점이 간다.
+        self.harm_even_mag = bool(harm_even_magnitude)
+        self.register_buffer("even_order",
+                             torch.tensor([1.0 if (i + 1) % 2 == 0 else 0.0 for i in range(h)],
+                                          dtype=torch.float32))
         nres = int((self.res_ohm > 0).sum()) if res_ohm is not None else 0
         if nres > 0:
             import itertools as _it
@@ -379,6 +406,37 @@ class NILMLoss(torch.nn.Module):
         self.power_delta = power_delta
         self.standby_delta = standby_delta
 
+
+    def _harm_err(self, pred, obs):
+        """(B,H,2) 차수별 정규화 오차.
+
+        짝수차는 **크기 공간**에서 잰다 (13.11) — 짝수차 위상은 플러그 방향이라 기기 속성이
+        아니다. 홀수차는 복소 그대로다. 두 성분에 반씩 담아 규모를 복소 판과 맞춘다
+        (복소 판의 성분 평균이 |Δ|의 0.64배, 이쪽이 0.5배로 같은 자리다).
+        """
+        err = (pred - obs).abs() / self.harm_scale[None, :, None]
+        if not self.harm_even_mag:
+            return err
+        pm = pred.pow(2).sum(-1).clamp(min=1e-18).sqrt()
+        om = obs.pow(2).sum(-1).clamp(min=1e-18).sqrt()
+        emag = ((pm - om).abs() / self.harm_scale[None, :] * 0.5)[..., None].expand_as(err)
+        return torch.where(self.even_order[None, :, None].bool(), emag, err)
+
+    def _harm_pred_active(self, out, power):
+        """활성 기기의 고조파 기여 (B,H,2).
+
+        상태별 지문이 있으면 상태 혼합으로 편다 (13.11). 없으면 옛 식 그대로다 —
+        `Σ_s 혼합·p_states = p_raw` 이므로 지문이 상태마다 같을 때 두 식은 같다.
+        """
+        if not self.use_state_sig or out.get("power_mix") is None                 or out.get("power_states") is None:
+            return torch.einsum("bk,khc->bhc", power, self.sig)
+        # power = 게이트 · p_raw 이므로 게이트는 power/p_raw 로 되살린다 —
+        # `power` 가 detach 등으로 손질된 판일 수 있어 out["on_logit"] 을 다시 쓰지 않는다.
+        praw = out["power_raw"].clamp(min=1e-6)
+        gate = (power / praw)[..., None]                       # (B,K,1)
+        pw = gate * out["power_mix"] * out["power_states"]      # (B,K,S)
+        return torch.einsum("bks,kshc->bhc", pw, self.sig_state)
+
     def forward(self, out: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         # 12.9.9절 — 정답 상태에 맞는 척도를 쓴다. 손실은 학습 라벨을 봐도 되고,
         # 이렇게 해야 '고전력 기기의 저전력 상태' 가 손실에서 지워지지 않는다.
@@ -389,6 +447,28 @@ class NILMLoss(torch.nn.Module):
         else:
             s = self.s_i[None]
         parts: Dict[str, torch.Tensor] = {}
+
+        # ── 꺼진 창은 `p_raw` 에 경사를 주지 않는다 (2026-09-06, 13.11) ──────────
+        # `p_raw = Σ_s softmax(state)_s · softplus(p_states)_s` 이고 `power_mix_mask` 가
+        # OFF 상태를 혼합에서 뺀다. 그래서 **꺼진 창도 켜진 상태 중 하나로 배분된다** —
+        # 참 상태가 OFF 인데 혼합에 갈 곳이 없다. 학습 초반 게이트가 0.5 근처일 때
+        # `L_power` 가 그 창들에서 p_raw 를 0 으로 밀고, 배출구가 된 상태의 softplus 가
+        # 음수 쪽으로 포화하면 **미분이 0 이라 못 돌아온다.**
+        #
+        # 드라이기 s2(HIGH, 참 899W)가 정확히 그렇게 죽었다 (13.10.9): 30만 창 중 OFF
+        # 25.8만(86%)이 s2 로 흘렀고(혼합 0.945), 진짜 HIGH 2.4만 창이 같은 s2 를 타서
+        # 통째로 0W 를 받는다. 합성 홀드아웃 상대오차가 300~600W 에서 +0.027,
+        # 900~1200W 에서 **−1.000** 이다. 실측 test_2 에서는 그 985W 가 포트로 간다.
+        #
+        # 꺼진 창을 0 으로 만드는 것은 **게이트의 일**이다 (`power = σ(on)·p_raw`).
+        # 그 창의 상태 혼합은 뜻이 없으므로 p_raw 를 detach 해 게이트만 경사를 받게 한다.
+        # 학습에만 걸린다 — 추론 경로도 저장되는 가중치의 뜻도 그대로다.
+        if (self.off_detach_praw and tgt.get("y_on") is not None
+                and out.get("power_raw") is not None and out.get("on_logit") is not None):
+            _pr = out["power_raw"]
+            _on = tgt["y_on"] > 0.5
+            out = dict(out)
+            out["power"] = torch.sigmoid(out["on_logit"]) * torch.where(_on, _pr, _pr.detach())
 
         # 3.1절 — 스케일 정규화 전력 회귀. 절대 W 를 쓰면 오븐 60W 와 프로젝터 60W 가
         # 같은 벌점이 되고, 0.7절의 오차 전가 보호막(87배)이 사라진다.
@@ -428,13 +508,13 @@ class NILMLoss(torch.nn.Module):
             # 관측 고조파 = Σ(활성 기기) + Σ(꽂힌 채 꺼진 기기의 대기 전류) + 계측계 전류.
             # 활성 항만 더하면 체계적 오프셋이 남고, 그 오프셋은 저부하 대역에서
             # 상대적으로 크다 (3.4절 경고).
-            pred = torch.einsum("bk,khc->bhc", out["power"], self.sig)
+            pred = self._harm_pred_active(out, out["power"])
             idle = torch.sigmoid(out["plugged_logit"]) * (1.0 - torch.sigmoid(out["on_logit"]))
             pred = pred + torch.einsum("bk,khc->bhc", idle, self.standby_sig)
             pred = pred + self.noise_sig[None]
             # 차수별로 같은 무게를 준다. 정규화하지 않으면 I1 이 전부 지배해
             # 고조파 제약이 전력 제약과 같아진다.
-            err = (pred - tgt["obs_harm"]).abs() / self.harm_scale[None, :, None]
+            err = self._harm_err(pred, tgt["obs_harm"])
             # 마스크를 걸어도 손실 규모가 유지되도록 마스크 평균으로 나눈다.
             # 그래야 `w_harm=0.1` 이 이전과 같은 뜻을 갖는다.
             parts["harm"] = ((err * self.harm_mask[None, :, None]).mean()
@@ -543,7 +623,8 @@ class NILMLoss(torch.nn.Module):
                 gw = self.harm_gw[None]
                 p_h = p_h * gw + (p_h * (1.0 - gw)).detach()
             sg = self.sig_real if self.sig_real.numel() else self.sig
-            pred = torch.einsum("bk,khc->bhc", p_h, sg)
+            pred = (self._harm_pred_active(out, p_h) if sg is self.sig
+                    else torch.einsum("bk,khc->bhc", p_h, sg))
             # ── h1 지문의 전압 보정 (12.151) ──────────────────────────────────
             # 유효전력의 정의에서 **항등식**이 나온다. P = V1·I1·cos(phi1) 이므로
             #
@@ -579,7 +660,7 @@ class NILMLoss(torch.nn.Module):
             # 짝수차는 0 이다 — 12.72(전류 인공물) + 12.147(전압 짝수차 미결).
             if tgt.get("harm_offset") is not None:
                 pred = pred + tgt["harm_offset"]
-            err = (pred - tgt["obs_harm"]).abs() / self.harm_scale[None, :, None]
+            err = self._harm_err(pred, tgt["obs_harm"])
             # 불감대 — 순방향 모델 오차만큼은 벌하지 않는다 (`harm_dz` 주석).
             # **2단계에만 건다.** 1단계는 합성이라 순방향이 정확하다.
             if self.harm_deadzone > 0:

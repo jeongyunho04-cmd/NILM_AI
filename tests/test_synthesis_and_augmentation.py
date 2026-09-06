@@ -1206,7 +1206,8 @@ def test_다단_강하_채널이_기착을_짚는다():
         x[0, 30] = prof
         x[0, 32] = 220.0
         f = build_fine(x)
-        return [float(np.sinh(f[0, 48 + i, ti]) * RIPPLE_SCALE) for i in range(2)]
+        from src.model.inputs import DROP0
+        return [float(np.sinh(f[0, DROP0 + i, ti]) * RIPPLE_SCALE) for i in range(2)]
 
     # 충전기 — 기착 없음. 두 탭 다 0
     short, long = drop_w(0.0)
