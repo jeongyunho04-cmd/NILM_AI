@@ -639,7 +639,8 @@ class GridSimulator:
             V_term = V_src − Z(h)·Σ_i I_i     (고정점 3회, Z = r_grid + j·2π·60·h·L, L = x_grid/(2π·60))
             I_i(생성) += I_i(V_term) − I_i(V_src)
 
-        기기별 전력 5W 구간의 조합을 키로 캐시한다. 결합 상대가 없는 사이클(SMPS 1개)은 그대로 둔다.
+        기기별 전력 5W 구간의 조합을 키로 캐시한다. 결합 상대가 없는 사이클(SMPS 1개)은 그대로 둔다 —
+        그 문턱의 근거는 `coupling.coupling_delta` 독스트링에 있다 (13.21에서 단독도 켜 봤고 접었다).
         """
         if not self.use_coupling:
             return layers
