@@ -52,24 +52,42 @@ class Texture:
     stem: str
     t_rel_s: float
     vrms: float
-    rel: np.ndarray          # (15,) complex, rel[0] = 1+0j
+    rel: np.ndarray          # (15,) complex, rel[0] = 1+0j — **단자** 전압 (녹화 그대로)
     site: str = ""           #: 자리 (`file_registry.site_of`). 모르면 ""
     session: str = ""        #: 세션 (`file_registry.SITE_SESSIONS` 의 키). 모르면 stem
+    #: **개방 전압** (13.22). `V_open = V_term + Z_session·I_block` 로 그 녹화 부하의 강하를 벗긴 것.
+    #: 합성 창의 소스 전압은 이쪽이다 — `rel` 은 그 녹화의 부하가 이미 얹힌 값이라 소스로 쓰면
+    #: 결합 델타가 강하를 두 번 건다. Z 를 모르는 세션이면 `rel` 과 같다.
+    rel_open: Optional[np.ndarray] = None
+
+    def source_rel(self) -> np.ndarray:
+        """합성의 소스로 쓸 상대 텍스처 (개방 전압이 있으면 그것)."""
+        return self.rel if self.rel_open is None else self.rel_open
 
     def v15(self, v1: float) -> np.ndarray:
         return (self.rel * float(v1)).astype(np.complex128)
 
 
+#: 개방 전압 복원에 쓰는 선로 리액턴스 [H]. 꼬리 자료로는 정해지지 않아(h1~h5 의 지렛대가 짧다,
+#: 13.22.3) 생성기의 `x_grid_range` 중앙(0.085Ω @60Hz)에 해당하는 값을 쓴다. R 이 지배적이라
+#: h15 에서도 |jwL| 0.57Ω 대 R 0.42~1.15Ω 다.
+DEEMBED_L_H = 225e-6
+
+
 def _site_session(stem: str) -> tuple:
-    """stem -> (자리, 세션). 등록부가 정본이다."""
+    """stem -> (자리, 세션, 그 세션의 Z). 등록부가 정본이다."""
     try:
         from src.preprocessing.file_registry import SITE_SESSIONS, site_of
     except Exception:
-        return "", stem
+        return "", stem, None
     for key, spec in SITE_SESSIONS.items():
         if stem in spec.get("stems", ()):
-            return spec.get("site", ""), key
-    return site_of(stem) or "", stem
+            z = spec.get("z_ohm")
+            if z is None:
+                site = spec.get("site", "")
+                z = {"D": 1.15, "E": 0.42}.get(site)
+            return spec.get("site", ""), key, z
+    return site_of(stem) or "", stem, None
 
 
 class VoltageTextureLibrary:
@@ -102,6 +120,12 @@ class VoltageTextureLibrary:
             V = np.asarray(z["voltage_harmonics_complex"], dtype=np.complex128)
             if V.ndim != 2 or V.shape[1] < H or len(V) == 0:
                 continue
+            # 개방 전압 복원 (13.22): V_open = V_term + Z(h)·I_block. 그 녹화 부하의 강하를 벗긴다.
+            st_, sess_, z_ohm = _site_session(f.stem)
+            Icur = (np.asarray(z["harmonics_complex"], dtype=np.complex128)
+                    if "harmonics_complex" in z.files else None)
+            Zh = (None if (z_ohm is None or Icur is None or Icur.shape[1] < H)
+                  else z_ohm + 1j * 2 * np.pi * 60.0 * np.arange(1, H + 1) * DEEMBED_L_H)
             valid = (np.asarray(z["is_valid"]) == 1) if "is_valid" in z.files else np.ones(len(V), bool)
             v1 = np.abs(V[:, 0])
             ok = valid & (v1 > 150.0) & (v1 < 280.0) & np.isfinite(V[:, :H]).all(axis=1)
@@ -122,10 +146,18 @@ class VoltageTextureLibrary:
                 seg = rel_all[a:a + step][sel]
                 rel = (np.median(seg.real, 0) + 1j * np.median(seg.imag, 0)).astype(np.complex128)
                 rel[0] = 1.0 + 0j
-                st, sess = _site_session(f.stem)
+                rel_open = None
+                if Zh is not None:
+                    Vseg = V[a:a + step][sel][:, :H]
+                    Iseg = Icur[a:a + step][sel][:, :H]
+                    vo = (np.median(Vseg.real, 0) + 1j * np.median(Vseg.imag, 0)
+                          + Zh * (np.median(Iseg.real, 0) + 1j * np.median(Iseg.imag, 0)))
+                    if np.all(np.isfinite(vo)) and abs(vo[0]) > 1.0:
+                        rel_open = (vo / abs(vo[0])).astype(np.complex128)
+                        rel_open[0] = 1.0 + 0j
                 textures.append(Texture(id=len(textures), stem=f.stem, t_rel_s=float(t[a]),
                                         vrms=float(np.median(v1[a:a + step][sel])), rel=rel,
-                                        site=st, session=sess))
+                                        site=st_, session=sess_, rel_open=rel_open))
         return cls(textures, file_rel)
 
     # ── 조회 ──────────────────────────────────────────────────────────────

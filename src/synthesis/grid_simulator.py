@@ -598,6 +598,11 @@ class GridSimulator:
         차분이라 모델(v12g)의 공통 편향은 상쇄되고 전압 파형의 차이에 대한 응답만 남는다. 두 항 모두 같은
         v1(기저 전압)에서 계산한다 — V1 크기의 효과는 `apply_cross_appliance_coupling` 의 kappa 몫이다.
         기준 텍스처는 **그 활성화가 녹화된 파일** 의 것이다 (`rec_ids`). 전력 5W 구간 × 녹화 파일마다 한 번만 부른다.
+
+        ⚠ 13.22: 더하는 쪽(합성 텍스처)은 **개방 전압** `tex.source_rel()` 이고 빼는 쪽(녹화 텍스처)은
+        **단자** 전압 `file_rel` 이다. 부기가 그렇게 맞는다 —
+            f(V_rec_단자) + [f(V_env_개방) − f(V_rec_단자)] + [f(V_env_개방 − Z·I) − f(V_env_개방)] = f(V_win_단자)
+        녹화 쪽 자기 강하는 뺄셈에서 상쇄되고, 창의 자기 강하는 결합 델타가 넣는다.
         """
         if harmonics_complex.size == 0 or not self.use_texture or rec_ids is None:
             return harmonics_complex
@@ -623,7 +628,8 @@ class GridSimulator:
             m = on & (keys == k)
             b_, r_id = int(k // 100000), int(k % 100000)
             rel_rec = lib.file_rel_by_id(r_id)
-            d = circ.texture_delta(appliance_type, float(b_ * P_BIN_W), tex.rel, tex.id, rel_rec, r_id, v1, R)
+            d = circ.texture_delta(appliance_type, float(b_ * P_BIN_W), tex.source_rel(), tex.id,
+                                   rel_rec, r_id, v1, R)
             if d is not None:
                 out[m] += d.astype(np.complex64)
         return out
@@ -634,13 +640,17 @@ class GridSimulator:
         powers: Dict[str, np.ndarray],   # {기기: (N,) float — 교류 입력 전력}
         env: VoltageEnvironment,
     ) -> Dict[str, np.ndarray]:
-        """SMPS 둘 이상이 같이 켜진 사이클에 **공유 임피던스 결합** 델타를 더한다 (13.2, FCM/가이드 §6.1).
+        """SMPS 가 켜진 사이클에 **선로 임피던스 결합** 델타를 더한다 (13.2, FCM/가이드 §6.1).
 
             V_term = V_src − Z(h)·Σ_i I_i     (고정점 3회, Z = r_grid + j·2π·60·h·L, L = x_grid/(2π·60))
             I_i(생성) += I_i(V_term) − I_i(V_src)
 
-        기기별 전력 5W 구간의 조합을 키로 캐시한다. 결합 상대가 없는 사이클(SMPS 1개)은 그대로 둔다 —
-        그 문턱의 근거는 `coupling.coupling_delta` 독스트링에 있다 (13.21에서 단독도 켜 봤고 접었다).
+        기기별 전력 5W 구간의 조합을 키로 캐시한다.
+
+        ⚠ 13.22: **SMPS 가 하나여도 돈다.** Σ 에 자기 자신이 들어 있으므로 자기 강하가 여기서 들어간다
+        (충전기 65W 의 |I9| 를 D 1.15Ω 에서 −22%, E 0.42Ω 에서 −7% 움직인다 — 캐시 창의 14.4%가
+        단독 SMPS 창이다). 13.21 에서 한 번 접었던 것을 되살린 것인데, 그때 막았던 이중 계상은
+        `V_src` 를 **개방 전압**(`tex.source_rel()`)으로 바꿔 없앴다.
         """
         if not self.use_coupling:
             return layers
@@ -650,11 +660,11 @@ class GridSimulator:
         from src.synthesis.coupling import SMPS_DEVICES, P_BIN_W
         circ = self.circuit
         devs = [d for d in SMPS_DEVICES if d in layers and d in powers and circ.has(d)]
-        if len(devs) < 2:
+        if not devs:
             return layers
         P = np.stack([np.asarray(powers[d], dtype=np.float64) for d in devs], 1)      # (N, k)
         on = P > 0.5
-        rows = np.flatnonzero(on.sum(1) >= 2)
+        rows = np.flatnonzero(on.sum(1) >= 1)
         if not len(rows):
             return layers
         pb = np.where(on, np.round(P / P_BIN_W).astype(np.int64), -1)
@@ -667,9 +677,10 @@ class GridSimulator:
         for ki, key in enumerate(keys):
             m_rows = rows[inv == ki]
             pw = {d: float(key[j] * P_BIN_W) for j, d in enumerate(devs) if key[j] >= 0}
-            if len(pw) < 2:
+            if not pw:
                 continue
-            deltas = circ.coupling_delta(pw, tex.rel, tex.id, v1, float(env.r_grid_ohm), l_line, R)
+            deltas = circ.coupling_delta(pw, tex.source_rel(), tex.id, v1,
+                                         float(env.r_grid_ohm), l_line, R)
             for d, delta in deltas.items():
                 out[d][m_rows] += delta.astype(np.complex64)
         res = dict(layers)

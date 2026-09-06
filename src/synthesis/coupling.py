@@ -122,26 +122,18 @@ class SmpsCircuit:
     def coupling_delta(self, powers: Dict[str, float], rel_env: np.ndarray, env_id: int, v1: float,
                        r_line: float, l_line: float, R: Optional[Dict[str, float]] = None
                        ) -> Dict[str, np.ndarray]:
-        """{기기: I_i(V_term) − I_i(V_src)}. SMPS 가 둘 미만이면 빈 dict.
-
-        ⚠ 문턱이 2 인 것은 "상대가 없어서" 가 아니다 — 기기는 자기 전류로도 강하를 만든다.
-        2026-09-06(13.21)에 단독 SMPS 에도 켜 봤고 **네 가지 검정이 전부 안 됐다**:
-          · `V_src` 로 쓰는 텍스처가 **단자** 전압이라 그 세션 부하의 강하가 이미 들어 있다.
-            거기에 Z·I 를 또 빼면 두 번 걸린다 — 실측 짝의 자리 비가 나빠진다
-            (미니PC 0.111 -> 0.153, 충전기 0.201 -> 0.320)
-          · 개방 전압으로 되돌려 이중 계상을 없애려 했으나 되돌리기가 자기 검정을 통과 못 한다
-            (세션 안 산포가 7차수 중 4개에서 오히려 늘고, 무부하 기준과의 거리도 h9·h15 에서 는다)
-          · 차분(ΔZ = Z_env − Z_rec)만 넣는 변형도 나빠진다 (충전기 0.227 -> 0.488)
-          · 이유는 **세션 안 전압 드리프트가 자기 강하보다 크다** — D1 의 부하 녹화가 무부하 기준에서
-            11~31% 떨어져 있는데(녹화 간격 최대 90분) 자기 강하 보정은 4~17% 다
-        즉 문턱 2 는 **델타의 대부분이 상대의 전류(확실히 새 정보)일 때만 켠다**는 뜻이다.
-        단독이면 델타 전체가 애매한 자기 몫이라 켜면 손해다. 설계 13.21.
+        """{기기: I_i(V_term) − I_i(V_src)}. SMPS 가 **하나여도** 돈다 (13.22).
 
         V_term = V_src − Z(h)·Σ_i I_i, Z(h) = r_line + j·2π·60·h·l_line, 고정점 `n_iter` 회 (2회면 잠긴다, 가이드 §6.1).
         내부는 fcm12 규약대로 **참전류**(measured=False)로 돌고, 델타는 계측 영역(measured=True)으로 낸다.
+
+        ⚠ `rel_env` 로는 **개방 전압**(`Texture.source_rel()`)을 받아야 한다. 단자 전압을 주면 그 녹화
+        부하의 강하 위에 창의 강하를 또 얹어 두 번 걸린다 — 13.21 에서 실제로 그렇게 해 자리 비가
+        나빠졌다(미니PC 0.111 -> 0.153, 충전기 0.201 -> 0.320). 13.22 에서 텍스처를 개방으로 되돌리고
+        나서 문턱을 1 로 내렸다.
         """
         p = {d: float(v) for d, v in powers.items() if self.has(d) and v is not None and v > 0.5}
-        if len(p) < 2:
+        if not p:
             return {}
         pb = tuple(sorted((d, _pbin(v)) for d, v in p.items()))
         rb = tuple(sorted((d, -1 if (R is None or R.get(d) is None) else int(round(R[d] / R_BIN_OHM))) for d in p))
