@@ -8,11 +8,19 @@ fit12.py — 원시 스냅샷(단일 입력 ADC 포맷) → v12g 회로 파라�
     --r-per-file     R 을 파일별로 (NTC 온도 상태가 다른 세션)
     --tau 60e-6      계측 RC
     --nbins 3        요동 파일을 전력 분위로 쪼개는 수
+    --site-ratio W   **자리 비를 목적함수에 넣는다** (설계 13.20). 0 이면 끔(옛 동작).
+                     파형만 맞추면 자리 감도가 모자란다 — 파형은 한 자리에서 맞고 두 자리 사이의
+                     고조파 비는 10~25% 짧다 (13.15.5 충전기 · 13.18.5 미니PC). 전압으로 두 자리를
+                     가르고 **전력이 맞는 짝**마다 `|I_h(E)|/|I_h(D)|` 를 실측과 맞춘다.
+                     짝의 두 파일에 **같은 R** 을 써서 비가 R 로 흡수되는 것을 막는다.
 출력: circ12_<dev>.pkl  {'device','topo':'v12g','params':(C,R,L0,Isat,Cx,rd,G),'R_files','tau','validation','files','Cx_meas'}
 """
 import numpy as np, pandas as pd, argparse, pickle, time
 from scipy.optimize import least_squares
-from circuit12 import sim_wave, rc_periodic, F
+from circuit12 import sim_wave, rc_periodic, harmonics_from_wave, F
+
+#: 자리 비를 맞출 차수 (홀수 h3~h15). h1 은 1/V 라 자리 정보가 없다.
+SITE_ORDERS = [3, 5, 7, 9, 11, 13, 15]
 
 NPC = 256; DT = 1.0 / (F * NPC)
 
@@ -63,7 +71,32 @@ def measure_cx(bins, off_thr=0.03, dv_thr=0.5):
     return float(best[0]), float(best[1])
 
 
-def fit(bins, cx, tau, fit_g=False, r_per_file=False, verbose=True):
+def site_pairs(bins, max_dp_frac=0.15, min_gap_v=5.0):
+    """전압으로 두 자리를 가르고 **전력이 맞는 짝**을 만든다.
+
+    자리 표는 안 쓴다 — 이 스크립트는 등록부와 독립이다. 대신 파일들의 Vrms 를 정렬해
+    **가장 큰 틈**에서 자르고, 그 틈이 `min_gap_v` 보다 좁으면 자리가 하나라고 보고 포기한다
+    (실측은 D 214~217V / E 229~232V 로 12V 넘게 벌어져 있다).
+    """
+    v = np.array([float(np.sqrt(np.mean(b['V'] ** 2))) for b in bins])
+    if len(v) < 2:
+        return [], None
+    o = np.argsort(v)
+    gaps = np.diff(v[o])
+    k = int(np.argmax(gaps))
+    if gaps[k] < min_gap_v:
+        return [], None
+    lo, hi = list(o[:k + 1]), list(o[k + 1:])
+    pairs = []
+    for i in lo:
+        for j in hi:
+            pi, pj = bins[i]['P'], bins[j]['P']
+            if abs(pi - pj) <= max_dp_frac * max(pi, pj):
+                pairs.append((int(i), int(j)))
+    return pairs, (float(v[o[k]]), float(v[o[k + 1]]))
+
+
+def fit(bins, cx, tau, fit_g=False, r_per_file=False, verbose=True, site_w=0.0):
     srcs = sorted({b['src'] for b in bins}); nf = len(srcs) if r_per_file else 1
     names = ['C', 'R', 'L0', 'rd', 'Isat'] + (['G', 'dCx'] if fit_g else []) + (['R%d' % k for k in range(1, nf)] if nf > 1 else [])
     lb = np.log10([5e-6, 0.1, 60e-6, 0.05, 0.1] + ([1e-6, 1e-12] if fit_g else []) + [0.1] * (nf - 1))
@@ -80,13 +113,41 @@ def fit(bins, cx, tau, fit_g=False, r_per_file=False, verbose=True):
             Rs[s] = p[k + j] if nf > 1 else R
         return C, L0, rd, Isat, G, dCx, Rs
 
+    pairs, cut = site_pairs(bins) if site_w > 0 else ([], None)
+    hs = [h - 1 for h in SITE_ORDERS]
+    meas_ratio = {}
+    for i, j in pairs:
+        a = np.abs(harmonics_from_wave(bins[i]['I'], bins[i]['V']))[hs]
+        b_ = np.abs(harmonics_from_wave(bins[j]['I'], bins[j]['V']))[hs]
+        meas_ratio[(i, j)] = np.log(np.maximum(b_, 1e-12) / np.maximum(a, 1e-12))
+    if verbose and site_w > 0:
+        if pairs:
+            print('  자리 비 %d짝 (자름 %.1f/%.1fV), 가중 %.2f: ' % (len(pairs), cut[0], cut[1], site_w)
+                  + ' '.join('%.0f/%.0fW' % (bins[i]['P'], bins[j]['P']) for i, j in pairs))
+        else:
+            print('  ⚠ 자리 비: 짝을 못 만들었다 (한 자리뿐이거나 전력이 안 맞는다)')
+    nsite = max(1, len(pairs) * len(hs))
+
     def resid(x):
         C, L0, rd, Isat, G, dCx, Rs = unpack(x); out = []
-        for b in bins:
+        sims = {}
+        for k_, b in enumerate(bins):
             Is = sim_wave(b['P'], b['V'], (C, Rs[b['src']], L0, Isat, cx + dCx, rd, G), NPC, tau)
             if Is is None:
-                return np.full(n, 1e3)
+                return np.full(n + nsite * bool(pairs), 1e3)
+            sims[k_] = Is
             out.append((Is - b['I']) / np.sqrt(np.mean(b['I'] ** 2) * len(b['I'])))
+        for i, j in pairs:
+            # **짝의 두 파일에 같은 R** — 그래야 비가 R 로 흡수되지 않는다 (13.18.5)
+            Ri = Rs[bins[i]['src']]
+            si = sim_wave(bins[i]['P'], bins[i]['V'], (C, Ri, L0, Isat, cx + dCx, rd, G), NPC, tau)
+            sj = sim_wave(bins[j]['P'], bins[j]['V'], (C, Ri, L0, Isat, cx + dCx, rd, G), NPC, tau)
+            if si is None or sj is None:
+                return np.full(n + nsite, 1e3)
+            a = np.abs(harmonics_from_wave(si, bins[i]['V']))[hs]
+            b_ = np.abs(harmonics_from_wave(sj, bins[j]['V']))[hs]
+            r = np.log(np.maximum(b_, 1e-12) / np.maximum(a, 1e-12))
+            out.append(site_w * (r - meas_ratio[(i, j)]) / np.sqrt(nsite))
         return np.concatenate(out)
 
     best = None; t0 = time.time()
@@ -115,10 +176,13 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(); ap.add_argument('device'); ap.add_argument('files', nargs='+')
     ap.add_argument('--bg'); ap.add_argument('--fit-g', action='store_true'); ap.add_argument('--r-per-file', action='store_true')
     ap.add_argument('--tau', type=float, default=60e-6); ap.add_argument('--nbins', type=int, default=3); ap.add_argument('-o')
+    ap.add_argument('--site-ratio', type=float, default=0.0, metavar='W',
+                    help='자리 비를 목적함수에 넣는 가중 (0 = 끔). 설계 13.20')
     a = ap.parse_args()
     bins = load_bins(a.files, a.nbins); Pbg = subtract_bg(bins, a.bg) if a.bg else None
     cx, r = measure_cx(bins); print('%s: 동작점 %s  Cx=%.3fµF(r=%.2f)  배경 %s' % (a.device, [round(b['P'], 1) for b in bins], cx * 1e6, r, None if Pbg is None else '%.2fW' % Pbg))
-    res = fit(bins, cx, a.tau, a.fit_g, a.r_per_file)
+    res = fit(bins, cx, a.tau, a.fit_g, a.r_per_file, site_w=a.site_ratio)
     out = dict(device=a.device, topo='v12g', params=res['params'], R_files=res['R_files'], tau=a.tau, Cx_meas=cx,
+               site_ratio_w=a.site_ratio,
                validation=res['validation'], files=[f.split('/')[-1] for f in a.files], bg=a.bg, adc='single-ended', date='2026-09-06')
     path = a.o or 'circ12_%s.pkl' % a.device; pickle.dump(out, open(path, 'wb')); print('->', path)
