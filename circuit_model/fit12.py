@@ -17,7 +17,20 @@ fit12.py — 원시 스냅샷(단일 입력 ADC 포맷) → v12g 회로 파라�
 """
 import numpy as np, pandas as pd, argparse, pickle, time
 from scipy.optimize import least_squares
-from circuit12 import sim_wave, rc_periodic, harmonics_from_wave, F
+try:                                   # 패키지(circuit_model.circuit12)로 먼저 — fcm12 와 같은 규약
+    from .circuit12 import sim_wave, rc_periodic, harmonics_from_wave, F
+except ImportError:                    # `python circuit_model/fit12.py` 로 직접 돌릴 때
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+    from circuit_model.circuit12 import sim_wave, rc_periodic, harmonics_from_wave, F
+
+# ⚠ **`circuit12` 를 최상위로 임포트하지 말 것** (2026-09-07, 13.23.5). `_core12` 가
+# `@njit(cache=True)` 라 numba 가 디스크 캐시에 **모듈 이름을 박아** 둔다. 같은 파일을 한 번은
+# `circuit12`, 한 번은 `circuit_model.circuit12` 로 임포트하면 캐시 항목이 섞이고, 그 뒤 파이프라인이
+# 부를 때 `ModuleNotFoundError: No module named 'circuit12'` 로 **조용히 전부 실패**한다
+# (`SmpsCircuit.current` 가 예외를 삼켜 `failures` 만 올라간다 — 혼합검증이 "SMPS 창이 없다" 로 나온다).
+# 걸렸으면 `circuit_model/__pycache__` 를 지우면 된다.
 
 #: 자리 비를 맞출 차수 (홀수 h3~h15). h1 은 1/V 라 자리 정보가 없다.
 SITE_ORDERS = [3, 5, 7, 9, 11, 13, 15]

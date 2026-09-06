@@ -1276,3 +1276,36 @@ def test_voltage_texture_stays_in_its_site_and_balances_sessions():
     far = [lib.sample(rng, vrms_target=top + 12.0) for _ in range(200)]
     assert all(t.vrms > top - 8.0 for t in far), (
         "전압 범위 밖 창이 먼 텍스처를 받았습니다 — 균등 난수로 떨어진 것입니다")
+
+
+def test_circuit_model_does_not_fail_silently():
+    """회로 모델이 **조용히 전부 실패**하지 않는가 (설계 13.23.5).
+
+    `SmpsCircuit.current` 는 예외를 삼키고 `failures` 만 올린다. 그래서 회로 모델이 통째로
+    죽어도 합성은 그냥 돌아가고 — 텍스처·결합 델타가 0 이 될 뿐 — 아무도 모른다.
+    실제로 2026-09-07 에 그랬다: `circuit12` 를 한 번은 최상위로, 한 번은 `circuit_model.circuit12`
+    로 임포트하자 `_core12` 의 numba 디스크 캐시(`@njit(cache=True)`)가 섞여
+    `ModuleNotFoundError: No module named 'circuit12'` 로 모든 호출이 실패했다. 혼합검증이
+    "SMPS 창이 없다" 로 나와서 겨우 알아챘다. 걸리면 `circuit_model/__pycache__` 를 지운다.
+    """
+    import numpy as np
+    from src.synthesis.coupling import SmpsCircuit
+    from src.synthesis.vtexture import VoltageTextureLibrary
+
+    lib = VoltageTextureLibrary.from_npz_dir()
+    if len(lib) == 0:
+        pytest.skip("텍스처 라이브러리가 없습니다")
+    tex = lib.textures[0]
+    circ = SmpsCircuit()
+    if not circ.models:
+        pytest.skip("회로 파라미터(pkl)가 없습니다")
+
+    for dev in sorted(circ.models):
+        I = circ.current(dev, 30.0, tex.source_rel(), 220.0)
+        assert I is not None and np.all(np.isfinite(I)), f"{dev} 전류가 안 나옵니다"
+        assert abs(I[0]) > 1e-4, f"{dev} 기본파가 0 입니다"
+    d = circ.coupling_delta({"laptop_charger": 45.0}, tex.source_rel(), tex.id, 220.0, 1.0, 100e-6)
+    assert d, "단독 SMPS 결합 델타가 비었습니다 (13.22 에서 문턱을 1 로 내렸다)"
+    assert circ.stats()["failures"] == 0, (
+        f"회로 모델이 조용히 실패했습니다: {circ.stats()} — "
+        "`circuit_model/__pycache__` 를 지우고 다시 보십시오 (13.23.5)")

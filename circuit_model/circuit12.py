@@ -16,6 +16,13 @@ from numba import njit
 
 F = 60.0
 VF = 1.4
+#: 정상상태에 이르기까지 돌리는 주기 수 (13.23). 옛 값은 24 였다 — 초기 vc0 을 전압 꼭짓점에 두므로
+#: 과도가 빨리 죽어 그만큼 필요하지 않다. 무작위 60판(기기 3종 x 3~70W x 전압 텍스처)에서 ncyc 64
+#: 대비 상대오차의 **최악**은
+#:     ncyc  6  3.8e-02 |  8  1.7e-02 | 10  6.8e-03 | 12  2.7e-03 | **16  4.2e-04** | 24  1.0e-05
+#: 다. 중앙값은 ncyc 8 에서 이미 3.6e-09 지만 **저전력 꼬리가 늦게 잠긴다** — 회로모델 자체의 실측
+#: 오차가 2~7% 이므로 그보다 두 자릿수 아래인 16 을 쓴다.
+NCYC = 16
 
 
 @njit(cache=True)
@@ -42,7 +49,7 @@ def rc_periodic(x, dt, tau, inverse=False):
     return np.fft.irfft(X * (1.0 / H if inverse else H), n=len(x))
 
 
-def sim_wave(P, V, params, npc=256, tau=60e-6, up=12, ncyc=24, deembed=True):
+def sim_wave(P, V, params, npc=256, tau=60e-6, up=12, ncyc=NCYC, deembed=True):
     """
     측정 전압 1주기 파형 V (npc 샘플, 이미 역RC 된 것이면 deembed=False) → 계측 영역 전류 1주기 (npc 샘플).
     params = (C, R, L0, Isat, Cx, rd, G).  P 는 총전력 (덧셈 성분 포함).
@@ -65,11 +72,15 @@ def sim_wave(P, V, params, npc=256, tau=60e-6, up=12, ncyc=24, deembed=True):
 
 
 def wave_from_harmonics(V15, npc=3072):
-    """V15: h1..h15 복소 (RMS, h배 위상 관례 X(h)=|X|e^{j(arg−h·arg V1)}) → 1주기 파형 (cos 기준)."""
-    t = np.arange(npc) / npc; v = np.zeros(npc)
-    for h in range(1, 16):
-        v += np.sqrt(2) * abs(V15[h - 1]) * np.cos(2 * np.pi * h * t + np.angle(V15[h - 1]))
-    return v
+    """V15: h1..h15 복소 (RMS, h배 위상 관례 X(h)=|X|e^{j(arg−h·arg V1)}) → 1주기 파형 (cos 기준).
+
+    13.23: 차수마다 cos 를 부르던 것을 **역 FFT 한 번**으로 바꿨다 (15 x npc 개의 cos -> irfft).
+    같은 값이다 (무작위 20판에서 최대 차이 6e-13 V) 고 10.4배 빠르다 — 이 함수가 `sim_harmonics`
+    시간의 24% 였다.
+    """
+    X = np.zeros(npc // 2 + 1, dtype=np.complex128)
+    X[1:16] = np.sqrt(2.0) * np.asarray(V15, dtype=np.complex128) * (npc / 2.0)
+    return np.fft.irfft(X, n=npc)
 
 
 def harmonics_from_wave(x, vref, nh=15):
@@ -78,7 +89,7 @@ def harmonics_from_wave(x, vref, nh=15):
     return np.abs(X[1:nh + 1]) * np.exp(1j * (np.angle(X[1:nh + 1]) - h * np.angle(Vh)))
 
 
-def sim_harmonics(P, V15, params, tau=60e-6, npc=3072, ncyc=24, measured=True):
+def sim_harmonics(P, V15, params, tau=60e-6, npc=3072, ncyc=NCYC, measured=True):
     """
     고조파 소스 V15 (참 전압, 계측 영역 아니어야 함) → 전류 h1..h15 (RMS, h배 관례).
     measured=True 면 계측 RC(τ) 를 걸어 펌웨어 ih/ihdeg 와 같은 영역, False 면 회로 참전류 (결합 고정점용).
