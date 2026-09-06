@@ -19,9 +19,17 @@ npz 의 `voltage_harmonics_complex[:, h-1]` = `vh_h · e^{j·vhdeg_h}`, 펌웨�
 쓰임
 ----
     lib = VoltageTextureLibrary.from_npz_dir()            # processed_data/npz 의 device·noise 파일
-    tex = lib.sample(rng, vrms_target=229.5)               # 기저 전압에 가까운 세션의 텍스처 하나
+    tex = lib.sample(rng, vrms_target=229.5, site="E")     # 그 자리의 텍스처 하나 (세션 균등)
     rel_rec = lib.file_rel("laptop_charger_1")             # 그 녹화 자체의 텍스처 (델타의 기준)
     V15 = tex.rel * 229.5                                  # fcm12 소스
+
+⚠ 세 가지를 2026-09-06(13.19)에 고쳤다 — 텍스처 **선택**이 고차 전류를 크게 움직이기 때문이다
+(같은 자리라도 세션이 다르면 미니PC 의 |I13|/P 가 30~45% 갈린다, 13.19.1):
+  ① **자리를 명시로 받는다.** 옛 코드는 기저 전압만 보고 골랐다. 236V 위에서는 ±4V 안에 아무것도
+     없어 **라이브러리 전체에서 균등**으로 떨어졌고, 그 절반이 216V 자리(D)의 텍스처였다.
+  ② 가까운 것이 없으면 **전압이 가장 가까운 것**을 준다 (균등 난수가 아니라).
+  ③ 후보 안에서 **세션을 먼저 균등하게** 고르고 그 안에서 텍스처를 고른다. 텍스처 개수는 녹화
+     길이의 부산물이라, 그대로 두면 긴 녹화 한 세션이 그 자리를 대표해 버린다 (E1 82% 대 E2 18%).
 """
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,9 +53,23 @@ class Texture:
     t_rel_s: float
     vrms: float
     rel: np.ndarray          # (15,) complex, rel[0] = 1+0j
+    site: str = ""           #: 자리 (`file_registry.site_of`). 모르면 ""
+    session: str = ""        #: 세션 (`file_registry.SITE_SESSIONS` 의 키). 모르면 stem
 
     def v15(self, v1: float) -> np.ndarray:
         return (self.rel * float(v1)).astype(np.complex128)
+
+
+def _site_session(stem: str) -> tuple:
+    """stem -> (자리, 세션). 등록부가 정본이다."""
+    try:
+        from src.preprocessing.file_registry import SITE_SESSIONS, site_of
+    except Exception:
+        return "", stem
+    for key, spec in SITE_SESSIONS.items():
+        if stem in spec.get("stems", ()):
+            return spec.get("site", ""), key
+    return site_of(stem) or "", stem
 
 
 class VoltageTextureLibrary:
@@ -56,6 +78,7 @@ class VoltageTextureLibrary:
         self._file_rel: Dict[str, np.ndarray] = dict(file_rel)
         self._file_ids: Dict[str, int] = {s: i for i, s in enumerate(sorted(self._file_rel))}
         self._vrms = np.array([t.vrms for t in self.textures], dtype=np.float64)
+        self._site = np.array([t.site for t in self.textures], dtype=object)
 
     # ── 구성 ──────────────────────────────────────────────────────────────
     @classmethod
@@ -99,8 +122,10 @@ class VoltageTextureLibrary:
                 seg = rel_all[a:a + step][sel]
                 rel = (np.median(seg.real, 0) + 1j * np.median(seg.imag, 0)).astype(np.complex128)
                 rel[0] = 1.0 + 0j
+                st, sess = _site_session(f.stem)
                 textures.append(Texture(id=len(textures), stem=f.stem, t_rel_s=float(t[a]),
-                                        vrms=float(np.median(v1[a:a + step][sel])), rel=rel))
+                                        vrms=float(np.median(v1[a:a + step][sel])), rel=rel,
+                                        site=st, session=sess))
         return cls(textures, file_rel)
 
     # ── 조회 ──────────────────────────────────────────────────────────────
@@ -122,15 +147,39 @@ class VoltageTextureLibrary:
         return None
 
     def sample(self, rng: np.random.Generator, vrms_target: Optional[float] = None,
-               tol_v: float = DEFAULT_TOL_V) -> Optional[Texture]:
-        """기저 전압에 가까운(±tol_v) 텍스처 중 하나. 가까운 것이 없으면 전체에서."""
+               tol_v: float = DEFAULT_TOL_V, site: Optional[str] = None,
+               by_session: bool = True) -> Optional[Texture]:
+        """그 환경의 텍스처 하나 (13.19).
+
+        `site` 를 주면 **그 자리의 텍스처만** 본다 (측정된 무리에서 온 창). 안 주면 전 자리에서 고른다
+        (탐색 성분 — 미측정 콘센트라 자리를 모른다).
+        전압은 `vrms_target ± tol_v` 로 거르되, **비면 가장 가까운 것**으로 간다 (옛 코드는 전체 균등이라
+        236V 창이 216V 자리의 텍스처를 절반 확률로 받았다).
+        `by_session` 이면 후보 안에서 **세션을 먼저 균등하게** 고른다 — 텍스처 개수는 녹화 길이의
+        부산물이라 그대로 두면 긴 녹화가 그 자리를 대표한다.
+        """
         if not self.textures:
             return None
-        if vrms_target is not None:
-            near = np.flatnonzero(np.abs(self._vrms - float(vrms_target)) <= tol_v)
+        idx = np.arange(len(self.textures))
+        if site:
+            m = np.flatnonzero(self._site[idx] == site)
+            if len(m):
+                idx = idx[m]
+        if vrms_target is not None and len(idx):
+            near = idx[np.abs(self._vrms[idx] - float(vrms_target)) <= tol_v]
             if len(near):
-                return self.textures[int(rng.choice(near))]
-        return self.textures[int(rng.integers(len(self.textures)))]
+                idx = near
+            else:                                   # 가까운 것이 없으면 **가장 가까운 쪽 한 무리**
+                d = np.abs(self._vrms[idx] - float(vrms_target))
+                idx = idx[d <= d.min() + tol_v]     # 한 개로 좁히면 다양성이 사라진다
+        if not len(idx):
+            idx = np.arange(len(self.textures))
+        if by_session:
+            sess = sorted({self.textures[i].session for i in idx})
+            if len(sess) > 1:
+                pick = sess[int(rng.integers(len(sess)))]
+                idx = np.array([i for i in idx if self.textures[i].session == pick])
+        return self.textures[int(idx[int(rng.integers(len(idx)))])]
 
     def describe(self) -> str:
         if not self.textures:

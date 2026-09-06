@@ -39,6 +39,9 @@ class VoltageCluster:
     mean_v: float
     std_v: float
     weight: float
+    #: 자리 (`file_registry.SITE_OF_STEM` 의 글자). 전압 텍스처를 **그 자리에서만** 뽑게 한다 (13.19).
+    #: 빈 문자열이면 자리를 모르는 것(탐색 성분)이라 전 자리에서 고른다.
+    site: str = ""
     r_grid_ohm: float = 0.8   # 이 콘센트까지의 배선 저항
     #: 그 집의 상시 배경 부하 범위 W (12.166.4). **배경은 집의 성질이다** —
     #: 실측 '모든 기기 OFF' 창에서 장소 A 4.75~5.33W, 장소 B 2.56W 로 **2배**
@@ -111,9 +114,9 @@ class VoltageCluster:
 # 0.017 로 떨어지고, **D 의 오븐 단독 녹화**가 독립적으로 1.14 를 준다 — D 의 Z 는 정말 E 의 2.7배다.
 # (D 는 전압도 13V 낮다. 임피던스가 큰 회선일수록 부하 시 전압이 더 내려가므로 두 값이 함께 움직이는 것이 물리적으로 맞다.)
 OBSERVED_VOLTAGE_CLUSTERS: Tuple[VoltageCluster, ...] = (
-    VoltageCluster("siteD_216v", mean_v=216.5, std_v=1.5, weight=0.40,
+    VoltageCluster("siteD_216v", mean_v=216.5, std_v=1.5, weight=0.40, site="D",
                    r_grid_ohm=1.15, background_w_range=None, v_distortion_h3=0.0),
-    VoltageCluster("siteE_229v", mean_v=229.5, std_v=1.5, weight=0.40,
+    VoltageCluster("siteE_229v", mean_v=229.5, std_v=1.5, weight=0.40, site="E",
                    r_grid_ohm=0.42, background_w_range=None, v_distortion_h3=0.0),
 )
 
@@ -252,7 +255,7 @@ class GridSimulator:
     # ── 환경 샘플링 ─────────────────────────────────────────────────────────
     def sample_environment(self) -> VoltageEnvironment:
         """이번 합성이 놓일 배전 환경 하나를 뽑는다."""
-        base_v, source, cluster_r, cluster_bg, d3 = self._sample_base_voltage()
+        base_v, source, cluster_r, cluster_bg, d3, site = self._sample_base_voltage()
         # 실측 콘센트에서 뽑았다면 그 회선의 배선 저항을 함께 쓴다.
         # 전압과 임피던스는 같은 회선의 성질이므로 따로 뽑으면 짝이 어긋난다.
         if cluster_r is not None and self.r_grid_range[0] != self.r_grid_range[1]:
@@ -265,7 +268,7 @@ class GridSimulator:
         # (`test_worker_count_does_not_change_the_generated_training_set`). 생성자에서 뽑는 _tex_rng 는 안 쓴다.
         _key = np.array([base_v, r, x], dtype=np.float64).view(np.uint64)
         _rng = np.random.default_rng(int(np.bitwise_xor.reduce(_key) & np.uint64(0x7FFFFFFF)))
-        tex = self._sample_texture(base_v, _rng)
+        tex = self._sample_texture(base_v, _rng, site)
         r_state: Dict[str, float] = {}
         if tex is not None and self.randomize_r:
             from src.synthesis.coupling import SMPS_DEVICES
@@ -289,8 +292,13 @@ class GridSimulator:
             r_state=r_state,
         )
 
-    def _sample_texture(self, base_v: Optional[float] = None, rng: Optional[np.random.Generator] = None):
+    def _sample_texture(self, base_v: Optional[float] = None, rng: Optional[np.random.Generator] = None,
+                        site: str = ""):
         """이번 합성이 놓일 **전압 텍스처** 하나 (13.2). 기저 전압(D 216V / E 229V)에 가까운 세션에서 뽑는다.
+
+        13.19: 측정된 무리에서 온 창이면 `site` 를 넘겨 **그 자리의 텍스처만** 쓴다. 옛 코드는 전압만
+        보고 골라서 236V 위 창(탐색 성분의 22%)이 ±4V 안에 후보가 없어 **라이브러리 전체 균등**으로
+        떨어졌고, 그 절반이 216V 자리의 텍스처였다.
 
         텍스처는 **세션**에 묶인다 — D 는 vh3 0.7%, E 는 3.0% 이고 같은 자리도 세션마다 조금씩 움직인다
         (READ_ME_FIRST §2). 2Hz 녹화의 vh·vhdeg 가 전부 텍스처 라이브러리다 (`vtexture`). 전용 RNG 로 뽑는다.
@@ -300,20 +308,22 @@ class GridSimulator:
         lib = self.texture_library
         if lib is None or len(lib) == 0:
             return None
-        return lib.sample(rng if rng is not None else self._tex_rng, vrms_target=base_v)
+        return lib.sample(rng if rng is not None else self._tex_rng, vrms_target=base_v,
+                          site=site or None)
 
     def _sample_base_voltage(
         self,
-    ) -> Tuple[float, str, Optional[float], Optional[Tuple[float, float]], float]:
+    ) -> Tuple[float, str, Optional[float], Optional[Tuple[float, float]], float, str]:
         """실측 이봉분포 + 미측정 영역 탐색 성분에서 기저 전압을 뽑는다.
 
         Returns:
-            (기저 전압, 출처 이름, 배선 저항 or None, 배경 부하 범위 or None, h3 왜곡)
+            (기저 전압, 출처 이름, 배선 저항 or None, 배경 부하 범위 or None, h3 왜곡, 자리)
+            자리는 측정된 무리에서 왔을 때만 글자다 — 탐색 성분은 "" (미측정 콘센트).
         """
         cluster_weight = sum(c.weight for c in self.voltage_clusters)
         total = cluster_weight + self.exploration_weight
         if total <= 0:
-            return self.default_ref_voltage, "default", None, None, 0.0
+            return self.default_ref_voltage, "default", None, None, 0.0, ""
 
         r = np.random.rand() * total
         acc = 0.0
@@ -322,13 +332,13 @@ class GridSimulator:
             if r < acc:
                 v = float(np.random.normal(c.mean_v, c.std_v)) if c.std_v > 0 else c.mean_v
                 return (float(np.clip(v, *EXPLORATION_VOLTAGE_RANGE)), c.name,
-                        c.r_grid_ohm, c.background_w_range, c.v_distortion_h3)
+                        c.r_grid_ohm, c.background_w_range, c.v_distortion_h3, c.site)
 
         # 탐색 성분(미측정 콘센트)은 h3 왜곡도 미측정이다. 실측 세 장소가 0.000~0.031 이므로
         # 그 범위에서 균등하게 뽑는다 — 분포의 모양을 모르니 폭만 맞춘다.
         lo, hi = self.exploration_range
         return (float(np.random.uniform(lo, hi)), "exploration", None, None,
-                float(np.random.uniform(0.0, EXPLORATION_H3_MAX)))
+                float(np.random.uniform(0.0, EXPLORATION_H3_MAX)), "")
 
     # ── 전압 시계열 생성 ────────────────────────────────────────────────────
     def _generate_drift(self, n_samples: int, env: VoltageEnvironment) -> np.ndarray:

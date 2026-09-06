@@ -1232,3 +1232,47 @@ def test_다단_강하_채널이_기착을_짚는다():
     # 짧은 탭은 기착이 짧을 때만 — 그래서 둘이 함께 길이를 준다
     assert drop_w(2.0)[0] > 3.0
     assert abs(drop_w(5.0)[0]) < 0.1
+
+
+def test_voltage_texture_stays_in_its_site_and_balances_sessions():
+    """전압 텍스처는 **그 자리에서만**, 세션은 고르게 뽑혀야 한다 (설계 13.19).
+
+    왜 검사하나 — 텍스처 선택이 고차 전류를 크게 움직인다. 같은 자리라도 세션이 다르면
+    미니PC 의 |I13|/P 가 30~45% 갈리고, 자리가 섞이면 vh3 이 0.7% 대 3.0% 로 4배 갈린다.
+    그런데 옛 코드는 **기저 전압만** 보고 골랐다:
+
+      · 236V 위 창(탐색 성분의 22%)은 ±4V 안에 후보가 없어 **라이브러리 전체 균등**으로
+        떨어졌고, 그 절반이 216V 자리의 텍스처였다.
+      · 후보 안에서 텍스처를 균등하게 뽑아, 녹화가 긴 세션 하나가 그 자리를 대표했다
+        (E1 82% 대 E2 18%).
+
+    둘 다 **조용히** 틀린다 — 합성은 정상으로 보이고 고차 자리 반응만 어긋난다.
+    """
+    import numpy as np
+    from collections import Counter
+    from src.synthesis.vtexture import VoltageTextureLibrary
+
+    lib = VoltageTextureLibrary.from_npz_dir()
+    if len(lib) < 20:
+        pytest.skip("텍스처 라이브러리가 없습니다")
+    sites = {t.site for t in lib.textures if t.site}
+    if len(sites) < 2:
+        pytest.skip("자리가 하나뿐입니다")
+
+    rng = np.random.default_rng(0)
+    for site, v in (("D", 216.5), ("E", 229.5)):
+        got = [lib.sample(rng, vrms_target=v, site=site) for _ in range(400)]
+        bad = [t.stem for t in got if t.site != site]
+        assert not bad, f"{site} 창에 다른 자리의 텍스처가 섞였습니다: {sorted(set(bad))[:3]}"
+        c = Counter(t.session for t in got)
+        if len(c) > 1:
+            lo = min(c.values()) / sum(c.values())
+            assert lo > 0.25, (
+                f"{site} 의 세션이 한쪽으로 쏠립니다: "
+                + ", ".join(f"{k} {n/len(got)*100:.0f}%" for k, n in c.most_common()))
+
+    # 라이브러리 전압 범위 **밖**에서도 균등 난수로 떨어지면 안 된다 — 가장 가까운 쪽이어야 한다
+    top = max(t.vrms for t in lib.textures)
+    far = [lib.sample(rng, vrms_target=top + 12.0) for _ in range(200)]
+    assert all(t.vrms > top - 8.0 for t in far), (
+        "전압 범위 밖 창이 먼 텍스처를 받았습니다 — 균등 난수로 떨어진 것입니다")
