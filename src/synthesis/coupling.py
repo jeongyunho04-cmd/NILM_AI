@@ -57,10 +57,15 @@ class SmpsCircuit:
     """v12g 모델 위의 델타 계산기 + 캐시. 생성기(`GridSimulator`)가 하나 들고 쓴다."""
 
     def __init__(self, models: Optional[Dict[str, object]] = None, max_cache: int = 300_000,
-                 n_iter: int = 3):
+                 n_iter: int = 3, relax: float = 1.0):
         self._models = models
         self.max_cache = int(max_cache)
         self.n_iter = int(n_iter)
+        #: 고정점 감쇠(under-relaxation). 1.0 은 옛 거동(V_term <- V_src − Z·I) 그대로다.
+        #: **1.0 은 Z 가 크면 안 잠긴다** — 잠근 값 대비 전류 오차가 Z 0.42Ω 0.9~3%,
+        #: Z 1.15Ω **26~50%**, Z 2.00Ω **169~204%** 다 (13.24.13). w=0.5 면 n=4 에 ~1%,
+        #: n=6 에 ~0.1% 로 모든 Z 에서 잠긴다. 대가는 반복 수 그대로다.
+        self.relax = float(relax)
         self._tex_cache: Dict[tuple, np.ndarray] = {}
         self._cpl_cache: Dict[tuple, Dict[str, np.ndarray]] = {}
         self.hits = 0
@@ -154,6 +159,52 @@ class SmpsCircuit:
             self._cpl_cache[key] = out
         return out
 
+    def _solve_vterm(self, total_true, V_src: np.ndarray, Z: np.ndarray) -> np.ndarray:
+        """V_term = V_src − Z·ΣI 를 푼다. **생성기와 검증기가 같이 쓰는 하나뿐인 구현이다.**
+
+        `relax` 가 1 이면 옛 무감쇠 반복 그대로이고, <1 이면 감쇠 반복이다:
+            V <- V + w·((V_src − Z·ΣI(V)) − V)
+        무감쇠는 Z 가 크면 발산에 가깝다 (13.23.4 · 13.24.13).
+        """
+        w = self.relax
+        I_tot = total_true(V_src)
+        V_term = V_src.copy()
+        for _ in range(self.n_iter):
+            tgt = V_src - Z * I_tot
+            V_term = tgt if w >= 1.0 else V_term + w * (tgt - V_term)
+            I_tot = total_true(V_term)
+        return V_term
+
+    def solve_terminal(self, powers: Dict[str, float], rel_env: np.ndarray, v1: float,
+                       r_line: float, l_line: float,
+                       R: Optional[Dict[str, float]] = None) -> Optional[np.ndarray]:
+        """개방 전압 `rel_env` 에서 **단자 전압**(절대, V)을 푼다 — 검증기가 이 경로를 직접 재려고 쓴다.
+
+        `coupling_delta` 와 **같은 풀개**(`_solve_vterm`)를 탄다. 양자화는 하지 않는다 —
+        여기서는 캐시가 아니라 풀개 자체를 재는 것이 목적이다.
+        """
+        p = {d: float(v) for d, v in powers.items() if self.has(d) and v is not None and v > 0.5}
+        if not p:
+            return None
+        h = np.arange(1, H + 1)
+        Z = float(r_line) + 1j * 2 * np.pi * F * h * float(l_line)
+        V_src = np.asarray(rel_env, complex) * float(v1)
+        ms = self.models
+        Rd = R or {}
+        try:
+            def total_true(V):
+                s = np.zeros(H, complex)
+                for d, pw in p.items():
+                    I = ms[d].simulate_true(pw, V, R=Rd.get(d)) if hasattr(ms[d], "simulate_true") else None
+                    if I is None:
+                        raise RuntimeError(d)
+                    s += I
+                return s
+            return self._solve_vterm(total_true, V_src, Z)
+        except Exception:
+            self.failures += 1
+            return None
+
     def _compute_coupling(self, powers: Dict[str, float], rel_env: np.ndarray, v1: float,
                           r_line: float, l_line: float, R: Dict[str, Optional[float]]) -> Dict[str, np.ndarray]:
         h = np.arange(1, H + 1)
@@ -169,11 +220,7 @@ class SmpsCircuit:
                         raise RuntimeError(d)
                     s += I
                 return s
-            I_tot = total_true(V_src)
-            V_term = V_src.copy()
-            for _ in range(self.n_iter):
-                V_term = V_src - Z * I_tot
-                I_tot = total_true(V_term)
+            V_term = self._solve_vterm(total_true, V_src, Z)
             out = {}
             for d, p in powers.items():
                 a = self.current(d, p, V_term / float(v1), v1, R.get(d))

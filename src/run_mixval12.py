@@ -1,17 +1,26 @@
 # -*- coding: utf-8 -*-
-"""혼합 검증 (mixval, v12) — 복합 녹화의 SMPS 창에서 생성기의 세 가지 전류 재현을 실측과 견준다 (13.2, 2026-09-06).
+"""혼합 검증 (mixval, v12) — 복합 녹화의 SMPS 창에서 생성기의 전류 재현을 실측과 견준다 (13.2 · 13.24.14).
 
 무엇을 재나
 ----------
-복합 녹화(`test_2`)에서 켜진 기기 집합이 일정한 2초 창(사건 앞뒤 3초 제외)을 골라, 실측 총전류 페이저
-I_meas(h1..h15) 와 다음을 비교한다:
+라벨 있는 복합 녹화 **다섯 개 전부**에서 켜진 기기 집합이 일정한 2초 창(사건 앞뒤 3초 제외)을 골라,
+실측 총전류 페이저 I_meas(h1..h15) 와 다음을 비교한다:
 
     [A] 녹화 중첩      Σ_i I_rec,i(p_i) · (V_rec/V_meas)                      지금까지의 생성기 = 단순 중첩
     [B] A + 텍스처 델타 [A] + Σ_i [ I_sim,i(p_i, V15_meas) − I_sim,i(p_i, V15_rec,i) ]     새 생성기 (13.2)
     [D] 모델 단독       Σ_i I_sim,i(p_i, V15_meas)                                교체안 — 델타보다 나은지 본다
+    [C] **결합 경로**   되돌린 개방 전압에서 생성기의 고정점을 돌려 낸 전류. 기준은 **잠근 풀개**다
 
-V15_meas 는 그 창의 **측정 단자 전압**이라 공유 임피던스 결합이 이미 들어 있다 — 그래서 여기서는 결합 델타를
-따로 더하지 않는다 (더하면 이중 계상). 결합 항의 크기는 합성 소스 전압에서 V_term 을 만들 때만 뜻이 있다.
+V15_meas 는 그 창의 **측정 단자 전압**이라 공유 임피던스 결합이 이미 들어 있다 — 그래서 [A][B][D] 에는
+결합 델타를 더하지 않는다 (더하면 이중 계상).
+
+⚠ **그래서 [A][B][D] 만 보면 결합 코드가 한 줄도 안 돈다.** 13.22·13.23 이 그 상태로 "[B] 가
+소수점까지 같다" 며 변경을 통과시켰고, 결합의 26~50% 오차를 학습 한 판을 돌릴 때까지 아무도 못 봤다
+(13.24.14). [C] 는 그 경로를 **일부러** 태우려고 있다. 실행 끝의 "[C] 결합 경로를 탄 창" 이 0 이면
+이 판은 결합 변경을 검증하지 못한 것이다.
+
+⚠ [C] 의 한계: 평가 창은 SMPS 가 한 대뿐인 경우가 많아(test_1 은 단독 42창) 풀개 오차가 작게 나온다.
+**학습 자료 분포**에서의 오차는 `src/run_coupling_check.py` 로 따로 재라 — 거기서는 27% 가 10% 넘게 틀린다.
 
 기기 전력 p_i: 저항·선풍기는 라벨의 ΔP(기기 몫), 미니PC·프로젝터도 라벨 ΔP. 충전기는 나머지
 (P_total − 나머지 − 계측 바닥) — 창 안에서 크게 변하는 유일한 SMPS 라 그렇게 둔다.
@@ -19,7 +28,7 @@ V15_meas 는 그 창의 **측정 단자 전압**이라 공유 임피던스 결�
 
 쓰는 법
 ------
-    python -X utf8 -m src.run_mixval12 --stems test_2 --out results/_mixval12.json
+    python -X utf8 -m src.run_mixval12 --out results/_mixval12.json    # 기본이 다섯 파일 전부다
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -37,6 +46,7 @@ import numpy as np
 from src.preprocessing import load_nilm_npz
 from src.synthesis.segment_pool import SegmentPool
 from src.synthesis.vtexture import VoltageTextureLibrary, default_library
+from src.preprocessing.file_registry import SITE_SESSIONS
 from src.synthesis.coupling import SmpsCircuit, SMPS_DEVICES
 
 H = 15
@@ -46,6 +56,10 @@ WIN_S = 2.0
 GUARD_S = 3.0
 #: 이 기기들이 켜진 창은 뺀다 — 1kW 급 저항이 h1 을 지배해 SMPS 재현을 못 본다.
 EXCLUDE_ON = ("electiric_kettle", "hair_dryer", "oven", "hotplate", "air_conditioner")
+#: 라벨 있는 복합 녹화 전부. **기본을 한 파일로 두면 그 자리만 검증된다** (13.24.14).
+ALL_STEMS = ("test_1", "test_2", "test_3", "test_4", "test_5")
+#: [C] 의 되돌리기에 쓰는 선로 인덕턴스 — 텍스처 되돌리기와 같은 값 (13.22).
+DEEMBED_L_H = 225e-6
 
 
 def rel_err(pred: np.ndarray, meas: np.ndarray, orders: slice = slice(0, H)) -> float:
@@ -129,25 +143,35 @@ def device_powers(spec: dict, t_mid: float, on: Dict[str, bool]) -> Dict[str, fl
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--stems", nargs="*", default=["test_2"])
+    ap.add_argument("--stems", nargs="*", default=ALL_STEMS,
+                    help="기본은 라벨 있는 **다섯 파일 전부**다. 옛 기본값은 test_2 하나였고, "
+                         "그것이 E 파일이라 D 의 후퇴를 아무도 못 봤다 (13.24.14)")
     ap.add_argument("--events", default="processed_data/real_events.json")
     ap.add_argument("--npz-dir", default="processed_data/composite_eval")
     ap.add_argument("--out", default="results/_mixval12.json")
+    ap.add_argument("--relax", type=float, default=1.0,
+                    help="[C] 결합 풀개의 감쇠. 1.0 은 지금 생성기 거동, 0.5 는 감쇠 (13.24.13)")
+    ap.add_argument("--n-iter", type=int, default=3, help="[C] 결합 풀개의 반복 수")
     a = ap.parse_args()
 
     ev = json.load(open(a.events, encoding="utf-8"))["files"]
     pool = SegmentPool(npz_dir="processed_data/npz")
     lib = default_library()
-    circ = SmpsCircuit()
+    circ = SmpsCircuit(n_iter=a.n_iter, relax=a.relax)
+    #: [C] 의 기준 — 잠근 풀개. 감쇠 0.5 로 200회면 잔차가 ~1e-20 이다 (13.24.13).
+    circ_ref = SmpsCircuit(models=circ.models, n_iter=200, relax=0.5)
     rec = RecordedSig(pool, lib)
     noise = pool._pick_noise_reference(1.6)
     doc: Dict[str, dict] = {}
     print("=" * 110)
-    print("혼합 검증 v12 — SMPS 창의 실측 총전류 대 [A] 녹화 중첩 / [B] +텍스처 델타 / [D] 모델 단독   (13.2)")
+    print("혼합 검증 v12 — 실측 총전류 대 [A] 녹화중첩 / [B] +텍스처델타 / [C] **결합 경로** / [D] 모델단독")
+    print(f"   파일 {len(a.stems)}개 · 결합 풀개 n_iter={a.n_iter} relax={a.relax:g}   (13.2 · 13.24.14)")
     print("=" * 110)
     for stem in a.stems:
         if stem not in ev:
             print(f"{stem}: 라벨 없음"); continue
+        sess = next((k for k, v in SITE_SESSIONS.items() if stem in v["stems"]), None)
+        z_ohm = SITE_SESSIONS[sess]["z_ohm"] if sess else None
         z = load_nilm_npz(f"{a.npz_dir}/{stem}.npz")
         spec = ev[stem]
         apps = list(spec["appliances_present"])
@@ -181,7 +205,7 @@ def main() -> int:
                     others = sum(v for k, v in pw.items() if k != d)
                     pw[d] = max(P_tot - others - float(noise.noise_floor_w) - P_stby, 3.0)
                     break
-            B = A.copy(); D = A.copy()
+            B = A.copy(); D = A.copy(); C = A.copy()
             ok = True
             for d, p in pw.items():
                 got = rec.at(d, p, v1)
@@ -198,13 +222,41 @@ def main() -> int:
                     else:
                         ok = False; break
                 else:
-                    D += I_rec
+                    D += I_rec; C += I_rec
             if not ok:
                 continue
+
+            # ── [C] **결합 경로** — 생성기가 실제로 타는 길을 잰다 (13.24.14) ──────────────
+            # 이 창의 실측 단자 전압에서 개방 소스를 되돌려(V_src = V_term + Z·I) **실제 동작점**을
+            # 만들고, 거기서 생성기의 고정점을 돌린다. 기준은 실측이 아니라 **잠근 풀개**
+            # (relax 0.5 x 200회, 잔차 ~1e-20) 다 — 실측을 기준으로 삼으면 SMPS 아닌 전류(선풍기·
+            # 대기)까지 되돌리게 되어 왕복이 안 닫히고, 풀개 오차와 모형 오차가 섞인다.
+            # 그래서 [C] 대 [C*] 는 **풀개 오차만** 가른다.
+            C_all = C_odd = dV = float("nan")
+            p_smps = {d: p for d, p in pw.items() if d in SMPS and circ.has(d)}
+            if z_ohm is not None and p_smps:
+                Zh = z_ohm + 1j * 2 * np.pi * 60.0 * np.arange(1, H + 1) * DEEMBED_L_H
+                rel_src = rel_meas + Zh * I_meas / v1
+                V_now = circ.solve_terminal(p_smps, rel_src, v1, z_ohm, DEEMBED_L_H)
+                V_ref = circ_ref.solve_terminal(p_smps, rel_src, v1, z_ohm, DEEMBED_L_H)
+                if V_now is not None and V_ref is not None:
+                    Cs = C.copy(); Cr = C.copy(); good = True
+                    for d, p in p_smps.items():
+                        I_n = circ.current(d, p, V_now / v1, v1)
+                        I_r = circ.current(d, p, V_ref / v1, v1)
+                        if I_n is None or I_r is None:
+                            good = False; break
+                        Cs += I_n; Cr += I_r
+                    if good:
+                        C = Cs
+                        C_all = rel_err(Cs, Cr); C_odd = rel_err(Cs, Cr, slice(2, H, 2))
+                        dV = float(np.max(np.abs(V_now[2:] - V_ref[2:])
+                                          / np.maximum(np.abs(V_ref[2:]), 1e-9)))
             odd = slice(2, H, 2)          # h3..h15 (SMPS 판별 대역)
             rows.append({"t0": a0 / 60.0, "on": [d for d, v in on.items() if v], "pw": {k: round(v, 1) for k, v in pw.items()},
                          "vh3_pct": round(100 * abs(rel_meas[2]), 2), "I1_mA": round(1e3 * abs(I_meas[0]), 1),
                          "stems": {}, "P_tot": round(P_tot, 1),
+                         "C_all": C_all, "C_odd": C_odd, "dV_term": dV,
                          "A_all": rel_err(A, I_meas), "B_all": rel_err(B, I_meas), "D_all": rel_err(D, I_meas),
                          "A_odd": rel_err(A, I_meas, odd), "B_odd": rel_err(B, I_meas, odd), "D_odd": rel_err(D, I_meas, odd),
                          "per_order": {k: [float(abs(X[h - 1] - I_meas[h - 1]) / max(abs(I_meas[h - 1]), 1e-9))
@@ -214,8 +266,15 @@ def main() -> int:
         doc[stem] = rows
         def med(key): return float(np.median([r[key] for r in rows]))
         print(f"\n■ {stem}  창 {len(rows)}개 (2초, SMPS 만·선풍기 허용)   vh3 {min(r['vh3_pct'] for r in rows):.2f}~{max(r['vh3_pct'] for r in rows):.2f}%")
-        print(f"   상대 RMS 오차  h1~h15 전체:  [A] 녹화중첩 {med('A_all'):.3f}   [B] +텍스처델타 {med('B_all'):.3f}   [D] 모델단독 {med('D_all'):.3f}")
+        print(f"   상대 RMS 오차  h1~h15 전체:  [A] 녹화중첩 {med('A_all'):.3f}   "
+              f"[B] +텍스처델타 {med('B_all'):.3f}   [D] 모델단독 {med('D_all'):.3f}")
         print(f"                 h3~h15 홀수:  [A] {med('A_odd'):.3f}   [B] {med('B_odd'):.3f}   [D] {med('D_odd'):.3f}")
+        # 풀개가 잠기면 [C] 는 [D] 와 같아진다 — 되돌린 소스에서 다시 풀면 V_meas 로 돌아오므로.
+        # 벌어진 만큼이 **풀개 오차**다 (13.24.14).
+        if not np.isnan(med("C_all")):
+            print(f"   **[C] 결합 풀개 오차** (기준: 잠근 풀개)  전류 {med('C_all'):.4f} / 홀수 {med('C_odd'):.4f}   "
+                  f"단자전압 최대 어긋남 {100 * med('dV_term'):.2f}%"
+                  f"   (세션 {sess}, Z={z_ohm}Ω, n_iter={a.n_iter} relax={a.relax:g})")
         print("   차수별 |오차|/|실측| 중앙:   " + "  ".join(
             f"{k} A {np.median([r['per_order'][k][0] for r in rows]):.2f}/B {np.median([r['per_order'][k][1] for r in rows]):.2f}/D {np.median([r['per_order'][k][2] for r in rows]):.2f}"
             for k in ("h1", "h3", "h5", "h9", "h13")))
@@ -227,7 +286,16 @@ def main() -> int:
             print(f"   {k:32s} n={len(rs):3d}  A {np.median([r['A_all'] for r in rs]):.3f}  B {np.median([r['B_all'] for r in rs]):.3f}  D {np.median([r['D_all'] for r in rs]):.3f}   홀수 A {np.median([r['A_odd'] for r in rs]):.3f} B {np.median([r['B_odd'] for r in rs]):.3f} D {np.median([r['D_odd'] for r in rs]):.3f}")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(doc, ensure_ascii=False, indent=1, default=float), encoding="utf-8")
-    print(f"\n저장: {a.out}   circuit {circ.stats()}")
+    st = circ.stats()
+    n_c = sum(1 for rs in doc.values() for r in rs
+              if not np.isnan(r.get("C_all", float("nan"))))
+    print(f"\n저장: {a.out}   circuit {st}   [C] 결합 경로를 탄 창 {n_c}개")
+    if n_c == 0:
+        print("  ⚠⚠ **결합 경로가 한 번도 안 불렸다.** 이 판은 결합 변경을 검증하지 못한다 — "
+              "세션 Z 가 없거나 SMPS 창이 없다. 13.24.14 의 함정 그 자체다")
+    if st["failures"]:
+        print(f"  ⚠ 회로 모델이 {st['failures']}회 조용히 실패했다 — "
+              "circuit_model/__pycache__ 를 지워라 (13.23.5)")
     return 0
 
 

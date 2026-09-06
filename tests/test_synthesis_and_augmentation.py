@@ -1342,3 +1342,49 @@ def test_scoring_does_not_assume_a_fixed_test_file():
 
     # 없는 이름을 물어도 조용히 False 여야 한다
     assert not oven_breakdown_ok("test_does_not_exist", ev)
+
+
+def test_coupling_solver_converges_at_high_impedance():
+    """결합 고정점 — 무감쇠는 Z 가 크면 안 잠기고, 감쇠는 잠긴다 (13.24.13).
+
+    그리고 `relax=1.0` 이 옛 무감쇠 반복과 **한 비트도 안 다른지** 지킨다 — 감쇠를 넣으려고
+    풀개를 `_solve_vterm` 으로 뽑아냈으므로 되돌림이 깨지면 여기서 걸려야 한다.
+    """
+    import numpy as np
+    from src.synthesis.coupling import SmpsCircuit
+    from src.synthesis.vtexture import default_library
+
+    rng = np.random.default_rng(0)
+    tex = default_library().sample(rng)
+    rel = tex.source_rel()
+    mix = {"laptop_charger": 55.0, "minipc": 12.0, "beam_projector": 40.0}
+    v1 = 220.0
+
+    now = SmpsCircuit(n_iter=3, relax=1.0)
+    ref = SmpsCircuit(models=now.models, n_iter=200, relax=0.5)
+    damp = SmpsCircuit(models=now.models, n_iter=6, relax=0.5)
+
+    def err(c, Z):
+        V, Vr = c.solve_terminal(mix, rel, v1, Z, 100e-6), ref.solve_terminal(mix, rel, v1, Z, 100e-6)
+        assert V is not None and Vr is not None, "풀개가 실패했습니다"
+        I = sum(np.asarray(c.current(d, p, V / v1, v1)) for d, p in mix.items())
+        Ir = sum(np.asarray(ref.current(d, p, Vr / v1, v1)) for d, p in mix.items())
+        return float(np.max(np.abs(I - Ir) / np.maximum(np.abs(Ir), 1e-9)))
+
+    # 감쇠는 모든 Z 에서 잠긴다
+    for Z in (0.42, 1.15, 2.00):
+        e = err(damp, Z)
+        assert e < 0.03, f"감쇠 풀개가 Z={Z}Ω 에서 {e:.1%} 틀립니다 (3% 이내여야 합니다)"
+
+    # 무감쇠는 Z 가 크면 못 잠근다 — 이 사실이 사라지면 기본값을 다시 봐야 한다
+    assert err(now, 2.00) > 0.10, (
+        "무감쇠 풀개가 Z=2Ω 에서 잠겼습니다 — 결함이 고쳐졌다면 이 검사와 "
+        "SmpsCircuit 의 기본값을 같이 갱신하십시오 (13.24.13)")
+
+    # relax=1.0 은 옛 거동 그대로여야 한다 (되돌림)
+    a = SmpsCircuit(models=now.models, n_iter=3, relax=1.0).coupling_delta(
+        mix, rel, 1, v1, 1.15, 100e-6)
+    b = SmpsCircuit(models=now.models, n_iter=3).coupling_delta(mix, rel, 1, v1, 1.15, 100e-6)
+    assert a and b
+    for k in a:
+        assert np.max(np.abs(a[k] - b[k])) == 0.0, f"{k}: relax=1.0 이 옛 거동과 다릅니다"
