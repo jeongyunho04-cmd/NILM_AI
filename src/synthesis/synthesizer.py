@@ -475,22 +475,51 @@ class LoadSynthesizer:
             # 그렇다 - 핫플레이트는 약 0.9초 통전 / 1.1초 휴지를 반복한다.
             # 그 구간을 일괄 ON 으로 덮으면 실측 42% 통전이 100% 로 둔갑한다.
             on_slice = aug_act.is_on[s0:s1].astype(bool)
-            if on_slice.any():
+            # ── 캐리어 상태를 세션으로 본다 (2026-09-07, 13.40) ───────────────
+            # 사용자가 고른 처방 C: **관문은 세션, 전력은 그 순간 실제값.**
+            #
+            # 오븐은 FAN_LIGHT 를 거쳐 켜지고, 켜져 있는 동안 통전이 아니면 FAN_LIGHT
+            # 이고, 꺼질 때도 FAN_LIGHT 를 거친다. 그런데 라벨은 `on_state_min_id = 2`
+            # 라 HEATING 만 `is_on = 1` 이다. 그래서:
+            #
+            #   학습(단독 라벨)  오븐 ON = 가열만        세션의 36.4% 만 ON
+            #   채점(복합 라벨)  오븐 ON = 세션 통째     ON 구간의 49.8% 만 가열
+            #
+            # **모델은 '가열 중일 때만 ON' 으로 배우고 채점은 '세션 내내 ON' 으로 묻는다.**
+            # 오븐 ON 창의 절반은 배운 대로 답하면 자동으로 오답이다. 합성 AUC 1.000
+            # 대 실측 0.688 이고 그 격차가 v16~v19 내내 하나도 안 줄었다 — 생성기를
+            # 고쳐서 줄어들 문제가 아니었다.
+            #
+            # 게이트를 세션으로 올리면 대기 항이 `(1−σ(on))` 으로 억제되므로,
+            # FAN_LIGHT 의 14.6W 를 **전력 쪽이 받아야** `P = Σ활성 + Σ대기 + 계측계`
+            # 가 유지된다. 그래서 전력을 `target_power_w`(가열만) 가 아니라
+            # `net_power_features`(그 순간 실제값)에서 가져온다.
+            #
+            # ⚠ 핫플은 안 건다 — ARMED_IDLE 이 0.55W 로 계측 바닥(1.5W)보다 작아
+            #   검출할 것이 없고, `MIN_ON_W` 428.8W 의 물리 프라이어와 부딪힌다.
+            if app in getattr(self.pool, "carrier_apps", ()):
+                live = aug_act.state_id[s0:s1] >= 1        # 0 = OFF_STANDBY 규약
+                net_p = np.maximum(0.0, aug_act.net_power_features[s0:s1, 0])
+                on_lab = live
+                act_p = np.where(live, net_p, 0.0)
+                sb_p = np.where(live, 0.0, net_p)
+            else:
+                on_lab = on_slice
+                act_p = np.where(on_slice, aug_act.target_power_w[s0:s1], 0.0)
+                sb_p = np.where(on_slice, 0.0,
+                                np.maximum(0.0, aug_act.net_power_features[s0:s1, 0]))
+            if on_lab.any():
                 active_set.add(app)
 
             # 동작 구간에서는 기기가 꽂힌 채 돌고 있으므로 대기 지문 대신 실측 파형이
             # 흐른다. 휴지 구간의 전류도 그 파형 안에 이미 들어 있다.
             layer_c[app][t_start:t_end] = aug_act.net_harmonics_complex[s0:s1]
-            gt_active_p[app][t_start:t_end] = np.where(
-                on_slice, aug_act.target_power_w[s0:s1], 0.0
-            )
+            gt_active_p[app][t_start:t_end] = act_p
             # 휴지 구간은 '꺼진 것'이 아니라 '꽂힌 채 통전만 끊긴 것'이다.
             # 그때 실제로 흐르는 전력(계측 바닥 제거본)을 대기 전력으로 잡아야
             # P = Σ활성 + Σ대기 + 계측계 분해가 계속 성립한다.
-            gt_standby_p[app][t_start:t_end] = np.where(
-                on_slice, 0.0, np.maximum(0.0, aug_act.net_power_features[s0:s1, 0])
-            )
-            gt_is_on[app][t_start:t_end] = on_slice.astype(np.int8)
+            gt_standby_p[app][t_start:t_end] = sb_p
+            gt_is_on[app][t_start:t_end] = on_lab.astype(np.int8)
             gt_plugged[app][t_start:t_end] = 1      # 돌고 있으면 당연히 꽂혀 있다
             gt_state_id[app][t_start:t_end] = aug_act.state_id[s0:s1]
 

@@ -156,6 +156,7 @@ class SegmentPool:
         exclude_activation_files: Optional[Dict[str, Sequence[str]]] = None,
         only_activation_files: Optional[Dict[str, Sequence[str]]] = None,
         ablate_pedestal_apps: Optional[Sequence[str]] = None,
+        carrier_apps: Optional[Sequence[str]] = None,
     ):
         """
         Args:
@@ -200,6 +201,13 @@ class SegmentPool:
         self.time_split = time_split
         self.holdout_frac = float(holdout_frac)
 
+        #: 캐리어 상태를 **세션의 일부로 보는** 기기 (13.40). 오븐의 FAN_LIGHT 가
+        #: 그것이다 — 사용자: "오븐은 무조건 fan_light상태를 거치고 켜지고 ... 꺼질때도".
+        #: 이 목록에 든 기기는 활성화가 세션 앞뒤의 캐리어 구간까지 포함하고,
+        #: 합성기가 그 구간의 게이트를 1 로, 전력을 그 순간 실제값으로 놓는다.
+        #: **핫플은 넣지 않는다** — ARMED_IDLE 이 0.55W 로 계측 바닥(1.5W)보다 작아
+        #: 검출할 것이 없고, MIN_ON_W 428.8W 의 물리 프라이어와도 부딪힌다.
+        self.carrier_apps = set(carrier_apps or ())
         self.appliance_activations: Dict[str, List[ApplianceActivation]] = {}
         self.standby_profiles: Dict[str, StandbyProfile] = {}
         self.noise_references: Dict[str, NoiseReference] = {}
@@ -590,6 +598,14 @@ class SegmentPool:
         bucket = self.appliance_activations.setdefault(appliance_type, [])
         periodic = is_periodic_duty(appliance_type)
 
+        # 캐리어 상태(오븐 FAN_LIGHT)를 세션에 포함할 기기인가 (13.40).
+        # `carrier_apps` 로 명시한 기기에만 건다 — 핫플의 ARMED_IDLE 은 0.55W 로
+        # 계측 바닥(1.5W)보다 작아 검출할 것이 없다.
+        from src.labeling.state_definitions import get_appliance_config
+        carrier_min = (get_appliance_config(appliance_type).on_state_min_id
+                       if (appliance_type in self.carrier_apps and "state_id" in data)
+                       else None)
+
         # 서모스탯/릴레이 부하는 통전 펄스 하나하나가 별개 활성화로 잘린다.
         # 실제로는 한 번의 조리 세션 안에서 일정 주기로 반복되는 것이므로,
         # 그 주기를 기록해 두어야 긴 타임라인에서 세션 형태로 다시 묶을 수 있다.
@@ -618,10 +634,30 @@ class SegmentPool:
             state = np.asarray(data["state_id"]) if (carrier and "state_id" in data) else None
             blocks = self._merge_duty_blocks(blocks, duty_period, valid, state)
 
+        # ── 세션 앞뒤의 캐리어 상태를 활성화에 넣는다 (2026-09-07, 13.40) ──────
+        # 블록은 `is_on == 1` 로 잘리는데 오븐의 FAN_LIGHT 는 `is_on = 0` 이다
+        # (`on_state_min_id = 2`). 듀티 **사이**의 FAN_LIGHT 는 `_merge_duty_blocks`
+        # 가 앞뒤 통전 펄스를 이어 붙이며 딸려 오지만, **세션의 맨 앞과 맨 뒤는 이어
+        # 붙일 상대가 없어 잘린다** — 활성화 6개가 전부 상태 2 로 시작해 상태 2 로 끝났다.
+        #
+        # 사용자: *"오븐은 무조건 fan_light상태를 거치고 켜지고 ... 꺼질때도 fan_light
+        # 상태를 거치고"*. 맞다. 그래서 합성 오븐은 0W -> 1100W 로 곧장 켜지는데
+        # 실측은 0 -> 14.6W -> 1100W 다. **그 전이 모양이 합성에 한 번도 없었다**
+        # (녹화에 켜질때앞 26초 · 꺼질때뒤 59초).
+        if carrier_min is not None:
+            live = np.asarray(data["state_id"]) >= 1        # 0 = OFF_STANDBY 규약
+        else:
+            live = None
+
         for block in blocks:
             if len(block) < MIN_ACTIVATION_CYCLES:
                 continue
             start_i, end_i = block[0], block[-1] + 1
+            if live is not None:
+                while start_i > 0 and live[start_i - 1] and valid[start_i - 1]:
+                    start_i -= 1
+                while end_i < len(live) and live[end_i] and valid[end_i]:
+                    end_i += 1
 
             raw_c = data["harmonics_complex"][start_i:end_i]
             raw_pow = data["power_features"][start_i:end_i]

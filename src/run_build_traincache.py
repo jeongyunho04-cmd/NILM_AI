@@ -42,6 +42,12 @@ def main() -> int:
                     help="기기별 전력 **범위** 표집 (13.29/13.30). 프리셋 'smps_operating' 또는 "
                          "JSON. 복합이 쓰는 동작점이 단독 녹화와 어긋난 SMPS 셋을 덮는다 — "
                          "**--sp-curves 와 같이 쓸 것**")
+    ap.add_argument("--carrier-on", nargs="*", default=None, metavar="APP",
+                    help="캐리어 상태를 **세션으로** 본다 (13.40). 인자 없이 주면 오븐. "
+                         "오븐은 FAN_LIGHT 를 거쳐 켜지고 통전이 아니면 FAN_LIGHT 이고 "
+                         "꺼질 때도 거치는데, 라벨은 HEATING 만 ON 이라 채점(세션 통째)과 "
+                         "어긋난다 — 오븐 ON 창의 절반이 자동 오답이었다. "
+                         "**핫플은 넣지 말 것** (ARMED_IDLE 0.55W < 계측 바닥)")
     ap.add_argument("--state-mix", default="",
                     help="창을 자를 때 **상태**를 먼저 뽑는다 (13.35). 프리셋 "
                          "'minipc_balanced'/'smps_balanced' 또는 JSON {가전:{상태id:확률}}. "
@@ -94,6 +100,11 @@ def main() -> int:
             print("  ⚠⚠ **--sp-curves 없이 범위 표집을 켰다.** 전력을 크게 옮기면서 전류를 "
                   "선형으로만 곱하게 되어 SMPS 의 고조파 모양이 틀린다 "
                   "(충전기 63->40W 에서 h7 30%, 미니PC h1 23%)")
+    car = None
+    if a.carrier_on is not None:
+        car = tuple(a.carrier_on) if a.carrier_on else ("oven",)
+        print(f"  ** 캐리어 상태를 세션으로 (13.40): {', '.join(car)} — "
+              f"게이트는 세션, 전력은 그 순간 실제값 **")
     smx = None
     if a.state_mix:
         from src.synthesis.augmentor import STATE_MIX_PRESETS
@@ -124,6 +135,7 @@ def main() -> int:
                 dither_even_amp=a.dither_even_amp,
                 dither_even_phase_deg=a.dither_even_phase_deg,
                 power_scale_std_map=pss, level_scramble=lvs, state_mix=smx,
+                carrier_apps=car,
                 sp_curves=a.sp_curves, background=a.background,
                 dither_min_order=a.dither_min_order)
     return 0

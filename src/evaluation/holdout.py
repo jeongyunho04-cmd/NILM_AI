@@ -83,6 +83,7 @@ def build_holdout(
     ablate_pedestal_apps: Optional[Sequence[str]] = None,
     level_scramble: Optional[Dict[str, tuple]] = None,
     state_mix: Optional[Dict[str, Dict[int, float]]] = None,
+    carrier_apps: Optional[Sequence[str]] = None,
     sp_curves: bool = False,
     background: bool = False,
 ) -> dict:
@@ -92,7 +93,8 @@ def build_holdout(
     np.random.seed(seed)
 
     pool = SegmentPool(npz_dir=npz_dir, time_split="holdout", holdout_frac=holdout_frac,
-                       ablate_pedestal_apps=ablate_pedestal_apps)
+                       ablate_pedestal_apps=ablate_pedestal_apps,
+                       carrier_apps=carrier_apps)
     # `sp_curves`/`background` 는 **학습 캐시와 반드시 같아야 한다** (12.168.4).
     # 배경 없이 만든 홀드아웃으로 배경 있는 모델을 재면, 모델이 기대하는 5.5W 를
     # 없는 데서 차감해 **최소 부하만** 무너진다 (미니PC −0.119, 선풍기 −0.093).
@@ -159,6 +161,7 @@ def build_holdout(
         "recipe_mix": recipe_mix,
         "level_scramble": {k: list(v) for k, v in (level_scramble or {}).items()},
         "state_mix": state_mix,
+        "carrier_apps": list(carrier_apps or []),
         # 학습 캐시와 짝이 맞아야 하는 설정 (12.168.4)
         "sp_curves": bool(sp_curves),
         "background": bool(background),

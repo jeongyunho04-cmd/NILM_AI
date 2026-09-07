@@ -34,7 +34,7 @@
 광역 갈래 유무는 wide 입력을 0 으로 만들면 된다.
 """
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Sequence
 import json
 import time
 
@@ -69,6 +69,7 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           sp_curves: bool = False, background: bool = False,
           level_scramble: Optional[Dict[str, tuple]] = None,
           state_mix_json: str = "",
+          carrier_apps: Optional[Sequence[str]] = None,
           dither_min_order: int = 2) -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.augmentor import DataAugmentor
@@ -84,7 +85,8 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
     # 레시피 믹스 (12.67절). 빈 문자열이면 `DEFAULT_RECIPE_MIX` 다.
     mix = json.loads(recipe_mix_json) if recipe_mix_json else None
     pool = SegmentPool(npz_dir=npz_dir, time_split=time_split,
-                       exclude_activation_files=excl)
+                       exclude_activation_files=excl,
+                       carrier_apps=carrier_apps)
     # 차수별 지터 (12.62절). 0 이면 `DataAugmentor` 기본과 같다.
     # 기기별 전력 증강 폭 (12.118). 빈 문자열이면 일괄 `power_scale_std` 다.
     pss = json.loads(power_scale_std_json) if power_scale_std_json else None
@@ -157,6 +159,7 @@ def build_cache(
     power_scale_std_map: Optional[Dict[str, float]] = None,
     level_scramble: Optional[Dict[str, tuple]] = None,
     state_mix: Optional[Dict[str, Dict[int, float]]] = None,
+    carrier_apps: Optional[Sequence[str]] = None,
     sp_curves: bool = False,
     background: bool = False,
     dither_min_order: int = 2,
@@ -201,7 +204,8 @@ def build_cache(
                             dither_amp, dither_phase_deg, mix_json,
                             dither_even_amp, dither_even_phase_deg, pss_json,
                             bool(sp_curves), bool(background), level_scramble,
-                            smx_json, int(dither_min_order))) as pool:
+                            smx_json, tuple(carrier_apps or ()),
+                            int(dither_min_order))) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -227,6 +231,7 @@ def build_cache(
             "power_scale_std_map": power_scale_std_map,
             "level_scramble": level_scramble,
             "state_mix": state_mix,
+            "carrier_apps": list(carrier_apps or []),
             # 부하 의존 서명 / 상시 배경 (12.166). 학습·손실 쪽이
             # 이 값을 읽어 짝을 맞춘다.
             "sp_curves": bool(sp_curves),
