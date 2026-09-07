@@ -38,6 +38,10 @@ def main() -> int:
                     help="짝수차 전용 지터 σ (12.69절). 차수 비례를 쓰지 않고 무리 전체에 "
                          "같은 값. 1.4 에서 프로젝터↔충전기 |I2|/|I1| d' 가 5.04 -> 1.06")
     ap.add_argument("--dither-even-phase-deg", type=float, default=0.0)
+    ap.add_argument("--level-scramble", default="",
+                    help="기기별 전력 **범위** 표집 (13.29/13.30). 프리셋 'smps_operating' 또는 "
+                         "JSON. 복합이 쓰는 동작점이 단독 녹화와 어긋난 SMPS 셋을 덮는다 — "
+                         "**--sp-curves 와 같이 쓸 것**")
     ap.add_argument("--sp-curves", action="store_true",
                     help="증강의 전력 스케일을 **부하 의존 서명** `s(p)` 로 옮긴다 "
                          "(12.166). 지금은 `I <- I·a` 로 선형인데, 캡 입력 SMPS 는 "
@@ -72,6 +76,18 @@ def main() -> int:
     if mix:
         print(f"  ** 레시피 믹스 '{a.recipe_mix}': 동시성을 올린다 (12.67절) **")
     pss = None
+    lvs = None
+    if a.level_scramble:
+        from src.synthesis.augmentor import LEVEL_SCRAMBLE_PRESETS
+        lvs = (LEVEL_SCRAMBLE_PRESETS[a.level_scramble]
+               if a.level_scramble in LEVEL_SCRAMBLE_PRESETS else json.loads(a.level_scramble))
+        lvs = {k: tuple(v) for k, v in lvs.items()}
+        print(f"  ** 기기별 전력 **범위 표집** '{a.level_scramble}' (13.29/13.30): "
+              + ", ".join(f"{k}={v[0]:g}~{v[1]:g}x" for k, v in sorted(lvs.items())) + " **")
+        if not a.sp_curves:
+            print("  ⚠⚠ **--sp-curves 없이 범위 표집을 켰다.** 전력을 크게 옮기면서 전류를 "
+                  "선형으로만 곱하게 되어 SMPS 의 고조파 모양이 틀린다 "
+                  "(충전기 63->40W 에서 h7 30%, 미니PC h1 23%)")
     if a.power_scale_std:
         from src.synthesis.augmentor import POWER_SCALE_STD_PRESETS
         pss = (POWER_SCALE_STD_PRESETS[a.power_scale_std]
@@ -92,7 +108,7 @@ def main() -> int:
                 recipe_mix=mix,
                 dither_even_amp=a.dither_even_amp,
                 dither_even_phase_deg=a.dither_even_phase_deg,
-                power_scale_std_map=pss,
+                power_scale_std_map=pss, level_scramble=lvs,
                 sp_curves=a.sp_curves, background=a.background,
                 dither_min_order=a.dither_min_order)
     return 0
