@@ -32,6 +32,7 @@ import hashlib
 import json
 import numpy as np
 
+from src.model.inputs import RAW_CHANNELS
 from src.synthesis.dataset import DEFAULT_RECIPE_MIX, NILMBatchGenerator
 from src.synthesis.augmentor import DataAugmentor
 from src.synthesis.segment_pool import SegmentPool
@@ -109,7 +110,7 @@ def build_holdout(
     # 60초 창이면 X 가 3.8GB 라 메모리에 다 못 올린다. 디스크에 바로 쓴다.
     out.mkdir(parents=True, exist_ok=True)
     X = np.lib.format.open_memmap(out / "X.npy", mode="w+", dtype=np.float32,
-                                  shape=(n_windows, 33, window_cycles))
+                                  shape=(n_windows, RAW_CHANNELS, window_cycles))
     yp = np.empty((n_windows, k), np.float32)
     ys = np.empty((n_windows, k), np.float32)
     yo = np.empty((n_windows, k), np.int8)

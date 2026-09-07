@@ -22,6 +22,7 @@ generate_batch_dict() 는 활성 라벨과 별도로 '콘센트 연결 여부(y_
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 
+from src.model.inputs import VOLT_ORDERS
 from .segment_pool import SegmentPool
 from .synthesizer import (
     DEFAULT_TARGET_LOOKAHEAD_CYCLES,
@@ -245,7 +246,13 @@ class NILMBatchGenerator:
         p_chan = sample.power_features[:, 0:1].T  # (1, W) 유효전력
         q_chan = sample.power_features[:, 1:2].T  # (1, W) 무효전력
         v_chan = sample.power_features[:, 4:5].T  # (1, W) 단자 전압 (계측 해상도 반영됨)
-        return np.concatenate([r_part, i_part, p_chan, q_chan, v_chan], axis=0).astype(np.float32)
+        # 33~44: **단자 전압 고조파** Re/Im, 홀수 h=1,3,5,7,9,11 (13.26).
+        # 선로 임피던스 Z 를 드러내는 유일한 관측량이다. 실측 로더(`realdata._to_raw`)와
+        # 같은 배치여야 한다.
+        vh = np.asarray(sample.voltage_harmonics_complex)[:, [h - 1 for h in VOLT_ORDERS]]
+        return np.concatenate(
+            [r_part, i_part, p_chan, q_chan, v_chan, vh.real.T, vh.imag.T],
+            axis=0).astype(np.float32)
 
     def _format_targets(self, sample: SyntheticLoadSample) -> Dict[str, np.ndarray]:
         """가전별 정답을 배열로 정리한다."""

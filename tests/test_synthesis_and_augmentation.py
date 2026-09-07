@@ -2,6 +2,8 @@
 합성 / 증강 / 계통 시뮬레이터 / 대기전력 자동 검증 스위트
 """
 import numpy as np
+
+from src.model.inputs import RAW_CHANNELS
 import pytest
 
 from src.preprocessing.file_registry import (
@@ -656,7 +658,7 @@ def test_batch_generator_fast_throughput(segment_pool):
     )
 
     X, y_pow, y_state, y_on = batch_gen.generate_batch(batch_size=8)
-    assert X.shape == (8, 33, 600)
+    assert X.shape == (8, RAW_CHANNELS, 600)
     assert X.dtype == np.float32
 
     n_apps = len(batch_gen.appliance_list)
@@ -870,7 +872,7 @@ def test_cache_build_and_read(tmp_path):
     assert len(cache.appliances) == 9
 
     w = cache.get(0)
-    assert w["X"].shape == (33, 600) and w["X"].dtype == np.float32
+    assert w["X"].shape == (RAW_CHANNELS, 600) and w["X"].dtype == np.float32
     for key in ("y_power", "y_standby", "y_on", "y_plugged"):
         assert w[key].shape == (9,)
     assert w["y_state"].shape == (9,)
@@ -1213,7 +1215,7 @@ def test_다단_강하_채널이_기착을_짚는다():
         prof[:tgt] = 45.0
         n = int(pedestal_s * 60)
         prof[tgt:tgt + n] = 4.0
-        x = np.zeros((1, 33, T), np.float32)
+        x = np.zeros((1, RAW_CHANNELS, T), np.float32)
         x[0, 30] = prof
         x[0, 32] = 220.0
         f = build_fine(x)

@@ -201,6 +201,12 @@ class SyntheticLoadSample:
     power_features: np.ndarray        # (N, 6) float32 [P, Q, S, PF, V_measured, THD_i]
     v_bus: np.ndarray                 # (N,) float32 계측 해상도로 계단화된 전압 (모델이 보는 값)
     v_bus_true: np.ndarray            # (N,) float32 연속 실제 전압 (진단용)
+    #: (N, 15) complex64 **단자** 전압 고조파 — 실측 npz 의 `voltage_harmonics_complex` 와 같은 양.
+    #: V_단자,h = V_개방,h − Z_h·I_h,  Z_h = r_grid + j·h·x_grid (13.26).
+    #: ⚠ 개방 전압에서 **한 번만** 뺀다. `v_bus` 는 이미 단자 전압이라 그것을 밑절미로 쓰면
+    #: 강하가 두 번 걸린다 — 13.21 에서 밟고 13.26 에서 또 밟은 함정이다.
+    #: 검산: Re(V_단자,1) == v_bus_true 가 정확히 성립한다 (`apply_load_drop` 과 같은 식).
+    voltage_harmonics_complex: np.ndarray
     t_rel_s: np.ndarray               # (N,) float32
 
     # ── 가전별 정답 ──
@@ -317,6 +323,35 @@ class LoadSynthesizer:
         cap = PLUG_PROBABILITY_CAP.get(app)
         p = prob if cap is None else min(prob, cap)
         return bool(np.random.rand() < p)
+
+    def _terminal_voltage_harmonics(self, v_open, total_complex, env, n: int) -> np.ndarray:
+        """개방 전압과 총전류에서 **단자** 전압 고조파를 조립한다 (13.26).
+
+            V_개방,h[t] = rel_개방[h] · v_개방[t]
+            V_단자,h[t] = V_개방,h[t] − Z_h · I_총,h[t],    Z_h = r_grid + j·h·x_grid
+
+        `Z_h = r + j·2πf·h·L` 이고 `L = x_grid/(2πf)` 이므로 `Z_h = r + j·h·x` 로 줄어든다.
+
+        **회로 모델을 다시 부르지 않는다** — 이미 나온 총전류로 한 번 곱하고 뺄 뿐이라
+        굽는 시간이 안 는다.
+
+        ⚠ 밑절미는 **개방** 전압이어야 한다. `v_bus`(단자)를 쓰면 강하가 두 번 걸린다.
+        검산: h=1 에서 `Re(V_단자,1) = v_개방 − Re(Z_1·I_1) = v_true` 로,
+        `GridSimulator.apply_load_drop` 의 `r·Re(I1) − x·Im(I1)` 과 정확히 같은 식이다.
+        """
+        if n == 0:
+            return np.zeros((0, NUM_HARMONICS), dtype=np.complex64)
+        rel = np.zeros(NUM_HARMONICS, dtype=np.complex128)
+        rel[0] = 1.0 + 0.0j
+        tex = getattr(env, "texture", None)
+        if tex is not None:
+            src = tex.source_rel() if hasattr(tex, "source_rel") else np.asarray(tex)
+            src = np.asarray(src, dtype=np.complex128)
+            rel[:min(len(src), NUM_HARMONICS)] = src[:NUM_HARMONICS]
+        h = np.arange(1, NUM_HARMONICS + 1)
+        z = float(env.r_grid_ohm) + 1j * h * float(env.x_grid_ohm)
+        v_op = np.asarray(v_open, dtype=np.float64).reshape(-1, 1)
+        return (rel[None, :] * v_op - z[None, :] * np.asarray(total_complex)).astype(np.complex64)
 
     def _resolve_plugged(
         self,
@@ -555,6 +590,10 @@ class LoadSynthesizer:
                         gt_harm_ri[a][on_mask, :, 0] = np.real(layer_c[a][on_mask])
                         gt_harm_ri[a][on_mask, :, 1] = np.imag(layer_c[a][on_mask])
 
+        # 7b. **단자 전압 고조파** (13.26). 계측기가 재는 것과 같은 양이고, 모델이 Z 를
+        #     알아볼 수 있는 유일한 관측량이다. 개방 전압에서 Z·I 를 **한 번만** 뺀다.
+        v_harm = self._terminal_voltage_harmonics(v_open, total_complex, env, N)
+
         # 8. 계측 해상도 반영. 실측 센서는 0.5초에 한 번만 전압을 갱신한다.
         v_measured = (
             self.grid_sim.quantize_measurement(v_true)
@@ -644,6 +683,7 @@ class LoadSynthesizer:
             power_features=power_features,
             v_bus=v_measured,
             v_bus_true=np.asarray(v_true, dtype=np.float32),
+            voltage_harmonics_complex=v_harm,
             t_rel_s=t_rel_s,
             gt_is_on=gt_is_on,
             gt_is_plugged=gt_plugged,

@@ -28,6 +28,7 @@ import numpy as np
 
 from src.synthesis.synthesizer import DEFAULT_TARGET_LOOKAHEAD_CYCLES
 
+from src.model.inputs import RAW_CHANNELS
 from src.baseline.features import extract, feature_names
 
 # 워커마다 한 번씩 만들어 재사용한다 (풀 적재가 2.5초라 매번 만들면 안 된다)
@@ -93,7 +94,7 @@ def _make_chunk(task: Tuple[int, int]) -> Tuple[np.ndarray, ...]:
     index, n = task
     np.random.seed(chunk_seed(_SEED_BASE, index))
     g = _GEN
-    xs = np.empty((n, 33, g.window_size), np.float32)
+    xs = np.empty((n, RAW_CHANNELS, g.window_size), np.float32)
     k = len(g.appliance_list)
     yp = np.empty((n, k), np.float32)
     yo = np.empty((n, k), np.int8)

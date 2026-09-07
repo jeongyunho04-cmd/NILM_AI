@@ -14,7 +14,7 @@
     2M 창 학습에 61분이 걸리는데 그중 57분이 CPU 합성 대기다.
 
 [변환 후를 저장한다 — 용량이 10배 작다]
-    원시 (33, 3600) float32            475 KB/창
+    원시 (45, 3600) float32            648 KB/창   (33 -> 45: 전압 고조파 12채널, 13.26)
     변환 후 (36,600)+(12,120) float16   45 KB/창
 
     창 수     용량      생성(1회)   2M 학습 시 재사용
@@ -41,7 +41,7 @@ import time
 import numpy as np
 
 from src.model.inputs import (ZERO_EVEN_HARMONICS, FINE_CHANNELS, FINE_CYCLES, FINE_LAYOUT,
-                             WIDE_CHANNELS, build_inputs)
+                             RAW_CHANNELS, WIDE_CHANNELS, build_inputs)
 
 # (이름, dtype, 창당 모양)
 _SPEC = {
@@ -109,7 +109,7 @@ def _chunk(task: Tuple[int, int]) -> Dict[str, np.ndarray]:
     w = g.window_size
     k = len(g.appliance_list)
     ti = g.target_index
-    xs = np.empty((n, 33, w), np.float32)
+    xs = np.empty((n, RAW_CHANNELS, w), np.float32)
     out = {
         "y_power": np.empty((n, k), np.float32), "y_on": np.empty((n, k), np.int8),
         "y_plugged": np.empty((n, k), np.int8), "y_standby": np.empty((n, k), np.float16),

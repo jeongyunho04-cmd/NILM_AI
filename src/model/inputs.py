@@ -61,8 +61,29 @@ EVEN_MAG0 = 16                #: 짝수차 크기 블록의 시작
 PHI_ORDERS = (3, 5, 7, 9)
 PHI0 = 31                     #: φ cos/sin 블록의 시작
 DROP0 = 41                    #: 다단강하 전방탭 블록의 시작 (12.62)
-FINE_CHANNELS = 45
-FINE_LAYOUT = "v2"
+
+#: **전압 고조파** (13.26, 2026-09-07). 원시 채널 33~44 = Re(V_h) 6개 + Im(V_h) 6개.
+#:
+#: 왜 넣나: 선로 임피던스 Z 가 창마다 달라지는데(0.30~2.00Ω) 모델이 그것을 **보정하지 못하고
+#: 흔들리기만** 했다 — 참 전력이 Z 에 대해 정확히 0.00W 불변인데 예측이 2.3~7.8W 움직였다.
+#: 원인은 관측량 부재였다: `V_h = V_개방,h − Z_h·I_h` 인데 모델은 기본파 실효값 하나만 받아
+#: 차수별 강하를 볼 수 없었다. 계측기는 `voltage_harmonics_complex` 로 이미 재고 있다.
+#: 능선 탐침의 Z 식별이 **R² 0.192 -> 0.879** (MAE 0.417 -> 0.158Ω) 가 된다.
+#:
+#: ⚠ **위상이 핵심이다.** Z = R + jωhL 이 복소수라 크기만으로는 강하의 방향을 잃는다
+#: (크기만 0.47 대 Re/Im 0.88). 홀수차만 쓰므로 플러그 방향 문제(13.11.7)는 안 걸린다 —
+#: 반대로 꽂으면 짝수차만 180° 돈다.
+#: ⚠ 차수를 더 넣는다고 좋아지지 않는다: h1~h11 홀수 12채널 0.879 > h1~h15 홀수 16채널 0.872.
+#: 낮은 차수가 더 중요하다 (전류가 크니 강하도 크다).
+VOLT_ORDERS = (1, 3, 5, 7, 9, 11)
+VOLT_RE0 = 33                 #: 원시에서 Re(V_h) 블록의 시작
+VOLT_IM0 = VOLT_RE0 + len(VOLT_ORDERS)
+#: 합성기·실측 로더가 모델에 넘기는 **원시** 채널 수.
+RAW_CHANNELS = VOLT_IM0 + len(VOLT_ORDERS)      # 33 + 12 = 45
+
+FINE_CHANNELS = 45 + 2 * len(VOLT_ORDERS)       # 45 + 12 = 57
+FINE_VOLT0 = 45               #: 세밀에서 전압 고조파 블록의 시작
+FINE_LAYOUT = "v3"
 
 #: 반파 정류 대비 `|I2|−|I4|` (61주기 평활, 12.114).
 HALFWAVE_CH = 43
@@ -89,7 +110,8 @@ EVEN_FINE_CHANNELS = list(range(EVEN_MAG0, EVEN_MAG0 + len(EVEN_ORDERS))) + [28]
 # ⚠ **세밀의 `fine_channels` 같은 슬라이스 장치가 없다.** `net.py` 가 이 값을 conv 입력 채널로
 #   직결하므로 바꾸면 옛 체크포인트를 아예 못 싣는다. 체크포인트에 `wide_channels` 를 적고
 #   로더가 검사한다. 절제는 `--zero-wide-channels` 로 같은 캐시에서 한다.
-WIDE_CHANNELS = 35
+WIDE_CHANNELS = 35 + 2 * len(VOLT_ORDERS)       # 35 + 12 = 47
+WIDE_VOLT0 = 35               #: 광역에서 전압 고조파 블록의 시작 (블록 중앙값, 13.26)
 
 #: 광역의 고조파 크기 블록(12~26)과 위상 블록(27~34). `--zero-wide-channels` 대조용.
 WIDE_MAG0 = 12
@@ -201,6 +223,9 @@ POWER_SCALE = 100.0          # P, Q
 # ⚠ 2026-09-06: 새 계측기 자료의 vrms 는 D 210.7~219.4 / E 227.5~231.0V 다. 정규화 중심 222 는
 #   그 사이에 있어 그대로 둔다 (값을 바꾸면 모든 체크포인트·캐시의 입력 프레임이 갈린다).
 V_CENTER, V_SPAN = 222.0, 10.0
+#: 전압 **고조파** 크기 (13.26). 실측 |V_h| 는 h3 1.3V · h5 3.7V · h7 1.9V · h9 1.3V · h11 0.5V 라
+#: 이 배율에서 asinh 가 거의 선형이다. 기본파(h1, ~215V)는 V_CENTER/V_SPAN 로 따로 정규화한다.
+VOLT_HARM_SCALE = 2.0
 
 
 def target_index(window_cycles: int) -> int:
@@ -303,8 +328,10 @@ def build_fine(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=np.float32)
     if x.ndim == 2:
         x = x[None]
-    if x.shape[1] < 33:
-        raise ValueError(f"33채널이 필요합니다: {x.shape[1]}")
+    if x.shape[1] < RAW_CHANNELS:
+        raise ValueError(
+            f"원시 {RAW_CHANNELS}채널이 필요합니다: {x.shape[1]}개를 받았습니다. "
+            "33채널은 전압 고조파가 없던 옛 배치(FINE_LAYOUT v2)입니다 — 캐시를 다시 구우십시오 (13.26)")
     seg = x[:, :, -FINE_CYCLES:]
     if seg.shape[2] < FINE_CYCLES:
         pad = FINE_CYCLES - seg.shape[2]
@@ -399,6 +426,18 @@ def build_fine(x: np.ndarray) -> np.ndarray:
     # (6.28/4.31/4.19) 차분이 1.97mA 로 신호를 지운다.
     out[:, EVEN2_CH] = np.arcsinh(_movavg(mag[:, 1], HALFWAVE_HALF) * CURRENT_SCALE)
 
+    # ── 45~56 전압 고조파 Re/Im, 홀수 h=1,3,5,7,9,11 (13.26) ───────────
+    # 선로 임피던스 Z 를 드러내는 유일한 관측량이다: V_h = V_개방,h − Z_h·I_h.
+    # 기본파는 ~215V 라 V_CENTER/V_SPAN 로, 고차는 0.5~4V 라 asinh 로 정규화한다.
+    for s, h in enumerate(VOLT_ORDERS):
+        vr, vi = seg[:, VOLT_RE0 + s], seg[:, VOLT_IM0 + s]
+        if h == 1:
+            out[:, FINE_VOLT0 + s] = (vr - V_CENTER) / V_SPAN
+            out[:, FINE_VOLT0 + len(VOLT_ORDERS) + s] = vi / V_SPAN
+        else:
+            out[:, FINE_VOLT0 + s] = np.arcsinh(vr * VOLT_HARM_SCALE)
+            out[:, FINE_VOLT0 + len(VOLT_ORDERS) + s] = np.arcsinh(vi * VOLT_HARM_SCALE)
+
     if ZERO_EVEN_HARMONICS:
         out[:, EVEN_FINE_CHANNELS] = 0.0
     return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
@@ -414,6 +453,9 @@ def build_wide(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=np.float32)
     if x.ndim == 2:
         x = x[None]
+    if x.shape[1] < RAW_CHANNELS:
+        raise ValueError(
+            f"원시 {RAW_CHANNELS}채널이 필요합니다: {x.shape[1]}개를 받았습니다 (13.26)")
     b, _, w = x.shape
     nb = w // WIDE_BLOCK
     if nb < 2:
@@ -479,6 +521,17 @@ def build_wide(x: np.ndarray) -> np.ndarray:
             a = np.abs(u) + 1e-12
             g = mag[:, j] / (mag[:, j] + PHASE_GATE_A)
             chans += [med(g * (u.real / a)), med(g * (u.imag / a))]
+
+    # ── 35~46 전압 고조파 Re/Im, 홀수 h=1,3,5,7,9,11 (13.26) ───────────
+    # Z 는 창 안에서 상수라 **광역이 자연스러운 자리다** — 2Hz 로 60초를 다 본다.
+    # 세밀(45~56)과 같은 양이고 배치도 같다 (Re 6개 -> Im 6개), 블록 중앙값이라 잡음만 낮다.
+    def _vnorm(a, h):
+        return (a - V_CENTER) / V_SPAN if h == 1 else np.arcsinh(a * VOLT_HARM_SCALE)
+
+    chans += [_vnorm(med(x[:, VOLT_RE0 + s, :cut]), h) for s, h in enumerate(VOLT_ORDERS)]
+    chans += [(med(x[:, VOLT_IM0 + s, :cut]) / V_SPAN if h == 1
+               else np.arcsinh(med(x[:, VOLT_IM0 + s, :cut]) * VOLT_HARM_SCALE))
+              for s, h in enumerate(VOLT_ORDERS)]
 
     out = np.stack(chans, axis=1).astype(np.float32)
     assert out.shape[1] == WIDE_CHANNELS, (out.shape[1], WIDE_CHANNELS)

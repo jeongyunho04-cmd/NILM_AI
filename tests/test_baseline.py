@@ -12,6 +12,8 @@ Phase 1 baseline 자동 검증
      수렴해 조기종료했다. RE 가 전부 1.000 으로 나왔다.
 """
 import numpy as np
+
+from src.model.inputs import RAW_CHANNELS
 import pytest
 
 from src.baseline.features import (
@@ -30,8 +32,8 @@ TARGET = 539
 
 
 def _window(p_series: np.ndarray, i1: float = 1.0, i3: float = 0.0) -> np.ndarray:
-    """전력 시계열 하나로 33채널 창을 만든다."""
-    x = np.zeros((33, W), dtype=np.float32)
+    """전력 시계열 하나로 원시 채널 창을 만든다 (13.26 에서 33 -> 45)."""
+    x = np.zeros((RAW_CHANNELS, W), dtype=np.float32)
     x[0] = i1                    # I1 실수부
     x[2] = i3                    # I3 실수부
     x[30] = p_series             # P
@@ -46,7 +48,8 @@ def test_feature_names_match_array():
 
 def test_no_nan_or_inf_on_degenerate_input():
     """전부 0 인 창에서도 NaN/Inf 가 나오면 안 된다 (0 나누기 방어)."""
-    for x in (np.zeros((3, 33, W), np.float32), np.full((3, 33, W), 1e-9, np.float32)):
+    for x in (np.zeros((3, RAW_CHANNELS, W), np.float32),
+              np.full((3, RAW_CHANNELS, W), 1e-9, np.float32)):
         f = extract(x, TARGET)
         assert np.isfinite(f).all()
 
@@ -232,10 +235,10 @@ def test_fine_layout_is_recorded_and_guarded():
                                   ODD_ORDERS, WIDE_CHANNELS, build_fine)
 
     rng = np.random.default_rng(0)
-    x = rng.normal(0, 0.3, (2, 33, 3600)).astype(np.float32)
+    x = rng.normal(0, 0.3, (2, RAW_CHANNELS, 3600)).astype(np.float32)
     fine = build_fine(x)
-    assert fine.shape[1] == FINE_CHANNELS == 45
-    assert FINE_LAYOUT == "v2"
+    assert fine.shape[1] == FINE_CHANNELS == 57      # 45 + 전압 고조파 12 (13.26)
+    assert FINE_LAYOUT == "v3"
 
     # 짝수차 크기 블록은 부호가 없다 — 위상을 버렸다는 뜻이다
     even = fine[:, EVEN_MAG0:EVEN_MAG0 + len(EVEN_ORDERS)]
@@ -265,7 +268,7 @@ def test_phase_channels_are_load_invariant_and_gated():
     from src.model.inputs import PHI0, PHI_ORDERS, build_fine
     lo, hi = PHI0, PHI0 + 2 * len(PHI_ORDERS)
     rng = np.random.default_rng(1)
-    x = np.zeros((1, 33, 3600), np.float32)
+    x = np.zeros((1, RAW_CHANNELS, 3600), np.float32)
     for h, amp, ph in ((1, 0.30, 0.4), (3, 0.25, -1.1), (5, 0.20, 2.0), (7, 0.15, -2.6)):
         x[0, h - 1] = amp * np.cos(ph)
         x[0, 15 + h - 1] = amp * np.sin(ph)
@@ -280,7 +283,7 @@ def test_phase_channels_are_load_invariant_and_gated():
     # 게이트는 크기를 따라 커져야 한다 (신호가 클수록 위상을 신뢰한다)
     assert np.linalg.norm(b) > np.linalg.norm(a)
 
-    z = build_fine(np.zeros((1, 33, 3600), np.float32))[0, lo:hi]
+    z = build_fine(np.zeros((1, RAW_CHANNELS, 3600), np.float32))[0, lo:hi]
     assert np.abs(z).max() < 1e-6, "신호가 없으면 위상 채널은 0 이어야 한다"
 
 def test_fine_dropout_is_off_at_inference_and_masks_only_fine():

@@ -8,6 +8,8 @@ from pathlib import Path
 import json
 
 import numpy as np
+
+from src.model.inputs import RAW_CHANNELS
 import pytest
 
 from src.evaluation.holdout import build_holdout, load_holdout
@@ -310,7 +312,7 @@ def test_holdout_build_and_load(tmp_path):
                          seed=7, progress_every=0)
     hs = load_holdout(tmp_path / "h")
     assert len(hs) == 40
-    assert hs.X.shape == (40, 33, 600) and hs.X.dtype == np.float32
+    assert hs.X.shape == (40, RAW_CHANNELS, 600) and hs.X.dtype == np.float32
     assert hs.y_power.shape == (40, len(hs.appliances))
     assert meta["time_split"] == "holdout"
     from src.model.inputs import target_index as _ti

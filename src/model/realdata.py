@@ -29,7 +29,8 @@ import warnings
 import numpy as np
 
 from src.evaluation.sealing import assert_not_sealed, is_sealed
-from src.model.inputs import build_inputs, target_index
+from src.model.inputs import (RAW_CHANNELS, VOLT_IM0, VOLT_ORDERS, VOLT_RE0,
+                              build_inputs, target_index)
 from src.preprocessing import load_nilm_npz
 from src.preprocessing.file_registry import NOISE_FLOOR_EXTERNAL_W
 
@@ -304,14 +305,22 @@ class RealWindows:
     # ── 내부 ────────────────────────────────────────────────────────────
     @staticmethod
     def _to_33ch(raw: dict) -> np.ndarray:
-        """npz -> (33, N). 합성기가 주는 배치와 같은 채널 배열로 맞춘다."""
+        """npz -> (45, N). 합성기가 주는 배치(`dataset._format_inputs`)와 같아야 한다.
+
+        33~44 는 **단자 전압 고조파** Re/Im, 홀수 h=1,3,5,7,9,11 이다 (13.26). 계측기가
+        `voltage_harmonics_complex` 로 이미 재고 있던 것을 그동안 버리고 있었다 —
+        그것이 선로 임피던스 Z 를 드러내는 유일한 관측량이다.
+        """
         hr = np.asarray(raw["harmonics_ri"], np.float32)          # (N,15,2)
         pf = np.asarray(raw["power_features"], np.float32)        # (N,6) p,q,s,pf,v,thd
         n = hr.shape[0]
-        x = np.empty((33, n), np.float32)
+        x = np.empty((RAW_CHANNELS, n), np.float32)
         x[0:15] = hr[:, :, 0].T
         x[15:30] = hr[:, :, 1].T
         x[30], x[31], x[32] = pf[:, 0], pf[:, 1], pf[:, 4]        # P, Q, V
+        vh = np.asarray(raw["voltage_harmonics_complex"])[:, [h - 1 for h in VOLT_ORDERS]]
+        x[VOLT_RE0:VOLT_IM0] = vh.real.T
+        x[VOLT_IM0:RAW_CHANNELS] = vh.imag.T
         return x
 
     def _windows(self, x: np.ndarray, targets: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
