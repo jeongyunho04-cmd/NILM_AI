@@ -78,32 +78,27 @@ POWER_SCALE_STD_PRESETS: Dict[str, Dict[str, float]] = {
 }
 
 
-# ── SMPS 동작점 덮기 (2026-09-07, 13.29/13.30) ────────────────────────────────
-# 복합 시험이 쓰는 동작점이 단독 녹화와 어긋난다. **SMPS 셋만** 그렇다 —
-# 저항 부하는 P = V²/R 로 고정이라 어긋날 수가 없고, SMPS 는 무엇을 먹이느냐
-# (배터리 잔량·PC 부하·프로젝터 밝기)에 따라 달라진다.
+# ── 증강이 **녹화 밖으로 나가지 않게** (2026-09-07, 13.31) ────────────────────
+# 사용자: "녹화 전력(p5~p95)에 맞추도록 하는게 나을거 같은데".  맞다 — 녹화된 적 없는
+# 전력을 만드는 것은 증거 없는 값을 지어내는 것이다. 복합과 단독의 동작점 격차
+# (13.29)는 **새 녹화**로 메워야지 증강으로 메울 것이 아니다.
 #
-#   기기        복합 계단 p10~p90   단독 동작 중앙   그 대역 비중
-#   프로젝터     36.2~41.1 W        44.9 W          0.0%
-#   충전기       24.1~58.6 W        62.5 W         21.8%
-#   미니PC        5.6~ 9.9 W        18.5 W          7.3%
-#   (포트 99.8% · 드라이기 99.5% · 핫플 95.7% · 선풍기 69.0% 는 멀쩡하다)
+# 실제로 지금 증강은 밖으로 나간다:
+#   충전기 σ=0.150(measured) -> 3σ 클립 뒤 p95 가 **78.1W**. 녹화 최대는 65.8W 다.
+#   모델이 D2 에서 내는 정격 69~70W 가 여기서 왔을 수 있다 (복합 참값은 47~57W).
 #
-# 필요한 이동이 **아래쪽으로 비대칭**이라 정규분포 지터로는 못 덮는다. 범위 표집
-# (`level_scramble`)을 쓴다. 상한을 1.05 로 조금 남기는 것은 단독 수준도 계속
-# 보게 하려는 것이다 — 배포처가 시험과 같은 동작점이라는 보장이 없다.
-#
-# ⚠ **`sp_curves=True` 와 반드시 같이 쓴다.** 곡선 없이 전력을 옮기면 전류를 선형으로
-#   곱할 뿐이고, 캡 입력 SMPS 는 부하가 바뀌면 모양도 바뀐다 — 회로모델을 참으로
-#   놓고 재면 충전기 63->40W 에서 h3 12.2% · h7 30.3% · h13 79.2% 가 틀리고,
-#   미니PC 18.5->9.9W 에서는 **기본파가 23.3%** 틀린다. 13.28 에서 고친 결합 오차보다 크다.
-LEVEL_SCRAMBLE_SMPS: Dict[str, Tuple[float, float]] = {
-    "laptop_charger": (0.38, 1.05),
-    "minipc": (0.30, 1.05),
-    "beam_projector": (0.78, 1.05),
-}
-LEVEL_SCRAMBLE_PRESETS: Dict[str, Dict[str, Tuple[float, float]]] = {
-    "smps_operating": LEVEL_SCRAMBLE_SMPS,
+# 그래서 지터는 남기되(하루하루 변동은 실재한다) **활성화의 중앙 전력이 녹화 범위를
+# 벗어나지 않도록 배율을 자른다.** 범위는 단독 녹화 ON 구간의 p1~p99 다.
+POWER_RANGE_W: Dict[str, Tuple[float, float]] = {
+    "air_conditioner": (13.4, 635.0),
+    "beam_projector": (4.4, 46.4),
+    "electiric_kettle": (1450.8, 1479.3),
+    "fan": (21.3, 37.7),
+    "hair_dryer": (482.1, 971.3),
+    "hotplate": (119.2, 459.3),
+    "laptop_charger": (16.1, 65.8),
+    "minipc": (8.8, 27.4),
+    "oven": (1058.0, 1121.9),
 }
 
 
@@ -129,6 +124,7 @@ class DataAugmentor:
         harmonic_dither_even_phase_deg: float = 0.0,
         harmonic_dither_min_order: int = 2,
         level_scramble: Optional[dict] = None,
+        clip_to_recorded_range: bool = True,
         power_scale_std_map: Optional[Dict[str, float]] = None,
         sp_curves: bool = False,
     ):
@@ -160,6 +156,8 @@ class DataAugmentor:
         # 움직이므로 예측이 틀려지는 것이 아니라 **절대 준위라는 단서만 사라진다.**
         # 반사실 절제이지 현실 반영이 아니다 — 실측 프로젝터 ON 은 폭 1.7W 로 일정하다.
         self.level_scramble = dict(level_scramble or {})
+        #: 증강 뒤 전력이 `POWER_RANGE_W` 밖으로 나가지 않게 배율을 자른다 (13.31).
+        self.clip_to_recorded_range = bool(clip_to_recorded_range)
         # 차수별 독립 지터 (12.62절). **0 이면 꺼진다 - 기본은 꺼짐이다.**
         # `_apply_harmonic_dither` 주석에 측정 근거가 있다.
         self.harmonic_dither_amp = max(0.0, float(harmonic_dither_amp))
@@ -260,6 +258,22 @@ class DataAugmentor:
             # 클립은 3σ 로 둔다. 일괄 ±15% 로 두면 σ=0.15 인 충전기가 잘리고
             # σ=0.005 인 포트는 클립이 아무 일도 안 한다 (12.118).
             p_scale = float(np.clip(1.0 + np.random.normal(0, sd), 1.0 - 3 * sd, 1.0 + 3 * sd))
+
+        # **녹화 범위 밖으로는 안 나간다** (13.31). 증강이 만들어 낸 전력이 그 기기가
+        # 관측된 적 없는 값이면 증거 없는 것을 지어내는 것이다 — 충전기 σ=0.15 는
+        # 78W 를 만드는데 녹화 최대는 65.8W 다.
+        # ⚠ **경계를 넘는 것만 막는다. 이미 밖에 있는 것을 안으로 밀지 않는다.**
+        #   처음에 `clip(p_scale, lo/med, hi/med)` 로 썼더니, 활성화 중앙이 녹화 하한보다
+        #   낮은 경우(듀티 부하의 저출력 구간 등) 배율을 1 위로 올려 **전력을 키웠다** —
+        #   전력 상한 검사 5개가 깨졌다.
+        if self.clip_to_recorded_range:
+            rng_w = POWER_RANGE_W.get(act.appliance_type)
+            on = aug_pow[:, 0] > 0.5
+            if rng_w is not None and np.any(on):
+                med = float(np.median(aug_pow[on, 0]))
+                lo_b = rng_w[0] / med if med > rng_w[0] else 0.0        # 이미 아래면 안 건드린다
+                hi_b = rng_w[1] / med if med < rng_w[1] else np.inf     # 이미 위면 안 건드린다
+                p_scale = float(np.clip(p_scale, lo_b, hi_b))
 
         # 고정 서명이면 `I <- I·a` 로 끝이지만, 캡 입력 SMPS 는 부하가 바뀌면
         # **모양도 바뀐다** (12.166). 곡선이 있는 기기는 `s(p)` 를 따라 옮긴다.
