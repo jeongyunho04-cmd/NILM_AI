@@ -31,7 +31,7 @@ from src import env_guard  # noqa: F401
 
 import numpy as np
 
-from src.synthesis.coupling import SmpsCircuit
+from src.synthesis.coupling import DEFAULT_N_ITER, SmpsCircuit
 from src.synthesis.grid_simulator import GridSimulator
 from src.synthesis.vtexture import default_library
 
@@ -45,11 +45,12 @@ PW_RANGE: Dict[str, Tuple[float, float]] = {
 BAD = 0.10
 
 
-def measure(n: int, n_iter: int, relax: float, seed: int = 0) -> List[dict]:
+def measure(n: int, n_iter: int, relax: float, seed: int = 0,
+            extrapolate: bool = True) -> List[dict]:
     gs = GridSimulator()
     bank = default_library()
     rng = np.random.default_rng(seed)
-    now = SmpsCircuit(n_iter=n_iter, relax=relax)
+    now = SmpsCircuit(n_iter=n_iter, relax=relax, extrapolate=extrapolate)
     ref = SmpsCircuit(models=now.models, n_iter=200, relax=0.5)
     devs = list(PW_RANGE)
     out: List[dict] = []
@@ -62,8 +63,11 @@ def measure(n: int, n_iter: int, relax: float, seed: int = 0) -> List[dict]:
         tex = bank.sample(rng)
         rel = tex.source_rel()
         v1 = float(env.base_voltage_v)
-        V_r = ref.solve_terminal(p, rel, v1, Z, 100e-6)
-        V_n = now.solve_terminal(p, rel, v1, Z, 100e-6)
+        # L 도 그 환경 것을 쓴다. 100µH 로 고정하면 생성기 분포(x_grid 0.02~0.15Ω ->
+        # 53~400µH, 중앙 225µH)보다 Z_h 가 작아져 **오차를 과소평가한다.**
+        L = float(env.x_grid_ohm) / (2.0 * np.pi * 60.0)
+        V_r = ref.solve_terminal(p, rel, v1, Z, L)
+        V_n = now.solve_terminal(p, rel, v1, Z, L)
         if V_r is None or V_n is None:
             continue
         I_r = sum(np.asarray(ref.current(d, pw, V_r / v1, v1)) for d, pw in p.items())
@@ -76,19 +80,24 @@ def measure(n: int, n_iter: int, relax: float, seed: int = 0) -> List[dict]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--windows", type=int, default=300)
-    ap.add_argument("--n-iter", type=int, default=3)
+    # ⚠ 모듈 기본값을 따라간다. 여기에 숫자를 박으면 "지금 설정" 을 잰다면서
+    #   다른 것을 재게 된다 (13.27 에서 실제로 그랬다 — n=4 라 이름 붙이고 n=3 을 쟀다).
+    ap.add_argument("--n-iter", type=int, default=DEFAULT_N_ITER)
     ap.add_argument("--relax", type=float, default=1.0)
+    ap.add_argument("--no-extrapolate", action="store_true",
+                    help="Aitken 외삽을 끈다 — 옛 거동과 견줄 때 쓴다 (13.27)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="")
     a = ap.parse_args()
 
-    rows = measure(a.windows, a.n_iter, a.relax, a.seed)
+    rows = measure(a.windows, a.n_iter, a.relax, a.seed, not a.no_extrapolate)
     if not rows:
         print("표본이 없다 — 회로 모델이 전부 실패했다 (circuit_model/__pycache__ 를 지워라)")
         return 1
     z = np.array([r["z"] for r in rows])
     print("=" * 96)
-    print(f"결합 풀개 검사 — n_iter={a.n_iter} relax={a.relax:g} · 창 {len(rows)}개 "
+    print(f"결합 풀개 검사 — n_iter={a.n_iter} relax={a.relax:g} "
+          f"외삽={'끔' if a.no_extrapolate else '켬'} · 창 {len(rows)}개 "
           f"(기준: 잠근 풀개 relax 0.5 x 200)")
     print(f"   생성기의 Z: 중앙 {np.median(z):.2f}Ω  p10~p90 {np.percentile(z, 10):.2f}~"
           f"{np.percentile(z, 90):.2f}  최대 {z.max():.2f}")

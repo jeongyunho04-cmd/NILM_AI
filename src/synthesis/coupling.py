@@ -35,12 +35,22 @@ import numpy as np
 from src.synthesis import fcm
 
 H = 15
+#: 결합 풀개 기본값 (13.27). 외삽을 켜면 n=4 가 감쇠 n=6 보다 싸고 낫다.
+DEFAULT_N_ITER = 4
+DEFAULT_EXTRAPOLATE = True
+#: Aitken 보정의 상한 — 마지막 걸음의 몇 배까지 믿나. 넘으면 보정을 버린다.
+AITKEN_CLAMP = 2.0
 F = 60.0
 P_BIN_W = 5.0          #: 전력 구간 — 동작점 간격(7~25W, 17~70W)의 1/3
-V_BIN_V = 2.0          #: 기저 전압 구간
-R_BIN_OHM = 0.10       #: NTC 상태 R 구간
-Z_BIN_OHM = 0.25       #: 선로 R 구간
-L_BIN_H = 100e-6       #: 선로 L 구간
+# ⚠ **Z·L·V·R 양자화는 공짜가 아니라 손해였다** (13.27, 실측으로 확인).
+#   이 넷은 창 안에서 **상수**라 캐시를 애초에 안 쪼갠다 — 구간을 성기게 하든 정확하게 하든
+#   결합 호출이 5,144 회로 똑같았다 (150창 x 34.3회). 즉 비용은 한 푼도 안 줄이면서
+#   결합 델타의 정확도만 깎고 있었다. 실질적으로 끈다 (양자화 자리는 남겨 둔다).
+#   호출을 실제로 줄이는 것은 **전력 구간뿐**이다 (5 -> 10W 에서 호출 절반, 처리량 1.88배).
+V_BIN_V = 1e-3         #: 기저 전압 구간 (사실상 정확)
+R_BIN_OHM = 1e-4       #: NTC 상태 R 구간 (사실상 정확)
+Z_BIN_OHM = 1e-4       #: 선로 R 구간 (사실상 정확)
+L_BIN_H = 1e-9         #: 선로 L 구간 (사실상 정확)
 #: 회로 모델이 있는 SMPS (`circuit_model/circ12_<dev>.pkl`)
 SMPS_DEVICES = ("laptop_charger", "beam_projector", "minipc")
 #: 선로 인덕턴스 범위 (미측정 — ∠Z₁ 은 vhdeg1≡0 규약상 못 잰다). `GridSimulator.x_grid_range` 0.02~0.15Ω ↔ 53~400µH.
@@ -57,7 +67,8 @@ class SmpsCircuit:
     """v12g 모델 위의 델타 계산기 + 캐시. 생성기(`GridSimulator`)가 하나 들고 쓴다."""
 
     def __init__(self, models: Optional[Dict[str, object]] = None, max_cache: int = 300_000,
-                 n_iter: int = 3, relax: float = 1.0):
+                 n_iter: int = DEFAULT_N_ITER, relax: float = 1.0,
+                 extrapolate: bool = DEFAULT_EXTRAPOLATE):
         self._models = models
         self.max_cache = int(max_cache)
         self.n_iter = int(n_iter)
@@ -66,6 +77,10 @@ class SmpsCircuit:
         #: Z 1.15Ω **26~50%**, Z 2.00Ω **169~204%** 다 (13.24.13). w=0.5 면 n=4 에 ~1%,
         #: n=6 에 ~0.1% 로 모든 Z 에서 잠긴다. 대가는 반복 수 그대로다.
         self.relax = float(relax)
+        #: 막은 Aitken Δ² 외삽 (13.27). 회로 호출을 안 늘리고 풀개 오차를 줄인다 —
+        #: 400창 대조에서 n=4 외삽이 중앙 0.16% / >10% 3.5% 로, 감쇠 n=6(0.81% / 3.5%,
+        #: 호출 1.75배)보다 싸고 낫다. 끄면 옛 거동 그대로다.
+        self.extrapolate = bool(extrapolate)
         self._tex_cache: Dict[tuple, np.ndarray] = {}
         self._cpl_cache: Dict[tuple, Dict[str, np.ndarray]] = {}
         self.hits = 0
@@ -169,11 +184,24 @@ class SmpsCircuit:
         w = self.relax
         I_tot = total_true(V_src)
         V_term = V_src.copy()
+        hist = []
         for _ in range(self.n_iter):
             tgt = V_src - Z * I_tot
             V_term = tgt if w >= 1.0 else V_term + w * (tgt - V_term)
+            hist.append(V_term)
             I_tot = total_true(V_term)
-        return V_term
+        if not self.extrapolate or len(hist) < 3:
+            return V_term
+        # 막은 Aitken Δ² — 수열의 극한을 대수로 구한다. **회로 호출이 안 는다.**
+        # 분모가 0 에 가까우면 보정이 발산하므로 마지막 걸음의 AITKEN_CLAMP 배로 막는다.
+        # 막히면 마지막 반복값을 그대로 쓰므로 **외삽 없는 것보다 나쁠 수 없다.**
+        x0, x1, x2 = hist[-3], hist[-2], hist[-1]
+        d1 = x2 - x1
+        d2 = x2 - 2.0 * x1 + x0
+        ok = np.abs(d2) > 1e-12
+        corr = np.where(ok, d1 * d1 / np.where(ok, d2, 1.0), 0.0)
+        corr = np.where(np.abs(corr) > AITKEN_CLAMP * np.abs(d1), 0.0, corr)
+        return x2 - corr
 
     def solve_terminal(self, powers: Dict[str, float], rel_env: np.ndarray, v1: float,
                        r_line: float, l_line: float,
