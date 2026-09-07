@@ -191,6 +191,11 @@ def main() -> int:
                     help="학습 중 세밀 갈래를 통째로 가릴 확률 (12.21절). 합성에서 학습한 "
                          "선형 probe 가 실측에서 세밀은 AUC 0.32 로 뒤집히고 광역은 0.69 를 "
                          "유지한다 - 광역을 쓰는 법을 배우게 강제한다")
+    ap.add_argument("--wide-target", action="store_true",
+                    help="광역에 **타깃 블록 슬라이스**를 준다 (13.44). seq2point 인데 "
+                         "광역은 hw.mean(-1) 하나뿐이라 순서에 불변이었다. "
+                         "--wide-summary 의 창끝 슬라이스는 타깃에서 6초 어긋난다. "
+                         "**평균을 대체하지 않고 더한다**")
     ap.add_argument("--wide-summary", action="store_true",
                     help="광역 갈래에도 amax + 창끝 슬라이스를 준다 (12.19.4 후보 1)")
     ap.add_argument("--periodicity", action="store_true",
@@ -349,7 +354,8 @@ def main() -> int:
     del pool
 
     model = NILMNet(apps, appliance_state_counts(apps), width=a.width,
-                    wide_summary=a.wide_summary, periodicity=a.periodicity,
+                    wide_summary=a.wide_summary, wide_target=a.wide_target,
+                    periodicity=a.periodicity,
                     fine_dropout=a.fine_dropout,
                     prior_kappa=a.prior_kappa, prior_beta=a.prior_beta,
                     fine_channels=a.fine_channels).to(dev)
@@ -433,7 +439,8 @@ def main() -> int:
         torch.save({"model": model.state_dict(), "appliances": apps,
                     "width": a.width, "epoch": ep_saved,
                     "prior_kappa": a.prior_kappa, "prior_beta": a.prior_beta,
-                    "wide_summary": a.wide_summary, "periodicity": a.periodicity,
+                    "wide_summary": a.wide_summary, "wide_target": a.wide_target,
+                    "periodicity": a.periodicity,
                     "fine_dropout": a.fine_dropout,
                     # 세밀 채널 수를 반드시 남긴다. 12.34 에서 38 -> 44 로
                     # 늘었고, 이 키가 없는 체크포인트는 38 로 간주된다.

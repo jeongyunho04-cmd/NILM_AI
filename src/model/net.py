@@ -48,8 +48,7 @@ import torch.nn.functional as F
 
 from src.model.inputs import (
     FINE_CHANNELS, FINE_CYCLES, LEGACY_FINE_CHANNELS, POWER_SCALE,
-    WIDE_CHANNELS, fine_target_index,
-)
+    WIDE_CHANNELS, fine_target_index, wide_target_index)
 
 MAX_STATES = 5
 P_CH_FINE = 23      # 세밀 갈래의 asinh(P/100) 채널 (배치 v2, 13.12. v1 에서는 30 이었다)
@@ -125,6 +124,7 @@ class NILMNet(nn.Module):
         prior_kappa: float = 0.0,
         prior_beta: float = 0.5,
         wide_summary: bool = False,
+        wide_target: bool = False,
         periodicity: bool = False,
         fine_dropout: float = 0.0,
         min_on_w: Optional[Sequence[float]] = None,
@@ -147,6 +147,9 @@ class NILMNet(nn.Module):
         self.prior_beta = float(prior_beta)
         # 12.19.4 의 후보 1 / 2. 서로 독립이라 따로 켜서 귀속한다.
         self.wide_summary = bool(wide_summary)     # 광역에도 amax + 창끝 슬라이스
+        # 광역에 **타깃 블록 슬라이스**를 준다 (13.44). seq2point 인데 광역에는
+        # 타깃 포인터가 없었다 — `wide_target_index` 주석에 근거가 있다.
+        self.wide_target = bool(wide_target)
         self.periodicity = bool(periodicity)       # 자기상관 + 교차율
         # **갈래 드롭아웃** (12.21절). 학습 중 이 확률로 세밀 갈래 특징을 통째로
         # 가려, 광역만으로도 답할 수 있게 강제한다.
@@ -184,6 +187,8 @@ class NILMNet(nn.Module):
         # 전역 평균 + 전역 최대 + 깊은 층 타깃 + 얕은 층 타깃 2개 + 원본 타깃
         # + 광역 평균 + **원시 창 전력 통계 4개**
         trunk_in = c2 * 2 + c2 + (c1 + c1) + self.fine_channels + w2 + WINDOW_STATS
+        if self.wide_target:
+            trunk_in += w2              # 광역 타깃 블록 (13.44)
         if self.wide_summary:
             trunk_in += w2 * 2          # 광역 amax + 창 끝 슬라이스 (후보 1)
         if self.periodicity:
@@ -216,6 +221,7 @@ class NILMNet(nn.Module):
         fine_flags: List[int] = (
             [1] * self.fine_channels + [1] * c1 + [1] * c1 + [1] * c2 + [1] * c2 + [1] * c2
             + [0] * w2                                        # 광역 평균
+            + ([0] * w2 if self.wide_target else [])           # 광역 타깃 블록 (13.44)
             + ([0] * (w2 * 2) if self.wide_summary else [])   # 광역 amax + 창끝
             + [1, 1, 0, 0]                                    # fp_max, fp_min, wp_max, wp_mean
         )
@@ -251,6 +257,10 @@ class NILMNet(nn.Module):
         feats += [h.mean(-1), h.amax(-1), h[:, :, t]]   # 전역 요약 + 깊은 층 타깃
         hw = self.wide(wide)
         feats.append(hw.mean(-1))
+        if self.wide_target:
+            # **평균에 더한다. 대체하지 않는다** (13.44) — 미니PC 는 60초 문맥이
+            # 순시값보다 낫다(0.795 대 0.680). 둘 다여야 0.937 로 최고다.
+            feats.append(hw[:, :, wide_target_index(hw.shape[-1])])
         if self.wide_summary:
             # 세밀은 전역평균·전역최대·타깃슬라이스 세 갈래로 오는데 광역은 평균
             # 하나뿐이었다 (12.19.1절). 비대칭을 없앤다.

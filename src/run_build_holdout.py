@@ -110,6 +110,10 @@ def main() -> int:
     ap.add_argument("--level-scramble", nargs="*", default=None, metavar="APP:LO:HI",
                     help="그 가전의 전력 배율을 균등분포 [LO,HI] 로 흔든 반사실 평가 셋 "
                          "(12.64절). 예: --level-scramble beam_projector:0.64:1.42")
+    ap.add_argument("--carrier-on", nargs="*", default=None, metavar="APP",
+                    help="캐리어 상태를 **세션으로** 본다 (13.40). 인자 없이 주면 오븐. "
+                         "**학습 캐시와 반드시 같이 줘야 한다** — 한쪽만 주면 오븐 라벨의 "
+                         "뜻이 달라져 홀드아웃 지표가 비교 불가능해진다")
     ap.add_argument("--state-mix", default="",
                     help="창을 자를 때 **상태**를 먼저 뽑는다 (13.35). 프리셋 이름 또는 "
                          "JSON {가전:{상태id:확률}}. **판을 견줄 때는 비워 두고 같은 "
@@ -132,6 +136,8 @@ def main() -> int:
                   sp_curves=a.sp_curves, background=a.background,
                   level_scramble=_parse_scramble(a.level_scramble),
                   state_mix=_parse_state_mix(a.state_mix),
+                  carrier_apps=(None if a.carrier_on is None
+                                else (tuple(a.carrier_on) or ("oven",))),
                   recipe_mix=_parse_mix(a.recipe_mix))
     return inspect(a.out)
 

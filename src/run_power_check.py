@@ -171,6 +171,7 @@ def main() -> None:
         from src.model.inputs import LEGACY_FINE_CHANNELS
         model = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0),
                         wide_summary=ck.get("wide_summary", False),
+                    wide_target=ck.get("wide_target", False),
                         periodicity=ck.get("periodicity", False),
                         fine_dropout=ck.get("fine_dropout", 0.0),
                         prior_kappa=ck.get("prior_kappa", 0.0),

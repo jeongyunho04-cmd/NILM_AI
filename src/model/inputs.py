@@ -232,6 +232,25 @@ def target_index(window_cycles: int) -> int:
     return window_cycles - 1 - TARGET_LOOKAHEAD
 
 
+def wide_target_index(n_blocks: int) -> int:
+    """광역 갈래 안에서 **타깃 사이클이 든 블록** (2026-09-08, 13.44).
+
+    사용자: *"우리 모델이 seq2point잖아 그러면 예측하는 그 포인트에 대한 정보를
+    주어야하는거 아니야?"* — 맞다. 세밀은 `fine[:, :, fine_target_index()]` 로
+    타깃을 정확히 짚는데 **광역에는 타깃 포인터가 없었다.** 헤드로 가는 광역 특징이
+    `hw.mean(-1)` 하나뿐이라 순서에 불변이고, 60초 안 어디서 일어난 일인지 모른다.
+
+    `--wide-summary` 가 주는 `hw[:, :, -1]` 은 **창 끝**이라 타깃에서
+    `TARGET_LOOKAHEAD`(6초 = 12블록)만큼 어긋난다. 탐침(13.44)에서 창끝 슬라이스가
+    타깃 슬라이스보다 실측 평균 0.902 대 0.912 로 나빴다.
+
+    ⚠ **평균을 대체하지 말 것.** 미니PC 는 60초 문맥이 순시값보다 낫다
+    (평균 0.795 대 타깃블록만 0.680). 둘 다 줘야 0.937 로 최고가 된다.
+    """
+    return max(0, min(int(n_blocks) - 1,
+                      (int(n_blocks) * WIDE_BLOCK - 1 - TARGET_LOOKAHEAD) // WIDE_BLOCK))
+
+
 def fine_target_index() -> int:
     """세밀 갈래 안에서의 타깃 위치. 창 길이와 무관하게 539 다."""
     return FINE_CYCLES - 1 - TARGET_LOOKAHEAD

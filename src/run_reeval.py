@@ -110,6 +110,7 @@ def predict_cnn(tag: str, hs, dev: str, prep) -> tuple:
     # 다른 모델이 된다 (kappa 기본값이 0 이라 프라이어가 조용히 꺼진다).
     model = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0),
                     wide_summary=ck.get("wide_summary", False),
+                    wide_target=ck.get("wide_target", False),
                     periodicity=ck.get("periodicity", False),
                     fine_dropout=ck.get("fine_dropout", 0.0),
                     prior_kappa=ck.get("prior_kappa", 0.0),
