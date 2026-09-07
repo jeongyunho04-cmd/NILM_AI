@@ -30136,3 +30136,54 @@ v19 minipc_balanced        33.1%  15.9%  100.0%  30.5%   17.2%  **16.3%**
 
 홀드아웃은 **`holdout60_v18` 을 그대로 쓴다.** 자르는 시간 구간이 달라 IDLE 이 자연히
 47.8% 라 그 자체로 상태가 고른 잣대이고, v18↔v19 를 같은 자로 재려면 바꾸면 안 된다.
+
+### 13.35.7 ⚠ 명령을 산문에서 재구성하지 마라 — `--recipe-mix` 를 놓쳐 25분을 버렸다
+
+13.32.1 은 v18 을 이렇게 적었다:
+
+```
+--power-scale-std measured   일괄 σ=5% -> 기기별 실측 산포 (13.31.1)
+--sp-curves                  전력을 옮길 때 고조파 모양이 따라오게 (13.30)
+녹화 범위 클립                POWER_RANGE_W 밖으로 안 나가게 (13.31.7)
+```
+
+**바뀐 것만 적혀 있다.** 물려받은 `--recipe-mix smps_hi_fix` 가 빠져 있어서, 그것 없이
+v19 를 구웠다. 기본 레시피는 `smps_overlap: 0.0` 이고 `smps_hi_fix` 는 `0.26` 이라
+SMPS 양성률이 절반이 됐다:
+
+```
+기기            v18     v19(잘못)   비
+프로젝터       0.3392   0.1571   0.46
+충전기         0.3548   0.1892   0.53
+미니PC         0.3576   0.1938   0.54
+선풍기         0.1212   0.1718   1.42
+```
+
+미니PC ON 창이 107,268 -> 58,133 이었다. **다행히 굽자마자 `meta.json` 을 v18 과
+전부 대조해서 잡았다** — 학습까지 갔으면 상태 계층 표집의 효과와 뒤섞여 못 갈랐다.
+
+**규칙: 실행 명령은 결과 json 의 `config` 에서 되짚어 만든다.** argparse 기본값과
+견주면 정확하다. 산문 기록은 *무엇을 왜 바꿨는지*를 위한 것이지 재현 명령이 아니다.
+그리고 **새 캐시를 구우면 `meta.json` 을 이전 판과 통째로 대조한다** — 의도한 항목
+하나만 달라야 한다.
+
+### 13.35.8 재현 명령 (v19)
+
+```bash
+# 캐시 (25분, 201 win/s)
+python -X utf8 -m src.run_build_traincache --out cache/train60_v19 \
+  --recipe-mix smps_hi_fix --power-scale-std measured --sp-curves \
+  --state-mix minipc_balanced
+
+# 1단계 (홀드아웃은 v18 것을 그대로 쓴다 — 같은 자로 재려면 바꾸면 안 된다)
+python -X utf8 -m src.run_train_cnn --cache cache/train60_v19 \
+  --holdout processed_data/holdout60_v18 --epochs 300 --epoch-windows 50000 \
+  --eval-every 10 --harm-even-magnitude --state-signatures \
+  --standby-operating session --w-over 0.0 --tag cnn_v19
+
+# 2단계 적응 (시드 0·1·2. 나머지 인자는 전부 기본값이다)
+python -X utf8 -m src.run_adapt --init results/cnn_v19.pt --cache cache/train60_v19 \
+  --holdout processed_data/holdout60_v18 --steps 1781 --eval-every 500 \
+  --harm-even-magnitude --state-signatures --harm-weight inv_h2 \
+  --standby-operating session --seed 0 --tag adapt_v19_s0
+```
