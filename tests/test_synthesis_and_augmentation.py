@@ -1390,3 +1390,125 @@ def test_coupling_solver_converges_at_high_impedance():
     assert a and b
     for k in a:
         assert np.max(np.abs(a[k] - b[k])) == 0.0, f"{k}: relax=1.0 이 옛 거동과 다릅니다"
+
+
+def test_state_mix_raises_rare_state_share():
+    """상태 계층 표집이 좁은 상태를 시간 비율보다 자주 뽑아야 한다 (13.35).
+
+    미니PC 가 그 예다. IDLE 은 8.8~12.0W 로 좁고 ACTIVE 는 11.5~26.7W 로 넓어서,
+    전력 균등 계층화(12.34.6)가 IDLE 에 17.2% 밖에 안 준다. 그런데 실측 복합은
+    미니PC 를 IDLE 로만 돌린다.
+
+    여기서는 80% 가 ACTIVE(19W), 20% 가 IDLE(9.7W) 인 활성화를 만들어 반반 요청이
+    IDLE 몫을 실제로 올리는지 본다.
+    """
+    n, win = 60_000, 3_600
+    state = np.full(n, 2, np.int16)
+    state[:12_000] = 1                                  # 앞 20% 만 IDLE
+    target_p = np.where(state == 1, 9.7, 19.0).astype(np.float32)
+    on = np.ones(n, np.int8)
+    span = n - win
+
+    aug = DataAugmentor(state_mix={"minipc": {1: 0.5, 2: 0.5}})
+    assert aug.state_mix == {"minipc": {1: 0.5, 2: 0.5}}
+
+    np.random.seed(0)
+    hits = 0
+    for _ in range(400):
+        s = aug._state_start(state, on, win, span, 1)
+        assert s is not None
+        if float(np.median(state[s:s + win])) == 1.0:
+            hits += 1
+    share = hits / 400
+    assert share > 0.35, f"IDLE 몫이 안 올랐습니다: {share:.3f} (시간 비율은 0.20)"
+
+
+def test_state_mix_falls_back_when_state_absent():
+    """그 상태가 활성화에 없으면 `None` 을 돌려 전력 계층화로 떨어져야 한다 (13.35).
+
+    다른 상태로 메우면 IDLE 이 없는 활성화가 ACTIVE 를 두 번 내게 되어, 요청한
+    비율이 조용히 어긋난다.
+    """
+    n, win = 20_000, 3_600
+    state = np.full(n, 2, np.int16)                     # ACTIVE 뿐이다
+    on = np.ones(n, np.int8)
+    aug = DataAugmentor(state_mix={"minipc": {1: 1.0}})
+    np.random.seed(0)
+    assert all(aug._state_start(state, on, win, n - win, 1) is None
+               for _ in range(20))
+    assert aug._state_fill(state, on, win, 1) is None
+
+
+def test_state_mix_only_touches_named_appliances():
+    """이름이 없는 기기는 기존 경로 그대로여야 한다 (13.35)."""
+    n, win = 20_000, 3_600
+    state = np.full(n, 2, np.int16); state[:4_000] = 1
+    target_p = np.where(state == 1, 9.7, 19.0).astype(np.float32)
+    on = np.ones(n, np.int8)
+    c = np.zeros((n, 15), np.complex64)
+    pw = np.zeros((n, 6), np.float32); pw[:, 0] = target_p
+    aug = DataAugmentor(state_mix={"minipc": {1: 1.0}})
+
+    called = []
+    orig = aug._state_start
+    aug._state_start = lambda *a, **k: (called.append(1), orig(*a, **k))[1]
+    np.random.seed(0)
+    for _ in range(60):
+        aug._crop_window(c, pw, state, target_p, on, target_len=win,
+                         appliance_type="beam_projector")
+    assert not called, "이름 없는 기기에 상태 표집이 걸렸습니다"
+    for _ in range(60):
+        aug._crop_window(c, pw, state, target_p, on, target_len=win,
+                         appliance_type="minipc")
+    assert called, "이름 있는 기기에 상태 표집이 안 걸렸습니다"
+
+
+def test_state_fill_makes_a_window_full_of_one_state():
+    """상태 구간이 창보다 짧아도 이어 붙여 창을 채워야 한다 (13.35).
+
+    미니PC IDLE 은 풀 전체 최장이 51.8초라 60초 창을 혼자 못 채운다. 그래서
+    캐시에 IDLE 80% 이상인 창이 0.4% 뿐인데, **실측 복합은 분 단위로 IDLE 이다.**
+    """
+    n, win = 60_000, 3_600
+    state = np.full(n, 2, np.int16)
+    for k in range(10):                                  # 30초짜리 IDLE 10토막
+        state[k * 6_000:k * 6_000 + 1_800] = 1
+    on = np.ones(n, np.int8)
+    aug = DataAugmentor()
+    np.random.seed(0)
+    sel = aug._state_fill(state, on, win, 1)
+    assert sel is not None and len(sel) == win
+    assert (state[sel] == 1).all(), "채운 창에 다른 상태가 섞였습니다"
+    assert len(np.unique(sel)) == win, "같은 사이클을 두 번 쓰면 안 됩니다"
+
+
+def test_state_fill_prefers_long_runs():
+    """길이 가중이므로 긴 구간이 먼저 쓰여 이음매가 적어야 한다 (13.35)."""
+    n, win = 60_000, 3_600
+    state = np.full(n, 2, np.int16)
+    state[0:3_000] = 1                                   # 50초 한 덩어리
+    for k in range(20):                                  # 1초짜리 스무 토막
+        state[10_000 + k * 500:10_000 + k * 500 + 60] = 1
+    on = np.ones(n, np.int8)
+    aug = DataAugmentor()
+    np.random.seed(0)
+    seams = []
+    for _ in range(40):
+        sel = aug._state_fill(state, on, win, 1)
+        if sel is None:
+            continue
+        seams.append(int((np.diff(sel) != 1).sum()))
+    assert seams, "채우기가 한 번도 성공하지 못했습니다"
+    assert np.median(seams) <= 8, f"이음매가 너무 많습니다: 중앙 {np.median(seams)}"
+
+
+def test_state_fill_rejects_too_short_runs():
+    """1초 미만 토막만 있으면 이어 붙이지 않는다 — 전이의 잔재다 (13.35)."""
+    n, win = 60_000, 3_600
+    state = np.full(n, 2, np.int16)
+    for k in range(200):
+        state[k * 250:k * 250 + 30] = 1                  # 0.5초씩
+    on = np.ones(n, np.int8)
+    aug = DataAugmentor()
+    np.random.seed(0)
+    assert aug._state_fill(state, on, win, 1) is None

@@ -82,6 +82,7 @@ def build_holdout(
     progress_every: int = 1000,
     ablate_pedestal_apps: Optional[Sequence[str]] = None,
     level_scramble: Optional[Dict[str, tuple]] = None,
+    state_mix: Optional[Dict[str, Dict[int, float]]] = None,
     sp_curves: bool = False,
     background: bool = False,
 ) -> dict:
@@ -95,7 +96,11 @@ def build_holdout(
     # `sp_curves`/`background` 는 **학습 캐시와 반드시 같아야 한다** (12.168.4).
     # 배경 없이 만든 홀드아웃으로 배경 있는 모델을 재면, 모델이 기대하는 5.5W 를
     # 없는 데서 차감해 **최소 부하만** 무너진다 (미니PC −0.119, 선풍기 −0.093).
+    # `state_mix`(13.35) 는 **일부러 학습 캐시와 다르게 둘 수 있다** — 홀드아웃은
+    # 자를 시간 구간이 달라 미니PC IDLE 이 자연히 47.8% 라, 손대지 않으면 그 자체로
+    # 상태가 고른 잣대가 된다. 판을 견줄 때는 **같은 홀드아웃을 그대로 쓴다.**
     aug = DataAugmentor(level_scramble=level_scramble or None,
+                        state_mix=state_mix,
                         sp_curves=bool(sp_curves))
     syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
                           augmentor=aug, background=bool(background))
@@ -153,6 +158,7 @@ def build_holdout(
         "ablate_pedestal_apps": list(ablate_pedestal_apps or []),
         "recipe_mix": recipe_mix,
         "level_scramble": {k: list(v) for k, v in (level_scramble or {}).items()},
+        "state_mix": state_mix,
         # 학습 캐시와 짝이 맞아야 하는 설정 (12.168.4)
         "sp_curves": bool(sp_curves),
         "background": bool(background),

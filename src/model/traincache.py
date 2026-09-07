@@ -68,6 +68,7 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           power_scale_std_json: str = "",
           sp_curves: bool = False, background: bool = False,
           level_scramble: Optional[Dict[str, tuple]] = None,
+          state_mix_json: str = "",
           dither_min_order: int = 2) -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.augmentor import DataAugmentor
@@ -87,6 +88,9 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
     # 차수별 지터 (12.62절). 0 이면 `DataAugmentor` 기본과 같다.
     # 기기별 전력 증강 폭 (12.118). 빈 문자열이면 일괄 `power_scale_std` 다.
     pss = json.loads(power_scale_std_json) if power_scale_std_json else None
+    # 상태 계층 표집 (13.35). JSON 키는 문자열이므로 int 로 되돌린다.
+    smx = ({a: {int(s): float(v) for s, v in m.items()}
+            for a, m in json.loads(state_mix_json).items()} if state_mix_json else None)
     aug = DataAugmentor(harmonic_dither_amp=float(dither_amp),
                         harmonic_dither_phase_deg=float(dither_phase_deg),
                         harmonic_dither_even_amp=float(dither_even_amp),
@@ -94,6 +98,7 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
                         harmonic_dither_min_order=int(dither_min_order),
                         power_scale_std_map=pss,
                         level_scramble=level_scramble or None,
+                        state_mix=smx,
                         sp_curves=bool(sp_curves))
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
@@ -151,6 +156,7 @@ def build_cache(
     dither_even_phase_deg: float = 0.0,
     power_scale_std_map: Optional[Dict[str, float]] = None,
     level_scramble: Optional[Dict[str, tuple]] = None,
+    state_mix: Optional[Dict[str, Dict[int, float]]] = None,
     sp_curves: bool = False,
     background: bool = False,
     dither_min_order: int = 2,
@@ -162,6 +168,7 @@ def build_cache(
     excl_json = json.dumps(exclude_activation_files) if exclude_activation_files else ""
     mix_json = json.dumps(recipe_mix) if recipe_mix else ""
     pss_json = json.dumps(power_scale_std_map) if power_scale_std_map else ""
+    smx_json = json.dumps(state_mix) if state_mix else ""
     apps = SegmentPool(npz_dir=npz_dir, time_split=time_split,
                        exclude_activation_files=exclude_activation_files).get_appliance_types()
     k = len(apps)
@@ -194,7 +201,7 @@ def build_cache(
                             dither_amp, dither_phase_deg, mix_json,
                             dither_even_amp, dither_even_phase_deg, pss_json,
                             bool(sp_curves), bool(background), level_scramble,
-                            int(dither_min_order))) as pool:
+                            smx_json, int(dither_min_order))) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -219,6 +226,7 @@ def build_cache(
             "dither_even_phase_deg": float(dither_even_phase_deg),
             "power_scale_std_map": power_scale_std_map,
             "level_scramble": level_scramble,
+            "state_mix": state_mix,
             # 부하 의존 서명 / 상시 배경 (12.166). 학습·손실 쪽이
             # 이 값을 읽어 짝을 맞춘다.
             "sp_curves": bool(sp_curves),

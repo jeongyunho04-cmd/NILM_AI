@@ -102,6 +102,44 @@ POWER_RANGE_W: Dict[str, Tuple[float, float]] = {
 }
 
 
+# ── 창을 자를 때 **상태**로 계층화한다 (2026-09-07, 13.35) ────────────────────
+# 사용자: "단독녹화에도 IDLE상태가 충분히 있을건데 그거 찾아서 IDLE상태 비율 늘려".
+# 맞다. 있는데 안 뽑히고 있었다.
+#
+# `_stratified_start`(12.34.6)는 **전력 범위에서 균등**하게 뽑는다. 그때의 문제는
+# 반대 방향이었다 — 미니PC 의 고부하 구간이 6.7% 뿐이라 합성 창의 최대가 27.9W 에
+# 그쳤다. 전력 균등이 그것을 고쳤다. 그런데 같은 규칙이 **좁은 상태를 과소 노출한다**:
+#
+#   미니PC IDLE    8.8~12.0W  (폭  3.2W)   -> 와트 균등에서 약 18%
+#   미니PC ACTIVE 11.5~26.7W  (폭 15.2W)   -> 약 82%
+#
+# 실제로 캐시의 `y_state` 가 IDLE 17.2% (18,465 / 107,268) 다. 녹화 자체는 IDLE 이
+# 596초(23%) 있는데도 그렇다.
+#
+# **그런데 실측 복합은 미니PC 를 IDLE 로만 돌린다.** 구성 변화 짝(같은 동반 기기,
+# 미니PC 하나만 다른 이웃 구간)으로 재면 기여가 5.8~11.8W 이고, 이것은 대기(1.3~2.9W)
+# 대비 계단이므로 절대값 9.7W 인 IDLE 과 맞는다.
+#
+# 노출이 모자란 만큼 못 배운다 — 합성 홀드아웃에서도 IDLE 미니PC 는 관문 중앙 0.833 ·
+# 0.5 통과 58.0% 인데 ACTIVE 는 0.9999 · 86.4% 다.
+#
+# 그래서 **상태를 먼저 뽑고** 그 상태가 많은 후보를 고른다. 파형은 실측 그대로다 —
+# 지어내는 것이 없고, 있는 것을 더 자주 보여줄 뿐이다.
+#
+# ⚠ 비율을 실측 복합에 맞추지 않고 **반반**으로 둔다. 복합 5파일은 채점 대상이라
+# 거기에 맞추면 시험지를 보고 생성기를 고르는 것이 된다. 두 상태를 고르게 덮는 것은
+# 그 자체로 정당하다.
+STATE_MIX_PRESETS: Dict[str, Dict[str, Dict[int, float]]] = {
+    #: 미니PC 만. IDLE(1) 과 ACTIVE_LOAD(2) 를 반반.
+    "minipc_balanced": {"minipc": {1: 0.5, 2: 0.5}},
+    #: SMPS 3종. 충전기 상태1(20.3W)·프로젝터 상태1(예열 4.6W)도 합성에서 약하다
+    #: (F1 0.805 / 0.518). 다만 실측 복합의 프로젝터는 42~47W(상태2)로만 돌아
+    #: 근거가 미니PC 만큼 강하지 않다 — 그래서 별도 프리셋으로 둔다.
+    "smps_balanced": {"minipc": {1: 0.5, 2: 0.5},
+                      "laptop_charger": {1: 0.35, 2: 0.65}},
+}
+
+
 class DataAugmentor:
     """가전 활성화 구간에 도메인 특화 물리 증강을 적용한다."""
 
@@ -124,6 +162,7 @@ class DataAugmentor:
         harmonic_dither_even_phase_deg: float = 0.0,
         harmonic_dither_min_order: int = 2,
         level_scramble: Optional[dict] = None,
+        state_mix: Optional[Dict[str, Dict[int, float]]] = None,
         clip_to_recorded_range: bool = True,
         power_scale_std_map: Optional[Dict[str, float]] = None,
         sp_curves: bool = False,
@@ -156,6 +195,12 @@ class DataAugmentor:
         # 움직이므로 예측이 틀려지는 것이 아니라 **절대 준위라는 단서만 사라진다.**
         # 반사실 절제이지 현실 반영이 아니다 — 실측 프로젝터 ON 은 폭 1.7W 로 일정하다.
         self.level_scramble = dict(level_scramble or {})
+        #: {가전: {state_id: 확률}} — 창을 자를 때 **상태**를 먼저 뽑는다 (13.35).
+        #: `STATE_MIX_PRESETS` 주석에 근거가 있다. 비면 기존 전력 계층화 그대로다.
+        self.state_mix: Dict[str, Dict[int, float]] = {
+            a: {int(s): float(p) for s, p in m.items() if float(p) > 0}
+            for a, m in (state_mix or {}).items()
+        }
         #: 증강 뒤 전력이 `POWER_RANGE_W` 밖으로 나가지 않게 배율을 자른다 (13.31).
         self.clip_to_recorded_range = bool(clip_to_recorded_range)
         # 차수별 독립 지터 (12.62절). **0 이면 꺼진다 - 기본은 꺼짐이다.**
@@ -235,6 +280,7 @@ class DataAugmentor:
                 act.target_power_w,
                 act.is_on,
                 target_len=new_len,
+                appliance_type=act.appliance_type,
             )
         else:
             aug_c, aug_pow, aug_state, aug_target_p, aug_on = self._warp_time_series(
@@ -519,6 +565,7 @@ class DataAugmentor:
         target_p: np.ndarray,
         on_series: np.ndarray,
         target_len: int,
+        appliance_type: str = "",
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]:
         """긴 동작 구간에서 목표 길이만큼 연속 구간을 잘라낸다 (시간 압축 없음).
 
@@ -544,23 +591,113 @@ class DataAugmentor:
         """
         orig_len = len(c_series)
         span = orig_len - target_len
+        mix = self.state_mix.get(appliance_type)
+        # 상태 계층화를 쓸 때는 돌입/종료 몫을 25%+25% -> 15%+15% 로 줄인다 (13.35).
+        # 그 두 갈래는 활성화의 처음·끝 상태로 고정되므로 상태를 못 고른다.
+        p_on, p_off = (0.15, 0.30) if mix else (0.25, 0.50)
         r = np.random.rand()
-        if r < 0.25:
+        start, sel = None, None
+        if r < p_on:
             start = 0                                   # 켜지는 순간(돌입 전류) 포함
-        elif r < 0.50:
+        elif r < p_off:
             start = span                                # 꺼지는 순간 포함
-        else:
+        elif mix:
+            want = self._draw_state(mix)
+            # 절반은 **그 상태로 가득 찬 창**(이어 붙여 채운다), 절반은 이어진
+            # 실측 구간 그대로다. 뒤쪽을 남기는 이유는 IDLE↔ACTIVE 전이가
+            # 실재하는 신호라 통째로 없애면 안 되기 때문이다.
+            if np.random.rand() < 0.5:
+                sel = self._state_fill(state_series, on_series, target_len, want)
+            if sel is None:
+                start = self._state_start(state_series, on_series, target_len,
+                                          span, want)
+        if sel is None and start is None:               # 그 상태가 이 활성화에 없다
             start = self._stratified_start(target_p, on_series, target_len, span)
+        if sel is None:
+            sel = np.arange(start, start + target_len)
 
-        sl = slice(start, start + target_len)
         return (
-            c_series[sl].copy(),
-            pow_series[sl].copy(),
-            state_series[sl].copy(),
-            target_p[sl].copy(),
-            on_series[sl].copy(),
-            start == 0,
+            c_series[sel].copy(),
+            pow_series[sel].copy(),
+            state_series[sel].copy(),
+            target_p[sel].copy(),
+            on_series[sel].copy(),
+            bool(sel[0] == 0 and sel[-1] == target_len - 1),
         )
+
+    @staticmethod
+    def _draw_state(mix: Dict[int, float]) -> int:
+        """{상태: 확률} 에서 목표 상태 하나를 뽑는다 (13.35)."""
+        states = list(mix)
+        p = np.asarray([mix[s] for s in states], dtype=np.float64)
+        return int(states[int(np.random.choice(len(states), p=p / p.sum()))])
+
+    def _state_start(
+        self, state_series: np.ndarray, on_series: np.ndarray,
+        target_len: int, span: int, want: int,
+    ) -> Optional[int]:
+        """목표 **상태**를 먼저 뽑고, 그 상태가 실제로 있는 자리를 잘라낸다 (13.35).
+
+        후보 몇 개를 무작위로 던져 고르는 방식(`_stratified_start` 처럼)은 여기서
+        약하다 - 상태가 한 덩어리로 몰려 있으면 후보가 전부 빗나가서, 미니PC 처럼
+        IDLE 이 앞쪽 20% 에 뭉친 활성화에서 15% 는 아예 못 찾는다. 그래서 그 상태의
+        위치를 **직접 찾아** 그 중 하나를 창 안에 넣는다.
+
+        창 안 어디에 넣을지는 무작위다 - 늘 가운데 두면 그 상태의 전이가 항상
+        같은 자리에 오는, 합성에만 있는 단서가 된다.
+
+        그 상태가 이 활성화에 아예 없으면 `None` 을 돌려주고 호출부가 전력 계층화로
+        떨어진다. **뽑기 실패를 다른 상태로 메우지 않는다** - 그러면 IDLE 이 없는
+        활성화가 ACTIVE 를 두 번 내게 되어 요청한 비율이 조용히 어긋난다.
+        """
+        if span < 1:
+            return None
+        where = np.flatnonzero((state_series == want) & on_series.astype(bool))
+        if where.size == 0:
+            return None
+        anchor = int(where[int(np.random.randint(0, where.size))])
+        # 고른 지점을 창 안의 임의 위치에 놓는다.
+        start = anchor - int(np.random.randint(0, target_len))
+        return int(np.clip(start, 0, span))
+
+    def _state_fill(
+        self, state_series: np.ndarray, on_series: np.ndarray,
+        target_len: int, want: int,
+    ) -> Optional[np.ndarray]:
+        """그 상태의 구간들을 이어 붙여 창을 **가득** 채운다 (13.35).
+
+        `_state_start` 로는 부족하다. 미니PC 의 IDLE 은 풀 전체 최장이 **51.8초**라
+        60초 창을 혼자 채울 수 없다 (60초 이상 구간이 44개 중 0개, 중앙 4.0초).
+        그래서 캐시에서 IDLE 이 80% 이상인 창이 **0.4%** 뿐이다.
+
+        그런데 **실측 복합은 분 단위로 IDLE 로 돈다** — 구성 변화 짝으로 재면
+        미니PC 기여가 24~120초 구간에서 5.8~11.8W 로 일정하다. 즉 모델이 채점에서
+        만나는 창을 합성이 **만들어 낸 적이 없다.**
+
+        정상상태를 이어 붙이는 것은 대기 지문이 이미 쓰는 방법이다
+        (`sample_standby_series` 주석). 사이클 경계에서 잇고 **길이로 가중**해
+        긴 구간부터 쓰므로 이음매가 적다. 이음매의 페이저 단차는 같은 상태 안의
+        차이라 IDLE↔ACTIVE 전이보다 훨씬 작다.
+
+        Returns: 원본에 걸 인덱스 배열 (target_len,) 또는 None
+        """
+        idx = np.flatnonzero((state_series == want) & on_series.astype(bool))
+        if idx.size < target_len // 8:
+            return None
+        runs = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
+        # 1초 미만은 전이의 잔재다 - 이으면 이음매만 늘린다.
+        runs = [r for r in runs if len(r) >= 60]
+        if not runs:
+            return None
+        w = np.asarray([len(r) for r in runs], dtype=np.float64)
+        take, total, guard = [], 0, 0
+        while total < target_len and guard < 64:
+            r = runs[int(np.random.choice(len(runs), p=w / w.sum()))]
+            take.append(r); total += len(r); guard += 1
+        sel = np.concatenate(take)
+        if len(sel) < target_len:
+            return None
+        return sel[:target_len]
 
     def _stratified_start(
         self, target_p: np.ndarray, on_series: np.ndarray, target_len: int, span: int

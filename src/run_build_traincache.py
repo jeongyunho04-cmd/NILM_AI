@@ -42,6 +42,12 @@ def main() -> int:
                     help="기기별 전력 **범위** 표집 (13.29/13.30). 프리셋 'smps_operating' 또는 "
                          "JSON. 복합이 쓰는 동작점이 단독 녹화와 어긋난 SMPS 셋을 덮는다 — "
                          "**--sp-curves 와 같이 쓸 것**")
+    ap.add_argument("--state-mix", default="",
+                    help="창을 자를 때 **상태**를 먼저 뽑는다 (13.35). 프리셋 "
+                         "'minipc_balanced'/'smps_balanced' 또는 JSON {가전:{상태id:확률}}. "
+                         "전력 균등 계층화(12.34.6)가 좁은 상태를 과소 노출한다 — "
+                         "미니PC IDLE 은 8.8~12.0W 로 좁아 17.2% 만 나오는데 "
+                         "**실측 복합은 IDLE 로만 돈다**")
     ap.add_argument("--sp-curves", action="store_true",
                     help="증강의 전력 스케일을 **부하 의존 서명** `s(p)` 로 옮긴다 "
                          "(12.166). 지금은 `I <- I·a` 로 선형인데, 캡 입력 SMPS 는 "
@@ -88,6 +94,15 @@ def main() -> int:
             print("  ⚠⚠ **--sp-curves 없이 범위 표집을 켰다.** 전력을 크게 옮기면서 전류를 "
                   "선형으로만 곱하게 되어 SMPS 의 고조파 모양이 틀린다 "
                   "(충전기 63->40W 에서 h7 30%, 미니PC h1 23%)")
+    smx = None
+    if a.state_mix:
+        from src.synthesis.augmentor import STATE_MIX_PRESETS
+        smx = (STATE_MIX_PRESETS[a.state_mix]
+               if a.state_mix in STATE_MIX_PRESETS else json.loads(a.state_mix))
+        smx = {k: {int(s): float(v) for s, v in m.items()} for k, m in smx.items()}
+        print(f"  ** 상태 계층 표집 '{a.state_mix}' (13.35): "
+              + ", ".join(f"{k}=" + "/".join(f"s{s}:{v:.0%}" for s, v in sorted(m.items()))
+                          for k, m in sorted(smx.items())) + " **")
     if a.power_scale_std:
         from src.synthesis.augmentor import POWER_SCALE_STD_PRESETS
         pss = (POWER_SCALE_STD_PRESETS[a.power_scale_std]
@@ -108,7 +123,7 @@ def main() -> int:
                 recipe_mix=mix,
                 dither_even_amp=a.dither_even_amp,
                 dither_even_phase_deg=a.dither_even_phase_deg,
-                power_scale_std_map=pss, level_scramble=lvs,
+                power_scale_std_map=pss, level_scramble=lvs, state_mix=smx,
                 sp_curves=a.sp_curves, background=a.background,
                 dither_min_order=a.dither_min_order)
     return 0

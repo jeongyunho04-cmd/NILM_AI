@@ -76,6 +76,16 @@ def _parse_scramble(items):
     return out
 
 
+def _parse_state_mix(s: str):
+    """`--state-mix` 를 {가전: {상태id: 확률}} 로. 빈 문자열이면 None (13.35)."""
+    if not s:
+        return None
+    import json as _json
+    from src.synthesis.augmentor import STATE_MIX_PRESETS
+    d = STATE_MIX_PRESETS[s] if s in STATE_MIX_PRESETS else _json.loads(s)
+    return {k: {int(x): float(v) for x, v in m.items()} for k, m in d.items()}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="고정 합성 홀드아웃 평가 셋 생성")
     ap.add_argument("--out", default=str(DEFAULT_DIR))
@@ -100,6 +110,11 @@ def main() -> int:
     ap.add_argument("--level-scramble", nargs="*", default=None, metavar="APP:LO:HI",
                     help="그 가전의 전력 배율을 균등분포 [LO,HI] 로 흔든 반사실 평가 셋 "
                          "(12.64절). 예: --level-scramble beam_projector:0.64:1.42")
+    ap.add_argument("--state-mix", default="",
+                    help="창을 자를 때 **상태**를 먼저 뽑는다 (13.35). 프리셋 이름 또는 "
+                         "JSON {가전:{상태id:확률}}. **판을 견줄 때는 비워 두고 같은 "
+                         "홀드아웃을 그대로 쓴다** — 홀드아웃은 자르는 시간 구간이 달라 "
+                         "미니PC IDLE 이 자연히 47.8% 라 그 자체로 고른 잣대다.")
     a = ap.parse_args()
 
     if a.inspect:
@@ -116,6 +131,7 @@ def main() -> int:
                   ablate_pedestal_apps=a.ablate_pedestal,
                   sp_curves=a.sp_curves, background=a.background,
                   level_scramble=_parse_scramble(a.level_scramble),
+                  state_mix=_parse_state_mix(a.state_mix),
                   recipe_mix=_parse_mix(a.recipe_mix))
     return inspect(a.out)
 
