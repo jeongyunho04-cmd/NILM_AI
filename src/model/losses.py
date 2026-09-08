@@ -160,6 +160,8 @@ class NILMLoss(torch.nn.Module):
         signatures_state: Optional[torch.Tensor] = None,  # (K,S,H,2) 상태별 지문 (13.11)
         harm_even_magnitude: bool = False,              # 짝수차를 크기 공간에서 잰다 (13.11)
         even_coherent: Optional[torch.Tensor] = None,   # (K,) 짝수차 위상이 기기 속성인 기기 (13.45)
+        signatures_site: Optional[torch.Tensor] = None,      # (Nz,K,H,2) 자리별 지문 (13.59)
+        signatures_state_site: Optional[torch.Tensor] = None,  # (Nz,K,S,H,2) 자리x상태별 (13.59)
     ):
         super().__init__()
         self.register_buffer("s_i", s_i.clamp(min=1e-3))
@@ -262,6 +264,23 @@ class NILMLoss(torch.nn.Module):
         self.register_buffer("sig_state", signatures_state
                              if signatures_state is not None else torch.zeros(0))
         self.use_state_sig = signatures_state is not None
+        # ── 자리별 지문 (2026-09-08, 13.59) ────────────────────────────────
+        # 지문은 기기의 성질만이 아니다. 같은 SMPS 를 자리 D(Z≈1.19Ω)와 E(0.42Ω)에서
+        # 격리 녹화해 재면 와트당 h13 전류가 프로젝터 0.47배·충전기 0.30배·미니PC
+        # 0.65배로 **기기마다 다르게** 갈린다 (13.59.1). 뭉친 중앙값은 그 자리들의
+        # 조성이라, 자리 D 창에서 프로젝터 h13 을 +92% 과대예측했다 — 손실은 그것을
+        # **프로젝터 전력을 깎아** 메우고 40W 가 충전기로 간다 (13.58.3).
+        #
+        #     `sig_site[z]` 는 자리 z 의 지문이다. 마지막 줄은 **뭉친 지문**이라
+        #     자리를 모르는 창(`site_idx = Nz−1`)은 이전과 정확히 같이 돈다.
+        #
+        # ⚠ 창별 색인은 `tgt["site_idx"]` 로만 온다. 없으면 옛 경로 그대로다 —
+        #   1단계(`forward`)는 합성이라 이 축을 안 쓴다.
+        self.register_buffer("sig_site", signatures_site
+                             if signatures_site is not None else torch.zeros(0))
+        self.register_buffer("sig_state_site", signatures_state_site
+                             if signatures_state_site is not None else torch.zeros(0))
+        self.use_site_sig = signatures_site is not None
         # ── 짝수차는 크기 공간에서 (2026-09-06, 13.11) ─────────────────────
         # 플러그를 반대로 꽂으면 `I_h -> −(−1)^h I_h` 라 **짝수차만 180° 돈다.**
         # 드라이기 약풍의 격리 녹화 대 복합 녹화에서 h2 가 −6.63° 대 +172.60°,
@@ -465,19 +484,28 @@ class NILMLoss(torch.nn.Module):
             emag = w * err + (1.0 - w) * emag
         return torch.where(self.even_order[None, :, None].bool(), emag, err)
 
-    def _harm_pred_active(self, out, power):
+    def _harm_pred_active(self, out, power, site_idx=None):
         """활성 기기의 고조파 기여 (B,H,2).
 
         상태별 지문이 있으면 상태 혼합으로 편다 (13.11). 없으면 옛 식 그대로다 —
         `Σ_s 혼합·p_states = p_raw` 이므로 지문이 상태마다 같을 때 두 식은 같다.
+
+        `site_idx` (B,) 를 주면 **창마다** 그 자리의 지문을 골라 쓴다 (13.59).
+        `sig_site` 를 안 넣었으면 무시한다.
         """
-        if not self.use_state_sig or out.get("power_mix") is None                 or out.get("power_states") is None:
+        use_site = self.use_site_sig and site_idx is not None
+        if not self.use_state_sig or out.get("power_mix") is None \
+                or out.get("power_states") is None:
+            if use_site:
+                return torch.einsum("bk,bkhc->bhc", power, self.sig_site[site_idx])
             return torch.einsum("bk,khc->bhc", power, self.sig)
         # power = 게이트 · p_raw 이므로 게이트는 power/p_raw 로 되살린다 —
         # `power` 가 detach 등으로 손질된 판일 수 있어 out["on_logit"] 을 다시 쓰지 않는다.
         praw = out["power_raw"].clamp(min=1e-6)
         gate = (power / praw)[..., None]                       # (B,K,1)
         pw = gate * out["power_mix"] * out["power_states"]      # (B,K,S)
+        if use_site:
+            return torch.einsum("bks,bkshc->bhc", pw, self.sig_state_site[site_idx])
         return torch.einsum("bks,kshc->bhc", pw, self.sig_state)
 
     def forward(self, out: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -682,7 +710,7 @@ class NILMLoss(torch.nn.Module):
                 gw = self.harm_gw[None]
                 p_h = p_h * gw + (p_h * (1.0 - gw)).detach()
             sg = self.sig_real if self.sig_real.numel() else self.sig
-            pred = (self._harm_pred_active(out, p_h) if sg is self.sig
+            pred = (self._harm_pred_active(out, p_h, tgt.get("site_idx")) if sg is self.sig
                     else torch.einsum("bk,khc->bhc", p_h, sg))
             # ── h1 지문의 전압 보정 (12.151) ──────────────────────────────────
             # 유효전력의 정의에서 **항등식**이 나온다. P = V1·I1·cos(phi1) 이므로

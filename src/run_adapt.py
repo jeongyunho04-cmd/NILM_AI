@@ -89,10 +89,11 @@ def real_sample_weights(p_observed, mode: str, boost: float = 4.0):
 
 
 def real_targets(b, dev, human=None, qobs=None, hoff=None, vsc=None, vrms=None,
-                 prefm=None):
+                 prefm=None, site=None):
     """`human` 은 `RealWindows.human(idx)` 의 (on, mask). 없으면 기존과 같다.
 
     `qobs` 는 `RealWindows.reactive(idx)` — 무효전력 보존 항이 쓴다 (12.133).
+    `site` 는 창별 자리 색인 — `L_harm` 이 그 자리의 지문을 고른다 (13.59).
     """
     fine, wide, pobs, oh, pn = [torch.from_numpy(np.ascontiguousarray(x)).to(dev) for x in b]
     tg = {"p_observed": pobs, "obs_harm": oh, "p_noise": pn}
@@ -106,6 +107,8 @@ def real_targets(b, dev, human=None, qobs=None, hoff=None, vsc=None, vrms=None,
         tg["v_rms"] = torch.from_numpy(np.ascontiguousarray(vrms)).to(dev)
     if prefm is not None:     # 창별 참값 마스크 (12.159)
         tg["pref_mask"] = torch.from_numpy(np.ascontiguousarray(prefm)).to(dev)
+    if site is not None:      # 자리별 지문 색인 (13.59)
+        tg["site_idx"] = torch.from_numpy(np.ascontiguousarray(site)).long().to(dev)
     if human is not None:
         ho, hm = [torch.from_numpy(np.ascontiguousarray(x)).to(dev) for x in human]
         tg["human_on"], tg["human_mask"] = ho, hm
@@ -219,6 +222,12 @@ def main() -> int:
                     help="상태별 고조파 지문 (13.11). **1단계와 반드시 같이 켜야 한다** — "
                          "한쪽만 켜면 2단계가 1단계의 배분을 되돌린다. 드라이기 약풍(반파)과 "
                          "강풍(순저항)처럼 한 기기의 상태들이 고조파 모양이 다를 때 필요하다.")
+    ap.add_argument("--sig-site", action="store_true",
+                    help="**자리별** 고조파 지문 (13.59). 실측 갈래의 `L_harm` 이 창마다 그 "
+                         "자리(D/E)의 격리 녹화로 세운 지문을 쓴다. 뭉친 지문은 프로젝터 "
+                         "격리 3개 중 2개가 자리 E 라 자리 D 창의 h13 을 +92% 과대예측하고, "
+                         "손실이 그것을 프로젝터 전력을 깎아 메운다 (13.58.3). 자리 녹화가 "
+                         "한쪽뿐인 기기는 뭉친 지문 그대로다 — SMPS 3종만 갈린다.")
     ap.add_argument("--harm-odd-only", action="store_true",
                     help="L_harm 에서 짝수차를 뺀다 (12.75절 — 계획만 있던 절이고 실행 기록은 "
                          "12.78, 단일 변수 재측정은 12.75.5). **2단계가 실측에서 도는 것이므로 "
@@ -565,6 +574,21 @@ def main() -> int:
         from src.model.net import harmonic_signatures_by_state
         sig_state, _used = harmonic_signatures_by_state(pool, apps)
         print(f"  ** 상태별 지문 (13.11): {int(_used.sum())}개 상태를 따로 맞췄다 **")
+    # ── 자리별 지문 (13.59) ────────────────────────────────────────────────
+    # 실측 갈래만 창별로 고른다. 합성 갈래(`crit(...)`)는 `site_idx` 를 안 주므로
+    # 뭉친 지문 그대로 돌아 **대조가 한 축만 달라진다**.
+    SIG_BANK = SIG_BANK_ST = None
+    if a.sig_site:
+        if a.sig_insitu or a.harm_vnorm:
+            raise SystemExit("--sig-site 는 --sig-insitu·--harm-vnorm 과 같이 못 쓴다 "
+                             "— 그것들은 뭉친 `sig` 를 고치는데 자리 지문은 따로 세운다")
+        from src.model.sig_site import SITES, signature_bank
+        SIG_BANK, SIG_BANK_ST, _su = signature_bank(pool, apps)
+        print(f"  ** 자리별 지문 (13.59): 따로 맞춘 칸 {int(_su.sum())}개 **")
+        for _si, _s in enumerate(SITES):
+            _named = [apps[j] for j in range(len(apps)) if _su[_si, j]]
+            print(f"     자리 {_s}: {_named}")
+        print(f"     나머지 기기와 자리를 모르는 창은 뭉친 지문 그대로 (줄 {len(SITES)})")
     del pool
 
     if a.w_consq > 0:
@@ -664,6 +688,9 @@ def main() -> int:
         noise_sig=torch.from_numpy(nz), harm_scale=torch.from_numpy(hsc),
         harm_odd_only=a.harm_odd_only,
         signatures_state=(torch.from_numpy(sig_state) if sig_state is not None else None),
+        signatures_site=(None if SIG_BANK is None else torch.from_numpy(SIG_BANK)),
+        signatures_state_site=(None if SIG_BANK_ST is None
+                               else torch.from_numpy(SIG_BANK_ST)),
         harm_even_magnitude=a.harm_even_magnitude,
         even_coherent=(torch.tensor(
             [1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
@@ -792,6 +819,15 @@ def main() -> int:
             for x, v, stems, frac in _named:
                 print(f"     {x}: {v:.2f}W, 파일 {list(stems)} "
                       f"-> 적응 창의 {frac*100:.1f}%")
+    # ── 창별 자리 색인 (13.59) ───────────────────────────────────────────
+    SITEIDX = None
+    if a.sig_site:
+        from src.model.sig_site import SITES, bank_index
+        SITEIDX = bank_index(rw.stem)
+        _cnt = np.bincount(SITEIDX, minlength=len(SITES) + 1)
+        print("  ** 창별 자리: "
+              + ", ".join(f"{s} {int(_cnt[i])}" for i, s in enumerate(SITES))
+              + f", 모름 {int(_cnt[len(SITES)])} **")
     VSC = None
     if a.harm_vscale > 0:
         v = np.asarray(rw.v_observed, np.float32)
@@ -844,7 +880,8 @@ def main() -> int:
                                     HOFF[ridx] if HOFF is not None else None,
                                     VSC[ridx] if VSC is not None else None,
                                     VRMS[ridx] if VRMS is not None else None,
-                                    PREFM[ridx] if PREFM is not None else None)
+                                    PREFM[ridx] if PREFM is not None else None,
+                                    SITEIDX[ridx] if SITEIDX is not None else None)
         sidx = np.sort(rng.choice(len(cache), a.batch, replace=False))
         sb_ = tuple(torch.from_numpy(x) for x in cache.batch(sidx))
         sf, swd, stg = to_targets(sb_, dev)

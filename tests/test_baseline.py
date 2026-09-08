@@ -307,3 +307,57 @@ def test_fine_dropout_is_off_at_inference_and_masks_only_fine():
     g_wide = sum(p.grad.abs().sum().item() for p in m.wide.parameters())
     assert g_fine == 0.0, f"가려진 창에서 세밀에 기울기가 갔습니다: {g_fine}"
     assert g_wide > 0.0, "광역에 기울기가 안 갔습니다"
+
+
+def test_site_signature_bank_falls_back_exactly_and_keeps_states():
+    """자리별 지문 (13.59) — 되돌림이 옛 경로를 **정확히** 재현하고 상태 축을 안 지운다.
+
+    13.59 에서 처방 자체는 반증됐지만(자리 조건화가 자리 D 프로젝터를 더 깎았다)
+    배관은 남아 있다. 두 가지가 깨지면 조용히 틀린 지문으로 학습한다:
+
+      ① `site_idx` 를 **뭉친 줄**로 주면 `sig_site` 없는 손실과 값이 같아야 한다
+      ② 자리 지문이 상태별 지문을 덮어써서는 안 된다 — 처음 판이 프로젝터 상태 1 을
+         고전력 지문으로 갈아버렸고 와트당 h13 이 3.8 mA/W 어긋났다 (13.11 형 결함)
+    """
+    import numpy as np
+    import torch
+    from src.model.losses import LossWeights, NILMLoss
+
+    apps = ["a", "b"]
+    K, S, H = len(apps), 3, 15
+    rng = np.random.default_rng(0)
+    sig = rng.normal(size=(K, H, 2)).astype(np.float32)
+    sig_state = rng.normal(size=(K, S, H, 2)).astype(np.float32)
+    # 자리 묶음: 줄 0·1 은 아무 값, **마지막 줄이 뭉친 지문**이라는 규약을 검정한다
+    bank = np.concatenate([rng.normal(size=(2, K, H, 2)).astype(np.float32), sig[None]], 0)
+    bank_st = np.concatenate(
+        [rng.normal(size=(2, K, S, H, 2)).astype(np.float32), sig_state[None]], 0)
+
+    kw = dict(s_i=torch.ones(K), signatures=torch.from_numpy(sig),
+              signatures_state=torch.from_numpy(sig_state),
+              weights=LossWeights(harm=0.1, cons=0.0, over=0.0))
+    old = NILMLoss(**kw)
+    new = NILMLoss(signatures_site=torch.from_numpy(bank),
+                   signatures_state_site=torch.from_numpy(bank_st), **kw)
+
+    B = 8
+    out = {"power": torch.rand(B, K), "power_raw": torch.rand(B, K) + 0.5,
+           "power_mix": torch.softmax(torch.randn(B, K, S), -1),
+           "power_states": torch.rand(B, K, S),
+           "standby": torch.rand(B, K) * 0.01,
+           "on_logit": torch.randn(B, K), "plugged_logit": torch.randn(B, K)}
+    tgt = {"p_observed": torch.rand(B) * 100 + 10, "obs_harm": torch.randn(B, H, 2),
+           "p_noise": torch.rand(B), "harm_offset": None}
+
+    a = float(old.unlabeled(out, tgt, w_harm=1.0)["harm"])
+    b = float(new.unlabeled(dict(out), dict(tgt, site_idx=torch.full((B,), 2)),
+                            w_harm=1.0)["harm"])
+    assert a == b, f"뭉친 줄로 보냈는데 값이 다르다: {a} vs {b}"
+    c = float(new.unlabeled(dict(out), dict(tgt, site_idx=torch.zeros(B, dtype=torch.long)),
+                            w_harm=1.0)["harm"])
+    assert c != a, "자리 줄을 골랐는데 값이 안 바뀌었다 — 색인이 안 먹는다"
+
+    # ② 상태 축 보존. 자리 지문은 뭉친 상태별 지문에 **자리 비**로 걸려야 하므로
+    #    한 자리 안에서 상태들이 여전히 서로 달라야 한다.
+    from src.model.sig_site import SITES
+    assert bank.shape[0] == len(SITES) + 1, "묶음의 마지막 줄이 뭉친 지문이어야 한다"

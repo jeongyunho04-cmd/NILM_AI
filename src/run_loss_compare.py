@@ -45,14 +45,28 @@ BIG = ("electiric_kettle", "oven", "hotplate", "hair_dryer")
 TRUE_W = {"beam_projector": 43.0, "laptop_charger": 39.0, "minipc": 8.0}
 
 
-def build_loss(apps: Sequence[str], dev: str, harm_weight: str = "inv_h2") -> NILMLoss:
-    """`run_adapt` 와 같은 지문·척도로 손실을 짓는다."""
+def build_loss(apps: Sequence[str], dev: str, harm_weight: str = "inv_h2",
+               sig_site: str = "") -> NILMLoss:
+    """`run_adapt` 와 같은 지문·척도로 손실을 짓는다.
+
+    `sig_site` 를 주면 그 **자리의 격리 녹화만으로** 지문을 세운다 (13.59). 여기서
+    재는 창은 전부 한 자리이므로 창별 선택이 필요 없다 — 손실 전체를 그 자리로 바꾼다.
+    """
     from src.synthesis.segment_pool import SegmentPool
+    from src.model.sig_site import SITES, site_signatures, site_signatures_by_state
     pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
     sig_state, _ = harmonic_signatures_by_state(pool, apps)
+    sig = harmonic_signatures(pool, apps)
+    if sig_site:
+        si = SITES.index(sig_site)
+        ss, used = site_signatures(pool, apps)
+        sig = ss[si]
+        sig_state = site_signatures_by_state(pool, apps)[0][si]
+        print(f"  ** 자리 {sig_site} 지문: 따로 맞춘 기기 "
+              f"{[apps[j] for j in range(len(apps)) if used[si, j]]} **")
     return NILMLoss(
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
-        signatures=torch.from_numpy(harmonic_signatures(pool, apps)),
+        signatures=torch.from_numpy(sig),
         standby_sig=torch.from_numpy(standby_signatures(pool, apps)),
         noise_sig=torch.from_numpy(noise_signature(pool)),
         harm_scale=torch.from_numpy(harmonic_scales(pool, apps)),
@@ -71,13 +85,15 @@ def main() -> None:
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--stems", nargs="+", default=["test_3", "test_4"])
     ap.add_argument("--harm-weight", default="inv_h2")
+    ap.add_argument("--sig-site", default="", choices=["", "D", "E"],
+                    help="그 자리의 격리 녹화만으로 지문을 세운다 (13.59)")
     ap.add_argument("--w-cons", type=float, default=0.1)
     ap.add_argument("--w-harm", type=float, default=4.0)
     ap.add_argument("--w-hedge", type=float, default=0.2)
     a = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     m, apps, _ = load_model(a.ckpt, dev)
-    crit = build_loss(apps, dev, a.harm_weight)
+    crit = build_loss(apps, dev, a.harm_weight, a.sig_site)
     js = [apps.index(x) for x in SMPS]
     jb = [apps.index(x) for x in BIG]
     ev = load_events()
@@ -135,7 +151,11 @@ def main() -> None:
     # 직접 계산한다. 13.58.4 가 이걸로 h1~h7 과 h9~h15 의 반전을 찾았다.
     from src.synthesis.segment_pool import SegmentPool
     pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
-    sig = harmonic_signatures(pool, apps)
+    if a.sig_site:
+        from src.model.sig_site import SITES, site_signatures
+        sig = site_signatures(pool, apps)[0][SITES.index(a.sig_site)]
+    else:
+        sig = harmonic_signatures(pool, apps)
     nzs = noise_signature(pool)
     S = {x: sig[apps.index(x), :, 0] + 1j * sig[apps.index(x), :, 1] for x in SMPS}
     OH = []
