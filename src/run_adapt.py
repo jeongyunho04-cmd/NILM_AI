@@ -42,7 +42,8 @@ from src.evaluation import load_holdout, resistive_confusion, score_appliances, 
 from src.evaluation.power_ref import REFERENCE_W, REFERENCE_W_STEMWISE
 from src.evaluation.real_events import load_events, score_absent, score_events, score_on_off
 from src.evaluation.sealing import is_sealed
-from src.model.losses import LossWeights, NILMLoss, build_state_scales
+from src.model.losses import (LossWeights, NILMLoss, PHASE_COHERENT_EVEN,
+                             build_state_scales)
 from src.model.postproc import HALFWAVE_OHM, RESISTIVE_OHM
 from src.model.inputs import (FINE_CYCLES, FINE_LAYOUT, LEGACY_FINE_CHANNELS,
                              TARGET_LOOKAHEAD, WIDE_CHANNELS)
@@ -205,6 +206,11 @@ def main() -> int:
                          "기본 none 은 이전과 동일하다")
     ap.add_argument("--smps-boost", type=float, default=4.0,
                     help="--real-weight smps-boost 의 배수")
+    ap.add_argument("--harm-even-by-class", action="store_true",
+                    help="짝수차 위상을 기기 부류별로 살린다 (13.45). "
+                         "--harm-even-magnitude 와 같이 써야 뜻이 있다 — 위상이 뭉치는 "
+                         "기기(오븐·포트·핫플·드라이기)가 그 창의 짝수차 예측 크기에서 "
+                         "차지하는 몫만큼 복소 오차를 되살린다")
     ap.add_argument("--harm-even-magnitude", action="store_true",
                     help="L_harm 에서 **짝수차만 크기 공간**으로 잰다 (13.11). 플러그를 "
                          "반대로 꽂으면 짝수차가 180° 도므로(홀수차는 안 돈다) 짝수차 위상은 "
@@ -654,6 +660,9 @@ def main() -> int:
         harm_odd_only=a.harm_odd_only,
         signatures_state=(torch.from_numpy(sig_state) if sig_state is not None else None),
         harm_even_magnitude=a.harm_even_magnitude,
+        even_coherent=(torch.tensor(
+            [1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
+            dtype=torch.float32) if a.harm_even_by_class else None),
         harm_max_order=a.harm_max_order,
         harm_grad_balance=a.harm_grad_balance,
         harm_deadzone=a.harm_deadzone, harm_weight=a.harm_weight,
@@ -899,6 +908,9 @@ def main() -> int:
                 "prior_kappa": ck.get("prior_kappa", 0.0),
                 "prior_beta": ck.get("prior_beta", 0.5),
                 "wide_summary": ck.get("wide_summary", False),
+                # 13.47: 이 키를 빠뜨리면 적응 체크포인트를 **못 읽는다** —
+                # `load_model` 이 wide_target=False 로 지어 trunk 701 vs 637 로 어긋난다.
+                "wide_target": ck.get("wide_target", False),
                 "periodicity": ck.get("periodicity", False),
                 "fine_dropout": ck.get("fine_dropout", 0.0),
                 # 짝수차 배제 (12.77). 부모 체크포인트 값을 그대로 물려받는다.

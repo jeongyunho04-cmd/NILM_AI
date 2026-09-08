@@ -42,7 +42,8 @@ from src.model.inputs import (ZERO_EVEN_HARMONICS, FINE_CYCLES, FINE_LAYOUT,
                              TARGET_LOOKAHEAD, WIDE_CHANNELS, build_inputs)
 from src.synthesis.dataset import chunk_seed
 from src.model.traincache import CachedWindows
-from src.model.losses import LossWeights, NILMLoss, build_state_scales
+from src.model.losses import (LossWeights, NILMLoss, PHASE_COHERENT_EVEN,
+                             build_state_scales)
 from src.model.net import (
     NILMNet, appliance_state_counts, harmonic_scales, harmonic_signatures,
     noise_signature, standby_signatures,
@@ -112,6 +113,54 @@ class SynthBatchDataset(Dataset):
         fine, wide = build_inputs(xs)
         return tuple(torch.from_numpy(a) for a in
                      (fine, wide, yp, yo, ypl, ys, yst, oh, pn, pobs))
+
+
+def cache_index_plan(n: int, batch_size: int, n_batches: int,
+                     rng, block_windows: int = 24_000):
+    """`CachedWindows.iter_batches` 와 **똑같은 색인 열**을 만든다 (I/O 없이).
+
+    같은 `rng` 를 같은 차례로 소모하므로, 이 계획으로 뽑은 배치는 옛 경로가 낸
+    배치와 **정확히 같다.** 동치는 `tests` 의 `test_cache_index_plan_matches_iter_batches`
+    가 못박는다. 저쪽을 고치면 이쪽도 같이 고쳐야 한다.
+    """
+    n_blocks = max(1, (n + block_windows - 1) // block_windows)
+    plan, made = [], 0
+    while made < n_batches:
+        for b in rng.permutation(n_blocks):
+            lo = int(b) * block_windows
+            hi = min(lo + block_windows, n)
+            if hi - lo < batch_size:
+                continue
+            order = lo + rng.permutation(hi - lo)
+            for k in range(0, len(order) - batch_size + 1, batch_size):
+                plan.append(order[k:k + batch_size])
+                made += 1
+                if made >= n_batches:
+                    return plan
+    return plan
+
+
+class CacheBatchDataset(Dataset):
+    """미리 정한 색인으로 캐시에서 배치를 뽑는다 (13.47).
+
+    `batch_size=None` · `shuffle=False` 로 쓴다 — DataLoader 가 순서를 지키므로
+    워커를 붙여도 배치 열이 그대로다. 윈도우는 spawn 이라 memmap 손잡이가 pickle 이
+    안 되므로 **워커마다 처음 쓸 때** 연다.
+    """
+
+    def __init__(self, cache_dir: str, plan):
+        self.cache_dir = str(cache_dir)
+        self.plan = plan
+        self._c = None
+
+    def __len__(self) -> int:
+        return len(self.plan)
+
+    def __getitem__(self, i: int):
+        if self._c is None:
+            from src.model.traincache import CachedWindows
+            self._c = CachedWindows(self.cache_dir)
+        return tuple(torch.from_numpy(x) for x in self._c.batch(self.plan[i]))
 
 
 def to_targets(batch, dev):
@@ -216,12 +265,22 @@ def main() -> int:
     ap.add_argument("--per-state-scale", dest="per_state_scale",
                     action=argparse.BooleanOptionalAction, default=True,
                     help="손실 척도를 (기기,상태)별로 (12.9.9절). --no-per-state-scale 로 끈다")
+    ap.add_argument("--cache-workers", type=int, default=0, metavar="N",
+                    help="캐시 배치를 뽑는 별도 프로세스 수 (13.47). 0 이면 메인 스레드가 "
+                         "직접 훑는다(옛 동작). 배치 **색인 열은 그대로**라 결과가 바뀌지 "
+                         "않는다 — 자료 공급을 계산과 겹치게 할 뿐이다. 스레드는 numpy "
+                         "고급 색인이 GIL 을 안 놓아 소용이 없었다(0.95배)")
     ap.add_argument("--block-windows", type=int, default=24_000,
                     help="캐시 블록 셔플 단위. 작을수록 메모리가 덜 든다 (24000 = 약 1.1GB)")
     ap.add_argument("--off-detach-praw", action="store_true",
                     help="**꺼진 창에서 `p_raw` 에 경사를 주지 않는다** (13.11). 상태 전력 머리가 "
                          "죽는 것을 막는다 — 드라이기 HIGH 가 정확히 그렇게 0W 가 됐다. "
                          "게이트가 꺼진 창을 0 으로 만드는 일을 맡는다.")
+    ap.add_argument("--harm-even-by-class", action="store_true",
+                    help="짝수차 위상을 기기 부류별로 살린다 (13.45). "
+                         "--harm-even-magnitude 와 같이 써야 뜻이 있다 — 위상이 뭉치는 "
+                         "기기(오븐·포트·핫플·드라이기)가 그 창의 짝수차 예측 크기에서 "
+                         "차지하는 몫만큼 복소 오차를 되살린다")
     ap.add_argument("--harm-even-magnitude", action="store_true",
                     help="L_harm 에서 **짝수차만 크기 공간**으로 잰다 (13.11). 플러그를 "
                          "반대로 꽂으면 짝수차가 180° 도므로(홀수차는 안 돈다) 짝수차 위상은 "
@@ -370,6 +429,9 @@ def main() -> int:
         off_detach_praw=a.off_detach_praw,
         signatures_state=(torch.from_numpy(sig_state) if a.state_signatures else None),
         harm_even_magnitude=a.harm_even_magnitude,
+        even_coherent=(torch.tensor(
+            [1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
+            dtype=torch.float32) if a.harm_even_by_class else None),
         weights=LossWeights(harm=a.w_harm, cons=a.w_cons, over=a.w_over,
                             state_power=a.w_state_power),
         s_state=(build_state_scales(apps, [S_I[x] for x in apps])
@@ -419,14 +481,35 @@ def main() -> int:
 
     rng = np.random.default_rng(a.seed)
 
+    # 13.47: 캐시 경로의 자료 공급을 계산과 겹친다. 계획을 **한 번에** 만들고
+    # DataLoader 하나로 전 epoch 을 돈다 — epoch 마다 워커를 다시 띄우면 윈도우
+    # spawn 이 1~2초라 300 epoch 에서 5~10분을 잃는다.
+    cache_iter = None
+    if cache is not None and a.cache_workers > 0:
+        _plan = cache_index_plan(len(cache), a.batch, n_batches * a.epochs, rng,
+                                 block_windows=a.block_windows)
+        cache_iter = iter(DataLoader(
+            CacheBatchDataset(a.cache, _plan), batch_size=None, shuffle=False,
+            num_workers=a.cache_workers, persistent_workers=True, prefetch_factor=4,
+            pin_memory=(dev == "cuda")))
+        print(f"  ** 캐시 배치를 워커 {a.cache_workers}개로 미리 뽑는다 (13.47) — "
+              f"색인 열은 옛 경로와 동일 **")
+
     def epoch_batches():
         """캐시면 블록 셔플로 뽑고, 아니면 DataLoader 를 돈다.
 
         전역 셔플을 쓰면 13GB 캐시 전체가 작업집합에 올라와 물리 메모리 여유가
         0 이 된다. 블록 셔플이면 동시에 손대는 구간이 block_windows 로 제한된다.
+
+        `--cache-workers` 가 0 보다 크면 같은 색인 열을 별도 프로세스가 미리 뽑는다
+        (13.47). 배치 내용은 바뀌지 않는다.
         """
         if cache is None:
             yield from dl
+            return
+        if cache_iter is not None:
+            for _ in range(n_batches):
+                yield next(cache_iter)
             return
         for arrays in cache.iter_batches(a.batch, n_batches, rng,
                                          block_windows=a.block_windows):

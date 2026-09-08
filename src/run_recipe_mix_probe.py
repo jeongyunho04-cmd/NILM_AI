@@ -114,6 +114,23 @@ PRESETS: Dict[str, Dict[str, float]] = {
         "unplugged_baseline": 0.05,      # 고정
         "smps_overlap": 0.26,
     },
+    # 13.48: `smps_hi_fix` 에서 **저항 겹침을 5 -> 12%** 로 올린다. 재원은
+    # standby_only(14->10) 와 random_uniform(14->11).
+    #   실측 저항2+ 31.9% 인데 합성이 11.7% 였다 (`resistive_overlap` 이 5% 뿐).
+    #   test_5 의 포트 창(저항 3~4종 동시)이 학습 분포 밖에 있던 것이 그 결과다.
+    # `smps_overlap` 비중은 건드리지 않는다 — 그 안은 이미 SMPS2+ 100% 로 꽉 찼고,
+    # 모자란 SMPS 동시성은 저항 레시피의 `RESISTIVE_SMPS_BACKGROUND` 로 채운다.
+    "smps_hi_res3": {
+        "smps_overlap": 0.26,
+        "standby_only": 0.10,
+        "high_low_mixed": 0.14,
+        "random_uniform": 0.11,
+        "high_power_resistive": 0.10,
+        "random_realistic": 0.08,
+        "unplugged_baseline": 0.05,
+        "resistive_overlap": 0.12,
+        "low_load_among_standby": 0.04,
+    },
     "smps_hi": {
         "random_realistic": 0.10,
         "random_uniform": 0.10,

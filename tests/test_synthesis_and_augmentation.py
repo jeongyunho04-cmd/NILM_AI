@@ -1512,3 +1512,48 @@ def test_state_fill_rejects_too_short_runs():
     aug = DataAugmentor()
     np.random.seed(0)
     assert aug._state_fill(state, on, win, 1) is None
+
+
+def test_cache_index_plan_matches_iter_batches():
+    """로더 작업자 경로는 **색인 열을 바꾸지 않는다** (13.47).
+
+    `run_train_cnn.cache_index_plan` 이 `CachedWindows.iter_batches` 와 같은 순서로
+    같은 난수를 소모해야, `--cache-workers` 를 켜도 학습이 그대로다. 둘 중 하나만
+    고치면 v21 이 v19·v20 과 비교 불가가 되므로 여기서 못박는다.
+
+    캐시가 없어도 도는 시험이다 — 색인 논리만 재현해 견준다.
+    """
+    import numpy as np
+    from src.run_train_cnn import cache_index_plan
+
+    def reference(n, batch_size, n_batches, rng, block_windows):
+        """`CachedWindows.iter_batches` 의 색인 부분 그대로 (traincache.py)."""
+        n_blocks = max(1, (n + block_windows - 1) // block_windows)
+        out, made = [], 0
+        while made < n_batches:
+            for b in rng.permutation(n_blocks):
+                lo = int(b) * block_windows
+                hi = min(lo + block_windows, n)
+                if hi - lo < batch_size:
+                    continue
+                order = lo + rng.permutation(hi - lo)
+                for k in range(0, len(order) - batch_size + 1, batch_size):
+                    out.append(order[k:k + batch_size])
+                    made += 1
+                    if made >= n_batches:
+                        return out
+        return out
+
+    for n, bs, nb, bw in ((300_000, 512, 40, 24_000), (50_000, 256, 25, 8_000),
+                          (9_000, 128, 30, 24_000)):
+        a = cache_index_plan(n, bs, nb, np.random.default_rng(7), block_windows=bw)
+        b = reference(n, bs, nb, np.random.default_rng(7), bw)
+        assert len(a) == len(b) == nb, f"배치 수가 다릅니다: {len(a)} vs {len(b)}"
+        for i, (x, y) in enumerate(zip(a, b)):
+            assert np.array_equal(x, y), f"n={n} 배치 {i} 의 색인이 다릅니다"
+        # 난수 소모량도 같아야 뒤따르는 난수가 안 어긋난다
+        r1, r2 = np.random.default_rng(7), np.random.default_rng(7)
+        cache_index_plan(n, bs, nb, r1, block_windows=bw)
+        reference(n, bs, nb, r2, bw)
+        assert np.array_equal(r1.integers(0, 2**31, 4), r2.integers(0, 2**31, 4)), \
+            f"n={n} 에서 rng 소모량이 다릅니다"

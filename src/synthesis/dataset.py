@@ -89,7 +89,22 @@ DEFAULT_RECIPE_MIX: Dict[str, float] = {
 # 포트는 그 창의 활성 후보에서 빼서 사전확률이 오히려 내려가게 한다.
 RESISTIVE_OVERLAP_PREFER = ("oven", "hotplate")
 RESISTIVE_OVERLAP_PREFER_P = 0.6
-RESISTIVE_OVERLAP_EXCLUDE = ("electiric_kettle",)
+#: 저항 겹침에서 **3대**를 켤 확률 (13.48). SMPS 쪽 `SMPS_OVERLAP_TRIO_P` 의
+#: 저항 판이다. 실측 test_5 는 넷이 동시라 3대도 모자라지만, 4kW 한도와
+#: 통전율(오븐 25%·핫플 45%) 때문에 3대부터 시작한다.
+RESISTIVE_OVERLAP_TRIO_P = 0.4
+#: 저항 창에 **함께 켤 SMPS 대수**(0/1/2/3)의 확률 (13.48).
+#: `smps_overlap` 이 `p_resistive` 로 저항 배경을 켜는 것의 반대다. 지금까지
+#: 저항 레시피 창에는 SMPS 가 **0%** 였는데, 실측은 SMPS1+ 86.5% · 2+ 58.5% ·
+#: 3+ 26.2% 다. 아래 값은 각각 85% / 55% / 20% 를 준다.
+RESISTIVE_SMPS_BACKGROUND = (0.15, 0.30, 0.35, 0.20)
+#: 저항 겹침 창에서 **활성 후보에서 뺄** 기기.
+#: 13.48: 비었다. 옛 값 `("electiric_kettle",)` 의 근거는 "실측 6파일 전부
+#: 전기포트가 없으므로" 였는데, 그것은 **옛 계측기 자료** 이야기다. 새 자료는
+#: test_2(158창)·test_5(188창) 둘 다 포트가 있고, test_5 에서는 포트가
+#: 오븐·핫플·드라이기와 **동시에** 켜져 3241W 까지 간다. 그 조합을 학습에서
+#: 빼 놓고 실측에서 맞기를 바랄 수 없다.
+RESISTIVE_OVERLAP_EXCLUDE: tuple = ()
 
 # smps_overlap 에서 2대가 아니라 **3대**를 켤 확률 (2026-08-25, 12.88.4 의 1번).
 # 실측(test_5/7/8)은 SMPS≥2 가 시간의 79%, 3종 동시가 37% 다 - 겹치는 시간의
@@ -138,7 +153,7 @@ class NILMBatchGenerator:
         self,
         segment_pool: SegmentPool,
         window_size_cycles: int = 600,  # 기본 10초 윈도우
-        max_concurrent_appliances: int = 3,
+        max_concurrent_appliances: int = 4,
         include_power_channels: bool = True,
         target_mode: str = "seq2point",  # "seq2point"(중앙 시점) 또는 "seq2seq"(전 구간)
         recipe_mix: Optional[Dict[str, float]] = None,
@@ -193,6 +208,7 @@ class NILMBatchGenerator:
             sample = self.synthesizer.synthesize_high_power_window(
                 self.window_size, compute_gt_harmonics=gt_h,
                 target_lookahead_cycles=self.target_lookahead_cycles,
+                p_smps=RESISTIVE_SMPS_BACKGROUND,
             )
         elif recipe == "resistive_overlap":
             # 쌍을 실측 구성 쪽으로 기울인다 (12.38). 총량(5%)은 그대로 두므로
@@ -203,6 +219,8 @@ class NILMBatchGenerator:
                 self.window_size, compute_gt_harmonics=gt_h,
                 target_lookahead_cycles=self.target_lookahead_cycles,
                 pair=use, exclude_active=RESISTIVE_OVERLAP_EXCLUDE,
+                p_trio=RESISTIVE_OVERLAP_TRIO_P,
+                p_smps=RESISTIVE_SMPS_BACKGROUND,
             )
         elif recipe == "smps_overlap":
             sample = self.synthesizer.synthesize_smps_overlap_window(

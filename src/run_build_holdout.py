@@ -110,6 +110,10 @@ def main() -> int:
     ap.add_argument("--level-scramble", nargs="*", default=None, metavar="APP:LO:HI",
                     help="그 가전의 전력 배율을 균등분포 [LO,HI] 로 흔든 반사실 평가 셋 "
                          "(12.64절). 예: --level-scramble beam_projector:0.64:1.42")
+    ap.add_argument("--couple-ext", action="store_true",
+                    help="결합 델타의 Σ 에 **비SMPS 전류**를 넣는다 (13.45). 지금은 SMPS 3종만 "
+                         "더해서 오븐 5.2A·에어컨 h3 1.44A 가 빠져 있고, D 에서 그 강하가 "
+                         "V_h3 자체보다 크다")
     ap.add_argument("--carrier-on", nargs="*", default=None, metavar="APP",
                     help="캐리어 상태를 **세션으로** 본다 (13.40). 인자 없이 주면 오븐. "
                          "**학습 캐시와 반드시 같이 줘야 한다** — 한쪽만 주면 오븐 라벨의 "
@@ -138,6 +142,7 @@ def main() -> int:
                   state_mix=_parse_state_mix(a.state_mix),
                   carrier_apps=(None if a.carrier_on is None
                                 else (tuple(a.carrier_on) or ("oven",))),
+                  couple_ext=a.couple_ext,
                   recipe_mix=_parse_mix(a.recipe_mix))
     return inspect(a.out)
 

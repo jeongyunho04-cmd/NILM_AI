@@ -87,6 +87,15 @@ def build_state_scales(appliances: Sequence[str], s_i: Sequence[float],
     return out
 
 
+#: 짝수차 위상이 **기기 속성인** 기기 (13.45). 격리 녹화에서 위상 뭉침
+#: R = |E[e^{i(∠I2 − 2∠I1)}]| 을 재어 갈랐다:
+#:     오븐 0.99~1.00 · 포트 0.90 · 핫플 0.60~0.64 · 드라이기 0.54   <- 여기
+#:     프로젝터 0.16~0.43 · 충전기 0.13~0.24 · 미니PC 0.12~0.37      <- 난수
+#:     에어컨 0.34 (애매) · 선풍기 R 0.82 인데 |I2| 0.28mA = 잡음 바닥의 1.2배
+#: 같은 기기 파일 간 Δ∠h2 는 오븐 +3°·핫플 +8° 로 안정하고 SMPS 는 +6~+147° 로
+#: 흩어진다 — 플러그 방향(0° 또는 180°)이 아니라 **낮은 R 때문에 난수**였던 것이다.
+PHASE_COHERENT_EVEN = ("oven", "electiric_kettle", "hotplate", "hair_dryer")
+
 #: 정답 배분에서도 남는 차수별 잔차의 중앙값 (손실 단위, 2026-09-01 측정).
 #: 사람 라벨 5파일의 60초 창 55개에서 `min_{P>=0} ‖y − A_정답·P‖` 의 잔차다.
 #: **이것이 순방향 모델의 오차이고, `L_harm` 이 벌하면 안 되는 양이다.**
@@ -147,6 +156,7 @@ class NILMLoss(torch.nn.Module):
         off_detach_praw: bool = False,                  # 꺼진 창에서 p_raw 를 detach (13.11)
         signatures_state: Optional[torch.Tensor] = None,  # (K,S,H,2) 상태별 지문 (13.11)
         harm_even_magnitude: bool = False,              # 짝수차를 크기 공간에서 잰다 (13.11)
+        even_coherent: Optional[torch.Tensor] = None,   # (K,) 짝수차 위상이 기기 속성인 기기 (13.45)
     ):
         super().__init__()
         self.register_buffer("s_i", s_i.clamp(min=1e-3))
@@ -255,6 +265,12 @@ class NILMLoss(torch.nn.Module):
         # h4 가 −177.52° 대 −0.74° 였고 홀수차는 10.7° 안이었다. 크기는 같다.
         # 즉 짝수차 위상은 기기 속성이 아니다 — 복소로 재면 정답 배분에 벌점이 간다.
         self.harm_even_mag = bool(harm_even_magnitude)
+        #: 13.45. 있으면 짝수차 오차를 **창마다** 섞는다 — 위상이 뭉치는 기기가
+        #: 그 창의 짝수차 예측 크기에서 차지하는 몫만큼 복소 오차를 쓴다.
+        #: None 이면 옛 동작 그대로(짝수차 전부 크기 공간).
+        self.register_buffer("even_coherent",
+                             even_coherent if even_coherent is not None
+                             else torch.zeros(0))
         self.register_buffer("even_order",
                              torch.tensor([1.0 if (i + 1) % 2 == 0 else 0.0 for i in range(h)],
                                           dtype=torch.float32))
@@ -407,12 +423,33 @@ class NILMLoss(torch.nn.Module):
         self.standby_delta = standby_delta
 
 
-    def _harm_err(self, pred, obs):
+    def _coherent_even_w(self, power):
+        """창마다 **짝수차 위상이 기기 속성인 기기**가 차지하는 예측 크기 몫 (B,) (13.45).
+
+        기기별 크기를 더한다 — 페이저 합이 아니다. 상쇄로 몫이 1 을 넘는 일이 없다.
+        드라이기만 켜진 창은 |I2| 912mA 라 1 에 붙고, SMPS 만인 창은 0 에 붙어
+        옛 동작(짝수차 전부 크기 공간)과 같아진다.
+        """
+        if self.even_coherent.numel() == 0:
+            return None
+        e = self.even_order.bool()
+        mag = self.sig.pow(2).sum(-1).clamp(min=1e-18).sqrt()[:, e]       # (K, He)
+        p = power.abs()
+        a = (p @ mag).sum(-1)                                             # (B,)
+        c = ((p * self.even_coherent[None, :]) @ mag).sum(-1)
+        return (c / a.clamp(min=1e-9)).clamp(0.0, 1.0)
+
+    def _harm_err(self, pred, obs, w_coh=None):
         """(B,H,2) 차수별 정규화 오차.
 
-        짝수차는 **크기 공간**에서 잰다 (13.11) — 짝수차 위상은 플러그 방향이라 기기 속성이
-        아니다. 홀수차는 복소 그대로다. 두 성분에 반씩 담아 규모를 복소 판과 맞춘다
-        (복소 판의 성분 평균이 |Δ|의 0.64배, 이쪽이 0.5배로 같은 자리다).
+        짝수차는 기본으로 **크기 공간**에서 잰다 (13.11). 홀수차는 복소 그대로다.
+        두 성분에 반씩 담아 규모를 복소 판과 맞춘다 (복소 판의 성분 평균이 |Δ|의
+        0.64배, 이쪽이 0.5배로 같은 자리다).
+
+        ⚠ 13.45 정정: "짝수차 위상은 플러그 방향" 은 **SMPS 에서만** 그렇게 보였고
+        실은 위상 뭉침 R 이 0.12~0.43 이라 난수였던 것이다. 오븐(0.99)·포트(0.90)·
+        핫플(0.60)·드라이기(0.54)는 짝수차 위상이 기기 속성이다. `w_coh` 를 주면
+        그 몫만큼 복소 오차를 되살린다.
         """
         err = (pred - obs).abs() / self.harm_scale[None, :, None]
         if not self.harm_even_mag:
@@ -420,6 +457,9 @@ class NILMLoss(torch.nn.Module):
         pm = pred.pow(2).sum(-1).clamp(min=1e-18).sqrt()
         om = obs.pow(2).sum(-1).clamp(min=1e-18).sqrt()
         emag = ((pm - om).abs() / self.harm_scale[None, :] * 0.5)[..., None].expand_as(err)
+        if w_coh is not None:
+            w = w_coh[:, None, None]
+            emag = w * err + (1.0 - w) * emag
         return torch.where(self.even_order[None, :, None].bool(), emag, err)
 
     def _harm_pred_active(self, out, power):
@@ -514,7 +554,8 @@ class NILMLoss(torch.nn.Module):
             pred = pred + self.noise_sig[None]
             # 차수별로 같은 무게를 준다. 정규화하지 않으면 I1 이 전부 지배해
             # 고조파 제약이 전력 제약과 같아진다.
-            err = self._harm_err(pred, tgt["obs_harm"])
+            err = self._harm_err(pred, tgt["obs_harm"],
+                                 self._coherent_even_w(out["power"]))
             # 마스크를 걸어도 손실 규모가 유지되도록 마스크 평균으로 나눈다.
             # 그래야 `w_harm=0.1` 이 이전과 같은 뜻을 갖는다.
             parts["harm"] = ((err * self.harm_mask[None, :, None]).mean()
@@ -660,7 +701,8 @@ class NILMLoss(torch.nn.Module):
             # 짝수차는 0 이다 — 12.72(전류 인공물) + 12.147(전압 짝수차 미결).
             if tgt.get("harm_offset") is not None:
                 pred = pred + tgt["harm_offset"]
-            err = self._harm_err(pred, tgt["obs_harm"])
+            err = self._harm_err(pred, tgt["obs_harm"],
+                                 self._coherent_even_w(out["power"]))
             # 불감대 — 순방향 모델 오차만큼은 벌하지 않는다 (`harm_dz` 주석).
             # **2단계에만 건다.** 1단계는 합성이라 순방향이 정확하다.
             if self.harm_deadzone > 0:

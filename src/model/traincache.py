@@ -70,7 +70,8 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           level_scramble: Optional[Dict[str, tuple]] = None,
           state_mix_json: str = "",
           carrier_apps: Optional[Sequence[str]] = None,
-          dither_min_order: int = 2) -> None:
+          dither_min_order: int = 2,
+          couple_ext: bool = False) -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.augmentor import DataAugmentor
     from src.synthesis.dataset import NILMBatchGenerator
@@ -105,7 +106,8 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
-                                    augmentor=aug, background=bool(background)),
+                                    augmentor=aug, background=bool(background),
+                                    couple_ext=bool(couple_ext)),
         recipe_mix=mix, compute_gt_harmonics=False)
 
 
@@ -163,6 +165,7 @@ def build_cache(
     sp_curves: bool = False,
     background: bool = False,
     dither_min_order: int = 2,
+    couple_ext: bool = False,
 ) -> dict:
     """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다."""
     import multiprocessing as mp
@@ -205,7 +208,7 @@ def build_cache(
                             dither_even_amp, dither_even_phase_deg, pss_json,
                             bool(sp_curves), bool(background), level_scramble,
                             smx_json, tuple(carrier_apps or ()),
-                            int(dither_min_order))) as pool:
+                            int(dither_min_order), bool(couple_ext))) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -232,6 +235,8 @@ def build_cache(
             "level_scramble": level_scramble,
             "state_mix": state_mix,
             "carrier_apps": list(carrier_apps or []),
+            # 13.45: 결합 델타의 Σ 에 비SMPS 전류를 넣었는가. 홀드아웃과 짝이 맞아야 한다.
+            "couple_ext": bool(couple_ext),
             # 부하 의존 서명 / 상시 배경 (12.166). 학습·손실 쪽이
             # 이 값을 읽어 짝을 맞춘다.
             "sp_curves": bool(sp_curves),

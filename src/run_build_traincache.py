@@ -42,6 +42,10 @@ def main() -> int:
                     help="기기별 전력 **범위** 표집 (13.29/13.30). 프리셋 'smps_operating' 또는 "
                          "JSON. 복합이 쓰는 동작점이 단독 녹화와 어긋난 SMPS 셋을 덮는다 — "
                          "**--sp-curves 와 같이 쓸 것**")
+    ap.add_argument("--couple-ext", action="store_true",
+                    help="결합 델타의 Σ 에 **비SMPS 전류**를 넣는다 (13.45). 지금은 SMPS 3종만 "
+                         "더해서 오븐 5.2A·에어컨 h3 1.44A 가 빠져 있고, D 에서 그 강하가 "
+                         "V_h3 자체보다 크다")
     ap.add_argument("--carrier-on", nargs="*", default=None, metavar="APP",
                     help="캐리어 상태를 **세션으로** 본다 (13.40). 인자 없이 주면 오븐. "
                          "오븐은 FAN_LIGHT 를 거쳐 켜지고 통전이 아니면 FAN_LIGHT 이고 "
@@ -135,7 +139,7 @@ def main() -> int:
                 dither_even_amp=a.dither_even_amp,
                 dither_even_phase_deg=a.dither_even_phase_deg,
                 power_scale_std_map=pss, level_scramble=lvs, state_mix=smx,
-                carrier_apps=car,
+                carrier_apps=car, couple_ext=a.couple_ext,
                 sp_curves=a.sp_curves, background=a.background,
                 dither_min_order=a.dither_min_order)
     return 0

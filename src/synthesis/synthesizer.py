@@ -245,6 +245,7 @@ class LoadSynthesizer:
         grid_simulator: Optional[GridSimulator] = None,
         augmentor: Optional[DataAugmentor] = None,
         voltage_feedback_iterations: int = 2,
+        couple_ext: bool = False,
         quantize_voltage_measurement: bool = True,
         compute_gt_harmonics: bool = True,
         sustained_power_limit_w: Optional[float] = DEFAULT_SUSTAINED_POWER_LIMIT_W,
@@ -263,6 +264,9 @@ class LoadSynthesizer:
                 raise FileNotFoundError(
                     "배경 곡선을 못 찾았다 — processed_data/sp_curves.npz 가 필요하다")
         self.grid_sim = grid_simulator or GridSimulator()
+        # 13.45: 결합 델타의 Σ 에 비SMPS 전류를 넣는다. 주입된 시뮬레이터에도 건다.
+        if couple_ext:
+            self.grid_sim.couple_ext = True
         self.augmentor = augmentor or DataAugmentor()
         self.known_appliances = self.pool.get_appliance_types()
         # 지속 부하 상한. None 이면 제한하지 않는다.
@@ -729,7 +733,7 @@ class LoadSynthesizer:
     def synthesize_random_window(
         self,
         window_size_cycles: int = 600,
-        max_concurrent_appliances: int = 3,
+        max_concurrent_appliances: int = 4,
         plugged_prob: float = 0.6,
         n_active: Optional[int] = None,
         candidate_appliances: Optional[Sequence[str]] = None,
@@ -940,6 +944,8 @@ class LoadSynthesizer:
         max_tries: int = 20,
         pair: Optional[Sequence[str]] = None,
         exclude_active: Optional[Sequence[str]] = None,
+        p_trio: float = 0.0,
+        p_smps: Optional[Sequence[float]] = None,
     ) -> SyntheticLoadSample:
         """저항 발열 부하 **2대가 타깃 시점에 동시 통전**하는 윈도우.
 
@@ -972,12 +978,27 @@ class LoadSynthesizer:
         # `pair` 를 주면 그것을 쓴다. 실측이 던지는 구성(오븐+핫플)을 겨냥할 때
         # 필요하다 - 무작위로 뽑으면 6쌍 중 1/6 만 그 조합이라 레시피 5% 중
         # 0.83% 밖에 안 된다 (12.38 측정: 학습 전체의 1.001%).
+        # 13.48: **2대가 상한이 아니다.** 실측 test_5 는 포트+오븐+핫플+드라이기가
+        # 넷 다 켜져 3241W 까지 가는데, 학습 캐시에는 3대 이상이 0.0% 였다.
+        # `p_trio` 확률로 한 대를 더 뽑는다 (SMPS 쪽 `p_trio` 와 같은 규약).
+        # 4kW 한도는 `_fit_within_power_budget` 이 그대로 지킨다 —
+        # 216V 에서 저항 4종 합이 3754W 라 대개 통과하고, 229V 에서는 한 대가 빠진다.
+        # 2대 / 3대 / 4대. 4kW 한도는 `_fit_within_power_budget` 이 지키므로
+        # 229V 에서 4종을 요청하면 한 대가 자동으로 빠진다 (4219W > 4000).
+        n = 2
+        if len(resistive) >= 3 and np.random.rand() < float(p_trio):
+            n = 4 if (len(resistive) >= 4 and np.random.rand() < 0.4) else 3
         if pair is None:
-            pair = list(np.random.choice(resistive, 2, replace=False))
+            pair = list(np.random.choice(resistive, n, replace=False))
         else:
             pair = [a for a in pair if a in self.known_appliances]
             if len(pair) < 2:
-                pair = list(np.random.choice(resistive, 2, replace=False))
+                pair = list(np.random.choice(resistive, n, replace=False))
+            elif len(pair) < n:
+                # 지정된 쌍에 저항 한 대를 더 얹는다 (실측 구성 + 한 대).
+                rest = [a for a in resistive if a not in pair]
+                if rest:
+                    pair = list(pair) + [str(np.random.choice(rest))]
         # `exclude_active` 는 그 창에서 **활성 후보에서 뺀다.** 강제로 켜는 쌍이
         # 아닌 기기가 곁다리로 켜지는 것을 막는다. 실측 6파일 전부 전기포트가
         # 없으므로, 오븐+핫플 창에서 포트를 빼야 "1600W 저항 덩어리는 포트가
@@ -986,11 +1007,19 @@ class LoadSynthesizer:
         if exclude_active:
             drop = set(exclude_active) - set(pair)
             cand = [a for a in self.known_appliances if a not in drop]
+        # 13.48: SMPS 배경. **판정에는 넣지 않는다** — 저항의 타깃 통전만 본다.
+        force = list(pair)
+        if p_smps:
+            smps = [a for a in self.known_appliances if a in set(get_smps_appliances())]
+            w = np.asarray(p_smps, float)
+            n_s = int(np.random.choice(len(w), p=w / w.sum()))
+            if n_s and smps:
+                force += list(np.random.choice(smps, min(n_s, len(smps)), replace=False))
         sample = None
         for _ in range(max_tries):
             sample = self.synthesize_random_window(
                 window_size_cycles=window_size_cycles,
-                force_active=pair,
+                force_active=force,
                 candidate_appliances=cand,
                 force_plugged_all=True,
                 compute_gt_harmonics=compute_gt_harmonics,
@@ -1083,8 +1112,9 @@ class LoadSynthesizer:
         window_size_cycles: int = 600,
         compute_gt_harmonics: Optional[bool] = None,
         target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
+        p_smps: Optional[Sequence[float]] = None,
     ) -> SyntheticLoadSample:
-        """고전력 저항 부하를 반드시 1~2대 켜는 윈도우.
+        """고전력 저항 부하를 반드시 1~3대 켜는 윈도우.
 
         전기포트·오븐·드라이기·핫플레이트는 모두 니크롬선 부하라 고조파 지문이
         사실상 같다(포트 vs 오븐 거리 0.596%p). 서로를 가르는 단서는 시간 패턴뿐인데,
@@ -1103,11 +1133,33 @@ class LoadSynthesizer:
                 compute_gt_harmonics=compute_gt_harmonics,
             )
 
-        k = 1 if np.random.rand() < 0.6 else 2
+        # 13.48: 옛 값은 `1 if rand < 0.6 else 2` 로 **2대가 상한**이었다.
+        # 실측 test_5 의 포트 창은 저항 3~4종이 동시라, 그 구간이 학습 분포 밖에
+        # 있었다 (캐시 300,000창 중 3종 이상 0.0%). 3대까지 넓힌다.
+        k = int(np.random.choice([1, 2, 3, 4], p=[0.40, 0.30, 0.20, 0.10]))
+        if not p_smps:
+            return self.synthesize_random_window(
+                window_size_cycles=window_size_cycles,
+                n_active=min(k, len(resistive)),
+                candidate_appliances=resistive,
+                plugged_prob=0.7,
+                compute_gt_harmonics=compute_gt_harmonics,
+                target_biased_placement=True,
+                target_lookahead_cycles=target_lookahead_cycles,
+            )
+        # 13.48: SMPS 배경을 함께 켠다. 지금까지 이 레시피 창에는 SMPS 가 0% 였고,
+        # 실측은 SMPS 가 86.5% 의 창에서 켜져 있다. 저항만 있는 조용한 창만 주면
+        # "고부하 + 경쟁 SMPS" 칸을 안 배운다 — `smps_overlap` 의 `p_resistive` 와
+        # 같은 논리의 반대 방향이다.
+        chosen = list(np.random.choice(resistive, min(k, len(resistive)), replace=False))
+        smps = [a for a in self.known_appliances if a in set(get_smps_appliances())]
+        w = np.asarray(p_smps, float)
+        n_s = int(np.random.choice(len(w), p=w / w.sum()))
+        if n_s and smps:
+            chosen += list(np.random.choice(smps, min(n_s, len(smps)), replace=False))
         return self.synthesize_random_window(
             window_size_cycles=window_size_cycles,
-            n_active=min(k, len(resistive)),
-            candidate_appliances=resistive,
+            force_active=chosen,
             plugged_prob=0.7,
             compute_gt_harmonics=compute_gt_harmonics,
             target_biased_placement=True,

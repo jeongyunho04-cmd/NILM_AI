@@ -86,6 +86,7 @@ def build_holdout(
     carrier_apps: Optional[Sequence[str]] = None,
     sp_curves: bool = False,
     background: bool = False,
+    couple_ext: bool = False,
 ) -> dict:
     """홀드아웃 구간에서만 평가 셋을 만들어 저장한다."""
     out = Path(out_dir)
@@ -105,7 +106,8 @@ def build_holdout(
                         state_mix=state_mix,
                         sp_curves=bool(sp_curves))
     syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
-                          augmentor=aug, background=bool(background))
+                          augmentor=aug, background=bool(background),
+                          couple_ext=bool(couple_ext))
     gen = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         recipe_mix=recipe_mix or DEFAULT_RECIPE_MIX, synthesizer=syn,
@@ -162,6 +164,8 @@ def build_holdout(
         "level_scramble": {k: list(v) for k, v in (level_scramble or {}).items()},
         "state_mix": state_mix,
         "carrier_apps": list(carrier_apps or []),
+        # 13.45: 학습 캐시의 `couple_ext` 와 반드시 같아야 한다.
+        "couple_ext": bool(couple_ext),
         # 학습 캐시와 짝이 맞아야 하는 설정 (12.168.4)
         "sp_curves": bool(sp_curves),
         "background": bool(background),

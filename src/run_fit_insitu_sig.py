@@ -70,10 +70,18 @@ WINDOW = 3600
 ODD = np.arange(0, 15, 2)
 
 #: 저항이 없어 P관측 = SMPS 합이 성립하는 파일 (앵커 ②)
-SMPS_ONLY_STEMS = ("test_7", "test_8", "test_13")
+# 13.50: 새 계측기 자료에서는 **test_4** 하나다 (저항 0종).
+# 옛 값 ("test_7","test_8","test_13") 은 2026-09-06 에 삭제된 파일이다.
+SMPS_ONLY_STEMS = ("test_4",)
 
 #: 안 켜진 기기를 사전값으로 끌어당기는 릿지. 0 이면 그 기기 지문이 폭주한다.
 RIDGE = 1e-3
+
+#: 앵커 ① 의 프로젝터 참값 (W). **`REFERENCE_W` 에 이 키가 없다** — 포트·핫플·오븐
+#: 셋뿐이라 앵커가 한 번도 안 걸리고 있었다 (13.50). 새 계측기 격리 3파일의 ON 구간
+#: 중앙값: 44.79 / 44.73 / 45.19 -> 44.8W. `REFERENCE_W` 는 다른 코드도 쓰므로
+#: 거기 넣지 않고 여기 둔다. `--projector-w` 로 덮어쓸 수 있다.
+PROJECTOR_ANCHOR_W = 44.8
 
 
 def collect(apps: Sequence[str], stems: Sequence[str], hs: np.ndarray,
@@ -118,8 +126,12 @@ def solve_powers(S: np.ndarray, w: dict, pj: int, anchor: bool = True):
         x, r = nnls(_cols(S, sup), b)
         return np.asarray(x), r
     fixed: Dict[int, float] = {}
-    if pj in sup and "beam_projector" in REFERENCE_W:
-        fixed[pj] = REFERENCE_W["beam_projector"][0]
+    # 13.50: `REFERENCE_W` 에 프로젝터가 없으면 `PROJECTOR_ANCHOR_W` 로 떨어진다.
+    # 앵커가 없으면 ALS 가 자기강화한다 (모듈 주석의 "앵커가 결정적이다").
+    pj_w = (REFERENCE_W["beam_projector"][0] if "beam_projector" in REFERENCE_W
+            else PROJECTOR_ANCHOR_W)
+    if pj in sup and pj_w:
+        fixed[pj] = float(pj_w)
         b = b - fixed[pj] * _cols(S, [pj])[:, 0]
     free = [j for j in sup if j not in fixed]
     out = np.zeros(len(sup))
@@ -228,6 +240,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ckpt", default="results/adapt_ovh.pt", help="기기 목록용")
+    ap.add_argument("--projector-w", type=float, default=PROJECTOR_ANCHOR_W,
+                    metavar="W",
+                    help="앵커 ① 의 프로젝터 참값 (13.50). 기본 44.8W 는 새 계측기 "
+                         "격리 3파일 ON 구간 중앙값(44.79/44.73/45.19)이다. "
+                         "0 이면 앵커를 끈다 — 문서의 경고를 읽고 쓸 것")
     ap.add_argument("--stems", nargs="+", default=list(HUMAN_ON_DEFAULT_STEMS))
     ap.add_argument("--iters", type=int, default=25)
     ap.add_argument("--no-anchor", action="store_true",
@@ -244,6 +261,8 @@ def main() -> None:
                          "되고 적합 집합 밖 파일에서 유령이 22~25W 튄다")
     ap.add_argument("--out", default="results/sig_insitu.npz")
     a = ap.parse_args()
+    # 13.50: 손잡이를 모듈 상수에 반영한다 — `solve_powers` 가 그것을 읽는다.
+    globals()['PROJECTOR_ANCHOR_W'] = float(a.projector_w)
 
     apps = torch.load(a.ckpt, map_location="cpu", weights_only=False)["appliances"]
     K = len(apps); pj = apps.index("beam_projector")

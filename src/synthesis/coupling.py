@@ -51,6 +51,10 @@ V_BIN_V = 1e-3         #: 기저 전압 구간 (사실상 정확)
 R_BIN_OHM = 1e-4       #: NTC 상태 R 구간 (사실상 정확)
 Z_BIN_OHM = 1e-4       #: 선로 R 구간 (사실상 정확)
 L_BIN_H = 1e-9         #: 선로 L 구간 (사실상 정확)
+#: 비SMPS 전류가 만드는 **전압 강하**의 캐시 구간 (13.45). 전류가 아니라 강하를
+#: 양자화한다 — 답에 드는 양이 Z_h·I_외부 이고, 그래야 효과가 없는 고차가 전부 0 으로
+#: 접혀 회로 호출 캐시의 적중률이 안 무너진다.
+EXT_DROP_BIN_V = 0.05
 #: 회로 모델이 있는 SMPS (`circuit_model/circ12_<dev>.pkl`)
 SMPS_DEVICES = ("laptop_charger", "beam_projector", "minipc")
 #: 선로 인덕턴스 범위 (미측정 — ∠Z₁ 은 vhdeg1≡0 규약상 못 잰다). `GridSimulator.x_grid_range` 0.02~0.15Ω ↔ 53~400µH.
@@ -140,8 +144,8 @@ class SmpsCircuit:
 
     # ── 결합 델타 ─────────────────────────────────────────────────────────
     def coupling_delta(self, powers: Dict[str, float], rel_env: np.ndarray, env_id: int, v1: float,
-                       r_line: float, l_line: float, R: Optional[Dict[str, float]] = None
-                       ) -> Dict[str, np.ndarray]:
+                       r_line: float, l_line: float, R: Optional[Dict[str, float]] = None,
+                       i_ext: Optional[np.ndarray] = None) -> Dict[str, np.ndarray]:
         """{기기: I_i(V_term) − I_i(V_src)}. SMPS 가 **하나여도** 돈다 (13.22).
 
         V_term = V_src − Z(h)·Σ_i I_i, Z(h) = r_line + j·2π·60·h·l_line, 고정점 `n_iter` 회 (2회면 잠긴다, 가이드 §6.1).
@@ -157,8 +161,20 @@ class SmpsCircuit:
             return {}
         pb = tuple(sorted((d, _pbin(v)) for d, v in p.items()))
         rb = tuple(sorted((d, -1 if (R is None or R.get(d) is None) else int(round(R[d] / R_BIN_OHM))) for d in p))
+        # 비SMPS 총전류도 키에 넣는다 (13.45). 전류가 아니라 그것이 만드는 **전압 강하**
+        # Z_h·I 를 EXT_DROP_BIN_V 로 양자화한다 — 답에 드는 양이 그것이고, 강하가 구간보다
+        # 작은 차수는 0 으로 접혀 적중률이 산다. 양자화한 강하를 다시 전류로 되돌려
+        # 계산에 넘기므로 키와 값이 정확히 짝이 맞는다.
+        if i_ext is None:
+            eb, iq = (), None
+        else:
+            _z = r_line + 1j * 2 * np.pi * F * np.arange(1, H + 1) * l_line
+            _d = np.asarray(i_ext, complex) * _z
+            _dq = (np.round(_d.real / EXT_DROP_BIN_V) + 1j * np.round(_d.imag / EXT_DROP_BIN_V))
+            eb = tuple(_dq.real.astype(np.int64)) + tuple(_dq.imag.astype(np.int64))
+            iq = _dq * EXT_DROP_BIN_V / _z
         key = ("cpl", pb, rb, int(env_id), int(round(v1 / V_BIN_V)),
-               int(round(r_line / Z_BIN_OHM)), int(round(l_line / L_BIN_H)))
+               int(round(r_line / Z_BIN_OHM)), int(round(l_line / L_BIN_H)), eb)
         got = self._cpl_cache.get(key)
         if got is not None:
             self.hits += 1
@@ -169,7 +185,7 @@ class SmpsCircuit:
         vq = int(round(v1 / V_BIN_V)) * V_BIN_V
         zr = int(round(r_line / Z_BIN_OHM)) * Z_BIN_OHM
         zl = int(round(l_line / L_BIN_H)) * L_BIN_H
-        out = self._compute_coupling(pq, rel_env, vq, zr, zl, rq)
+        out = self._compute_coupling(pq, rel_env, vq, zr, zl, rq, iq)
         if len(self._cpl_cache) < self.max_cache:
             self._cpl_cache[key] = out
         return out
@@ -234,14 +250,24 @@ class SmpsCircuit:
             return None
 
     def _compute_coupling(self, powers: Dict[str, float], rel_env: np.ndarray, v1: float,
-                          r_line: float, l_line: float, R: Dict[str, Optional[float]]) -> Dict[str, np.ndarray]:
+                          r_line: float, l_line: float, R: Dict[str, Optional[float]],
+                          i_ext: Optional[np.ndarray] = None) -> Dict[str, np.ndarray]:
         h = np.arange(1, H + 1)
         Z = r_line + 1j * 2 * np.pi * F * h * l_line
         V_src = np.asarray(rel_env, complex) * float(v1)
         ms = self.models
+        # 비SMPS 부하 (13.45). 저항은 I_h = V_h/R 로 전압에 선형이라 **어드미턴스**로 넣는다 —
+        # 정전류로 넣으면 강하가 커져도 외부 전류가 안 줄어 강하를 과대평가한다.
+        # |V_src,h| 가 h1 의 1/1000 아래인 차수만 정전류로 떨어뜨린다 (0 나눗셈 방지).
+        y_ext = i_fix = None
+        if i_ext is not None:
+            ie = np.asarray(i_ext, complex)
+            big = np.abs(V_src) > 1e-3 * max(abs(V_src[0]), 1e-9)
+            y_ext = np.where(big, ie / np.where(big, V_src, 1.0), 0.0)
+            i_fix = np.where(big, 0.0 + 0.0j, ie)
         try:
             def total_true(V):
-                s = np.zeros(H, complex)
+                s = np.zeros(H, complex) if y_ext is None else y_ext * V + i_fix
                 for d, p in powers.items():
                     I = ms[d].simulate_true(p, V, R=R.get(d)) if hasattr(ms[d], "simulate_true") else None
                     if I is None:

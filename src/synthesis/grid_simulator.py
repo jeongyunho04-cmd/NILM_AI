@@ -213,6 +213,7 @@ class GridSimulator:
         texture_library=None,
         use_texture: bool = True,
         use_coupling: bool = True,
+        couple_ext: bool = False,
         randomize_r: bool = True,
         texture_stems: Optional[Sequence[str]] = None,
         texture_model=None,
@@ -220,6 +221,9 @@ class GridSimulator:
         self._texture_library = texture_library
         self.use_texture = bool(use_texture) and texture_library is not False
         self.use_coupling = bool(use_coupling) and texture_library is not False
+        #: 결합 델타의 Σ 에 비SMPS 전류를 넣는가 (13.45). 지금까지 SMPS 3종만 더해서
+        #: 오븐 5.2A·에어컨 h3 1.44A 가 빠져 있었고, D 에서 그 강하가 V_h3 자체보다 크다.
+        self.couple_ext = bool(couple_ext)
         self.randomize_r = bool(randomize_r)
         self.texture_stems = ()                 # 옛 API 호환
         self._circuit = None
@@ -672,6 +676,15 @@ class GridSimulator:
         v1 = float(env.base_voltage_v)
         l_line = float(env.x_grid_ohm) / (2.0 * np.pi * 60.0)
         R = getattr(env, "r_state", None) or {}
+        # 13.45: 비SMPS 총전류. 격리 녹화 실측으로 오븐 h3 26mA·포트 207mA·드라이기 116mA·
+        # 에어컨 1436mA 가 지금까지 Σ 에서 통째로 빠져 있었다. 묶음 안에서 평균내 넘긴다.
+        ext_c = None
+        if getattr(self, "couple_ext", False):
+            ext_apps = [a for a in layers if a not in devs]
+            if ext_apps:
+                ext_c = np.zeros(np.asarray(layers[devs[0]]).shape, dtype=np.complex128)
+                for a in ext_apps:
+                    ext_c += np.asarray(layers[a], dtype=np.complex128)
         keys, inv = np.unique(pb[rows], axis=0, return_inverse=True)
         inv = np.asarray(inv).reshape(-1)
         for ki, key in enumerate(keys):
@@ -679,8 +692,9 @@ class GridSimulator:
             pw = {d: float(key[j] * P_BIN_W) for j, d in enumerate(devs) if key[j] >= 0}
             if not pw:
                 continue
+            i_ext = None if ext_c is None else ext_c[m_rows].mean(0)
             deltas = circ.coupling_delta(pw, tex.source_rel(), tex.id, v1,
-                                         float(env.r_grid_ohm), l_line, R)
+                                         float(env.r_grid_ohm), l_line, R, i_ext=i_ext)
             for d, delta in deltas.items():
                 out[d][m_rows] += delta.astype(np.complex64)
         res = dict(layers)
