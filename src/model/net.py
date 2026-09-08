@@ -429,6 +429,21 @@ def standby_signatures(pool, appliances: Sequence[str], n_harm: int = 15) -> np.
     return sig
 
 
+def standby_powers(pool, appliances: Sequence[str]) -> np.ndarray:
+    """기기별 **측정된 대기 전력** (K,) W. `standby_signatures` 와 같은 출처다.
+
+    2단계의 `L_sb`(13.60)가 자유 대기 헤드를 `idle x 이 값` 으로 묶는 데 쓴다.
+    `y_standby_power` 의 규약이 "활성 중이면 0" 이므로 짝이 맞는다.
+    """
+    out = np.zeros(len(appliances), dtype=np.float32)
+    for j, app in enumerate(appliances):
+        try:
+            out[j] = float(np.mean(pool.get_standby_profile(app).power_w))
+        except Exception:
+            out[j] = 0.0
+    return out
+
+
 def noise_signature(pool, n_harm: int = 15) -> np.ndarray:
     """계측계 자체 고조파 페이저 (n_harm, 2). 3.4절의 누락 항 ②."""
     refs = list(pool.noise_references.values())

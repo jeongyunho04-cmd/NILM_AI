@@ -352,7 +352,10 @@ def test_site_signature_bank_falls_back_exactly_and_keeps_states():
     a = float(old.unlabeled(out, tgt, w_harm=1.0)["harm"])
     b = float(new.unlabeled(dict(out), dict(tgt, site_idx=torch.full((B,), 2)),
                             w_harm=1.0)["harm"])
-    assert a == b, f"뭉친 줄로 보냈는데 값이 다르다: {a} vs {b}"
+    # ⚠ 비트 단위 일치를 요구하지 않는다. 두 경로의 einsum 축약이 다르다
+    #   ("bks,kshc->bhc" 대 "bks,bkshc->bhc") — 값은 같아야 하지만 마지막 자리는
+    #   갈릴 수 있다. 실제 자료에서는 0.00e+00 이 나왔으나 보장은 아니다.
+    assert abs(a - b) <= 1e-6 * max(abs(a), 1e-9), f"뭉친 줄인데 값이 다르다: {a} vs {b}"
     c = float(new.unlabeled(dict(out), dict(tgt, site_idx=torch.zeros(B, dtype=torch.long)),
                             w_harm=1.0)["harm"])
     assert c != a, "자리 줄을 골랐는데 값이 안 바뀌었다 — 색인이 안 먹는다"
@@ -361,3 +364,52 @@ def test_site_signature_bank_falls_back_exactly_and_keeps_states():
     #    한 자리 안에서 상태들이 여전히 서로 달라야 한다.
     from src.model.sig_site import SITES
     assert bank.shape[0] == len(SITES) + 1, "묶음의 마지막 줄이 뭉친 지문이어야 한다"
+
+
+def test_standby_anchor_ties_the_free_slack_in_cons():
+    """`L_sb` (13.60) — 대기 헤드가 `cons` 안의 자유 슬랙이 되지 않게 묶는다.
+
+    `out["standby"]` 는 게이트 없는 softplus 하나이고 `L_cons` 의 재구성에 그대로
+    더해진다. 1단계는 `y_standby`(규약: **활성 중이면 0**)가 잡아 주지만 2단계에는
+    라벨도 구조적 게이트도 없어서, 자리 D 창에서 대기 합이 1.06 -> 6.93W 로 부풀고
+    그 8W 가 `cons` 를 통해 SMPS 에서 빠졌다 (참 92.4 -> 예측 83.8W).
+
+    검정 셋:
+      ① `w_sb=0` 이면 옛 경로와 **정확히** 같다 (기본이 꺼짐이어야 한다)
+      ② 켜진 기기(σ(on)→1)의 대기는 0 을 요구한다 — 규약 그대로
+      ③ 꺼져-꽂힘 기기는 **측정 대기전력**을 요구한다
+    """
+    import torch
+    from src.model.losses import LossWeights, NILMLoss
+
+    K, H = 3, 15
+    sbw = torch.tensor([2.0, 1.0, 0.5])
+    kw = dict(s_i=torch.ones(K), weights=LossWeights(harm=0.1, cons=0.0, over=0.0))
+    off = NILMLoss(**kw)
+    on = NILMLoss(standby_w=sbw, **kw)
+
+    B = 4
+    out = {"power": torch.rand(B, K), "power_raw": torch.rand(B, K) + 0.5,
+           "power_states": torch.rand(B, K, 5), "power_mix": torch.rand(B, K, 5),
+           "standby": torch.zeros(B, K),
+           # 0번은 켜짐(대기 0 이어야), 1·2번은 꺼져-꽂힘(대기 = 측정값이어야)
+           "on_logit": torch.tensor([[12.0, -12.0, -12.0]] * B),
+           "plugged_logit": torch.full((B, K), 12.0)}
+    tgt = {"p_observed": torch.rand(B) * 50 + 10, "obs_harm": None,
+           "p_noise": torch.rand(B)}
+
+    # ① 기본은 꺼짐
+    a = float(off.unlabeled(out, tgt, w_cons=0.1)["total"])
+    b = float(on.unlabeled(out, tgt, w_cons=0.1)["total"])
+    assert a == b, f"w_sb 를 안 줬는데 값이 달라졌다: {a} vs {b}"
+
+    # ② ③ 규약대로 채우면 항이 0 이 된다
+    good = dict(out, standby=torch.tensor([[0.0, 1.0, 0.5]] * B))
+    p = on.unlabeled(good, tgt, w_cons=0.1, w_sb=1.0)
+    # σ(±12) 가 정확히 0/1 이 아니라 1e-5 규모의 잔차가 남는다 — 그것보다 넉넉히 잡는다
+    assert float(p["sb"]) < 1e-4, f"규약대로인데 벌점이 남았다: {float(p['sb'])}"
+
+    # 켜진 기기에 대기를 얹으면 벌점이 그만큼 는다 (자유 슬랙 차단)
+    bad = dict(out, standby=torch.tensor([[3.0, 1.0, 0.5]] * K + [[3.0, 1.0, 0.5]]))
+    q = on.unlabeled(bad, tgt, w_cons=0.1, w_sb=1.0)
+    assert float(q["sb"]) > 0.9, f"켜진 기기의 대기 3W 가 안 걸렸다: {float(q['sb'])}"

@@ -222,6 +222,36 @@ def main() -> int:
                     help="상태별 고조파 지문 (13.11). **1단계와 반드시 같이 켜야 한다** — "
                          "한쪽만 켜면 2단계가 1단계의 배분을 되돌린다. 드라이기 약풍(반파)과 "
                          "강풍(순저항)처럼 한 기기의 상태들이 고조파 모양이 다를 때 필요하다.")
+    ap.add_argument("--w-standby", type=float, default=0.0, metavar="W",
+                    help="**대기 헤드의 닻** `L_sb` (13.60). `out[\"standby\"]` 는 게이트 없는 "
+                         "softplus 하나이고 `L_cons` 의 재구성에 그대로 더해지는데, 1단계의 "
+                         "라벨(y_standby)이 사라진 2단계에서는 자유 슬랙이 된다. 자리 D 창에서 "
+                         "대기 합이 1.06 -> 6.93W 로 부풀고 그 8W 가 cons 를 통해 SMPS 에서 "
+                         "빠진다. |standby − idle·측정대기W| 로 묶는다 (규칙 14: 측정 상수).")
+    ap.add_argument("--standby-harm-max-ratio", type=float, default=0.0, metavar="R",
+                    help="대기 지문을 **와트당 지렛대가 큰 기기에서만** 끈다 (13.61.4). "
+                         "기기별로 (대기 h11 / 대기W) / (통전 h11 와트당) 을 재서 이 값을 "
+                         "넘으면 0 으로 둔다. 포트 790배 · 드라이기 801배 · 핫플 305배 · "
+                         "선풍기 266배 · 오븐 88배 대 SMPS 1.5~2.3배 — 저항 기기의 통전이 "
+                         "순저항이라 고조파가 거의 없어서 생기는 차다. 0 이면 안 끈다. "
+                         "`--no-standby-harm` 은 이것의 전부 끄기 판이다.")
+    ap.add_argument("--cons-deadzone", type=float, default=0.0, metavar="W",
+                    help="`L_cons` **불감대** (13.64). |재구성 − 관측| 이 이 값 아래면 "
+                         "안 벌한다. 절대 W 라 작은 창일수록 상대적으로 큰 자유를 준다 — "
+                         "자리 D SMPS 전용 창은 93W 인데 포트 창은 1600W 여서 같은 3W 가 "
+                         "3% 와 0.2% 다. 배분을 수십 W 옮겨야 하는 창이 가장 빡빡했다.")
+    ap.add_argument("--cons-asinh", type=float, default=0.0, metavar="S",
+                    help="`L_cons` 를 S·asinh(d/S) 로 누른다 (13.64). 작은 d 에서는 |d| 와 "
+                         "같고 큰 d 를 로그로 압축한다 — **이상치 강건성**이지 자유가 "
+                         "아니다. 불감대와 노리는 것이 다르므로 갈라서 볼 것.")
+    ap.add_argument("--no-standby-harm", action="store_true",
+                    help="**2단계 `L_harm` 에서 대기 지문을 뺀다** (13.61.3). `idle = "
+                         "σ(plugged)(1−σ(on))` 이 곱해지므로 게이트를 내리면 그 기기의 "
+                         "대기 지문이 켜지는데, 대기는 와트당 고조파가 통전의 3배다 "
+                         "(프로젝터 15.5 대 4.8 mA/W). h9~h11 이 모자란 손실이 그 값싼 "
+                         "전류를 쓰려고 프로젝터를 끈다 — 기울기 귀속에서 자리 D·SMPS "
+                         "전용 창 압력의 60%가 이 통로였다. ⚠ 진짜 대기 고조파도 같이 "
+                         "빠진다 (자리 D 창에서 h11 약 3mA, 관측 64mA).")
     ap.add_argument("--sig-site", action="store_true",
                     help="**자리별** 고조파 지문 (13.59). 실측 갈래의 `L_harm` 이 창마다 그 "
                          "자리(D/E)의 격리 녹화로 세운 지문을 쓴다. 뭉친 지문은 프로젝터 "
@@ -278,7 +308,8 @@ def main() -> int:
                     help="지도에 쓸 파일을 직접 지정 (쉼표). 비우면 SMPS 가 든 "
                          "사람 라벨 5파일. **test_11/12 를 넣으면 규칙 20 대조가 죽는다**")
     ap.add_argument("--harm-weight", default="off",
-                    choices=("off", "inv_h", "inv_h2", "inv_tau"),
+                    choices=("off", "inv_h", "inv_h2", "inv_h3", "inv_h4", "h1",
+                             "inv_tau"),
                     help="`L_harm` 의 **차수별 신뢰도 가중** (12.135). `harm_scale` 이 "
                          "15차수를 균등화하는데, 실측에서는 고차가 신호가 아니라 "
                          "모델오차다. 모델오차/판별신호가 균등 2.23 -> 1/h 1.74 -> "
@@ -574,6 +605,18 @@ def main() -> int:
         from src.model.net import harmonic_signatures_by_state
         sig_state, _used = harmonic_signatures_by_state(pool, apps)
         print(f"  ** 상태별 지문 (13.11): {int(_used.sum())}개 상태를 따로 맞췄다 **")
+    # ── 대기 헤드의 닻 (13.60) — `standby_sig` 와 같은 격리 녹화에서 잰다 ──
+    SB_W = None
+    if a.w_standby > 0 or a.standby_harm_max_ratio > 0:
+        from src.model.net import standby_powers
+        SB_W = standby_powers(pool, apps)
+        if a.w_standby > 0:
+            print(f"  ** 대기 닻 L_sb 켜짐: w={a.w_standby:g} **")
+        else:
+            print("  ** 대기 전력 상수 적재 (지렛대 비 계산용, 13.61.4) **")
+        print("     " + "  ".join(f"{apps[j][:8]} {SB_W[j]:.2f}W"
+                                  for j in range(len(apps)) if SB_W[j] > 0.05))
+
     # ── 자리별 지문 (13.59) ────────────────────────────────────────────────
     # 실측 갈래만 창별로 고른다. 합성 갈래(`crit(...)`)는 `site_idx` 를 안 주므로
     # 뭉친 지문 그대로 돌아 **대조가 한 축만 달라진다**.
@@ -688,6 +731,7 @@ def main() -> int:
         noise_sig=torch.from_numpy(nz), harm_scale=torch.from_numpy(hsc),
         harm_odd_only=a.harm_odd_only,
         signatures_state=(torch.from_numpy(sig_state) if sig_state is not None else None),
+        standby_w=(None if SB_W is None else torch.from_numpy(SB_W)),
         signatures_site=(None if SIG_BANK is None else torch.from_numpy(SIG_BANK)),
         signatures_state_site=(None if SIG_BANK_ST is None
                                else torch.from_numpy(SIG_BANK_ST)),
@@ -719,6 +763,25 @@ def main() -> int:
             [HALFWAVE_OHM[x] if (x in HALFWAVE_OHM and x in _res_set) else 0.0
              for x in apps], dtype=torch.float32),
     ).to(dev)
+    if a.no_standby_harm or a.standby_harm_max_ratio > 0:
+        # `standby_sig` 는 `L_harm` 에서만 쓰인다 — `L_cons` 는 `out["standby"]` 를 쓴다.
+        # 그래서 여기를 0 으로 두면 **고조파 통로만** 막힌다 (13.61.3).
+        import numpy as _np
+        _sb = crit.standby_sig.detach().cpu().numpy()
+        _sg = sig
+        _drop = []
+        for _j, _x in enumerate(apps):
+            if a.no_standby_harm:
+                _drop.append(_j); continue
+            _w = float(SB_W[_j]) if SB_W is not None else 0.0
+            _num = float(_np.hypot(_sb[_j, 10, 0], _sb[_j, 10, 1])) / max(_w, 1e-6)
+            _den = float(_np.hypot(_sg[_j, 10, 0], _sg[_j, 10, 1]))
+            if _den > 0 and _num / _den > a.standby_harm_max_ratio:
+                _drop.append(_j)
+        for _j in _drop:
+            crit.standby_sig[_j].zero_()
+        print(f"  ** L_harm 의 대기 지문 0 (13.61.3): {[apps[j] for j in _drop]} **")
+        print("     고조파 통로만 막는다 — `L_cons` 의 대기 전력은 그대로다")
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=0.01)
     cache = CachedWindows(a.cache)
     # ── 교차주파수 어드미턴스 보정 (12.148) — 창마다 상수라 미리 다 만든다 ──
@@ -905,6 +968,9 @@ def main() -> int:
                                 swap_tb_orders=tuple(
                                     int(x) for x in a.swap_tb_orders.split(",") if x),
                                 w_impl=a.w_impl, impl_side=a.impl_side,
+                                w_sb=a.w_standby,
+                                cons_deadzone=a.cons_deadzone,
+                                cons_asinh=a.cons_asinh,
                                 companion=bool(a.companion))
             sp = crit(model(sf, swd), stg)
             loss = rp["total"] + a.lam * sp["total"]
@@ -914,6 +980,7 @@ def main() -> int:
         opt.step()
 
         for k, v in (("real_cons", rp["cons"]), ("real_harm", rp["harm"]),
+                     ("real_sb", rp["sb"]),
                      ("real_consq", rp["consq"]), ("real_res", rp["res"]),
                      ("real_swap", rp["swap"]), ("swap_frac", rp["swap_frac"]),
                      ("swap_ties", rp["swap_ties"]),

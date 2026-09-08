@@ -162,6 +162,7 @@ class NILMLoss(torch.nn.Module):
         even_coherent: Optional[torch.Tensor] = None,   # (K,) 짝수차 위상이 기기 속성인 기기 (13.45)
         signatures_site: Optional[torch.Tensor] = None,      # (Nz,K,H,2) 자리별 지문 (13.59)
         signatures_state_site: Optional[torch.Tensor] = None,  # (Nz,K,S,H,2) 자리x상태별 (13.59)
+        standby_w: Optional[torch.Tensor] = None,            # (K,) 측정된 대기 전력 W (13.60)
     ):
         super().__init__()
         self.register_buffer("s_i", s_i.clamp(min=1e-3))
@@ -276,6 +277,29 @@ class NILMLoss(torch.nn.Module):
         #
         # ⚠ 창별 색인은 `tgt["site_idx"]` 로만 온다. 없으면 옛 경로 그대로다 —
         #   1단계(`forward`)는 합성이라 이 축을 안 쓴다.
+        # ── 대기 헤드의 닻 (2026-09-09, 13.60) ────────────────────────────
+        # `out["standby"]` 는 게이트 없는 `softplus` 하나이고 `L_cons` 의 재구성에
+        # **그대로** 더해진다. 1단계는 `y_standby`(규약: 활성 중이면 0)가 잡아 주는데
+        # **2단계에는 라벨도 구조적 게이트도 없다** — `L_cons` 안의 자유 슬랙이다.
+        #
+        # 자리 D 의 SMPS 전용 창에서 실제로 그렇게 된다:
+        #     1단계 cnn_v24b   대기 합 1.06W   SMPS 합 99.5W
+        #     2단계 적응판     대기 합 6.93W   SMPS 합 83.8W   (참 92.4)
+        # 조합 차분이 준 예산은 0.6W 다. 초과 8W 가 `cons` 를 통해 SMPS 에서 빠지고,
+        # `L_harm` 이 그 8W 를 **프로젝터**에서 가져간다 (13.60.3).
+        #
+        # 더 나쁜 것은 되먹임이다: 게이트를 내리면 `idle` 이 올라 그 기기의 **대기
+        # 지문**이 `L_harm` 에 들어가는데, 대기 지문은 와트당 고조파가 통전의 3배다
+        # (프로젝터 15.5 대 4.8 mA/W). h9~h11 이 모자란 손실이 그 값싼 전류를 쓰려고
+        # 프로젝터를 끄고, 꺼서 생긴 전력 빚을 다시 프로젝터에서 갚는다.
+        #
+        #     L_sb = mean | standby − idle · standby_w |,  idle = σ(plugged)(1−σ(on))
+        #
+        # `standby_w` 는 `standby_sig` 와 **같은 격리 녹화**에서 잰 상수다 (규칙 14).
+        # 이 항이 두 항의 대기 계산을 같은 것으로 묶는다 — `cons` 도 `harm` 과 같은
+        # `idle` 로 세게 된다.
+        self.register_buffer("standby_w", standby_w if standby_w is not None
+                             else torch.zeros(len(s_i)))
         self.register_buffer("sig_site", signatures_site
                              if signatures_site is not None else torch.zeros(0))
         self.register_buffer("sig_state_site", signatures_state_site
@@ -423,6 +447,19 @@ class NILMLoss(torch.nn.Module):
                 w_h = 1.0 / hh
             elif harm_weight == "inv_h2":
                 w_h = 1.0 / (hh * hh)
+            elif harm_weight == "inv_h4":
+                w_h = 1.0 / (hh ** 4)
+            elif harm_weight == "h1":
+                # 극한 — h1 만. **`L_cons` 의 사본이 아니다**: cons 는 유효전력만 보고
+                # h1 의 **위상**(변위)은 못 본다. 13.62.1 이 잰 조건부 판별력의 최대가
+                # 거기 있다 (d′ 3.30, 두 SMPS 가 7° 차).
+                w_h = torch.zeros(h)
+                w_h[0] = 1.0
+            elif harm_weight == "inv_h3":
+                # 13.63 — `off < inv_h < inv_h2` 가 단조라 한 칸 더 눌러 본다.
+                # 13.62.2 가 잰 조건부 판별력(총전력 고정)이 h1 에서 가장 크므로
+                # 방향은 맞는데, 너무 누르면 `L_harm` 이 `L_cons` 의 사본이 된다.
+                w_h = 1.0 / (hh * hh * hh)
             elif harm_weight == "inv_tau":
                 t = torch.as_tensor(HARM_DEADZONE_PROFILE[:h], dtype=torch.float32)
                 if len(t) < h:
@@ -641,6 +678,9 @@ class NILMLoss(torch.nn.Module):
                   swap_tb_orders: Sequence[int] = (3, 5, 7),
                   w_impl: float = 0.0,
                   impl_side: str = "both",
+                  w_sb: float = 0.0,
+                  cons_deadzone: float = 0.0,
+                  cons_asinh: float = 0.0,
                   companion: bool = False) -> Dict[str, torch.Tensor]:
         """**기기별 라벨이 없는 실측 창**용 손실 (4.2절 2단계).
 
@@ -680,7 +720,26 @@ class NILMLoss(torch.nn.Module):
         recon = out["power"].sum(1) + out["standby"].sum(1) + tgt["p_noise"]
         if companion:
             recon = recon + (comp * self.companion_w[None]).sum(1)
-        parts["cons"] = wmean((recon - tgt["p_observed"]).abs())
+        # ── `L_cons` 의 규모 (2026-09-09, 13.64) ───────────────────────────
+        # 이 항은 **절대 W** 다. 1단계 전력 손실이 `_huber(power/s, y/s)` 로 기기
+        # 정격으로 나누는 것과 대조된다 — "절대 W 를 쓰면 오븐 60W 와 프로젝터
+        # 60W 가 같은 벌점이 된다" 는 그 주석의 논리가 창 규모에는 안 걸려 있다.
+        # 자리 D 의 SMPS 전용 창은 93W 인데 포트 창은 1600W 라, 같은 3W 잔차가
+        # 3% 와 0.2% 다. 배분을 수십 W 옮기려는 창이 가장 빡빡하게 묶여 있다.
+        #
+        #     `cons_deadzone`  |d| 가 이 값 아래면 안 벌한다. **절대 W** 라
+        #                      작은 창일수록 상대적으로 큰 자유를 준다
+        #     `cons_asinh`     S·asinh(d/S). 작은 d 에서는 |d| 와 같고 큰 d 를
+        #                      로그로 누른다 — **이상치 강건성**이지 자유가 아니다
+        #                      (잔차 200W 짜리 창이 배치 기울기를 독식하는 것을 막는다)
+        #
+        # ⚠ 둘은 다른 것을 한다. 섞어 쓸 수 있지만 무엇을 노리는지 갈라서 적을 것.
+        _d = (recon - tgt["p_observed"]).abs()
+        if cons_deadzone > 0:
+            _d = (_d - cons_deadzone).clamp(min=0.0)
+        if cons_asinh > 0:
+            _d = cons_asinh * torch.asinh(_d / cons_asinh)
+        parts["cons"] = wmean(_d)
 
         # ── 무효전력 보존 `L_cons^Q` (12.133) ────────────────────────────────
         #     |Σ qp_i·P̂_i + Σ qp_i·Ŝ_i + Q_noise − Q관측|
@@ -1066,7 +1125,17 @@ class NILMLoss(torch.nn.Module):
             parts["impl"] = out["power"].sum() * 0.0
             parts["impl_frac"] = out["power"].sum().detach() * 0.0
 
-        parts["total"] = (w_cons * parts["cons"] + w_harm * parts["harm"]
+        # ── 대기 헤드의 닻 `L_sb` (13.60) ─────────────────────────────────
+        # 자유 슬랙을 `idle x 측정 대기전력` 으로 묶는다 (`standby_w` 주석 참조).
+        if w_sb > 0 and float(self.standby_w.abs().sum()) > 0:
+            idle_sb = (torch.sigmoid(out["plugged_logit"])
+                       * (1.0 - torch.sigmoid(out["on_logit"])))
+            parts["sb"] = wmean((out["standby"] - idle_sb * self.standby_w[None]).abs())
+        else:
+            parts["sb"] = out["power"].sum() * 0.0
+
+        parts["total"] = (w_sb * parts["sb"]
+                          + w_cons * parts["cons"] + w_harm * parts["harm"]
                           + w_over * parts["over"] + w_hedge * parts["hedge"]
                           + w_real_on * parts["real_on"]
                           + w_consq * parts["consq"] + w_pref * parts["pref"]

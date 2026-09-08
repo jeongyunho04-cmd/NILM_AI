@@ -46,11 +46,15 @@ TRUE_W = {"beam_projector": 43.0, "laptop_charger": 39.0, "minipc": 8.0}
 
 
 def build_loss(apps: Sequence[str], dev: str, harm_weight: str = "inv_h2",
-               sig_site: str = "") -> NILMLoss:
+               sig_site: str = "", pref_apps: Sequence[str] = ()) -> NILMLoss:
     """`run_adapt` 와 같은 지문·척도로 손실을 짓는다.
 
     `sig_site` 를 주면 그 **자리의 격리 녹화만으로** 지문을 세운다 (13.59). 여기서
     재는 창은 전부 한 자리이므로 창별 선택이 필요 없다 — 손실 전체를 그 자리로 바꾼다.
+
+    `pref_apps` 를 주면 `L_pref`(12.145)의 참조 전력을 싣는다. 비우면 `power_ref` 가
+    0 이라 그 항이 **항등적으로 0** 이다 — 이 도구의 기본이고, 배분만 견줄 때는 그것이
+    맞다. 지형을 훑을 때는(`run_alloc_landscape`) 켜야 한다.
     """
     from src.synthesis.segment_pool import SegmentPool
     from src.model.sig_site import SITES, site_signatures, site_signatures_by_state
@@ -64,9 +68,19 @@ def build_loss(apps: Sequence[str], dev: str, harm_weight: str = "inv_h2",
         sig_state = site_signatures_by_state(pool, apps)[0][si]
         print(f"  ** 자리 {sig_site} 지문: 따로 맞춘 기기 "
               f"{[apps[j] for j in range(len(apps)) if used[si, j]]} **")
+    pref = torch.zeros(len(apps), dtype=torch.float32)
+    if pref_apps:
+        from src.evaluation.power_ref import REFERENCE_W
+        for x in pref_apps:
+            if x in apps and x in REFERENCE_W:
+                pref[apps.index(x)] = float(REFERENCE_W[x][0])
+        print(f"  ** L_pref 참조: "
+              + ", ".join(f"{apps[j]} {float(pref[j]):.1f}W"
+                          for j in range(len(apps)) if pref[j] > 0) + " **")
     return NILMLoss(
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
         signatures=torch.from_numpy(sig),
+        power_ref=pref,
         standby_sig=torch.from_numpy(standby_signatures(pool, apps)),
         noise_sig=torch.from_numpy(noise_signature(pool)),
         harm_scale=torch.from_numpy(harmonic_scales(pool, apps)),
