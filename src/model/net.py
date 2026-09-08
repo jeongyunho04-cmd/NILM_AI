@@ -129,6 +129,7 @@ class NILMNet(nn.Module):
         fine_dropout: float = 0.0,
         min_on_w: Optional[Sequence[float]] = None,
         fine_channels: Optional[int] = None,
+        aux_z: bool = False,
     ):
         super().__init__()
         # 세밀 갈래가 실제로 쓸 채널 수. 입력은 항상 FINE_CHANNELS 개로 오지만
@@ -234,6 +235,20 @@ class NILMNet(nn.Module):
                              torch.tensor(fine_flags, dtype=torch.float32),
                              persistent=False)
 
+        # 몸통 -> log(r_grid) 보조 헤드 (13.55). **입력 배치도 trunk_in 도 안 바꾼다** —
+        # 파라미터 257개가 z 뒤에 붙을 뿐이라 옛 체크포인트와 모양이 어긋나지 않는다
+        # (`aux_z=False` 로 지으면 키 자체가 없다).
+        #
+        # 왜 필요한가 (13.54): 입력 57채널에서 log Z 를 선형으로 R² 0.935 로 뽑을 수
+        # 있는데 몸통 z 256차원에서는 0.661 로 흐려진다. "모른다"도 "알면서 안 쓴다"도
+        # 아니고 **뽑다가 잃는다** — 아무도 보존하라고 요구하지 않기 때문이다.
+        # 그 사이 같은 창을 Z 만 바꿔 만들면 참 전력은 불변인데 예측이 12.9~51.1W 로
+        # 흔들리고 Z=3.0Ω 에서 프로젝터 관문이 0.137 로 무너진다.
+        self.aux_z = bool(aux_z)
+        if self.aux_z:
+            self.z_head = nn.Linear(h, 1)
+            nn.init.zeros_(self.z_head.bias)
+
         # 전력 혼합에서 state 0(OFF_STANDBY)은 뺀다 — 켜진 상태들만 섞어야 한다.
         on_states = self.state_mask.clone()
         on_states[:, 0] = 0.0
@@ -310,7 +325,7 @@ class NILMNet(nn.Module):
         p_states = F.softplus(o[..., 0:MAX_STATES])                     # (B,K,S)
         mix = state.masked_fill(self.power_mix_mask[None] == 0, -1e4).softmax(-1)
         p_raw = (mix * p_states).sum(-1)                                 # (B,K)
-        return {
+        out = {
             # 전력은 on/off 로 게이팅한다. 게이팅이 없으면 꺼진 기기에도 전력이 샌다.
             "power": torch.sigmoid(on_logit) * p_raw,
             "power_raw": p_raw,
@@ -323,6 +338,9 @@ class NILMNet(nn.Module):
             "plugged_logit": o[..., self.i_on + 1],
             "standby": F.softplus(o[..., self.i_on + 2]),
         }
+        if self.aux_z:
+            out["log_z"] = self.z_head(z).squeeze(-1)      # (B,)
+        return out
 
 
 def appliance_state_counts(appliances: Sequence[str]) -> List[int]:

@@ -100,6 +100,7 @@ class SynthBatchDataset(Dataset):
         yst = np.empty((n, k), np.int64)
         oh = np.empty((n, 15, 2), np.float32)
         pn = np.empty(n, np.float32); pobs = np.empty(n, np.float32)
+        zg = np.empty((n, 2), np.float32)          # 13.55 선로 임피던스 [r, x]
         for j in range(n):
             smp, _ = g._synthesize_window()
             t = g._format_targets(smp)
@@ -110,9 +111,11 @@ class SynthBatchDataset(Dataset):
             oh[j] = smp.harmonics_ri[ti]
             pn[j] = smp.p_noise_w[ti]
             pobs[j] = smp.power_features[ti, 0]
+            zg[j] = (smp.metadata.get("r_grid_ohm", np.nan),
+                     smp.metadata.get("x_grid_ohm", np.nan))
         fine, wide = build_inputs(xs)
         return tuple(torch.from_numpy(a) for a in
-                     (fine, wide, yp, yo, ypl, ys, yst, oh, pn, pobs))
+                     (fine, wide, yp, yo, ypl, ys, yst, oh, pn, pobs, zg))
 
 
 def cache_index_plan(n: int, batch_size: int, n_batches: int,
@@ -164,10 +167,13 @@ class CacheBatchDataset(Dataset):
 
 
 def to_targets(batch, dev):
-    (fine, wide, yp, yo, ypl, ys, yst, oh, pn, pobs) = [b.to(dev, non_blocking=True) for b in batch]
+    (fine, wide, yp, yo, ypl, ys, yst, oh, pn, pobs, zg) = [
+        b.to(dev, non_blocking=True) for b in batch]
     return fine, wide, {
         "y_power": yp, "y_on": yo, "y_plugged": ypl, "y_standby": ys, "y_state": yst,
         "obs_harm": oh, "p_noise": pn, "p_observed": pobs, "harm_offset": None,
+        # 13.55 — 이 창의 선로 저항 [Ω]. 옛 캐시면 NaN 이고 손실이 알아서 건너뛴다.
+        "log_z": torch.log(zg[:, 0].clamp(min=1e-3)),
     }
 
 
@@ -236,6 +242,11 @@ def main() -> int:
                     help="상태별 전력 출력을 그 상태의 실제 전력에 묶는 항 (12.35). "
                          "0 이면 끈다 - 그러면 전력 손실이 섞인 뒤에만 걸려 "
                          "충전기·미니PC 의 상태별 출력이 붕괴한다 (분화비 1.02 / 1.16).")
+    ap.add_argument("--w-z", type=float, default=0.0, metavar="W",
+                    help="몸통 z 에서 log(r_grid) 를 맞히는 보조 감독 (13.55). "
+                         "13.54 측정: 입력 57채널에서 log Z 를 R² 0.935 로 뽑는데 "
+                         "몸통에서는 0.661 로 흐려진다. 참 전력은 Z 에 불변인데 "
+                         "예측은 86%% 폭으로 흔들렸다. 라벨은 캐시의 z_grid 다")
     ap.add_argument("--fine-dropout", type=float, default=0.0,
                     help="학습 중 세밀 갈래를 통째로 가릴 확률 (12.21절). 합성에서 학습한 "
                          "선형 probe 가 실측에서 세밀은 AUC 0.32 로 뒤집히고 광역은 0.69 를 "
@@ -417,7 +428,8 @@ def main() -> int:
                     periodicity=a.periodicity,
                     fine_dropout=a.fine_dropout,
                     prior_kappa=a.prior_kappa, prior_beta=a.prior_beta,
-                    fine_channels=a.fine_channels).to(dev)
+                    fine_channels=a.fine_channels,
+                    aux_z=(a.w_z > 0)).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
     crit = NILMLoss(
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
@@ -433,7 +445,7 @@ def main() -> int:
             [1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
             dtype=torch.float32) if a.harm_even_by_class else None),
         weights=LossWeights(harm=a.w_harm, cons=a.w_cons, over=a.w_over,
-                            state_power=a.w_state_power),
+                            state_power=a.w_state_power, z=a.w_z),
         s_state=(build_state_scales(apps, [S_I[x] for x in apps])
                  if a.per_state_scale else None),
     ).to(dev)
@@ -539,6 +551,7 @@ def main() -> int:
                     # 광역 채널 수 (13.12). 세밀과 달리 슬라이스가 아예 없다 —
                     # `net.py` 가 conv 입력 채널로 직결한다.
                     "wide_channels": WIDE_CHANNELS,
+                    "aux_z": bool(model.aux_z),
                     "select": a.select}, path)
 
     hist, best = [], None
@@ -577,9 +590,12 @@ def main() -> int:
         if a.snapshot_every > 0 and ep % a.snapshot_every == 0 and ep != a.epochs:
             save_ckpt(Path(a.out) / "snapshots" / f"{a.tag}_ep{ep:04d}.pt", ep)
 
+        # 13.55: 보조 Z 항은 **표현이 잡히는지**를 바로 보여준다. 출발점은
+        # 평균 예측 = Var(log r) 0.296 이다. 이 값이 안 내려가면 헤드가 논 것이다.
+        _zs = f" z {agg['z']:.4f}" if a.w_z > 0 else ""
         if ep % a.eval_every and ep != a.epochs:
             print(f"  ep{ep:>3d}  loss {agg['total']:.4f} (pw {agg['power']:.4f} "
-                  f"harm {agg['harm']:.4f})  [{t_train:.0f}s, "
+                  f"harm {agg['harm']:.4f}{_zs})  [{t_train:.0f}s, "
                   f"{a.epoch_windows/max(t_train,1e-9):,.0f} win/s]", flush=True)
             continue
 
@@ -592,7 +608,7 @@ def main() -> int:
                "train_sec": round(t_train, 1)}
         hist.append(row)
         print(f"  ep{ep:>3d}  loss {agg['total']:.4f} (pw {agg['power']:.4f} "
-              f"harm {agg['harm']:.4f})  |  MAE {row['mae']:.3f}W  F1 {row['f1']:.4f}  "
+              f"harm {agg['harm']:.4f}{_zs})  |  MAE {row['mae']:.3f}W  F1 {row['f1']:.4f}  "
               f"저항3종 {row['resistive_acc']:.3f}  잔차 {row['resid_abs']:.1f}W  "
               f"[{t_train:.0f}s 학습 / {row['sec']-t_train:.0f}s 평가, "
               f"{a.epoch_windows/max(t_train,1e-9):,.0f} win/s]", flush=True)

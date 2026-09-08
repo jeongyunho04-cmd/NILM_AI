@@ -56,7 +56,7 @@ def main() -> int:
                     help="창을 자를 때 **상태**를 먼저 뽑는다 (13.35). 프리셋 "
                          "'minipc_balanced'/'smps_balanced' 또는 JSON {가전:{상태id:확률}}. "
                          "전력 균등 계층화(12.34.6)가 좁은 상태를 과소 노출한다 — "
-                         "미니PC IDLE 은 8.8~12.0W 로 좁아 17.2% 만 나오는데 "
+                         "미니PC IDLE 은 8.8~12.0W 로 좁아 17.2%% 만 나오는데 "
                          "**실측 복합은 IDLE 로만 돈다**")
     ap.add_argument("--sp-curves", action="store_true",
                     help="증강의 전력 스케일을 **부하 의존 서명** `s(p)` 로 옮긴다 "

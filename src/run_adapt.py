@@ -397,6 +397,10 @@ def main() -> int:
                          "겨냥은 크기가 아니라 **신원**이다 — 오븐이 켜졌다면 64mA/"
                          "|u3| 0.058 의 SMPS 전류가 같이 있어야 하고 포트에는 그런 "
                          "상태가 없다. 상수는 녹화 3개에서 폭/중앙 0.010 이다.")
+    ap.add_argument("--w-z", type=float, default=0.0, metavar="W",
+                    help="보조 Z 감독을 2단계에서도 이어간다 (13.55). **합성 복기 배치에만 "
+                         "걸린다** — 실측 창에는 참 Z 가 없어 NaN 마스크가 걸러낸다. "
+                         "1단계에서 얻은 표현을 적응이 다시 흘리지 않게 하려는 것이다")
     ap.add_argument("--w-pref", type=float, default=0.0, metavar="W",
                     help="**전력 사전** (12.145). 격리 녹화에서 통전 전력이 좁은 "
                          "기기(`power_ref.REFERENCE_W`)의 전력을 그 참값에 묶는다. "
@@ -647,6 +651,7 @@ def main() -> int:
                     fine_dropout=ck.get("fine_dropout", 0.0),
                     prior_kappa=ck.get("prior_kappa", 0.0),
                     prior_beta=ck.get("prior_beta", 0.5),
+                    aux_z=ck.get("aux_z", False),
                     fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
     model.load_state_dict(ck["model"])
     # 채점(`score_real_files`)도 같은 프레임을 봐야 한다 (12.181). 체크포인트에도 저장한다.
@@ -669,7 +674,7 @@ def main() -> int:
         reactive_qp=torch.from_numpy(qp), noise_q=nq,
         smps_group=[apps.index(x) for x in
                     ("beam_projector", "laptop_charger", "minipc") if x in apps],
-        weights=LossWeights(harm=0.1, cons=0.0, over=0.0),
+        weights=LossWeights(harm=0.1, cons=0.0, over=0.0, z=a.w_z),
         s_state=build_state_scales(apps, [S_I[x] for x in apps]),
         power_ref=torch.tensor(
             [(REFERENCE_W[x][0] if x in REFERENCE_W
@@ -911,6 +916,8 @@ def main() -> int:
                 # 13.47: 이 키를 빠뜨리면 적응 체크포인트를 **못 읽는다** —
                 # `load_model` 이 wide_target=False 로 지어 trunk 701 vs 637 로 어긋난다.
                 "wide_target": ck.get("wide_target", False),
+                # 13.55: 같은 이유로 보조 Z 헤드 유무도 남긴다 (`z_head.*` 키가 남는다).
+                "aux_z": bool(getattr(model, "aux_z", False)),
                 "periodicity": ck.get("periodicity", False),
                 "fine_dropout": ck.get("fine_dropout", 0.0),
                 # 짝수차 배제 (12.77). 부모 체크포인트 값을 그대로 물려받는다.

@@ -119,6 +119,9 @@ class LossWeights:
     harm: float = 0.1
     cons: float = 0.0        # 1단계 0. 2단계에서 0.4 로 올린다 (3.3절)
     over: float = 0.1        # 물리 상한 힌지 (아래 참조)
+    # 몸통 -> log(r_grid) 보조 감독 (13.55). 0 이면 완전히 꺼진다.
+    # 라벨은 캐시의 `z_grid` 다. 실측 창에는 없으므로 2단계에서는 안 걸린다.
+    z: float = 0.0
 
 
 def _huber(pred: torch.Tensor, tgt: torch.Tensor, delta: float) -> torch.Tensor:
@@ -575,6 +578,21 @@ class NILMLoss(torch.nn.Module):
             parts["cons"] = (recon - tgt["p_observed"]).abs().mean()
         else:
             parts["cons"] = out["power"].sum() * 0.0
+
+        # ── 선로 임피던스 보조 감독 (13.55) ────────────────────────────────
+        # 예측 대상은 **분해가 아니라 표현**이다. 참 전력은 Z 에 완전히 불변인데
+        # (44.4 / 56.8 / 12.7W) 예측은 Z 를 따라 86% 폭으로 흔들렸다 (13.54).
+        # 정보는 입력에 있으니(R² 0.935) 몸통이 그것을 버리지 말라고만 하면 된다.
+        #
+        # NaN 마스크: 옛 캐시에는 `z_grid` 가 없고, 2단계 실측 창에는 참 Z 가 없다.
+        # 유한한 창만 세고 그 개수로 나눈다 — 섞인 배치에서도 척도가 유지된다.
+        if self.w.z > 0 and out.get("log_z") is not None and tgt.get("log_z") is not None:
+            lz = tgt["log_z"]
+            m = torch.isfinite(lz)
+            d = (out["log_z"] - torch.where(m, lz, torch.zeros_like(lz))) * m
+            parts["z"] = (d * d).sum() / m.sum().clamp(min=1.0)
+        else:
+            parts["z"] = out["power"].sum() * 0.0
 
         total = sum(getattr(self.w, n) * v for n, v in parts.items())
         parts["total"] = total

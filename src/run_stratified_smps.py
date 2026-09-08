@@ -89,6 +89,7 @@ def run(ckpt: str, stems: Sequence[str], dev: str, stride: int = 30) -> dict:
                     fine_dropout=ck.get("fine_dropout", 0.0),
                     prior_kappa=ck.get("prior_kappa", 0.0),
                     prior_beta=ck.get("prior_beta", 0.5),
+                    aux_z=ck.get("aux_z", False),
                     fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
     model.load_state_dict(ck["model"])
     model.eval()

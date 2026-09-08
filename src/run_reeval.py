@@ -115,6 +115,7 @@ def predict_cnn(tag: str, hs, dev: str, prep) -> tuple:
                     fine_dropout=ck.get("fine_dropout", 0.0),
                     prior_kappa=ck.get("prior_kappa", 0.0),
                     prior_beta=ck.get("prior_beta", 0.5),
+                    aux_z=ck.get("aux_z", False),
                     fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
     model.load_state_dict(ck["model"])       # 구조가 다르면 여기서 걸린다
     p, on_prob = evaluate(model, prep, dev)

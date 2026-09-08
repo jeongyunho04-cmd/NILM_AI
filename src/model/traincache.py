@@ -55,7 +55,14 @@ _SPEC = {
     "obs_harm":   (np.float16, (15, 2)),
     "p_noise":    (np.float32, ()),
     "p_observed": (np.float32, ()),
+    # 13.55 — 이 창의 **선로 임피던스** [r_grid, x_grid] Ω. 모델 입력이 아니라
+    # 보조 감독 목표다. 13.54 가 잰 것: 입력에서 log Z 를 R² 0.935 로 뽑을 수
+    # 있는데 몸통 z 에서는 0.661 로 흐려진다 — 아무도 보존하라고 안 해서다.
+    "z_grid":     (np.float32, (2,)),
 }
+
+#: 옛 캐시에는 없는 배열. 없으면 NaN 으로 채워 내보낸다 (배치 길이는 항상 같다).
+_OPTIONAL = ("z_grid",)
 
 _GEN = None
 _SEED_BASE = 0
@@ -126,6 +133,7 @@ def _chunk(task: Tuple[int, int]) -> Dict[str, np.ndarray]:
         "y_plugged": np.empty((n, k), np.int8), "y_standby": np.empty((n, k), np.float16),
         "y_state": np.empty((n, k), np.int8), "obs_harm": np.empty((n, 15, 2), np.float16),
         "p_noise": np.empty(n, np.float32), "p_observed": np.empty(n, np.float32),
+        "z_grid": np.empty((n, 2), np.float32),
     }
     for j in range(n):
         smp, _ = g._synthesize_window()
@@ -137,6 +145,10 @@ def _chunk(task: Tuple[int, int]) -> Dict[str, np.ndarray]:
         out["obs_harm"][j] = smp.harmonics_ri[ti]
         out["p_noise"][j] = smp.p_noise_w[ti]
         out["p_observed"][j] = smp.power_features[ti, 0]
+        # 한 창은 배전 환경 하나 위에 놓인다 (`sample_environment`). metadata 가
+        # 이미 담고 있으므로 새로 계산하지 않는다 — 소수 4자리는 0.3~2.0Ω 에서 무해하다.
+        out["z_grid"][j] = (smp.metadata.get("r_grid_ohm", np.nan),
+                            smp.metadata.get("x_grid_ohm", np.nan))
     f, wd = build_inputs(xs)
     out["fine"] = f.astype(np.float16)
     out["wide"] = wd.astype(np.float16)
@@ -187,6 +199,7 @@ def build_cache(
         "y_power": (n_windows, k), "y_on": (n_windows, k), "y_plugged": (n_windows, k),
         "y_standby": (n_windows, k), "y_state": (n_windows, k),
         "obs_harm": (n_windows, 15, 2), "p_noise": (n_windows,), "p_observed": (n_windows,),
+        "z_grid": (n_windows, 2),
     }
     mm = {name: np.lib.format.open_memmap(out / f"{name}.npy", mode="w+",
                                           dtype=_SPEC[name][0], shape=shapes[name])
@@ -278,7 +291,14 @@ class CachedWindows:
                 "python -m src.run_build_traincache 로 다시 만드십시오.")
         self.n = self.meta["n_windows"]
         self.appliances = self.meta["appliances"]
-        self.arr = {name: np.load(d / f"{name}.npy", mmap_mode="r") for name in _SPEC}
+        self.arr = {name: np.load(d / f"{name}.npy", mmap_mode="r")
+                    for name in _SPEC if name not in _OPTIONAL}
+        # 옛 캐시(v22 이전)에는 `z_grid.npy` 가 없다. 배치 길이를 바꾸지 않으려고
+        # NaN 을 내보낸다 — 손실 쪽이 유한값만 골라 쓴다.
+        for name in _OPTIONAL:
+            p = d / f"{name}.npy"
+            self.arr[name] = np.load(p, mmap_mode="r") if p.exists() else None
+        self.has_z = self.arr["z_grid"] is not None
 
     def __len__(self) -> int:
         return self.n
@@ -320,4 +340,6 @@ class CachedWindows:
             np.asarray(a["y_plugged"][i], np.float32), np.asarray(a["y_standby"][i], np.float32),
             np.asarray(a["y_state"][i], np.int64), np.asarray(a["obs_harm"][i], np.float32),
             np.asarray(a["p_noise"][i], np.float32), np.asarray(a["p_observed"][i], np.float32),
+            (np.asarray(a["z_grid"][i], np.float32) if a["z_grid"] is not None
+             else np.full((len(i), 2), np.nan, np.float32)),
         )
