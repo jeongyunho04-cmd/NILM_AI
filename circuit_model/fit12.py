@@ -35,6 +35,17 @@ except ImportError:                    # `python circuit_model/fit12.py` 로 직
 #: 자리 비를 맞출 차수 (홀수 h3~h15). h1 은 1/V 라 자리 정보가 없다.
 SITE_ORDERS = [3, 5, 7, 9, 11, 13, 15]
 
+#: **고차 크기**를 맞출 차수 (13.67). `SITE_ORDERS` 와 같은 목록이지만 하는 일이 다르다 —
+#: 저쪽은 두 자리의 **비**를 묶고 이쪽은 **크기 자체**를 묶는다.
+#:
+#: 왜 필요한가: 목적함수에 고차 크기를 직접 묶는 항이 **없었다.**
+#:   · 파형 항은 `‖Is − I‖ / RMS(I)` 라 시간영역 에너지 기준인데 h1 이 그 99% 다.
+#:     고차는 사실상 안 보인다 (격리 파형 적합 오차 2.6~10.8% 는 h1 이 만든 값이다)
+#:   · 자리 비 항은 `log(|I_h(E)|/|I_h(D)|)` — 두 자리가 같은 배율로 틀리면 0 이다
+#: 그래서 혼합검증에서 **기기 한 대만 켜진 창의 h13 이 44~116% 틀렸다** (13.67.1).
+#: 로그비로 잰다 — 차수마다 크기가 100배 다르므로 절대 잔차를 쓰면 h3 이 독식한다.
+MAG_ORDERS = [3, 5, 7, 9, 11, 13, 15]
+
 NPC = 256; DT = 1.0 / (F * NPC)
 
 
@@ -109,7 +120,8 @@ def site_pairs(bins, max_dp_frac=0.15, min_gap_v=5.0):
     return pairs, (float(v[o[k]]), float(v[o[k + 1]]))
 
 
-def fit(bins, cx, tau, fit_g=False, r_per_file=False, verbose=True, site_w=0.0):
+def fit(bins, cx, tau, fit_g=False, r_per_file=False, verbose=True, site_w=0.0,
+        mag_w=0.0):
     srcs = sorted({b['src'] for b in bins}); nf = len(srcs) if r_per_file else 1
     names = ['C', 'R', 'L0', 'rd', 'Isat'] + (['G', 'dCx'] if fit_g else []) + (['R%d' % k for k in range(1, nf)] if nf > 1 else [])
     lb = np.log10([5e-6, 0.1, 60e-6, 0.05, 0.1] + ([1e-6, 1e-12] if fit_g else []) + [0.1] * (nf - 1))
@@ -141,22 +153,35 @@ def fit(bins, cx, tau, fit_g=False, r_per_file=False, verbose=True, site_w=0.0):
             print('  ⚠ 자리 비: 짝을 못 만들었다 (한 자리뿐이거나 전력이 안 맞는다)')
     nsite = max(1, len(pairs) * len(hs))
 
+    # ── 고차 크기 항 (13.67) ────────────────────────────────────────────────
+    hm = [h - 1 for h in MAG_ORDERS]
+    meas_mag = [np.log(np.maximum(
+        np.abs(harmonics_from_wave(b['I'], b['V']))[hm], 1e-12)) for b in bins]
+    nmag = max(1, len(bins) * len(hm))
+    if verbose and mag_w > 0:
+        print('  고차 크기 %d창 x %d차수, 가중 %.2f (h%s)'
+              % (len(bins), len(hm), mag_w, ','.join(str(h) for h in MAG_ORDERS)))
+
     def resid(x):
         C, L0, rd, Isat, G, dCx, Rs = unpack(x); out = []
         sims = {}
         for k_, b in enumerate(bins):
             Is = sim_wave(b['P'], b['V'], (C, Rs[b['src']], L0, Isat, cx + dCx, rd, G), NPC, tau)
             if Is is None:
-                return np.full(n + nsite * bool(pairs), 1e3)
+                return np.full(n + nsite * bool(pairs) + nmag * (mag_w > 0), 1e3)
             sims[k_] = Is
             out.append((Is - b['I']) / np.sqrt(np.mean(b['I'] ** 2) * len(b['I'])))
+            if mag_w > 0:
+                a = np.log(np.maximum(
+                    np.abs(harmonics_from_wave(Is, b['V']))[hm], 1e-12))
+                out.append(mag_w * (a - meas_mag[k_]) / np.sqrt(nmag))
         for i, j in pairs:
             # **짝의 두 파일에 같은 R** — 그래야 비가 R 로 흡수되지 않는다 (13.18.5)
             Ri = Rs[bins[i]['src']]
             si = sim_wave(bins[i]['P'], bins[i]['V'], (C, Ri, L0, Isat, cx + dCx, rd, G), NPC, tau)
             sj = sim_wave(bins[j]['P'], bins[j]['V'], (C, Ri, L0, Isat, cx + dCx, rd, G), NPC, tau)
             if si is None or sj is None:
-                return np.full(n + nsite, 1e3)
+                return np.full(n + nsite + nmag * (mag_w > 0), 1e3)
             a = np.abs(harmonics_from_wave(si, bins[i]['V']))[hs]
             b_ = np.abs(harmonics_from_wave(sj, bins[j]['V']))[hs]
             r = np.log(np.maximum(b_, 1e-12) / np.maximum(a, 1e-12))
@@ -189,13 +214,19 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(); ap.add_argument('device'); ap.add_argument('files', nargs='+')
     ap.add_argument('--bg'); ap.add_argument('--fit-g', action='store_true'); ap.add_argument('--r-per-file', action='store_true')
     ap.add_argument('--tau', type=float, default=60e-6); ap.add_argument('--nbins', type=int, default=3); ap.add_argument('-o')
+    ap.add_argument('--harm-mag', type=float, default=0.0, metavar='W',
+                    help='**고차 크기**를 목적함수에 넣는다 (13.67). 파형 항은 시간영역 '
+                         'RMS 정규화라 h1 이 에너지의 99%%를 차지해 고차가 안 보이고, '
+                         '자리 비 항은 비만 묶는다. h3~h15 의 log|I_h| 를 직접 맞춘다. '
+                         '0 이면 끔(옛 동작).')
     ap.add_argument('--site-ratio', type=float, default=0.0, metavar='W',
                     help='자리 비를 목적함수에 넣는 가중 (0 = 끔). 설계 13.20')
     a = ap.parse_args()
     bins = load_bins(a.files, a.nbins); Pbg = subtract_bg(bins, a.bg) if a.bg else None
     cx, r = measure_cx(bins); print('%s: 동작점 %s  Cx=%.3fµF(r=%.2f)  배경 %s' % (a.device, [round(b['P'], 1) for b in bins], cx * 1e6, r, None if Pbg is None else '%.2fW' % Pbg))
-    res = fit(bins, cx, a.tau, a.fit_g, a.r_per_file, site_w=a.site_ratio)
+    res = fit(bins, cx, a.tau, a.fit_g, a.r_per_file, site_w=a.site_ratio,
+              mag_w=a.harm_mag)
     out = dict(device=a.device, topo='v12g', params=res['params'], R_files=res['R_files'], tau=a.tau, Cx_meas=cx,
-               site_ratio_w=a.site_ratio,
+               site_ratio_w=a.site_ratio, harm_mag_w=a.harm_mag,
                validation=res['validation'], files=[f.split('/')[-1] for f in a.files], bg=a.bg, adc='single-ended', date='2026-09-06')
     path = a.o or 'circ12_%s.pkl' % a.device; pickle.dump(out, open(path, 'wb')); print('->', path)

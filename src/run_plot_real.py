@@ -72,15 +72,34 @@ def load_model(ckpt: str, dev: str):
 
 @torch.no_grad()
 def predict(model, rw, dev: str, batch: int = 512):
-    P, S = [], []
+    """(전력, 대기, 관문, 관측P, 관측고조파, 계측P) — 후처리가 뒤의 셋을 쓴다."""
+    P, S, G, PO, OH, PN = [], [], [], [], [], []
     for i in range(0, len(rw), batch):
-        f, w, *_ = rw.batch(np.arange(i, min(i + batch, len(rw))))
+        f, w, pobs, oh, pn = rw.batch(np.arange(i, min(i + batch, len(rw))))
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
             o = model(torch.from_numpy(np.ascontiguousarray(f)).to(dev),
                       torch.from_numpy(np.ascontiguousarray(w)).to(dev))
         P.append(o["power"].float().cpu().numpy())
         S.append(o["standby"].float().cpu().numpy())
-    return np.concatenate(P), np.concatenate(S)
+        G.append(torch.sigmoid(o["on_logit"]).float().cpu().numpy())
+        PO.append(pobs); OH.append(oh); PN.append(pn)
+    return (np.concatenate(P), np.concatenate(S), np.concatenate(G),
+            np.concatenate(PO), np.concatenate(OH), np.concatenate(PN))
+
+
+def run_postproc(mode, apps, pred, standby, gate, pobs, oh, pn, v_rms):
+    """`cap` = 물리 상한 넘기기, `full` = 거기에 저항 조합 정합까지 (12.112).
+
+    ⚠ `resistive_match` 는 `min_w=150W` 문턱이라 **SMPS 전용 창(93W)은 안 건드린다.**
+      자리 D 배분은 후처리로 못 고친다 — 고치는 것은 저항 창의 조합이다.
+    """
+    if mode == "off":
+        return pred, gate
+    from src.model.postproc import apply_postproc, resistive_match
+    P, g = apply_postproc(pred, gate, apps)
+    if mode == "full":
+        P, g = resistive_match(P, g, apps, pobs, v_rms, standby, pn, obs_harm=oh)
+    return np.asarray(P, np.float32), np.asarray(g, np.float32)
 
 
 def plot_file(stem, apps, t_pred, pred, standby, t_obs, obs, spec, path, title):
@@ -171,6 +190,9 @@ def main() -> int:
     ap.add_argument("--stride", type=int, default=30, help="예측 간격 (사이클)")
     ap.add_argument("--tag", default="")
     ap.add_argument("--out", default="results/plots")
+    ap.add_argument("--postproc", default="off", choices=("off", "cap", "full"),
+                    help="`cap` 물리 상한 넘기기 · `full` 거기에 저항 조합 정합까지. "
+                         "⚠ resistive_match 는 min_w=150W 라 SMPS 전용 창은 안 건드린다")
     a = ap.parse_args()
 
     _font()
@@ -187,7 +209,11 @@ def main() -> int:
             print(f"  {stem}: 봉인 — 건너뜀 (4.3절)")
             continue
         rw = dense_targets(stem, stride=a.stride)
-        pred, standby = predict(model, rw, dev)
+        pred, standby, gate, pobs, oh, pn = predict(model, rw, dev)
+        if a.postproc != "off":
+            pred, gate = run_postproc(a.postproc, apps, pred, standby, gate,
+                                      pobs, oh, pn,
+                                      np.asarray(rw.v_observed, np.float32))
         raw = load_nilm_npz(f"processed_data/composite_eval/{stem}.npz")
         obs = np.asarray(raw["power_features"])[:, 0]
         t_obs = np.arange(len(obs)) / SAMPLING_HZ
