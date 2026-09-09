@@ -1313,6 +1313,66 @@ def test_circuit_model_does_not_fail_silently():
         "`circuit_model/__pycache__` 를 지우고 다시 보십시오 (13.23.5)")
 
 
+def test_sim_harmonics_references_the_measured_voltage():
+    """`sim_harmonics` 의 위상 기준이 **계측 전압**인가 (13.68).
+
+    펌웨어 규약은 `ihdeg_h = arg(I_h) − h·arg(V1)` 이고 그 `V1` 은 계측 전압이다. 2026-09-09
+    까지 `sim_harmonics` 는 계측 영역 전류를 **참** 전압에 기준했다 — 크기는 그대로인데 위상만
+    `atan(2πFτ)` = 1.2958°/h 로 어긋났고, h15 에서 19.44° 였다. 생성기의 SMPS 층 전체가
+    저항성 층에 대해 그만큼 돌아간 채 나갔다 (자리 D 에서 |I| 의 h13 30% · h15 35%).
+
+    두 가지로 묶는다.
+      ① 닫힌 꼴 회전이 기준을 실제로 `rc_periodic(v)` 로 옮긴 것과 같은가 (1e-9).
+      ② 같은 조건에서 `sim_wave` 입구(적합이 타는 길, 처음부터 계측 전압 기준)와
+         **h 비례 위상 어긋남**이 없는가. 버그가 있으면 이 기울기가 1.2958°/h 로 나온다.
+    `measured=False` 는 참전류·참전압이라 회전이 없어야 한다.
+    """
+    import numpy as np
+    import pytest as _pytest
+    from circuit_model.circuit12 import (F, NCYC, VF, _core12, harmonics_from_wave, rc_periodic,
+                                         sim_harmonics, sim_wave, wave_from_harmonics)
+
+    par = (1.067e-4, 3.70, 4.262e-4, 1.523, 2.079e-7, 0.1179, 6.708e-5)   # circ12_laptop_charger
+    tau, npc, P = 60e-6, 3072, 45.0
+    V15 = np.zeros(15, complex); V15[0] = 217.0
+    V15[2] = 217 * 0.021 * np.exp(1j * np.radians(190.0))
+    V15[4] = 217 * 0.017 * np.exp(1j * np.radians(20.0))
+    V15[6] = 217 * 0.008 * np.exp(1j * np.radians(-70.0))
+
+    # ① 닫힌 꼴 == 기준을 계측 전압 파형으로 옮긴 것
+    C, R, L0, Isat, Cx, rd, G = par
+    dt = 1.0 / (F * npc); v = wave_from_harmonics(V15, npc)
+    I = _core12(np.tile(v, NCYC), dt, max(P - G * np.mean(v ** 2), 0.5),
+                C, R, L0, Isat, Cx, VF, rd, np.tile(v, NCYC).max() - VF)
+    ref = harmonics_from_wave(rc_periodic(I[-npc:] + G * v, dt, tau), rc_periodic(v, dt, tau))
+    got = sim_harmonics(P, V15, par, tau=tau, npc=npc)
+    assert np.abs(got - ref).max() / np.abs(ref).max() < 1e-9, (
+        "닫힌 꼴 회전이 계측 전압 기준과 다릅니다")
+
+    # 참전류 경로는 회전이 없다 (참전압 기준으로 자기 정합)
+    raw = harmonics_from_wave(I[-npc:] + G * v, v)
+    assert np.abs(sim_harmonics(P, V15, par, tau=tau, npc=npc, measured=False) - raw).max()         / np.abs(raw).max() < 1e-9, "measured=False 에 회전이 섞였습니다"
+
+    # ② `sim_wave` 입구와 h 비례 어긋남이 없다.
+    #    ⚠ `up=1` 로 부른다. 생산 기본값 `up=12` 는 마지막 줄
+    #    `Ic.reshape(npc, up).mean(1)` 이 블록 **평균**을 블록의 **첫 표본**에 놓아
+    #    파형을 (up−1)/(2·up)·dt = 29.84µs 만큼 앞세우기 때문이다 (+0.6445°/h,
+    #    측정 +0.6447°/h). 그것은 이 수정과 **별개의** 결함이고 (13.68.3),
+    #    고치려면 pkl 재적합을 같이 해야 해서 여기서는 빗긴다.
+    Vm = wave_from_harmonics(V15, npc)                        # 계측 전압으로 쓴다
+    Is = sim_wave(P, Vm, par, npc, tau, up=1)
+    if Is is None:
+        _pytest.skip("sim_wave 가 수렴하지 않았습니다")
+    A = harmonics_from_wave(Is, Vm)
+    Vt = rc_periodic(Vm, dt, tau, inverse=True)
+    B = sim_harmonics(P, harmonics_from_wave(Vt, Vt), par, tau=tau, npc=npc)
+    h = np.arange(1, 16)
+    slope = float(np.median(np.degrees(np.angle(A / B))[:9] / h[:9]))
+    assert abs(slope) < 0.1, (
+        f"두 입구의 위상 기준이 다릅니다: {slope:.4f}°/h "
+        f"(버그가 있으면 {np.degrees(np.arctan(2 * np.pi * F * tau)):.4f}°/h 로 나옵니다)")
+
+
 def test_scoring_does_not_assume_a_fixed_test_file():
     """채점기가 **파일 이름**으로 옛 시대 자료 모양을 가정하면 안 된다 (13.24.10).
 
