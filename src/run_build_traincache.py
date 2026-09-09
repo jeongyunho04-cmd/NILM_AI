@@ -58,6 +58,11 @@ def main() -> int:
                          "전력 균등 계층화(12.34.6)가 좁은 상태를 과소 노출한다 — "
                          "미니PC IDLE 은 8.8~12.0W 로 좁아 17.2%% 만 나오는데 "
                          "**실측 복합은 IDLE 로만 돈다**")
+    ap.add_argument("--sp-per-texture", action="store_true",
+                    help="s(p) 를 **그 녹화의 텍스처**에서 만든 곡선으로 (13.74). 옛 곡선은 "
+                         "깨끗한 정현파에서 만들어 자리 차이가 원리적으로 없었다 — 실측 채점에서 "
+                         "크기 오차 중앙값 0.123 -> 0.031 (자리 D 는 0.211 -> 0.049). "
+                         "--sp-curves 와 같이 써야 하고 processed_data/sp_curves_tex.npz 가 필요하다")
     ap.add_argument("--sp-curves", action="store_true",
                     help="증강의 전력 스케일을 **부하 의존 서명** `s(p)` 로 옮긴다 "
                          "(12.166). 지금은 `I <- I·a` 로 선형인데, 캡 입력 SMPS 는 "
@@ -140,7 +145,7 @@ def main() -> int:
                 dither_even_phase_deg=a.dither_even_phase_deg,
                 power_scale_std_map=pss, level_scramble=lvs, state_mix=smx,
                 carrier_apps=car, couple_ext=a.couple_ext,
-                sp_curves=a.sp_curves, background=a.background,
+                sp_curves=a.sp_curves, sp_per_texture=a.sp_per_texture, background=a.background,
                 dither_min_order=a.dither_min_order)
     return 0
 

@@ -244,6 +244,15 @@ class VoltageTextureLibrary:
     def __len__(self) -> int:
         return len(self.textures)
 
+    def stems(self) -> List[str]:
+        """중앙 텍스처를 가진 녹화 stem 목록 (정렬). `file_rel` 의 키다."""
+        return sorted(self._file_rel)
+
+    def stem_vrms(self, stem: str) -> Optional[float]:
+        """그 녹화의 대표 vrms (텍스처 표본들의 중앙값). 모르면 None."""
+        v = [t.vrms for t in self.textures if t.stem == stem]
+        return float(np.median(v)) if v else None
+
     def file_rel(self, stem: str) -> Optional[np.ndarray]:
         """그 녹화(npz stem)의 중앙 상대 텍스처. 모르면 None."""
         return self._file_rel.get(stem)

@@ -85,6 +85,7 @@ def build_holdout(
     state_mix: Optional[Dict[str, Dict[int, float]]] = None,
     carrier_apps: Optional[Sequence[str]] = None,
     sp_curves: bool = False,
+    sp_per_texture: bool = False,
     background: bool = False,
     couple_ext: bool = False,
 ) -> dict:
@@ -104,7 +105,8 @@ def build_holdout(
     # 상태가 고른 잣대가 된다. 판을 견줄 때는 **같은 홀드아웃을 그대로 쓴다.**
     aug = DataAugmentor(level_scramble=level_scramble or None,
                         state_mix=state_mix,
-                        sp_curves=bool(sp_curves))
+                        sp_curves=bool(sp_curves),
+                        sp_per_texture=bool(sp_per_texture))
     syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
                           augmentor=aug, background=bool(background),
                           couple_ext=bool(couple_ext))
@@ -168,6 +170,7 @@ def build_holdout(
         "couple_ext": bool(couple_ext),
         # 학습 캐시와 짝이 맞아야 하는 설정 (12.168.4)
         "sp_curves": bool(sp_curves),
+        "sp_per_texture": bool(sp_per_texture),
         "background": bool(background),
         "appliances": apps,
         "channel_layout": "0:15 harmonic Real, 15:30 harmonic Imag, 30 P, 31 Q, 32 V",

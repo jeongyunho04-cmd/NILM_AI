@@ -103,6 +103,11 @@ def main() -> int:
                          "합성 F1 이 분포 어긋남과 교락되지 않는다")
     ap.add_argument("--sp-curves", action="store_true",
                     help="증강 전력스케일을 s(p) 로 (12.166). **학습 캐시와 같아야 한다**")
+    ap.add_argument("--sp-per-texture", action="store_true",
+                    help="s(p) 를 **그 녹화의 텍스처**에서 만든 곡선으로 (13.74). 옛 곡선은 "
+                         "깨끗한 정현파에서 만들어 자리 차이가 원리적으로 없었다 — 실측 채점에서 "
+                         "크기 오차 중앙값 0.123 -> 0.031 (자리 D 는 0.211 -> 0.049). "
+                         "--sp-curves 와 같이 써야 하고 processed_data/sp_curves_tex.npz 가 필요하다")
     ap.add_argument("--background", action="store_true",
                     help="상시 배경 부하를 넣는다 (12.166). **학습 캐시와 같아야 한다** — "
                          "배경 없이 만든 홀드아웃으로 배경 있는 모델을 재면 최소 부하만 "
@@ -137,7 +142,7 @@ def main() -> int:
     build_holdout(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                   holdout_frac=a.holdout_frac, seed=a.seed,
                   ablate_pedestal_apps=a.ablate_pedestal,
-                  sp_curves=a.sp_curves, background=a.background,
+                  sp_curves=a.sp_curves, sp_per_texture=a.sp_per_texture, background=a.background,
                   level_scramble=_parse_scramble(a.level_scramble),
                   state_mix=_parse_state_mix(a.state_mix),
                   carrier_apps=(None if a.carrier_on is None

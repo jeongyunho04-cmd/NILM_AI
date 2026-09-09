@@ -1778,3 +1778,88 @@ def test_voltage_tail_reaches_the_simulator():
     assert max(moved) > 0.02, (
         f"꼬리를 붙였는데 h13 이 {100 * max(moved):.2f}% 밖에 안 움직입니다 — "
         "꼬리가 회로에 안 들어가고 있습니다 (fcm.H_SRC / to_spectrum 절단을 보십시오)")
+
+
+def test_sp_curves_follow_the_recording_texture():
+    """s(p) 곡선이 **그 녹화의 텍스처**를 따라 갈리는가 (13.74).
+
+    옛 곡선은 `rel[0]=1` 인 깨끗한 정현파에서 만들어 자리 차이가 **원리적으로 없었다** —
+    충전기 h13 저P/고P 모양비가 어디서나 1.62 였다. 13.71 은 이 칸을 "회로모델이 h15 까지만
+    본다" 로 귀속했지만 13.73 이 반증했다: 꼬리를 얹어도 정현파면 그대로고, 텍스처만 바꿔도
+    3.85 대 0.81 로 갈린다.
+
+    실측 채점(고전력 조각을 s(p) 로 저전력으로 옮겨 같은 녹화의 실측과 견주기)에서 크기 오차
+    중앙값이 **0.123 -> 0.031** 이다 (자리 D 는 0.211 -> 0.049).
+
+    ⚠ 곡선이 **실제로 갈리는지**까지 본다. 파일만 있고 내용이 같으면 아무 일도 안 한 것이다.
+    """
+    import numpy as np
+    from src.run_build_sp_curves import TEX_CURVES
+    from src.synthesis.sp_curves import load_curves
+
+    tex = load_curves(TEX_CURVES)
+    if not tex:
+        pytest.skip(f"{TEX_CURVES} 가 없습니다 (run_build_sp_curves --per-texture)")
+
+    # ① 키가 `<기기>@<stem>` 이고 augmentor 가 찾는 꼴이다
+    bad = [k for k in tex if "@" not in k]
+    assert not bad, f"`기기@stem` 이 아닌 키가 있습니다: {bad[:3]}"
+
+    # ② 같은 기기라도 **자리가 다르면 곡선이 다르다** — 여기가 이 변경의 전부다
+    def ratio_h13(cv, lo=20.0, hi=61.0):
+        lo = max(lo, cv.p_min); hi = min(hi, cv.p_max)
+        a, b = cv.signature(lo), cv.signature(hi)
+        return float(abs(a[12]) / max(abs(b[12]), 1e-12))
+
+    pairs = [("minipc@minipc_1", "minipc@minipc_2"),          # D1 대 E2
+             ("laptop_charger@laptop_charger_1", "laptop_charger@laptop_charger_2")]  # D1 대 E1
+    seen = 0
+    for ka, kb in pairs:
+        if ka not in tex or kb not in tex:
+            continue
+        seen += 1
+        ra, rb = ratio_h13(tex[ka]), ratio_h13(tex[kb])
+        assert abs(ra - rb) / max(ra, rb) > 0.05, (
+            f"{ka} 와 {kb} 의 h13 전력 의존이 같습니다 ({ra:.3f} 대 {rb:.3f}) — "
+            "곡선이 텍스처를 안 따라갑니다")
+    if seen == 0:
+        pytest.skip("견줄 녹화 짝이 없습니다")
+
+    # ③ 정현파 곡선과도 다르다 (옛 곡선을 그대로 복사한 게 아니다)
+    base = load_curves()
+    for k, cv in tex.items():
+        dev = k.split("@")[0]
+        if dev not in base:
+            continue
+        p = 0.5 * (cv.p_min + cv.p_max)
+        if np.abs(cv.signature(p) - base[dev].signature(p)).max() > 1e-6:
+            break
+    else:
+        pytest.fail("텍스처 곡선이 정현파 곡선과 전부 같습니다 — rel 이 안 먹혔습니다")
+
+
+def test_augmentor_falls_back_when_the_recording_has_no_curve():
+    """모르는 녹화는 **안 건드린다** — 정현파 곡선으로 폴백 (13.74).
+
+    텍스처 곡선은 SMPS 녹화에만 있다. 없는 녹화까지 텍스처 곡선을 억지로 붙이면 남의 자리
+    지문을 실어 주는 셈이라 절단보다 나쁘다 (13.73 4절의 "자리를 틀리면" 과 같은 함정).
+    """
+    from src.run_build_sp_curves import TEX_CURVES
+    from src.synthesis.augmentor import DataAugmentor
+    from src.synthesis.sp_curves import load_curves
+
+    if not load_curves(TEX_CURVES):
+        pytest.skip(f"{TEX_CURVES} 가 없습니다")
+    aug = DataAugmentor(sp_curves=True, sp_per_texture=True)
+    assert aug._sp_tex, "텍스처 곡선이 안 실렸습니다"
+    assert aug._sp, "정현파 곡선(폴백)이 안 실렸습니다"
+
+    pick = lambda app, stem: (aug._sp_tex.get(f"{app}@{stem}") or aug._sp.get(app))  # noqa: E731
+    known = next(iter(aug._sp_tex))
+    app, stem = known.split("@", 1)
+    assert pick(app, stem) is aug._sp_tex[known], "아는 녹화인데 텍스처 곡선을 안 씁니다"
+    assert pick(app, "없는_녹화_9999") is aug._sp[app], "모르는 녹화가 폴백을 안 탑니다"
+
+    # 곡선이 아예 없는 기기(저항)는 둘 다 None -> 선형 곱으로 간다
+    assert pick("electiric_kettle", "electric_kettle_1") is None, (
+        "회로모델이 없는 기기에 곡선이 붙었습니다")

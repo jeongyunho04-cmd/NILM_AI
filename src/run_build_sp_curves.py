@@ -60,10 +60,21 @@ N_POINTS = 28
 V_REF = 224.0
 
 
-def build(devices: List[str], n: int = N_POINTS, v_ref: float = V_REF) -> dict:
-    circ = SmpsCircuit()
-    rel = np.zeros(15, complex)
-    rel[0] = 1.0 + 0j                     # 깨끗한 정현파 기준 — 텍스처 효과는 델타가 따로 맡는다
+#: 텍스처별 곡선 파일 (13.74). 기본 곡선(`sp_curves.npz`, 정현파)은 폴백으로 남는다.
+TEX_CURVES = "processed_data/sp_curves_tex.npz"
+
+
+def build(devices: List[str], n: int = N_POINTS, v_ref: float = V_REF,
+          rel: "np.ndarray" = None, suffix: str = "", circ: "SmpsCircuit" = None) -> dict:
+    """곡선 묶음 하나. `rel` 을 주면 그 텍스처에서, 안 주면 깨끗한 정현파에서 만든다.
+
+    `suffix` 는 기기 이름 뒤에 붙는다 (`laptop_charger@laptop_charger_1`) — `load_curves` 가
+    `device_names` 를 그대로 키로 쓰므로 파일 형식을 안 바꾸고 여러 벌을 담을 수 있다.
+    """
+    circ = circ or SmpsCircuit()
+    if rel is None:
+        rel = np.zeros(15, complex)
+        rel[0] = 1.0 + 0j                 # 깨끗한 정현파 기준
     out: Dict[str, np.ndarray] = {}
     names: List[str] = []
     for d in devices:
@@ -86,16 +97,57 @@ def build(devices: List[str], n: int = N_POINTS, v_ref: float = V_REF) -> dict:
         if len(P) < 4:
             print(f"  {d}: 유효 점이 {len(P)}개뿐 — 건너뛴다")
             continue
-        names.append(d)
-        out[f"{d}__P"] = np.asarray(P, float)
-        out[f"{d}__S"] = np.asarray(S, complex)
-        out[f"{d}__i1"] = np.asarray(i1, float)
-        out[f"{d}__ph1_rad"] = np.asarray(ph1, float)
-        out[f"{d}__k"] = np.asarray(k, float)
-        out[f"{d}__V_ref"] = np.float64(v_ref)
-        out[f"{d}__discrete"] = np.bool_(False)
-        print(f"  {d}: {len(P)}점 {P[0]:.1f}~{P[-1]:.1f}W  "
+        nm = d + suffix
+        names.append(nm)
+        out[f"{nm}__P"] = np.asarray(P, float)
+        out[f"{nm}__S"] = np.asarray(S, complex)
+        out[f"{nm}__i1"] = np.asarray(i1, float)
+        out[f"{nm}__ph1_rad"] = np.asarray(ph1, float)
+        out[f"{nm}__k"] = np.asarray(k, float)
+        out[f"{nm}__V_ref"] = np.float64(v_ref)
+        out[f"{nm}__discrete"] = np.bool_(False)
+        print(f"  {nm}: {len(P)}점 {P[0]:.1f}~{P[-1]:.1f}W  "
               f"k {min(k):.3f}~{max(k):.3f}  |I1| {i1[0]*1e3:.0f}~{i1[-1]*1e3:.0f}mA")
+    out["device_names"] = np.asarray(names)
+    return out
+
+
+def build_per_texture(devices: List[str], n: int = N_POINTS, vtail: bool = False) -> dict:
+    """**녹화 파일마다** 그 파일의 텍스처·전압에서 곡선을 만든다 (13.74).
+
+    키는 `<기기>@<stem>` 이다. `augmentor` 가 `act.source_file` 로 찾고, 없으면 정현파 곡선
+    (`sp_curves.npz`)으로 폴백한다 — 그래서 이 파일이 없으면 옛 거동 그대로다.
+
+    ⚠ `v_ref` 도 그 녹화의 실제 vrms 를 쓴다. 곡선은 비(比)로만 쓰이지만 도통각이 전압
+    크기에도 반응하므로 맞춰 두는 편이 옳다.
+    """
+    from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, VoltageTextureLibrary
+
+    lib = VoltageTextureLibrary.from_npz_dir(vtail=DEFAULT_VTAIL_NPZ if vtail else None)
+    if len(lib) == 0:
+        raise RuntimeError("텍스처 라이브러리가 비었다 — processed_data/npz 를 확인하라")
+    print(f"텍스처: {lib.describe()}")
+    circ = SmpsCircuit()
+    out: Dict[str, np.ndarray] = {}
+    names: List[str] = []
+    for d in devices:
+        if not circ.has(d):
+            continue
+        for stem in lib.stems():
+            if not (stem == d or stem.startswith(d + "_")):
+                continue                       # 그 기기의 녹화만
+            rel = lib.file_rel_full(stem) if vtail else lib.file_rel(stem)
+            v = lib.stem_vrms(stem)
+            if rel is None or v is None:
+                continue
+            print(f"[{stem}]  vrms {v:.1f}V"
+                  + (f"  꼬리 h17~h31 포함 (len {len(rel)})" if vtail else ""))
+            g = build([d], n, float(v), rel=np.asarray(rel, complex),
+                      suffix="@" + stem, circ=circ)
+            names += [str(x) for x in g.pop("device_names")]
+            out.update(g)
+    if not names:
+        raise RuntimeError("만든 곡선이 없다 — stem 과 기기 이름이 안 맞는지 보라")
     out["device_names"] = np.asarray(names)
     return out
 
@@ -131,12 +183,20 @@ def main() -> int:
     ap.add_argument("--points", type=int, default=N_POINTS)
     ap.add_argument("--v-ref", type=float, default=V_REF)
     ap.add_argument("--verify", action="store_true")
+    ap.add_argument("--per-texture", action="store_true",
+                    help="녹화 파일마다 그 텍스처에서 곡선을 만든다 (13.74). "
+                         f"기본 출력은 {TEX_CURVES}")
+    ap.add_argument("--vtail", action="store_true",
+                    help="--per-texture 에 전압 꼬리(h17~h31)까지 얹는다 (13.73)")
     a = ap.parse_args()
+    if a.per_texture and a.out == "processed_data/sp_curves.npz":
+        a.out = TEX_CURVES               # 기본 곡선을 덮지 않는다
 
     print("=" * 78)
     print(f"s(p) 곡선을 회로모델에서 만든다 — {a.points}점 · V_ref {a.v_ref:g}V")
     print("=" * 78)
-    d = build(list(SMPS_DEVICES), a.points, a.v_ref)
+    d = (build_per_texture(list(SMPS_DEVICES), a.points, a.vtail) if a.per_texture
+         else build(list(SMPS_DEVICES), a.points, a.v_ref))
     if len(d.get("device_names", [])) == 0:
         print("만들 수 있는 기기가 없다")
         return 1

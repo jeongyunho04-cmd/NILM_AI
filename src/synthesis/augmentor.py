@@ -166,14 +166,28 @@ class DataAugmentor:
         clip_to_recorded_range: bool = True,
         power_scale_std_map: Optional[Dict[str, float]] = None,
         sp_curves: bool = False,
+        sp_per_texture: bool = False,
     ):
         self.duration_scale_range = duration_scale_range
         self.power_scale_std = power_scale_std
         # 부하 의존 서명 곡선 (12.166). 없으면 기존 선형 스케일로 간다.
         self._sp = {}
+        #: **그 녹화의 텍스처**에서 만든 곡선 (13.74). 키는 `<기기>@<stem>`.
+        #: 옛 곡선은 `rel[0]=1` 인 깨끗한 정현파에서 만들어 자리 차이가 원리적으로 없었다 —
+        #: 실측 채점에서 크기 오차 중앙값이 0.123 대 **0.031** 로 4배 갈린다 (자리 D 는 4.3배).
+        #: 부기: `rescale_to_power` 가 옮기는 것은 **녹화 전류**이므로 그 녹화의 전압이 기준이다.
+        #: 자리로 옮기는 일은 그 다음 `apply_voltage_texture` 의 몫이다.
+        self._sp_tex = {}
         if sp_curves:
             from .sp_curves import load_curves, BACKGROUND
             self._sp = {k: v for k, v in load_curves().items() if k != BACKGROUND}
+            if sp_per_texture:
+                from src.run_build_sp_curves import TEX_CURVES
+                self._sp_tex = load_curves(TEX_CURVES)
+                if not self._sp_tex:
+                    raise FileNotFoundError(
+                        f"{TEX_CURVES} 가 없다 — `python -X utf8 -m src.run_build_sp_curves "
+                        f"--per-texture` 로 만들어라 (13.74)")
         #: 기기별 폭 (12.118). 없는 기기는 `power_scale_std` 를 쓴다.
         self.power_scale_std_map = dict(power_scale_std_map or {})
         self.phase_jitter_max_deg = phase_jitter_max_deg
@@ -323,7 +337,13 @@ class DataAugmentor:
 
         # 고정 서명이면 `I <- I·a` 로 끝이지만, 캡 입력 SMPS 는 부하가 바뀌면
         # **모양도 바뀐다** (12.166). 곡선이 있는 기기는 `s(p)` 를 따라 옮긴다.
-        cv = self._sp.get(act.appliance_type) if self._sp else None
+        # 13.74: **그 녹화의** 곡선을 먼저 찾는다. 없으면 정현파 곡선으로 폴백한다
+        # (증강 대상이 텍스처를 모르는 녹화일 수 있다 — 모르는 것은 안 건드린다).
+        cv = None
+        if self._sp_tex:
+            cv = self._sp_tex.get(f"{act.appliance_type}@{act.source_file}")
+        if cv is None and self._sp:
+            cv = self._sp.get(act.appliance_type)
         if cv is not None:
             from .sp_curves import rescale_to_power
             aug_c = rescale_to_power(aug_c, aug_pow[:, 0], p_scale, cv)
