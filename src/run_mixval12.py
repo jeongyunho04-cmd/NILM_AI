@@ -46,7 +46,7 @@ import numpy as np
 from src.preprocessing import load_nilm_npz
 from src.synthesis.segment_pool import SegmentPool
 from src.synthesis.vtexture import VoltageTextureLibrary, default_library
-from src.preprocessing.file_registry import SITE_SESSIONS
+from src.preprocessing.file_registry import SITE_SESSIONS, LoadClass, get_load_class
 from src.synthesis.coupling import SmpsCircuit, SMPS_DEVICES
 
 H = 15
@@ -206,6 +206,10 @@ def main() -> int:
                     pw[d] = max(P_tot - others - float(noise.noise_floor_w) - P_stby, 3.0)
                     break
             B = A.copy(); D = A.copy(); C = A.copy()
+            # [B2] = [B] + **저항 부하의 전압 텍스처 델타** (13.69). 같은 실행 안에서 짝지어 보려고
+            # 따로 쌓는다 — I_h += I_1·(rel_meas[h] − rel_rec[h]). 생성기의 `apply_site_distortion`
+            # 과 같은 식이고, 여기서는 rel_env 가 라이브러리 표본이 아니라 **이 창의 실측 전압**이다.
+            d_res = np.zeros(H, complex)
             ok = True
             for d, p in pw.items():
                 got = rec.at(d, p, v1)
@@ -223,6 +227,10 @@ def main() -> int:
                         ok = False; break
                 else:
                     D += I_rec; C += I_rec
+                    if get_load_class(d) is LoadClass.RESISTIVE and rel_rec is not None:
+                        dd = rel_meas - np.asarray(rel_rec, complex)
+                        dd[0] = 0.0
+                        d_res += I_rec[0] * dd
             if not ok:
                 continue
 
@@ -258,9 +266,11 @@ def main() -> int:
                          "stems": {}, "P_tot": round(P_tot, 1),
                          "C_all": C_all, "C_odd": C_odd, "dV_term": dV,
                          "A_all": rel_err(A, I_meas), "B_all": rel_err(B, I_meas), "D_all": rel_err(D, I_meas),
+                         "B2_all": rel_err(B + d_res, I_meas), "B2_odd": rel_err(B + d_res, I_meas, odd),
+                         "res_on": [d for d, v in on.items() if v and get_load_class(d) is LoadClass.RESISTIVE],
                          "A_odd": rel_err(A, I_meas, odd), "B_odd": rel_err(B, I_meas, odd), "D_odd": rel_err(D, I_meas, odd),
                          "per_order": {k: [float(abs(X[h - 1] - I_meas[h - 1]) / max(abs(I_meas[h - 1]), 1e-9))
-                                          for X in (A, B, D)] for k, h in (("h1", 1), ("h3", 3), ("h5", 5), ("h9", 9), ("h13", 13))}})
+                                          for X in (A, B, D, B + d_res)] for k, h in (("h1", 1), ("h3", 3), ("h5", 5), ("h9", 9), ("h13", 13))}})
         if not rows:
             print(f"{stem}: SMPS 창이 없다"); continue
         doc[stem] = rows

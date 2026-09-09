@@ -1313,6 +1313,68 @@ def test_circuit_model_does_not_fail_silently():
         "`circuit_model/__pycache__` 를 지우고 다시 보십시오 (13.23.5)")
 
 
+def test_resistive_loads_carry_the_window_voltage_texture():
+    """저항 부하가 **그 창의** 전압 텍스처를 다는가 (13.69).
+
+    순저항은 자기 서명이 없다 — `I_h = V_h/R` 이라 정규화 서명이 곧 그 세션의 전압이다.
+    2026-09-09 까지 저항 부하에는 창당 스칼라 배율(`kappa`) 하나만 걸려 `|I3|/|I1|` 이
+    **녹화 세션 값에 박제**됐다. 그 탓에 포트·드라이기(E1 녹화, vh3 2.9~3.2%)는 어느 자리에서든
+    h3 을 3.3% 달고 핫플·오븐(D 녹화, 0.56~0.67%)은 0.46% 를 달아 **7.0배의 가짜 판별자**가
+    생겼다. 실측에서는 한 창의 두 기기가 같은 전압을 보므로 그 판별자가 증발한다.
+
+    세 가지를 묶는다.
+      ① 저항 부하의 h3 이 **녹화 텍스처가 아니라 환경 텍스처**를 따라간다
+      ② h1 은 안 움직인다 (kappa 몫이다)
+      ③ SMPS·MOTOR 는 안 건드린다 (SMPS 는 회로 델타가, 선풍기·에어컨은 자기 지문이 있다)
+    """
+    import numpy as np
+    import pytest as _pytest
+    from src.synthesis.grid_simulator import GridSimulator
+    from src.synthesis.vtexture import default_library
+
+    lib = default_library()
+    if len(lib) == 0:
+        _pytest.skip("텍스처 라이브러리가 없습니다")
+    grid = GridSimulator()
+    if grid.texture_library is None or not grid.use_texture:
+        _pytest.skip("텍스처가 꺼져 있습니다")
+
+    # 서로 다른 자리의 텍스처 둘 — 하나는 녹화, 하나는 창
+    by_site = {}
+    for t in lib.textures:
+        by_site.setdefault(t.site, t)
+    if len(by_site) < 2:
+        _pytest.skip("자리가 둘 이상 있어야 합니다")
+    t_rec, t_env = (by_site["D"], by_site["E"]) if "D" in by_site and "E" in by_site         else tuple(list(by_site.values())[:2])
+    rec_id = lib.file_id(t_rec.stem) if hasattr(lib, "file_id") else t_rec.id
+    if lib.file_rel_by_id(int(rec_id)) is None:
+        _pytest.skip("녹화 텍스처 id 를 못 찾습니다")
+    rel_rec = np.asarray(lib.file_rel_by_id(int(rec_id)), complex)
+    rel_env = np.asarray(t_env.rel, complex)
+
+    class _Env:
+        texture = t_env
+    N = 8
+    I = np.zeros((N, 15), np.complex64)
+    I[:, 0] = 6.7                                  # 1450W 급 저항의 h1
+    I[:, 1:] = (6.7 * rel_rec[1:]).astype(np.complex64)   # 녹화 세션의 전압이 곧 서명
+    rid = np.full(N, int(rec_id), np.int64)
+
+    out = grid.apply_site_distortion("electiric_kettle", I, _Env(), rid)
+    got = out[:, 2] / out[:, 0]
+    assert np.allclose(np.abs(got), abs(rel_env[2]), rtol=1e-4), (
+        f"h3 이 환경 텍스처를 안 따라갑니다: {100 * abs(got[0]):.3f}% "
+        f"(환경 {100 * abs(rel_env[2]):.3f}% · 녹화 {100 * abs(rel_rec[2]):.3f}%)")
+    assert np.allclose(out[:, 0], I[:, 0]), "h1 이 움직였습니다 — 그건 kappa 몫입니다"
+    # 고차까지 전부 (h3~h15 는 NILM 특징 벡터가 쓰는 대역이다)
+    for h in (5, 7, 9, 11, 13, 15):
+        assert abs(abs(out[0, h - 1] / out[0, 0]) - abs(rel_env[h - 1])) < 1e-6, f"h{h} 가 안 따라갑니다"
+
+    for dev in ("laptop_charger", "fan", "air_conditioner"):
+        same = grid.apply_site_distortion(dev, I, _Env(), rid)
+        assert np.array_equal(same, I), f"{dev} 는 건드리면 안 됩니다 (SMPS 는 회로 델타 · MOTOR 는 자기 지문)"
+
+
 def test_sim_harmonics_references_the_measured_voltage():
     """`sim_harmonics` 의 위상 기준이 **계측 전압**인가 (13.68).
 

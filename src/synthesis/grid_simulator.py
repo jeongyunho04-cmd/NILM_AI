@@ -706,38 +706,55 @@ class GridSimulator:
         appliance_type: str,
         harmonics_complex: np.ndarray,   # (N, 15) complex64
         env: VoltageEnvironment,
+        rec_ids: Optional[np.ndarray] = None,   # (N,) int - 이 사이클이 온 녹화(파일 id)
     ) -> np.ndarray:
-        """저항 부하에 **그 콘센트의 h3 전압 왜곡**을 싣는다 (①a, 12.185.21).
+        """저항 부하에 **이 세션의 전압 텍스처**를 싣는다 — 차분으로 (13.69).
 
-        ⚠ 2026-09-06: 새 계측기 무리는 전부 `v_distortion_h3=0` 이라 **지금은 no-op** 이다. 아래 실측
-        ("계측기의 덧셈 바닥" 등)은 옛 계측기 이야기다 — `OBSERVED_VOLTAGE_CLUSTERS` 주석과 13.1.
+            I_h(생성) = I_h(녹화 재생) + I_1 · ( rel_env[h] − rel_rec[h] )
 
-        순저항은 자기 서명이 없다 — `I_h = V_h/R` 이므로 정규화 서명이 곧 그 콘센트의
-        전압이다. 그런데 지금까지 저항 부하는 **장소 A 녹화의 서명을 그대로 재생**했고
-        전압 변화는 스칼라 배율 하나로만 들어갔다 (`apply_cross_appliance_coupling`) —
-        배율은 모든 차수에 공통이라 `|I3|/|I1|` 이 녹화 당시 값에 박제된다.
-        그 대가가 12.184.15(a) 다: 운영점이 장소 C 에서 1590W 포트를 포트로 못 보고
-        포트/드라이기/핫플/오븐이 20초마다 나눠 갖는다.
+        순저항은 자기 서명이 없다 — `I_h = V_h/R` 이므로 정규화 서명이 곧 그 세션의
+        전압이다. 실측이 그렇게 말한다 — `|I_h/I_1| / |V_h/V_1|` 이 포트·핫플·오븐에서
+        h3~h15 전부 **0.73~1.30** 이고, 빼고 남는 자기 지문은 I_1 의 0.04~0.50% 뿐이다.
 
-        실측(저항 녹화 11개)이 말하는 것:
-          · h3 만 장소축이 선다.  d_3 = 장소 A 0.000 / B 0.003 / **C 0.031** (10배)
-          · 장소 A·B 의 h3 은 그 장소의 전압이 아니라 **계측기의 덧셈 바닥**이다
-            (33.5mA ∠+164°, |I_1| 이 2.1~6.4A 로 3배 달라도 절대값이 일정하고
-             위상이 세 기기에서 1.7° 안에 잠겨 있다)
-          · h5 이상은 세 장소가 겹친다 (0.3~2.2%) — 장소축이 안 선다. **싣지 않는다.**
+        ⚠ **이것이 없으면 h3 가 녹화 세션 값에 박제된다.** `apply_cross_appliance_coupling`
+        의 kappa 는 모든 차수에 공통인 스칼라라 `|I3|/|I1|` 을 못 움직인다. 그러면
+        포트·드라이기(E1 녹화, vh3 2.9~3.2%)는 **어느 자리에서든** h3 을 3.3% 달고
+        핫플·오븐(D 녹화, 0.56~0.67%)은 0.46% 를 달아 **7.0배의 가짜 판별자**가 생긴다.
+        실측에서는 한 창 안의 두 기기가 같은 전압을 보므로 그 판별자가 증발한다.
 
-        그래서 h3 하나에 `d_3 · I_1 · e^{jθ}` 를 더한다. 이미 녹화 서명 안에 들어 있는
-        계측 바닥은 건드리지 않는다 (그건 어느 장소에서나 같다).
+        부기 — SMPS 경로(`apply_voltage_texture`)와 다르게 **양쪽 다 단자 전압**을 쓴다.
+        저항 부하는 결합 델타(`apply_smps_coupling`)를 받지 않으므로 창의 자기 강하를
+        넣어 줄 다음 항이 없다 — `tex.rel`(단자) − `file_rel`(단자) 로 바로 닫는다.
+
+        ⚠ `LoadClass.RESISTIVE` 만 한다 (포트·드라이기·핫플·오븐). 선풍기·에어컨은 MOTOR 라
+        빠진다 — 선풍기는 Y_h 가 고차에서 0.17~0.35 로 떨어져(유도성) Y_1 으로 밀면
+        과보정이고, 에어컨은 비가 5~283 로 **자기 지문**이다 (인버터). 둘 다 남는 일감이다.
+        여기 미는 몸은 선형 부분을 Y_h = Y_1 로 보고, 나머지는 세션 불변으로 도록 남긴다.
         """
         if harmonics_complex.size == 0 or harmonics_complex.shape[1] < 3:
             return harmonics_complex
         if get_load_class(appliance_type) is not LoadClass.RESISTIVE:
             return harmonics_complex
-        d3 = float(getattr(env, "v_distortion_h3", 0.0))
-        if d3 <= 0.0:
+        lib = self.texture_library
+        tex = getattr(env, "texture", None)
+        if not self.use_texture or lib is None or tex is None or rec_ids is None:
             return harmonics_complex
+        rel_env = np.asarray(getattr(tex, "rel", None), dtype=np.complex128)
+        if rel_env.size != harmonics_complex.shape[1]:
+            return harmonics_complex
+        rid = np.asarray(rec_ids, dtype=np.int64)
         out = np.asarray(harmonics_complex, dtype=np.complex64).copy()
-        out[:, 2] += (d3 * np.exp(1j * SITE_H3_PHASE_RAD) * out[:, 0]).astype(np.complex64)
+        live = (rid >= 0) & (np.abs(out[:, 0]) > 1e-6)
+        if not live.any():
+            return out
+        for r_id in np.unique(rid[live]):
+            m = live & (rid == int(r_id))
+            rel_rec = lib.file_rel_by_id(int(r_id))
+            if rel_rec is None:
+                continue
+            d = rel_env - np.asarray(rel_rec, dtype=np.complex128)
+            d[0] = 0.0                      # h1 은 kappa 가 이미 했다 (rel[0] ≡ 1 이라 원래 0 이다)
+            out[m] += (out[m, :1] * d[None, :]).astype(np.complex64)
         return out
 
     def apply_power_voltage_response(
