@@ -156,7 +156,9 @@ class NILMLoss(torch.nn.Module):
         companion_w: Optional[torch.Tensor] = None,     # (K,) 동반 부하 전력 (W)
         res_ohm: Optional[torch.Tensor] = None,         # (K,) 등가저항 Ω, 0 = 안 건다 (12.156)
         res_ohm_half: Optional[torch.Tensor] = None,    # (K,) 반파 상태의 등가저항 (12.157)
-        off_detach_praw: bool = False,                  # 꺼진 창에서 p_raw 를 detach (13.11)
+        off_detach_praw: bool = False,
+        gate_smooth: float = 0.0,                    # 게이트 BCE 라벨 완화 (13.80)
+        gate_focal: float = 0.0,                     # 쉬운 창 가중 낮추기 (13.80)                  # 꺼진 창에서 p_raw 를 detach (13.11)
         signatures_state: Optional[torch.Tensor] = None,  # (K,S,H,2) 상태별 지문 (13.11)
         harm_even_magnitude: bool = False,              # 짝수차를 크기 공간에서 잰다 (13.11)
         even_coherent: Optional[torch.Tensor] = None,   # (K,) 짝수차 위상이 기기 속성인 기기 (13.45)
@@ -478,6 +480,9 @@ class NILMLoss(torch.nn.Module):
         self.harm_max_order = int(harm_max_order)
         self.harm_weight = str(harm_weight)
         self.w = weights or LossWeights()
+        # 게이트 BCE 포화 방지 (13.80). 둘 다 0 이면 옛 호출을 그대로 탄다.
+        self.gate_smooth = float(gate_smooth)
+        self.gate_focal = float(gate_focal)
         self.power_delta = power_delta
         self.standby_delta = standby_delta
 
@@ -582,7 +587,33 @@ class NILMLoss(torch.nn.Module):
         # 같은 벌점이 되고, 0.7절의 오차 전가 보호막(87배)이 사라진다.
         parts["power"] = _huber(out["power"] / s, tgt["y_power"] / s, self.power_delta).mean()
 
-        parts["on"] = F.binary_cross_entropy_with_logits(out["on_logit"], tgt["y_on"])
+        # ── 게이트 BCE (13.80) ────────────────────────────────────────────
+        # 합성에서 이 과제는 이미 풀렸다 — 헤드 방향의 d' 가 4.5~7.9 이고 합성
+        # F1 이 0.973~1.000 이다. 그 마진에서 BCE 는 압력이 사라지고, 그런
+        # 방향은 무수히 많은데 **실측에 통하는 것을 고를 이유가 없다.**
+        # 실측에서 창의 84~97% 가 s(1-s)<0.01 인 죽은 구간이 되는 이유다.
+        #
+        # `power = sigma(on)*p_raw` 라 잘못 포화한 게이트는 **흡수 상태**다:
+        # 게이트가 0 이면 맞은 p_raw 도 0 이 되고 d power/d p_raw = sigma ~ 0
+        # 이라 그 창의 전력 기울기까지 같이 죽는다. 프로젝터가 그렇다 —
+        # 놓친 창의 p_raw 45.2W 가 맞은 창(43.2W)과 같다.
+        #
+        # 기본값 0 이면 **아래 옛 호출을 글자 그대로** 탄다.
+        if self.gate_smooth > 0 or self.gate_focal > 0:
+            y_on = tgt["y_on"]
+            e = self.gate_smooth
+            tgt_on = y_on * (1.0 - 2.0 * e) + e if e > 0 else y_on
+            bce_on = F.binary_cross_entropy_with_logits(
+                out["on_logit"], tgt_on, reduction="none")
+            if self.gate_focal > 0:
+                # p_t = 참 라벨에 준 확률. 완화 **이전** 라벨로 잰다 —
+                # 겨냥이 "이 창을 이미 맞혔나" 이지 완화된 목표가 아니다.
+                p = torch.sigmoid(out["on_logit"])
+                p_t = p * y_on + (1.0 - p) * (1.0 - y_on)
+                bce_on = bce_on * (1.0 - p_t).clamp(min=0.0) ** self.gate_focal
+            parts["on"] = bce_on.mean()
+        else:
+            parts["on"] = F.binary_cross_entropy_with_logits(out["on_logit"], tgt["y_on"])
         parts["plugged"] = F.binary_cross_entropy_with_logits(out["plugged_logit"], tgt["y_plugged"])
         parts["standby"] = _huber(out["standby"], tgt["y_standby"], self.standby_delta).mean()
 

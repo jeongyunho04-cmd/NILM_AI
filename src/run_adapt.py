@@ -291,6 +291,12 @@ def main() -> int:
                          "값은 안 바뀌고 기울기만 바뀐다. smps 는 SMPS 3종 "
                          "안에서만, all 은 9종 전부. 기본 off")
     # ── 사람 스위칭 로그 지도 (SMPS_PLAN 4.5절) ─────────────────────────
+    ap.add_argument("--gate-smooth", type=float, default=0.0, metavar="EPS",
+                    help="1단계와 같은 게이트 BCE 라벨 완화 (13.80). **2단계의 합성 "
+                         "갈래에 걸린다** — 1단계에서 켠 모델을 여기서 안 켜면 게이트가 "
+                         "다시 포화한다. 0 이면 옛 경로.")
+    ap.add_argument("--gate-focal", type=float, default=0.0, metavar="GAMMA",
+                    help="1단계와 같은 쉬운 창 가중 낮추기 (13.80).")
     ap.add_argument("--w-real-on", type=float, default=0.0,
                     help="사람 스위칭 로그 on/off 를 2단계에 거는 무게 (기본 0 = 끔). "
                          "test_5/6/7/8/13 의 human_switching_log 만 쓴다. 전력은 "
@@ -731,6 +737,7 @@ def main() -> int:
         noise_sig=torch.from_numpy(nz), harm_scale=torch.from_numpy(hsc),
         harm_odd_only=a.harm_odd_only,
         signatures_state=(torch.from_numpy(sig_state) if sig_state is not None else None),
+        gate_smooth=a.gate_smooth, gate_focal=a.gate_focal,
         standby_w=(None if SB_W is None else torch.from_numpy(SB_W)),
         signatures_site=(None if SIG_BANK is None else torch.from_numpy(SIG_BANK)),
         signatures_state_site=(None if SIG_BANK_ST is None

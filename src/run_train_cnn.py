@@ -262,6 +262,16 @@ def main() -> int:
                     help="자기상관·교차율을 헤드 직전에 직접 준다 (12.19.4 후보 2)")
     ap.add_argument("--w-over", type=float, default=0.1,
                     help="물리 상한 힌지. 예측 합이 관측 총전력을 넘을 때만 벌한다")
+    ap.add_argument("--gate-smooth", type=float, default=0.0, metavar="EPS",
+                    help="**게이트 BCE 라벨 완화** (13.80). y -> y(1-2e)+e 라 최적 "
+                         "로짓이 +-log((1-e)/e) 로 묶인다. e=0.05 면 sigma in "
+                         "[0.05,0.95] 이라 dsigma/dlogit 이 0.0475 아래로 안 간다. "
+                         "합성에서 d' 4~8 로 이미 풀린 과제가 포화해 **실측에 통하는 "
+                         "방향을 고를 이유가 사라지는 것**을 막는다. 0 이면 옛 경로.")
+    ap.add_argument("--gate-focal", type=float, default=0.0, metavar="GAMMA",
+                    help="**쉬운 창 가중 낮추기** (13.80). BCE 에 (1-p_t)^gamma 를 "
+                         "곱해 이미 맞은 창이 방향을 정하지 못하게 한다. 로짓은 안 "
+                         "묶으므로 --gate-smooth 와 겨냥이 다르다 — 따로 켜서 갈라라.")
     ap.add_argument("--prior-kappa", type=float, default=8.0,
                     help="on 게이트 물리 프라이어 세기 (12.9.8절). 0 이면 끈다")
     ap.add_argument("--prior-beta", type=float, default=0.5,
@@ -444,6 +454,7 @@ def main() -> int:
         even_coherent=(torch.tensor(
             [1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
             dtype=torch.float32) if a.harm_even_by_class else None),
+        gate_smooth=a.gate_smooth, gate_focal=a.gate_focal,
         weights=LossWeights(harm=a.w_harm, cons=a.w_cons, over=a.w_over,
                             state_power=a.w_state_power, z=a.w_z),
         s_state=(build_state_scales(apps, [S_I[x] for x in apps])
@@ -552,6 +563,8 @@ def main() -> int:
                     # `net.py` 가 conv 입력 채널로 직결한다.
                     "wide_channels": WIDE_CHANNELS,
                     "aux_z": bool(model.aux_z),
+                    # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
+                    "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "select": a.select}, path)
 
     hist, best = [], None
