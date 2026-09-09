@@ -74,7 +74,8 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           dither_even_amp: float = 0.0, dither_even_phase_deg: float = 0.0,
           power_scale_std_json: str = "",
           sp_curves: bool = False,
-          sp_per_texture: bool = False, background: bool = False,
+          sp_per_texture: bool = False, vtail: bool = False,
+          background: bool = False,
           level_scramble: Optional[Dict[str, tuple]] = None,
           state_mix_json: str = "",
           carrier_apps: Optional[Sequence[str]] = None,
@@ -112,6 +113,9 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
                         state_mix=smx,
                         sp_curves=bool(sp_curves),
                         sp_per_texture=bool(sp_per_texture))
+    # 13.78: 전압 꼬리(h17~h31)를 켠다. 기본은 꺼짐이라 안 부르면 옛 거동 그대로다.
+    from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
+    set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
@@ -178,6 +182,7 @@ def build_cache(
     carrier_apps: Optional[Sequence[str]] = None,
     sp_curves: bool = False,
     sp_per_texture: bool = False,
+    vtail: bool = False,
     background: bool = False,
     dither_min_order: int = 2,
     couple_ext: bool = False,
@@ -222,7 +227,7 @@ def build_cache(
                   initargs=(npz_dir, window_cycles, time_split, seed, excl_json,
                             dither_amp, dither_phase_deg, mix_json,
                             dither_even_amp, dither_even_phase_deg, pss_json,
-                            bool(sp_curves), bool(sp_per_texture),
+                            bool(sp_curves), bool(sp_per_texture), bool(vtail),
                             bool(background), level_scramble,
                             smx_json, tuple(carrier_apps or ()),
                             int(dither_min_order), bool(couple_ext))) as pool:
@@ -258,6 +263,7 @@ def build_cache(
             # 이 값을 읽어 짝을 맞춘다.
             "sp_curves": bool(sp_curves),
             "sp_per_texture": bool(sp_per_texture),
+            "vtail": bool(vtail),
             "background": bool(background),
             "fine_shape": [FINE_CHANNELS, FINE_CYCLES], "bytes": int(total),
             "zero_even_harmonics": bool(ZERO_EVEN_HARMONICS),

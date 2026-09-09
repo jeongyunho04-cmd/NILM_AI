@@ -565,6 +565,11 @@ def main() -> int:
                     "aux_z": bool(model.aux_z),
                     # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
+                    # ⚠ 이것은 **추론에도 써야 한다** — 0 으로 배운 채널에 값을
+                    # 주면 본 적 없는 입력이 된다. 채점 쪽이 읽어 같이 0 으로
+                    # 만들 수 있게 남긴다 (13.80.10).
+                    "zero_channels": a.zero_channels,
+                    "zero_wide_channels": a.zero_wide_channels,
                     "select": a.select}, path)
 
     hist, best = [], None

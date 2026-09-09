@@ -86,6 +86,7 @@ def build_holdout(
     carrier_apps: Optional[Sequence[str]] = None,
     sp_curves: bool = False,
     sp_per_texture: bool = False,
+    vtail: bool = False,
     background: bool = False,
     couple_ext: bool = False,
 ) -> dict:
@@ -107,6 +108,8 @@ def build_holdout(
                         state_mix=state_mix,
                         sp_curves=bool(sp_curves),
                         sp_per_texture=bool(sp_per_texture))
+    from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
+    set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
     syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
                           augmentor=aug, background=bool(background),
                           couple_ext=bool(couple_ext))
@@ -171,6 +174,7 @@ def build_holdout(
         # 학습 캐시와 짝이 맞아야 하는 설정 (12.168.4)
         "sp_curves": bool(sp_curves),
         "sp_per_texture": bool(sp_per_texture),
+        "vtail": bool(vtail),
         "background": bool(background),
         "appliances": apps,
         "channel_layout": "0:15 harmonic Real, 15:30 harmonic Imag, 30 P, 31 Q, 32 V",

@@ -331,6 +331,17 @@ class VoltageTextureLibrary:
 
 
 _DEFAULT: Optional[VoltageTextureLibrary] = None
+#: 이 프로세스에서 `default_library()` 가 쓸 꼬리 경로. **기본은 None(꺼짐)** 이고
+#: `set_default_vtail()` 로만 켠다 (13.78). 생성기 워커는 spawn 이라 각자 `_init` 을 거치므로
+#: 전역 하나면 되고, 캐시 `meta.json` 에 남아 재현이 된다.
+_DEFAULT_VTAIL: Union[str, Path, None] = None
+
+
+def set_default_vtail(path: Union[str, Path, None]) -> None:
+    """이 프로세스의 `default_library()` 기본 꼬리를 정한다. 이미 만든 라이브러리는 버린다."""
+    global _DEFAULT_VTAIL, _DEFAULT
+    _DEFAULT_VTAIL = path
+    _DEFAULT = None
 
 
 def default_library(npz_dir: Union[str, Path] = DEFAULT_NPZ_DIR,
@@ -342,5 +353,6 @@ def default_library(npz_dir: Union[str, Path] = DEFAULT_NPZ_DIR,
     """
     global _DEFAULT
     if _DEFAULT is None:
-        _DEFAULT = VoltageTextureLibrary.from_npz_dir(npz_dir, vtail=vtail)
+        _DEFAULT = VoltageTextureLibrary.from_npz_dir(
+            npz_dir, vtail=_DEFAULT_VTAIL if vtail is None else vtail)
     return _DEFAULT
