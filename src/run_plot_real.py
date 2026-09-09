@@ -10,6 +10,11 @@
   2) 잔차 (관측 − 예측)            — 어느 구간에서 벌어지는가
   3) 기기별 예측 전력 (누적)        — 그 와트를 누가 가져갔는가
   4) 알려진 정답 구간              — 그때 실제로 무엇이 켜져 있었나
+  5) **모델의 on/off 판정**        — 모델은 무엇이 켜졌다고 봤나 (게이트)
+
+5번은 **모든 기기**를 행으로 놓는다. 정답이 없는 기기에 게이트가 서는 것이 곧
+오귀속이라, 정답 있는 기기만 그리면 그게 안 보인다. 정답 구간은 검은 테두리로
+겹쳐 두었으므로 **테두리 밖의 색 = 헛detect, 테두리 안의 빈칸 = 놓침**이다.
 
 **실측에는 기기별 정답이 없다** (12.4절). 4번 칸은 `real_events.json` 의
 *확실* 구간과 이벤트뿐이고, 정상상태 귀속은 애초에 옮기지 않았다 (4.2절).
@@ -102,9 +107,12 @@ def run_postproc(mode, apps, pred, standby, gate, pobs, oh, pn, v_rms):
     return np.asarray(P, np.float32), np.asarray(g, np.float32)
 
 
-def plot_file(stem, apps, t_pred, pred, standby, t_obs, obs, spec, path, title):
-    fig, ax = plt.subplots(4, 1, figsize=(16, 11), sharex=True,
-                           gridspec_kw={"height_ratios": [3, 2, 3, 2.2], "hspace": 0.12})
+def plot_file(stem, apps, t_pred, pred, standby, t_obs, obs, spec, path, title,
+              gate=None, gate_thr=0.5):
+    n_ax = 4 if gate is None else 5
+    hr = [3, 2, 3, 2.2] if gate is None else [3, 2, 3, 2.2, 2.4]
+    fig, ax = plt.subplots(n_ax, 1, figsize=(16, 11 if gate is None else 13.4), sharex=True,
+                           gridspec_kw={"height_ratios": hr, "hspace": 0.12})
 
     total = pred.sum(1) + standby.sum(1)
     obs_at = np.interp(t_pred, t_obs, obs)
@@ -172,11 +180,50 @@ def plot_file(stem, apps, t_pred, pred, standby, t_obs, obs, spec, path, title):
     ax[3].set_yticklabels([KO.get(a, a) for a in rows], fontsize=9)
     # 세로 라벨이 들어갈 자리를 위쪽에 비워 둔다.
     ax[3].set_ylim(-0.6, len(rows) + 1.1)
-    ax[3].set_xlabel("시간 (초)")
+    if gate is None:
+        ax[3].set_xlabel("시간 (초)")
     ax[3].set_ylabel("알려진 정답")
     ax[3].grid(alpha=.3, axis="x")
     ax[3].annotate("색칠 = 확실히 켜짐   빗금 = uncertain(채점 제외)",
                    (0.01, 0.04), xycoords="axes fraction", fontsize=9, color="0.3")
+
+    # 5) 모델의 on/off 판정 — **모든 기기**를 행으로
+    if gate is not None:
+        g = np.asarray(gate, float)
+        iv = spec["intervals"]
+        dt = float(np.median(np.diff(t_pred))) if len(t_pred) > 1 else 1.0
+        for i, a in enumerate(apps):
+            col = COL(apps.index(a) % 10)
+            on = g[:, i] > gate_thr
+            # 게이트 세기를 진하기로 (0.5 -> 옅게, 1.0 -> 진하게)
+            for k in np.flatnonzero(on):
+                ax[4].barh(i, dt, left=t_pred[k], height=0.62, color=col,
+                           alpha=float(np.clip((g[k, i] - gate_thr) / (1 - gate_thr), 0.15, 1.0)),
+                           linewidth=0)
+            # 정답 구간을 테두리로 겹친다 — 테두리 밖의 색이 헛detect 다
+            for t0, t1 in iv.get(a, {}).get("on", []):
+                ax[4].add_patch(plt.Rectangle((t0, i - 0.34), t1 - t0, 0.68, fill=False,
+                                              edgecolor="0.1", linewidth=1.1, zorder=5))
+            for t0, t1 in iv.get(a, {}).get("uncertain", []):
+                ax[4].add_patch(plt.Rectangle((t0, i - 0.34), t1 - t0, 0.68, fill=False,
+                                              edgecolor="0.55", linewidth=0.9, ls=":", zorder=5))
+        ax[4].set_yticks(range(len(apps)))
+        ax[4].set_yticklabels([KO.get(a, a) for a in apps], fontsize=9)
+        ax[4].set_ylim(-0.6, len(apps) - 0.4)
+        ax[4].set_xlabel("시간 (초)")
+        ax[4].set_ylabel(f"모델 판정 (게이트>{gate_thr:g})")
+        ax[4].grid(alpha=.3, axis="x")
+        # 기기별로 얼마나 켰다고 봤는지 — 정답과 견줄 수 있게 옆에 적는다
+        for i, a in enumerate(apps):
+            frac = float((g[:, i] > gate_thr).mean())
+            true_s = sum(t1 - t0 for t0, t1 in iv.get(a, {}).get("on", []))
+            span = max(t_pred[-1] - t_pred[0], 1.0) if len(t_pred) else 1.0
+            ax[4].annotate(f"{100*frac:.0f}% (참 {100*true_s/span:.0f}%)",
+                           (1.002, i), xycoords=("axes fraction", "data"),
+                           fontsize=7.5, va="center", color="0.25")
+        ax[4].annotate("진하기 = 게이트 세기   검은 테두리 = 참 ON   점선 = uncertain   "
+                       "**테두리 밖의 색 = 헛detect, 테두리 안 빈칸 = 놓침**",
+                       (0.01, 0.03), xycoords="axes fraction", fontsize=8.5, color="0.3")
 
     fig.savefig(path, dpi=110, bbox_inches="tight")
     plt.close(fig)
@@ -190,6 +237,9 @@ def main() -> int:
     ap.add_argument("--stride", type=int, default=30, help="예측 간격 (사이클)")
     ap.add_argument("--tag", default="")
     ap.add_argument("--out", default="results/plots")
+    ap.add_argument("--gate-thr", type=float, default=0.5,
+                    help="5번 칸에서 '켜졌다' 로 볼 게이트 문턱")
+    ap.add_argument("--no-gate", action="store_true", help="5번 칸을 안 그린다 (옛 4칸 그림)")
     ap.add_argument("--postproc", default="off", choices=("off", "cap", "full"),
                     help="`cap` 물리 상한 넘기기 · `full` 거기에 저항 조합 정합까지. "
                          "⚠ resistive_match 는 min_w=150W 라 SMPS 전용 창은 안 건드린다")
@@ -220,7 +270,8 @@ def main() -> int:
         t_pred = rw.target_cycle / SAMPLING_HZ
         r = plot_file(stem, apps, t_pred, pred, standby, t_obs, obs, ev[stem],
                       str(outd / f"real_{stem}_{name}.png"),
-                      f"{stem}  —  {a.ckpt} 예측  ({len(rw):,}창, {a.stride/60:.1f}초 간격)")
+                      f"{stem}  —  {a.ckpt} 예측  ({len(rw):,}창, {a.stride/60:.1f}초 간격)",
+                      gate=None if a.no_gate else gate, gate_thr=a.gate_thr)
         rows.append((stem, r, pred))
 
     print(f"\n{'파일':10s}{'잔차 평균':>11s}{'절대':>9s}  기기별 평균 예측 (W)")
