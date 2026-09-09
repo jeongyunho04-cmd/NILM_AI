@@ -39,7 +39,16 @@ import json
 import numpy as np
 
 H = 15
+#: 전압 **꼬리** 차수 (13.73). 2Hz 녹화는 h15 까지지만 SMPS 전류의 h11~h15 를 지배하는 것은
+#: h17 위의 전압이다 — 생성기 입구(`sim_harmonics`)에서 충전기 |I13| 오차가 자리 D 에서
+#: 0.449 -> 0.042 로 내린다 (`VTAIL_BACKFILL_DESIGN.md` 1·2절). **홀수만** 이다: 계통 전압은
+#: 반파 대칭이라 짝수차가 원리적으로 없고, 실측에서도 짝수만 넣으면 절단과 셋째 자리까지 같다.
+TAIL_ORDERS = (17, 19, 21, 23, 25, 27, 29, 31)
+H_FULL = TAIL_ORDERS[-1]          #: `rel_full()` 의 길이 (h1..h31)
 DEFAULT_NPZ_DIR = "processed_data/npz"
+#: 꼬리 표 (`src/run_build_vtail.py` 가 원시 22파일에서 만든다). 없으면 꼬리 없이 돌고
+#: **결과는 예전과 비트 단위로 같다** — 꼬리가 없는 자리는 0 이고 0 은 파형을 안 바꾼다.
+DEFAULT_VTAIL_NPZ = "processed_data/vtail.npz"
 #: 텍스처를 뽑는 간격 (초). 파일 안 산포(0.02~0.04%)가 세션 간 차(0.6~3.2%)의 1/50 이라 60초면 넉넉하다.
 DEFAULT_STEP_S = 60.0
 #: 기저 전압에 가까운 세션을 고를 때의 허용폭 (V). D(216V)/E(229V) 무리를 가르되 그 안에서는 섞는다.
@@ -59,13 +68,63 @@ class Texture:
     #: 합성 창의 소스 전압은 이쪽이다 — `rel` 은 그 녹화의 부하가 이미 얹힌 값이라 소스로 쓰면
     #: 결합 델타가 강하를 두 번 건다. Z 를 모르는 세션이면 `rel` 과 같다.
     rel_open: Optional[np.ndarray] = None
+    #: **전압 꼬리** (8,) complex — `TAIL_ORDERS` 의 `V_h/V_1`, 같은 h배 위상 관례 (13.73).
+    #: 2Hz npz 에는 없다. 원시 스냅샷에서 **세션마다 하나**를 뽑아 붙인다 (`run_build_vtail`).
+    #: 그래서 한 세션의 텍스처 수백 개가 전부 같은 꼬리를 쓴다 — 꼬리는 분 단위로 돌지만
+    #: 세션 안 산포(0.29~0.59)가 세션 사이(0.56~1.27)보다 작아 그만큼은 값이 있다.
+    tail: Optional[np.ndarray] = None
+    #: 개방 꼬리 — 그 원시 스냅샷 자신의 부하 강하 `Z(h)·I_h` 를 벗긴 것 (`rel_open` 과 같은 규약).
+    #: 강하가 꼬리의 2~29% 라 무시할 크기가 아니다. Z 를 모르는 세션이면 `tail` 과 같다.
+    tail_open: Optional[np.ndarray] = None
 
     def source_rel(self) -> np.ndarray:
-        """합성의 소스로 쓸 상대 텍스처 (개방 전압이 있으면 그것)."""
+        """합성의 소스로 쓸 상대 텍스처 (개방 전압이 있으면 그것). **h1..h15 만** — 옛 서명 그대로."""
         return self.rel if self.rel_open is None else self.rel_open
+
+    def source_tail(self) -> Optional[np.ndarray]:
+        """소스로 쓸 꼬리 (개방이 있으면 그것). `source_rel` 과 같은 규약."""
+        return self.tail if self.tail_open is None else self.tail_open
+
+    def rel_full(self) -> np.ndarray:
+        """**단자** 텍스처를 h1..h31 로 (꼬리 없으면 h1..h15 그대로 돌려준다)."""
+        return splice_tail(self.rel, self.tail)
+
+    def source_rel_full(self) -> np.ndarray:
+        """**소스**(개방) 텍스처를 h1..h31 로. 회로 호출은 이것을 받는다."""
+        return splice_tail(self.source_rel(), self.source_tail())
 
     def v15(self, v1: float) -> np.ndarray:
         return (self.rel * float(v1)).astype(np.complex128)
+
+
+def splice_tail(rel: np.ndarray, tail: Optional[np.ndarray]) -> np.ndarray:
+    """(15,) 텍스처 + (8,) 꼬리 -> (31,) h1..h31. 꼬리가 None 이면 **입력을 그대로** 돌려준다.
+
+    짝수차와 h16 은 0 으로 남는다 (계통 전압은 반파 대칭). `fcm.to_spectrum` 의 `V[k-1]=h(k)`
+    관례와 같으므로 그대로 넘길 수 있다.
+    """
+    rel = np.asarray(rel, dtype=np.complex128)
+    if tail is None:
+        return rel
+    out = np.zeros(H_FULL, dtype=np.complex128)
+    out[:min(len(rel), H_FULL)] = rel[:H_FULL]
+    out[np.asarray(TAIL_ORDERS, dtype=np.int64) - 1] = np.asarray(tail, dtype=np.complex128)
+    return out
+
+
+def load_vtail(path=DEFAULT_VTAIL_NPZ) -> Dict[str, tuple]:
+    """`vtail.npz` -> {키: (꼬리 단자 (8,), 꼬리 개방 (8,))}. 키는 세션(D1·E1…)과 자리(D·E).
+
+    파일이 없으면 **빈 dict** 다 — 꼬리 없이 도는 것이 정상 경로이고 그때 결과는 옛것과 같다.
+    """
+    p = Path(path)
+    if not p.exists():
+        return {}
+    z = np.load(p, allow_pickle=True)
+    keys = [str(k) for k in z["keys"]]
+    t = np.asarray(z["tail"], dtype=np.complex128)
+    to = np.asarray(z["tail_open"], dtype=np.complex128)
+    return {k: (t[i], to[i]) for i, k in enumerate(keys)}
 
 
 #: 개방 전압 복원에 쓰는 선로 리액턴스 [H]. 꼬리 자료로는 정해지지 않아(h1~h5 의 지렛대가 짧다,
@@ -91,9 +150,12 @@ def _site_session(stem: str) -> tuple:
 
 
 class VoltageTextureLibrary:
-    def __init__(self, textures: Sequence[Texture], file_rel: Dict[str, np.ndarray]):
+    def __init__(self, textures: Sequence[Texture], file_rel: Dict[str, np.ndarray],
+                 file_tail: Optional[Dict[str, np.ndarray]] = None):
         self.textures: List[Texture] = list(textures)
         self._file_rel: Dict[str, np.ndarray] = dict(file_rel)
+        #: 그 녹화(세션)의 **단자** 꼬리. `file_rel` 이 단자라 짝이 맞는다 (13.73).
+        self._file_tail: Dict[str, np.ndarray] = dict(file_tail or {})
         self._file_ids: Dict[str, int] = {s: i for i, s in enumerate(sorted(self._file_rel))}
         self._vrms = np.array([t.vrms for t in self.textures], dtype=np.float64)
         self._site = np.array([t.site for t in self.textures], dtype=object)
@@ -101,10 +163,23 @@ class VoltageTextureLibrary:
     # ── 구성 ──────────────────────────────────────────────────────────────
     @classmethod
     def from_npz_dir(cls, npz_dir: Union[str, Path] = DEFAULT_NPZ_DIR, step_s: float = DEFAULT_STEP_S,
-                     roles: Sequence[str] = ("device", "noise")) -> "VoltageTextureLibrary":
-        """device·noise npz 에서 `step_s` 마다 텍스처 하나, 파일마다 중앙 텍스처 하나."""
+                     roles: Sequence[str] = ("device", "noise"),
+                     vtail: Union[str, Path, None] = None) -> "VoltageTextureLibrary":
+        """device·noise npz 에서 `step_s` 마다 텍스처 하나, 파일마다 중앙 텍스처 하나.
+
+        `vtail` 을 주면 **세션마다 꼬리 하나**(h17~h31)를 같이 붙인다 (13.73). 세션 키가 없으면
+        자리 키로, 그것도 없으면 꼬리 없이 간다 — 없을 때의 결과는 옛것과 비트 단위로 같다.
+
+        ⚠ **기본은 꺼짐이다.** `processed_data/vtail.npz` 가 있어도 안 켜진다. 켜려면
+        `vtail=DEFAULT_VTAIL_NPZ` 를 명시로 넘겨라. 검정 ③(13.73)에서 모델 단독[D]은 1.1~2.9배
+        좋아지지만 **생성기가 타는 델타 경로[B]는 2~22% 나빠졌다** — 세션 중앙 꼬리가 그 창의
+        값이 아니기 때문이다. 그 교환은 사용자가 고를 일이라 기본값을 옛 거동으로 둔다.
+        먼저 할 일은 `s(p)` 를 세션 텍스처에서 만드는 것이다 (설계 9절 ④).
+        """
         textures: List[Texture] = []
         file_rel: Dict[str, np.ndarray] = {}
+        file_tail: Dict[str, np.ndarray] = {}
+        tails = load_vtail(vtail) if vtail else {}
         d = Path(npz_dir)
         if not d.exists():
             return cls([], {})
@@ -137,6 +212,9 @@ class VoltageTextureLibrary:
             m = rel_all[ok]
             file_rel[f.stem] = (np.median(m.real, 0) + 1j * np.median(m.imag, 0)).astype(np.complex128)
             file_rel[f.stem][0] = 1.0 + 0j
+            tl = tails.get(sess_) or tails.get(st_)
+            if tl is not None:
+                file_tail[f.stem] = tl[0]              # 녹화 쪽은 **단자** 꼬리 (file_rel 과 짝)
             # step_s 마다 하나: 그 구간의 중앙값
             step = max(60, int(step_s * 60))
             for a in range(0, len(V), step):
@@ -157,8 +235,10 @@ class VoltageTextureLibrary:
                         rel_open[0] = 1.0 + 0j
                 textures.append(Texture(id=len(textures), stem=f.stem, t_rel_s=float(t[a]),
                                         vrms=float(np.median(v1[a:a + step][sel])), rel=rel,
-                                        site=st_, session=sess_, rel_open=rel_open))
-        return cls(textures, file_rel)
+                                        site=st_, session=sess_, rel_open=rel_open,
+                                        tail=None if tl is None else tl[0],
+                                        tail_open=None if tl is None else tl[1]))
+        return cls(textures, file_rel, file_tail)
 
     # ── 조회 ──────────────────────────────────────────────────────────────
     def __len__(self) -> int:
@@ -173,10 +253,27 @@ class VoltageTextureLibrary:
         return self._file_ids.get(stem, -1)
 
     def file_rel_by_id(self, fid: int) -> Optional[np.ndarray]:
+        s = self._stem_of(fid)
+        return None if s is None else self._file_rel[s]
+
+    def _stem_of(self, fid: int) -> Optional[str]:
         for s, i in self._file_ids.items():
             if i == fid:
-                return self._file_rel[s]
+                return s
         return None
+
+    def file_rel_full(self, stem: str) -> Optional[np.ndarray]:
+        """그 녹화의 단자 텍스처를 h1..h31 로 (꼬리를 아는 세션이면 붙는다)."""
+        rel = self._file_rel.get(stem)
+        return None if rel is None else splice_tail(rel, self._file_tail.get(stem))
+
+    def file_rel_full_by_id(self, fid: int) -> Optional[np.ndarray]:
+        s = self._stem_of(fid)
+        return None if s is None else self.file_rel_full(s)
+
+    def n_tails(self) -> int:
+        """꼬리가 붙은 텍스처 수 — 관문 확인용 (0 이면 그 경로가 안 돌았다)."""
+        return int(sum(1 for t in self.textures if t.tail is not None))
 
     def sample(self, rng: np.random.Generator, vrms_target: Optional[float] = None,
                tol_v: float = DEFAULT_TOL_V, site: Optional[str] = None,
@@ -218,16 +315,23 @@ class VoltageTextureLibrary:
             return "텍스처 없음"
         stems = sorted({t.stem for t in self.textures})
         v3 = np.array([abs(t.rel[2]) for t in self.textures]) * 100
+        nt = self.n_tails()
+        tail = "꼬리 없음" if nt == 0 else f"꼬리 {nt}개 (h{TAIL_ORDERS[0]}~h{TAIL_ORDERS[-1]})"
         return (f"텍스처 {len(self.textures)}개 / 파일 {len(stems)}개, vrms {self._vrms.min():.1f}~{self._vrms.max():.1f}V, "
-                f"|V3|/|V1| {v3.min():.2f}~{v3.max():.2f}%")
+                f"|V3|/|V1| {v3.min():.2f}~{v3.max():.2f}%, {tail}")
 
 
 _DEFAULT: Optional[VoltageTextureLibrary] = None
 
 
-def default_library(npz_dir: Union[str, Path] = DEFAULT_NPZ_DIR) -> VoltageTextureLibrary:
-    """프로세스 안에서 한 번만 읽는다 (워커마다 한 번)."""
+def default_library(npz_dir: Union[str, Path] = DEFAULT_NPZ_DIR,
+                    vtail: Union[str, Path, None] = None) -> VoltageTextureLibrary:
+    """프로세스 안에서 한 번만 읽는다 (워커마다 한 번).
+
+    `vtail` 은 `from_npz_dir` 과 같다 — **기본은 꺼짐**. 첫 호출이 캐시를 굳히므로 켜려면
+    프로세스에서 처음 부를 때 넘겨야 한다.
+    """
     global _DEFAULT
     if _DEFAULT is None:
-        _DEFAULT = VoltageTextureLibrary.from_npz_dir(npz_dir)
+        _DEFAULT = VoltageTextureLibrary.from_npz_dir(npz_dir, vtail=vtail)
     return _DEFAULT

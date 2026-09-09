@@ -631,8 +631,11 @@ class GridSimulator:
         for k in np.unique(keys[on]):
             m = on & (keys == k)
             b_, r_id = int(k // 100000), int(k % 100000)
-            rel_rec = lib.file_rel_by_id(r_id)
-            d = circ.texture_delta(appliance_type, float(b_ * P_BIN_W), tex.source_rel(), tex.id,
+            # 13.73: **양쪽 다 꼬리까지** 준다. 합성 쪽에만 붙이면 "녹화에는 꼬리가 없었다" 는
+            # 뜻이 되어 가짜 항이 생긴다 — 녹화도 자기 세션의 꼬리를 갖고 찍힌 것이다.
+            # 같은 세션이면 꼬리가 뺄셈에서 거의 상쇄되고, 자리가 갈릴 때만 값이 산다.
+            rel_rec = lib.file_rel_full_by_id(r_id)
+            d = circ.texture_delta(appliance_type, float(b_ * P_BIN_W), tex.source_rel_full(), tex.id,
                                    rel_rec, r_id, v1, R)
             if d is not None:
                 out[m] += d.astype(np.complex64)
@@ -693,7 +696,7 @@ class GridSimulator:
             if not pw:
                 continue
             i_ext = None if ext_c is None else ext_c[m_rows].mean(0)
-            deltas = circ.coupling_delta(pw, tex.source_rel(), tex.id, v1,
+            deltas = circ.coupling_delta(pw, tex.source_rel_full(), tex.id, v1,
                                          float(env.r_grid_ohm), l_line, R, i_ext=i_ext)
             for d, delta in deltas.items():
                 out[d][m_rows] += delta.astype(np.complex64)

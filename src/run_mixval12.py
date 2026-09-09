@@ -47,6 +47,11 @@ from src.preprocessing import load_nilm_npz
 from src.synthesis.segment_pool import SegmentPool
 from src.synthesis.vtexture import VoltageTextureLibrary, default_library
 from src.preprocessing.file_registry import SITE_SESSIONS, LoadClass, get_load_class
+from src.synthesis.vtexture import load_vtail, splice_tail
+
+#: 세션별 전압 꼬리 h17~h31. **기본은 비어 있다** — 생성기 기본(꺼짐)과 맞춘다.
+#: `--vtail` 을 주면 채워지고, 그때만 [B]/[D] 가 꼬리를 본다 (13.73).
+_TAILS: dict = {}
 from src.synthesis.coupling import SmpsCircuit, SMPS_DEVICES
 
 H = 15
@@ -101,7 +106,9 @@ class RecordedSig:
         I = np.median(C[mm].real, 0) + 1j * np.median(C[mm].imag, 0)
         v_rec = float(np.median(V[mm]))
         scale = (v_rec / v_meas)                      # SMPS: I ∝ 1/V (선풍기는 ~V^0.7 이지만 작다)
-        return I * scale, self.lib.file_rel(stem), stem
+        # 13.73: 녹화 텍스처도 **h1..h31** 로 (그 녹화가 찍힌 세션의 꼬리가 붙는다).
+        # 환경 쪽에만 얹으면 "녹화에는 꼬리가 없었다" 가 되어 델타에 가짜 항이 생긴다.
+        return I * scale, self.lib.file_rel_full(stem), stem
 
 
 def windows_of(z: dict, spec: dict, apps: List[str]) -> List[Tuple[int, int, Dict[str, bool]]]:
@@ -152,7 +159,13 @@ def main() -> int:
     ap.add_argument("--relax", type=float, default=1.0,
                     help="[C] 결합 풀개의 감쇠. 1.0 은 지금 생성기 거동, 0.5 는 감쇠 (13.24.13)")
     ap.add_argument("--n-iter", type=int, default=3, help="[C] 결합 풀개의 반복 수")
+    ap.add_argument("--vtail", action="store_true",
+                    help="전압 꼬리(h17~h31)를 켠다 (13.73). 기본은 생성기와 같이 꺼짐 — "
+                         "켜면 [D] 는 좋아지고 [B] 는 나빠진다")
     a = ap.parse_args()
+    if a.vtail:
+        _TAILS.update(load_vtail())
+        print(f"전압 꼬리 켬 — 키 {sorted(_TAILS)} (비면 꼬리 없이 돈다)")
 
     ev = json.load(open(a.events, encoding="utf-8"))["files"]
     pool = SegmentPool(npz_dir="processed_data/npz")
@@ -172,6 +185,9 @@ def main() -> int:
             print(f"{stem}: 라벨 없음"); continue
         sess = next((k for k, v in SITE_SESSIONS.items() if stem in v["stems"]), None)
         z_ohm = SITE_SESSIONS[sess]["z_ohm"] if sess else None
+        # 그 세션의 **단자** 꼬리 (rel_meas 가 단자라 짝이 맞는다). 세션을 모르면 자리로.
+        _t = _TAILS.get(sess) or _TAILS.get(SITE_SESSIONS.get(sess, {}).get("site", ""))
+        tail_env = None if _t is None else _t[0]
         z = load_nilm_npz(f"{a.npz_dir}/{stem}.npz")
         spec = ev[stem]
         apps = list(spec["appliances_present"])
@@ -188,6 +204,9 @@ def main() -> int:
             I_meas = np.median(hc[m].real, 0) + 1j * np.median(hc[m].imag, 0)
             Vm = np.median(V15[m].real, 0) + 1j * np.median(V15[m].imag, 0)
             v1 = float(abs(Vm[0])); rel_meas = Vm / v1
+            # 이 창의 실측 전압에도 **그 세션의 꼬리**를 얹는다 (13.73). npz 가 h15 까지만
+            # 적을 뿐 실제 전압에는 h17+ 가 있었다. 꼬리를 모르는 세션이면 그대로 h15 다.
+            rel_env = splice_tail(rel_meas, tail_env)
             P_tot = float(np.median(pf[m, 0]))
             t_mid = (a0 + b0) / 120.0
             pw = device_powers(spec, t_mid, on)
@@ -218,7 +237,7 @@ def main() -> int:
                 I_rec, rel_rec, rstem = got
                 A += I_rec; B += I_rec
                 if d in SMPS and circ.has(d):
-                    I_env = circ.current(d, p, rel_meas, v1)
+                    I_env = circ.current(d, p, rel_env, v1)
                     I_own = circ.current(d, p, rel_rec, v1) if rel_rec is not None else None
                     if I_env is not None and I_own is not None:
                         B += (I_env - I_own)
@@ -228,7 +247,9 @@ def main() -> int:
                 else:
                     D += I_rec; C += I_rec
                     if get_load_class(d) is LoadClass.RESISTIVE and rel_rec is not None:
-                        dd = rel_meas - np.asarray(rel_rec, complex)
+                        # ⚠ 저항 출력은 h15 까지라 **꼬리를 자른다.** 안 자르면 (31,) 이
+                        #    (15,) 에 더해져 터진다. 꼬리는 저항 서명에 안 들어간다.
+                        dd = rel_meas - np.asarray(rel_rec, complex)[:H]
                         dd[0] = 0.0
                         d_res += I_rec[0] * dd
             if not ok:
@@ -244,7 +265,8 @@ def main() -> int:
             p_smps = {d: p for d, p in pw.items() if d in SMPS and circ.has(d)}
             if z_ohm is not None and p_smps:
                 Zh = z_ohm + 1j * 2 * np.pi * 60.0 * np.arange(1, H + 1) * DEEMBED_L_H
-                rel_src = rel_meas + Zh * I_meas / v1
+                # 생성기와 같은 부기: 강하는 h1~h15 에만 걸고 꼬리는 그대로 통과시킨다
+                rel_src = splice_tail(rel_meas + Zh * I_meas / v1, tail_env)
                 V_now = circ.solve_terminal(p_smps, rel_src, v1, z_ohm, DEEMBED_L_H)
                 V_ref = circ_ref.solve_terminal(p_smps, rel_src, v1, z_ohm, DEEMBED_L_H)
                 if V_now is not None and V_ref is not None:

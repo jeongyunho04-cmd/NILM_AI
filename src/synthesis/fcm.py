@@ -41,6 +41,11 @@ from src.synthesis.circuit_sim import F, NPC, simulate, to_wave
 
 H = 15
 HFULL = 128                     #: 소스 전압 스펙트럼의 최고 차수 (원시 256표본/주기의 나이퀴스트)
+#: 시뮬에 **넣는** 소스 전압의 최고 차수 (13.73 back-fill). 옛 값은 `H`(15) 였다 — v12 규약이
+#: "15차 소스" 였기 때문인데, 그 절단이 곧 충전기 h11~h15 오차의 뿌리였다. 출력 전류는 여전히
+#: h15 까지다 (`circuit12.harmonics_from_wave` 의 `nh`). 소스에 h17+ 가 없으면 그 자리가 0 이라
+#: **옛 결과와 비트 단위로 같다** — 0 은 파형에 아무것도 안 더한다.
+H_SRC = 31
 NCYC = 10                       #: 시뮬 주기 수 (8주기면 잠긴다)
 RAW_FIT_JSON = "results/_circuit_raw_C.json"   #: (옛 계측기) 원시 적합 결과 — 참고용
 V12_DIR = "circuit_model"                       #: 새 계측기 v12g 모델 (`circ12_<dev>.pkl`)
@@ -184,9 +189,15 @@ class DeviceModel12:
 
     def current(self, p_ac: float, V, n_match: int = 3, ncyc: int = NCYC,
                 R: Optional[float] = None, include_bg: bool = False) -> Optional[np.ndarray]:
+        """(15,) complex 계측 영역 전류. `V` 는 `to_spectrum` 이 받는 것 아무거나.
+
+        ⚠ 소스로 **h1..h31** 을 넘긴다 (13.73). h15 에서 자르면 도통각이 밀려 h11~h15 전류가
+        틀어진다 — 충전기 원시 20구간에서 |I13| 오차 중앙값이 자리 D 0.449, 자리 E 0.297 인데
+        꼬리를 넣으면 0.042 / 0.031 이다. 꼬리가 없는 소스는 그 자리가 0 이라 옛 값과 같다.
+        """
         X = to_spectrum(V)
-        V15 = X[1:H + 1]
-        I = self.m.simulate(float(p_ac), V15, measured=True, R=R, include_bg=include_bg)
+        V_src = X[1:H_SRC + 1]
+        I = self.m.simulate(float(p_ac), V_src, measured=True, R=R, include_bg=include_bg)
         return None if I is None else np.asarray(I, complex)
 
     def sample_R(self, rng):
@@ -195,7 +206,9 @@ class DeviceModel12:
 
     def simulate_true(self, p_ac: float, V15, R: Optional[float] = None) -> Optional[np.ndarray]:
         """회로 **참전류** (계측 RC 를 걸기 전) h1..h15 — 결합 고정점 안에서 V_term 을 갱신할 때 쓴다 (fcm12.forward 규약).
-        `V15` 는 (15,) complex 절대 전압, h배 위상 관례 (∠V1 이 0 이 아니어도 그대로 넣는다)."""
+        `V15` 는 (15,) complex 절대 전압, h배 위상 관례 (∠V1 이 0 이 아니어도 그대로 넣는다).
+        13.73 부터 **더 길어도 된다** — 꼬리(h17~h31)까지 주면 그대로 시뮬에 들어간다.
+        `to_spectrum` 을 안 거치므로 준 길이가 그대로 쓰인다."""
         I = self.m.simulate(float(p_ac), np.asarray(V15, complex), measured=False, R=R)
         return None if I is None else np.asarray(I, complex)
 

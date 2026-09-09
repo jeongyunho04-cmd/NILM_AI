@@ -1679,3 +1679,102 @@ def test_cache_index_plan_matches_iter_batches():
         reference(n, bs, nb, r2, bw)
         assert np.array_equal(r1.integers(0, 2**31, 4), r2.integers(0, 2**31, 4)), \
             f"n={n} 에서 rng 소모량이 다릅니다"
+
+
+def test_voltage_tail_is_a_no_op_when_absent():
+    """꼬리가 없으면 **비트 단위로** 옛 결과와 같은가 (13.73).
+
+    back-fill 은 소스 전압의 길이만 늘린다 (h15 -> h31). 늘린 자리가 0 이면 `irfft` 에 아무것도
+    안 더하므로 파형이 **정확히** 같아야 한다. 여기가 흔들리면 꼬리를 안 쓰는 경로(옛 캐시 재현,
+    `sp_curves` 재생성)까지 값이 바뀐 것이라 되돌림 검정이 통째로 무의미해진다.
+    """
+    import numpy as np
+    from src.synthesis.coupling import SmpsCircuit
+
+    circ = SmpsCircuit()
+    if not circ.models:
+        pytest.skip("회로 파라미터(pkl)가 없습니다")
+    rel = np.zeros(15, complex)
+    rel[0] = 1.0 + 0j
+    rel[2] = 0.03 * np.exp(1j * 2.0)
+    rel[4] = 0.017 * np.exp(-1j * 1.1)
+    rel[6] = 0.009 * np.exp(1j * 0.4)
+    pad = np.concatenate([rel, np.zeros(16, complex)])
+
+    for dev in sorted(circ.models):
+        for p in (12.0, 30.0, 55.0):
+            a = circ.current(dev, p, rel, 224.0)
+            b = circ.current(dev, p, pad, 224.0)
+            assert a is not None and b is not None, f"{dev} @ {p}W 전류가 안 나옵니다"
+            assert np.array_equal(a, b), (
+                f"{dev} @ {p}W: 0 을 덧붙였는데 값이 바뀝니다 "
+                f"(최대 {np.abs(a - b).max():.3e} A) — wave_from_harmonics 를 보십시오")
+
+    # 결합 고정점도 (꼬리는 강하 없이 통과시키므로 0 꼬리는 아무 일도 안 해야 한다)
+    pw = {"laptop_charger": 45.0, "minipc": 15.0}
+    d15 = SmpsCircuit().coupling_delta(pw, rel, 1, 224.0, 1.15, 225e-6)
+    d31 = SmpsCircuit().coupling_delta(pw, pad, 1, 224.0, 1.15, 225e-6)
+    assert set(d15) == set(d31) and d15, "결합 델타의 기기 구성이 다릅니다"
+    for k in d15:
+        assert np.array_equal(d15[k], d31[k]), (
+            f"결합 델타 {k}: 0 꼬리가 값을 바꿉니다 (최대 {np.abs(d15[k] - d31[k]).max():.3e} A)")
+
+
+def test_voltage_tail_reaches_the_simulator():
+    """꼬리가 **실제로 회로에 들어가는가** — 관문 확인 (13.73).
+
+    ⚠ "값이 안 바뀐다"는 통과가 아니다. `vtail.npz` 가 없거나 세션 귀속이 어긋나면 꼬리가
+    조용히 안 붙고, 그러면 back-fill 을 켠 채로 옛 거동을 재게 된다 (규칙: 관문이 그 경로를
+    부르는지 확인하라). 그래서 **h13 이 눈에 띄게 움직이는 것**까지 확인한다.
+
+    꼬리 크기는 V1 의 0.16~0.55% 뿐인데 SMPS 전류의 h13 은 그것에 초선형으로 반응한다 —
+    충전기 원시 20구간에서 |I13| 오차 중앙값이 자리 D 0.449 -> 0.042 로 내렸다.
+    """
+    import numpy as np
+    from src.synthesis.coupling import SmpsCircuit
+    from src.synthesis.vtexture import (DEFAULT_VTAIL_NPZ, TAIL_ORDERS, VoltageTextureLibrary,
+                                        splice_tail)
+
+    # ⚠ **명시로 켠다.** 기본은 꺼짐이라 그냥 부르면 꼬리가 안 붙고, 이 시험이 통째로
+    #   skip 되면서 "통과" 처럼 보인다.
+    lib = VoltageTextureLibrary.from_npz_dir(vtail=DEFAULT_VTAIL_NPZ)
+    if len(lib) == 0:
+        pytest.skip("텍스처 라이브러리가 없습니다")
+    if lib.n_tails() == 0:
+        pytest.skip("processed_data/vtail.npz 가 없습니다 (run_build_vtail 로 만듭니다)")
+
+    # 붙는 자리가 맞는가 — 홀수 h17~h31 만, 짝수와 h16 은 0
+    tex = next(t for t in lib.textures if t.tail is not None)
+    full = tex.rel_full()
+    assert len(full) == 31, f"rel_full 이 h1..h31 이 아닙니다: {len(full)}"
+    assert np.array_equal(full[:15], tex.rel), "앞 15 차가 원래 텍스처와 다릅니다"
+    for h in TAIL_ORDERS:
+        assert full[h - 1] == tex.tail[TAIL_ORDERS.index(h)], f"h{h} 가 제자리에 없습니다"
+    # ⚠ **꼬리 구간만** 본다. h2~h14 의 짝수차는 녹화가 실제로 갖고 있는 값이다 (계측 인공물,
+    #   vh2/vh1 0.03%). 거기까지 0 을 요구하면 없는 결함을 만든다 — `fcm.to_spectrum` 이
+    #   어차피 아래에서 지운다. 꼬리는 원시에서 **홀수만** 떠 왔으므로 h16~h30 은 0 이어야 한다.
+    even_tail = [h for h in range(16, 32, 2)]
+    assert np.all(full[np.array(even_tail) - 1] == 0), (
+        "꼬리 구간의 짝수차가 0 이 아닙니다 (계통 전압은 반파 대칭이라 짝수가 없다)")
+
+    # 녹화 쪽도 같은 길이여야 한다 — 한쪽만 길면 델타에 가짜 항이 생긴다
+    fid = lib.file_id(tex.stem)
+    rec = lib.file_rel_full_by_id(fid)
+    assert rec is not None and len(rec) == len(full), (
+        f"녹화 텍스처 길이가 다릅니다: {None if rec is None else len(rec)} vs {len(full)}")
+
+    # 그리고 실제로 h13 을 움직이는가
+    circ = SmpsCircuit()
+    if not circ.models:
+        pytest.skip("회로 파라미터(pkl)가 없습니다")
+    moved = []
+    for dev in sorted(circ.models):
+        a = circ.current(dev, 30.0, splice_tail(tex.rel, None), 224.0)
+        b = circ.current(dev, 30.0, full, 224.0)
+        if a is None or b is None:
+            continue
+        moved.append(abs(b[12] - a[12]) / max(abs(a[12]), 1e-12))
+    assert moved, "회로가 한 번도 안 돌았습니다"
+    assert max(moved) > 0.02, (
+        f"꼬리를 붙였는데 h13 이 {100 * max(moved):.2f}% 밖에 안 움직입니다 — "
+        "꼬리가 회로에 안 들어가고 있습니다 (fcm.H_SRC / to_spectrum 절단을 보십시오)")

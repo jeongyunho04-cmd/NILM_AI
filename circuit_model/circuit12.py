@@ -71,15 +71,22 @@ def sim_wave(P, V, params, npc=256, tau=60e-6, up=12, ncyc=NCYC, deembed=True):
     return Ic.reshape(npc, up).mean(1)
 
 
-def wave_from_harmonics(V15, npc=3072):
-    """V15: h1..h15 복소 (RMS, h배 위상 관례 X(h)=|X|e^{j(arg−h·arg V1)}) → 1주기 파형 (cos 기준).
+def wave_from_harmonics(V, npc=3072):
+    """V: h1..hN 복소 (RMS, h배 위상 관례 X(h)=|X|e^{j(arg−h·arg V1)}) → 1주기 파형 (cos 기준).
 
     13.23: 차수마다 cos 를 부르던 것을 **역 FFT 한 번**으로 바꿨다 (15 x npc 개의 cos -> irfft).
     같은 값이다 (무작위 20판에서 최대 차이 6e-13 V) 고 10.4배 빠르다 — 이 함수가 `sim_harmonics`
     시간의 24% 였다.
+
+    13.73: 길이를 **입력이 정한다** (옛 코드는 `X[1:16]` 로 15 에 박혀 있었다). 전압 꼬리
+    back-fill 이 h17~h31 을 넣기 때문이다 — 2Hz 녹화는 h15 까지지만 SMPS 전류의 h11~h15 를
+    지배하는 것은 h17 위의 전압이다 (`VTAIL_BACKFILL_DESIGN.md` 1절). 15 개를 주면 뒤가 0 이라
+    **옛 결과와 비트 단위로 같다**. 출력 전류는 여전히 h15 까지다 (`harmonics_from_wave` 의 nh).
     """
     X = np.zeros(npc // 2 + 1, dtype=np.complex128)
-    X[1:16] = np.sqrt(2.0) * np.asarray(V15, dtype=np.complex128) * (npc / 2.0)
+    V = np.asarray(V, dtype=np.complex128)
+    n = min(len(V), npc // 2)
+    X[1:n + 1] = np.sqrt(2.0) * V[:n] * (npc / 2.0)
     return np.fft.irfft(X, n=npc)
 
 

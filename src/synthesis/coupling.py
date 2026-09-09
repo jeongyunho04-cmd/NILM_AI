@@ -67,6 +67,24 @@ def _pbin(p: float) -> int:
     return int(round(float(p) / P_BIN_W))
 
 
+def _split_tail(V: np.ndarray):
+    """(h1..hN,) -> (앞 H 개, 꼬리). 꼬리가 없으면 두 번째가 길이 0 이다.
+
+    ⚠ 앞이 H 보다 짧으면 **0 으로 채워** 길이를 H 로 맞춘다 — 고정점 `Z`(15,) 와 짝이 맞아야 한다.
+    """
+    V = np.asarray(V, dtype=np.complex128)
+    if len(V) >= H:
+        return V[:H], V[H:]
+    out = np.zeros(H, dtype=np.complex128)
+    out[:len(V)] = V
+    return out, V[:0]
+
+
+def _join_tail(V15: np.ndarray, tail: np.ndarray) -> np.ndarray:
+    """고정점이 푼 h1..h15 뒤에 손대지 않은 꼬리를 도로 붙인다."""
+    return V15 if tail.size == 0 else np.concatenate([V15, tail])
+
+
 class SmpsCircuit:
     """v12g 모델 위의 델타 계산기 + 캐시. 생성기(`GridSimulator`)가 하나 들고 쓴다."""
 
@@ -107,7 +125,11 @@ class SmpsCircuit:
     # ── 원시 호출 ─────────────────────────────────────────────────────────
     def current(self, device: str, p: float, rel: np.ndarray, v1: float,
                 R: Optional[float] = None) -> Optional[np.ndarray]:
-        """(15,) complex 계측 영역 전류. 실패하면 None."""
+        """(15,) complex 계측 영역 전류. 실패하면 None.
+
+        `rel` 은 h1..h15 도 되고 **h1..h31**(꼬리 포함, 13.73) 도 된다 — 길이는 `DeviceModel12`
+        가 그대로 시뮬에 넘긴다. 출력은 어느 쪽이든 h15 까지다.
+        """
         m = self.models.get(device)
         if m is None or p <= 0.5:
             return None
@@ -124,7 +146,13 @@ class SmpsCircuit:
     def texture_delta(self, device: str, p: float, rel_env: np.ndarray, env_id: int,
                       rel_rec: np.ndarray, rec_id: int, v1: float,
                       R: Optional[float] = None) -> Optional[np.ndarray]:
-        """I_sim(p, rel_env·v1) − I_sim(p, rel_rec·v1). 구간 대표값으로 계산해 같은 키가 같은 답을 준다."""
+        """I_sim(p, rel_env·v1) − I_sim(p, rel_rec·v1). 구간 대표값으로 계산해 같은 키가 같은 답을 준다.
+
+        ⚠ **두 rel 의 길이가 같아야 한다** (13.73). 합성 쪽에만 꼬리를 붙이고 녹화 쪽에 안 붙이면
+        "그 녹화에는 꼬리가 없었다" 는 뜻이 되어 델타에 가짜 항이 생긴다 — 녹화도 어딘가에서
+        찍힌 것이라 자기 세션의 꼬리를 갖고 있다. 캐시 키는 `env_id`/`rec_id` 라 그대로 둔다:
+        꼬리는 세션에 매이고 세션은 그 id 가 이미 가른다.
+        """
         if not self.has(device) or p <= 0.5 or rel_env is None or rel_rec is None:
             return None
         pb = _pbin(p); vb = int(round(v1 / V_BIN_V)); rb = -1 if R is None else int(round(R / R_BIN_OHM))
@@ -232,19 +260,20 @@ class SmpsCircuit:
             return None
         h = np.arange(1, H + 1)
         Z = float(r_line) + 1j * 2 * np.pi * F * h * float(l_line)
-        V_src = np.asarray(rel_env, complex) * float(v1)
+        V_src, tail = _split_tail(np.asarray(rel_env, complex) * float(v1))
         ms = self.models
         Rd = R or {}
         try:
             def total_true(V):
+                Vf = _join_tail(V, tail)
                 s = np.zeros(H, complex)
                 for d, pw in p.items():
-                    I = ms[d].simulate_true(pw, V, R=Rd.get(d)) if hasattr(ms[d], "simulate_true") else None
+                    I = ms[d].simulate_true(pw, Vf, R=Rd.get(d)) if hasattr(ms[d], "simulate_true") else None
                     if I is None:
                         raise RuntimeError(d)
                     s += I
                 return s
-            return self._solve_vterm(total_true, V_src, Z)
+            return _join_tail(self._solve_vterm(total_true, V_src, Z), tail)
         except Exception:
             self.failures += 1
             return None
@@ -254,7 +283,10 @@ class SmpsCircuit:
                           i_ext: Optional[np.ndarray] = None) -> Dict[str, np.ndarray]:
         h = np.arange(1, H + 1)
         Z = r_line + 1j * 2 * np.pi * F * h * l_line
-        V_src = np.asarray(rel_env, complex) * float(v1)
+        # 13.73: 꼬리(h17~h31)는 **강하 없이 통과**시킨다. 고정점은 h1~h15 그대로다 —
+        # 꼬리의 부하 전류가 mA 라 Z·I 가 1~2mV(기본파의 0.001%)이고, 늘리면 고정점이
+        # 32차원이 되면서 회로 호출이 는다. 값에 비해 비싸다 (설계 5.2절).
+        V_src, tail = _split_tail(np.asarray(rel_env, complex) * float(v1))
         ms = self.models
         # 비SMPS 부하 (13.45). 저항은 I_h = V_h/R 로 전압에 선형이라 **어드미턴스**로 넣는다 —
         # 정전류로 넣으면 강하가 커져도 외부 전류가 안 줄어 강하를 과대평가한다.
@@ -267,14 +299,15 @@ class SmpsCircuit:
             i_fix = np.where(big, 0.0 + 0.0j, ie)
         try:
             def total_true(V):
+                Vf = _join_tail(V, tail)
                 s = np.zeros(H, complex) if y_ext is None else y_ext * V + i_fix
                 for d, p in powers.items():
-                    I = ms[d].simulate_true(p, V, R=R.get(d)) if hasattr(ms[d], "simulate_true") else None
+                    I = ms[d].simulate_true(p, Vf, R=R.get(d)) if hasattr(ms[d], "simulate_true") else None
                     if I is None:
                         raise RuntimeError(d)
                     s += I
                 return s
-            V_term = self._solve_vterm(total_true, V_src, Z)
+            V_term = _join_tail(self._solve_vterm(total_true, V_src, Z), tail)
             out = {}
             for d, p in powers.items():
                 a = self.current(d, p, V_term / float(v1), v1, R.get(d))
