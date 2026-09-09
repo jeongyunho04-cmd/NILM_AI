@@ -66,3 +66,9 @@ results/_minipc_gap_pairs*.npz
 # 100 epoch 탐침 체크포인트. **수치는 같은 이름의 JSON 에 남는다** — 13.11.5 의
 # 음성 대조(A/B/A+B)와 절제 판이 그것이다. 바이너리까지 둘 값어치는 없다.
 results/*_probe.pt
+
+# gate1 HPC 접속 꾸러미 — **개인키가 평문으로 들어 있다.** 커밋 금지 (gate1-access/README.md)
+gate1-access/
+gate1-access-setup.md
+*.pem
+*_ed25519
