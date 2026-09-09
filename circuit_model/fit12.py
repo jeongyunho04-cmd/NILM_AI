@@ -18,12 +18,13 @@ fit12.py — 원시 스냅샷(단일 입력 ADC 포맷) → v12g 회로 파라�
 import numpy as np, pandas as pd, argparse, pickle, time
 from scipy.optimize import least_squares
 try:                                   # 패키지(circuit_model.circuit12)로 먼저 — fcm12 와 같은 규약
-    from .circuit12 import sim_wave, rc_periodic, harmonics_from_wave, F
+    from .circuit12 import sim_wave, sim_harmonics, rc_periodic, harmonics_from_wave, F
 except ImportError:                    # `python circuit_model/fit12.py` 로 직접 돌릴 때
     import sys as _sys
     from pathlib import Path as _Path
     _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
-    from circuit_model.circuit12 import sim_wave, rc_periodic, harmonics_from_wave, F
+    from circuit_model.circuit12 import (sim_wave, sim_harmonics, rc_periodic,
+                                         harmonics_from_wave, F)
 
 # ⚠ **`circuit12` 를 최상위로 임포트하지 말 것** (2026-09-07, 13.23.5). `_core12` 가
 # `@njit(cache=True)` 라 numba 가 디스크 캐시에 **모듈 이름을 박아** 둔다. 같은 파일을 한 번은
@@ -47,6 +48,35 @@ SITE_ORDERS = [3, 5, 7, 9, 11, 13, 15]
 MAG_ORDERS = [3, 5, 7, 9, 11, 13, 15]
 
 NPC = 256; DT = 1.0 / (F * NPC)
+
+#: 적합이 탈 **입구** (13.77). 옛 적합은 `sim_wave` 로 원시 **전파형**(h128)을 먹였는데
+#: 생성기는 `sim_harmonics` 로 h15 로 자른 전압을 먹여 왔다 — 두 입구가 다른 전압을 쓰고
+#: 있었고, back-fill 로 꼬리를 켜자 그 불일치가 65W 근처에서 드러났다 (13.76):
+#:     원시 충전기 31구간, 크기 오차 중앙값 (h9~h15)
+#:       저전력 <42W   절단 0.238 -> 꼬리 0.038   (6.3배)
+#:       고전력 >=42W  절단 0.244 -> 꼬리 0.222   (65W 6구간 중 5개가 **나빠진다**)
+#: `h31`/`h15` 는 적합을 생성기와 **같은 입구**로 옮긴다.
+SOURCES = ("wave", "h31", "h15")
+
+
+def source_rel(V, nh):
+    """측정 파형 -> `sim_harmonics` 소스 h1..hnh (RMS, h배 위상 관례).
+
+    ⚠ **역RC 를 하지 않는다.** 생성기(`vtexture`)가 npz 의 **계측** 전압(vh/vhdeg)을 그대로
+    소스에 넣기 때문이다. 적합도 같은 영역이어야 두 입구가 맞는다. 참 전압으로 옮기는 것은
+    h1~h15 까지 포함해 통째로 해야 하는 별건이고, 재 보니 꼬리를 넣은 뒤 h13 오차가
+    0.240 대 0.227 로 갈리는 2차 항이다 (2026-09-09).
+    """
+    return harmonics_from_wave(V, V, nh)
+
+
+def _phasors(b, par, tau, source, src_rel):
+    """그 구간의 시뮬 전류 — (파형 or None, h1..h15 페이저). 입구에 따라 갈린다."""
+    if source == "wave":
+        Is = sim_wave(b["P"], b["V"], par, NPC, tau)
+        return (None, None) if Is is None else (Is, harmonics_from_wave(Is, b["V"]))
+    ph = sim_harmonics(b["P"], src_rel, par, tau=tau, npc=3072)
+    return (None, None) if ph is None else (None, ph)
 
 
 def load_bins(files, nbins=3, min_cyc=6, fluct_thr=2.0):
@@ -121,12 +151,22 @@ def site_pairs(bins, max_dp_frac=0.15, min_gap_v=5.0):
 
 
 def fit(bins, cx, tau, fit_g=False, r_per_file=False, verbose=True, site_w=0.0,
-        mag_w=0.0):
+        mag_w=0.0, source="wave"):
+    assert source in SOURCES, source
     srcs = sorted({b['src'] for b in bins}); nf = len(srcs) if r_per_file else 1
     names = ['C', 'R', 'L0', 'rd', 'Isat'] + (['G', 'dCx'] if fit_g else []) + (['R%d' % k for k in range(1, nf)] if nf > 1 else [])
     lb = np.log10([5e-6, 0.1, 60e-6, 0.05, 0.1] + ([1e-6, 1e-12] if fit_g else []) + [0.1] * (nf - 1))
     ub = np.log10([500e-6, 60, 20e-3, 10, 50] + ([2e-3, 1e-6] if fit_g else []) + [60] * (nf - 1))
     n = sum(len(b['I']) for b in bins)
+    nh_src = {"wave": 0, "h31": 31, "h15": 15}[source]
+    src_rel = [None if nh_src == 0 else source_rel(b['V'], nh_src) for b in bins]
+    #: 페이저 입구에서는 파형 대신 **h1..h15 복소**를 맞춘다 — 모델이 내놓는 것이 그것이다.
+    #: 정규화는 파형 항과 같은 '상대오차' 눈금이라 site/mag 가중을 그대로 쓸 수 있다.
+    meas_ph = [harmonics_from_wave(b['I'], b['V']) for b in bins]
+    ph_norm = [max(float(np.sqrt(np.sum(np.abs(m) ** 2))), 1e-12) for m in meas_ph]
+    if verbose and source != "wave":
+        print('  입구: sim_harmonics(h1..h%d) — 생성기와 같은 길. 파형 항 대신 h1~h15 복소'
+              % nh_src)
 
     def unpack(x):
         p = 10.0 ** x; C, R, L0, rd, Isat = p[:5]; k = 5
@@ -166,24 +206,29 @@ def fit(bins, cx, tau, fit_g=False, r_per_file=False, verbose=True, site_w=0.0,
         C, L0, rd, Isat, G, dCx, Rs = unpack(x); out = []
         sims = {}
         for k_, b in enumerate(bins):
-            Is = sim_wave(b['P'], b['V'], (C, Rs[b['src']], L0, Isat, cx + dCx, rd, G), NPC, tau)
-            if Is is None:
+            par = (C, Rs[b['src']], L0, Isat, cx + dCx, rd, G)
+            Is, ph = _phasors(b, par, tau, source, src_rel[k_])
+            if ph is None:
                 return np.full(n + nsite * bool(pairs) + nmag * (mag_w > 0), 1e3)
-            sims[k_] = Is
-            out.append((Is - b['I']) / np.sqrt(np.mean(b['I'] ** 2) * len(b['I'])))
+            sims[k_] = ph
+            if source == "wave":
+                out.append((Is - b['I']) / np.sqrt(np.mean(b['I'] ** 2) * len(b['I'])))
+            else:
+                d_ = (ph - meas_ph[k_]) / ph_norm[k_]
+                out.append(np.concatenate([d_.real, d_.imag]))
             if mag_w > 0:
-                a = np.log(np.maximum(
-                    np.abs(harmonics_from_wave(Is, b['V']))[hm], 1e-12))
+                a = np.log(np.maximum(np.abs(ph)[hm], 1e-12))
                 out.append(mag_w * (a - meas_mag[k_]) / np.sqrt(nmag))
         for i, j in pairs:
             # **짝의 두 파일에 같은 R** — 그래야 비가 R 로 흡수되지 않는다 (13.18.5)
             Ri = Rs[bins[i]['src']]
-            si = sim_wave(bins[i]['P'], bins[i]['V'], (C, Ri, L0, Isat, cx + dCx, rd, G), NPC, tau)
-            sj = sim_wave(bins[j]['P'], bins[j]['V'], (C, Ri, L0, Isat, cx + dCx, rd, G), NPC, tau)
-            if si is None or sj is None:
+            pr = (C, Ri, L0, Isat, cx + dCx, rd, G)
+            _, pi_ = _phasors(bins[i], pr, tau, source, src_rel[i])
+            _, pj_ = _phasors(bins[j], pr, tau, source, src_rel[j])
+            if pi_ is None or pj_ is None:
                 return np.full(n + nsite + nmag * (mag_w > 0), 1e3)
-            a = np.abs(harmonics_from_wave(si, bins[i]['V']))[hs]
-            b_ = np.abs(harmonics_from_wave(sj, bins[j]['V']))[hs]
+            a = np.abs(pi_)[hs]
+            b_ = np.abs(pj_)[hs]
             r = np.log(np.maximum(b_, 1e-12) / np.maximum(a, 1e-12))
             out.append(site_w * (r - meas_ratio[(i, j)]) / np.sqrt(nsite))
         return np.concatenate(out)
@@ -199,9 +244,14 @@ def fit(bins, cx, tau, fit_g=False, r_per_file=False, verbose=True, site_w=0.0,
             best = r
     C, L0, rd, Isat, G, dCx, Rs = unpack(best.x)
     rows = []
-    for b in bins:
-        Is = sim_wave(b['P'], b['V'], (C, Rs[b['src']], L0, Isat, cx + dCx, rd, G), NPC, tau)
-        rows.append((b['src'], b['P'], float(np.sqrt(np.mean((Is - b['I']) ** 2) / np.mean(b['I'] ** 2)))))
+    for k_, b in enumerate(bins):
+        par = (C, Rs[b['src']], L0, Isat, cx + dCx, rd, G)
+        Is, ph = _phasors(b, par, tau, source, src_rel[k_])
+        if source == "wave":
+            e = float(np.sqrt(np.mean((Is - b['I']) ** 2) / np.mean(b['I'] ** 2)))
+        else:                     # 같은 눈금: h1~h15 복소 상대오차
+            e = float(np.linalg.norm(ph - meas_ph[k_]) / ph_norm[k_])
+        rows.append((b['src'], b['P'], e))
     if verbose:
         print('  C=%.1fµF R=%s L0=%.0fµH Isat=%.2fA rd=%.2fΩ G=%.3fmS Cx=%.3f(+%.3f)µF  (%.0fs)' % (
             C * 1e6, '/'.join('%.2f' % Rs[s] for s in srcs), L0 * 1e6, Isat, rd, G * 1e3, cx * 1e6, dCx * 1e6, time.time() - t0))
@@ -221,12 +271,16 @@ if __name__ == '__main__':
                          '0 이면 끔(옛 동작).')
     ap.add_argument('--site-ratio', type=float, default=0.0, metavar='W',
                     help='자리 비를 목적함수에 넣는 가중 (0 = 끔). 설계 13.20')
+    ap.add_argument('--source', choices=SOURCES, default='wave',
+                    help='적합이 탈 입구 (13.77). wave=원시 전파형+sim_wave(옛 동작), '
+                         'h31=계측 전압 h1..h31 + sim_harmonics (**생성기와 같은 길**), '
+                         'h15=h15 절단. 페이저 입구에서는 파형 항 대신 h1~h15 복소를 맞춘다')
     a = ap.parse_args()
     bins = load_bins(a.files, a.nbins); Pbg = subtract_bg(bins, a.bg) if a.bg else None
     cx, r = measure_cx(bins); print('%s: 동작점 %s  Cx=%.3fµF(r=%.2f)  배경 %s' % (a.device, [round(b['P'], 1) for b in bins], cx * 1e6, r, None if Pbg is None else '%.2fW' % Pbg))
     res = fit(bins, cx, a.tau, a.fit_g, a.r_per_file, site_w=a.site_ratio,
-              mag_w=a.harm_mag)
+              mag_w=a.harm_mag, source=a.source)
     out = dict(device=a.device, topo='v12g', params=res['params'], R_files=res['R_files'], tau=a.tau, Cx_meas=cx,
-               site_ratio_w=a.site_ratio, harm_mag_w=a.harm_mag,
+               site_ratio_w=a.site_ratio, harm_mag_w=a.harm_mag, source=a.source,
                validation=res['validation'], files=[f.split('/')[-1] for f in a.files], bg=a.bg, adc='single-ended', date='2026-09-06')
     path = a.o or 'circ12_%s.pkl' % a.device; pickle.dump(out, open(path, 'wb')); print('->', path)
