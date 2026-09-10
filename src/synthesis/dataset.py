@@ -114,6 +114,15 @@ RESISTIVE_OVERLAP_EXCLUDE: tuple = ()
 # 그것들도 각각 실측 실패를 보고 넣은 것이다 (12.38).
 SMPS_OVERLAP_TRIO_P = 0.6
 
+# smps_overlap 에서 **미니PC 를 끄고 형제 SMPS 만** 켤 확률 (2026-09-10, 13.83).
+# 0.0 이면 옛 경로 그대로다. 근거는 `synthesize_smps_overlap_window` 독스트링에
+# 있다 — 실측 미니PC 게이트가 형제 SMPS 유무로 AUC 0.998 대 **0.452** 로 갈리고,
+# 그 원인이 합성의 동시성 부호(phi +0.333, 실측 -0.13)다.
+# ⚠ 이 값만 올려서는 phi 가 +0.14 에서 멈춘다. `--recipe-mix decorr` 와 **같이**
+#   써야 0 에 간다 (13.83 의 [A+B]). 0.4 가 그 조합의 값이다.
+SMPS_OVERLAP_FOCUS_OFF_P = 0.0
+SMPS_OVERLAP_FOCUS_APP = "minipc"
+
 # resistive_overlap 를 따로 둔 이유 (2026-08-22)
 # 0.2절이 "저항성끼리 겹칠 때가 진짜 시험대" 라고 했는데 그 시험을 칠 데이터가 없었다.
 # 홀드아웃 8,000창에서 오븐+핫플 동시 발열이 6창(0.07%) 뿐이다.
@@ -160,6 +169,7 @@ class NILMBatchGenerator:
         synthesizer: Optional[LoadSynthesizer] = None,
         compute_gt_harmonics: bool = False,
         target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
+        smps_focus_off_p: Optional[float] = None,
     ):
         self.synthesizer = synthesizer or LoadSynthesizer(segment_pool=segment_pool)
         # 학습 배치에는 가전별 고조파 정답이 나가지 않는다. 전력·상태 회귀만 한다면
@@ -173,6 +183,11 @@ class NILMBatchGenerator:
         # seq2point 타깃 시점. 창 중앙이 아니라 끝쪽이다.
         # 중앙을 쓰면 추론할 때 창 절반만큼의 미래가 필요해 실시간이 성립하지 않는다.
         self.target_lookahead_cycles = int(target_lookahead_cycles)
+        #: `smps_overlap` 에서 미니PC 를 끄고 형제만 켤 확률 (13.83).
+        #: None 이면 모듈 기본값(0.0 = 옛 경로).
+        self.smps_focus_off_p = float(
+            SMPS_OVERLAP_FOCUS_OFF_P if smps_focus_off_p is None else smps_focus_off_p
+        )
         self.target_index = window_target_index(window_size_cycles, target_lookahead_cycles)
         self.appliance_list = sorted(self.synthesizer.known_appliances)
         self.app_to_idx = {app: i for i, app in enumerate(self.appliance_list)}
@@ -227,6 +242,8 @@ class NILMBatchGenerator:
                 self.window_size, compute_gt_harmonics=gt_h,
                 target_lookahead_cycles=self.target_lookahead_cycles,
                 p_trio=SMPS_OVERLAP_TRIO_P,
+                p_focus_off=self.smps_focus_off_p,
+                focus_app=SMPS_OVERLAP_FOCUS_APP,
             )
         elif recipe == "high_low_mixed":
             sample = self.synthesizer.synthesize_high_low_mixed_window(

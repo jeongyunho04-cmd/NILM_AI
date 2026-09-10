@@ -51,6 +51,25 @@ SMPS = ("beam_projector", "laptop_charger", "minipc")
 
 #: 12.66.5 가 지목한 이동. 빈 창을 만드는 셋에서 덜어 동시 부하 쪽으로 옮긴다.
 PRESETS: Dict[str, Dict[str, float]] = {
+    # ── 동시성 탈상관 (2026-09-10, 13.83) ────────────────────────────────
+    # 미니PC↔형제 SMPS 의 phi 를 **+0.333 -> 0** 으로 보낸다. 레시피별 phi 는
+    # 전부 +0.13 이하인데 섞으면 +0.333 이 된다 (혼합 유도 상관) — 한계확률이
+    # 극단이면서 같은 방향인 것들을 섞어서다. 그래서 믹스만으로는 +0.164 에서
+    # 멈추고, **`--smps-focus-off-p 0.4` 와 같이** 써야 0 에 간다.
+    # 곁들여 전력대 분포도 실측 쪽으로 간다 (30~100W 창 16.6% -> 30.9%,
+    # 실측 32.6%). `smps_overlap` 은 오히려 0.26 -> 0.30 으로 올린다 —
+    # 실측 SMPS>=2 가 79% 라 그 레시피를 줄이면 안 된다.
+    "decorr": {
+        "smps_overlap": 0.30,
+        "low_load_among_standby": 0.297,
+        "high_low_mixed": 0.219,
+        "resistive_overlap": 0.035,
+        "high_power_resistive": 0.03,
+        "random_realistic": 0.03,
+        "random_uniform": 0.03,
+        "standby_only": 0.03,
+        "unplugged_baseline": 0.03,
+    },
     "half": {                        # 실측까지의 절반
         "random_realistic": 0.23,
         "random_uniform": 0.14,

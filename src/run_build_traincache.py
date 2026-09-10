@@ -31,6 +31,10 @@ def main() -> int:
     ap.add_argument("--recipe-mix", default="", metavar="NAME|JSON",
                     help="레시피 믹스. run_recipe_mix_probe 의 프리셋 이름(half/full) 이나 "
                          "JSON. 기본은 DEFAULT_RECIPE_MIX (12.67절)")
+    ap.add_argument("--smps-focus-off-p", type=float, default=0.0, metavar="P",
+                    help="smps_overlap 에서 미니PC 를 끄고 형제 SMPS 만 켤 확률 (13.83). "
+                         "0 이면 옛 경로. **--recipe-mix 재조정과 같이** 써야 동시성 phi 가 "
+                         "0 에 간다 — 한쪽만으로는 +0.16/+0.14 에서 멈춘다. 조합값은 0.4")
     ap.add_argument("--power-scale-std", default="", metavar="NAME|JSON",
                     help="기기별 전력 증강 폭 (12.118). 프리셋 measured/resistive "
                          "또는 JSON. 기본은 일괄 0.05")
@@ -148,7 +152,8 @@ def main() -> int:
                 power_scale_std_map=pss, level_scramble=lvs, state_mix=smx,
                 carrier_apps=car, couple_ext=a.couple_ext,
                 sp_curves=a.sp_curves, sp_per_texture=a.sp_per_texture, vtail=a.vtail, background=a.background,
-                dither_min_order=a.dither_min_order)
+                dither_min_order=a.dither_min_order,
+                smps_focus_off_p=a.smps_focus_off_p)
     return 0
 
 

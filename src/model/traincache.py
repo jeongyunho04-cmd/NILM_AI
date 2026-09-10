@@ -80,7 +80,8 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           state_mix_json: str = "",
           carrier_apps: Optional[Sequence[str]] = None,
           dither_min_order: int = 2,
-          couple_ext: bool = False) -> None:
+          couple_ext: bool = False,
+          smps_focus_off_p: Optional[float] = None) -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.augmentor import DataAugmentor
     from src.synthesis.dataset import NILMBatchGenerator
@@ -121,7 +122,8 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
         synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
                                     augmentor=aug, background=bool(background),
                                     couple_ext=bool(couple_ext)),
-        recipe_mix=mix, compute_gt_harmonics=False)
+        recipe_mix=mix, compute_gt_harmonics=False,
+        smps_focus_off_p=smps_focus_off_p)
 
 
 def _chunk(task: Tuple[int, int]) -> Dict[str, np.ndarray]:
@@ -186,8 +188,14 @@ def build_cache(
     background: bool = False,
     dither_min_order: int = 2,
     couple_ext: bool = False,
+    smps_focus_off_p: Optional[float] = None,
 ) -> dict:
-    """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다."""
+    """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다.
+
+    `smps_focus_off_p`: `smps_overlap` 에서 미니PC 를 끄고 형제 SMPS 만 켤 확률
+    (13.83). None/0.0 이면 옛 경로 그대로다. **`recipe_mix` 재조정과 같이** 써야
+    동시성 phi 가 0 에 간다 — 어느 한쪽만으로는 +0.16 / +0.14 에서 멈춘다.
+    """
     import multiprocessing as mp
 
     from src.synthesis.segment_pool import SegmentPool
@@ -230,7 +238,8 @@ def build_cache(
                             bool(sp_curves), bool(sp_per_texture), bool(vtail),
                             bool(background), level_scramble,
                             smx_json, tuple(carrier_apps or ()),
-                            int(dither_min_order), bool(couple_ext))) as pool:
+                            int(dither_min_order), bool(couple_ext),
+                            smps_focus_off_p)) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -256,6 +265,10 @@ def build_cache(
             "power_scale_std_map": power_scale_std_map,
             "level_scramble": level_scramble,
             "state_mix": state_mix,
+            # 13.83: smps_overlap 에서 미니PC 를 끄고 형제 SMPS 만 켠 비율.
+            # None/0.0 이면 옛 경로다. 동시성 phi 를 읽으려면 recipe_mix 와 함께 봐야 한다.
+            "smps_focus_off_p": (None if smps_focus_off_p is None
+                                 else float(smps_focus_off_p)),
             "carrier_apps": list(carrier_apps or []),
             # 13.45: 결합 델타의 Σ 에 비SMPS 전류를 넣었는가. 홀드아웃과 짝이 맞아야 한다.
             "couple_ext": bool(couple_ext),

@@ -1041,6 +1041,8 @@ class LoadSynthesizer:
         p_trio: float = 0.5,
         p_resistive: Sequence[float] = (0.45, 0.45, 0.10),
         max_tries: int = 20,
+        p_focus_off: float = 0.0,
+        focus_app: str = "minipc",
     ) -> SyntheticLoadSample:
         """SMPS **2~3대가 타깃 시점에 동시에 켜져 있는** 윈도우 (12.88.4 의 1번).
 
@@ -1073,6 +1075,30 @@ class LoadSynthesizer:
                 `resistive_overlap` 과 같은 이유다 - 켜 두는 것과 **타깃 시점에
                 켜져 있는 것**은 다르다. 다만 여기서는 통전율이 아니라 배치가
                 문제라 재시도가 훨씬 덜 필요하다 (SMPS 는 연속 부하다).
+            p_focus_off: 이 확률로 `focus_app` 을 **끄고 형제 SMPS 만** 켠다 (13.83).
+                기본 0.0 이면 옛 경로 그대로다.
+            focus_app: 위에서 끄는 기기.
+
+        ⚠ **`p_focus_off` 를 넣은 이유 — 동시성 부호** (2026-09-10, 13.83).
+        실측에서 미니PC 게이트는 형제 SMPS 가 꺼져 있으면 AUC **0.998**, 켜져
+        있으면 **0.452** 다 (우연 아래다). 오탐 451창의 **100%** 가 충전기가 켜진
+        창이고, 둘 다 꺼진 창에서는 **0%** 다. 즉 게이트가 "이 SMPS 인가" 가 아니라
+        **"SMPS 전류가 있는가"** 를 배웠다. 합성이 그렇게 가르쳤기 때문이다:
+
+            P(충전기 ON | ...)      미니PC ON   미니PC OFF
+            합성                      65.6%       32.2%     phi **+0.333**
+            실측                      69.6%       81.8%     phi 약 -0.13
+
+        ⚠ 범인은 이 레시피 **내부가 아니다**. 레시피별 phi 는 전부 +0.13 이하이고
+        이 레시피는 오히려 **-0.160** 이다. +0.333 은 한계확률이 극단이면서 같은
+        방향인 레시피들을 **섞어서** 생긴다 (둘 다 항상 OFF 인 standby_only ·
+        unplugged_baseline 1215창 대 둘 다 대부분 ON 인 여기 1527창).
+        그래서 믹스 재조정과 **함께** 써야 0 에 간다 — 어느 한쪽만으로는
+        +0.16 / +0.14 에서 멈춘다 (13.83 의 [A] · [B]).
+
+        대칭 규칙(SMPS 하나를 균등하게 끄기)으로는 안 된다. 3종에서 "SMPS>=2" 를
+        지키면서 대칭이면 각 기기의 한계확률이 **2/3 밑으로 못 내려가고**,
+        그 지점의 phi 는 약 +0.21 이다. 그래서 focus 를 지목한다.
         """
         smps = [a for a in self.known_appliances if a in set(get_smps_appliances())]
         if len(smps) < 2:
@@ -1086,8 +1112,16 @@ class LoadSynthesizer:
         # **조합은 루프 밖에서 한 번만 뽑는다** - 12.38 이 겪은 버그다. 재시도마다
         # 다시 뽑으면 타깃 시점에 걸리기 쉬운 조합이 채택을 독식해, 정작 겨냥한
         # 조합(3종 동시)의 사전확률이 도리어 낮아진다.
-        n_smps = 3 if (len(smps) >= 3 and np.random.rand() < p_trio) else 2
-        chosen = list(np.random.choice(smps, min(n_smps, len(smps)), replace=False))
+        # focus 를 끄는 갈래 (13.83). `synthesize_random_window` 는 `force_active`
+        # 목록 **밖을 절대 켜지 않으므로**, 목록에서 빼는 것으로 OFF 가 확정된다.
+        # SMPS 는 형제 둘이 남아 `SMPS>=2` 라는 이 레시피의 목적은 유지된다.
+        if (p_focus_off > 0.0 and len(smps) >= 3 and focus_app in smps
+                and np.random.rand() < p_focus_off):
+            chosen = [a for a in smps if a != focus_app]
+            n_smps = len(chosen)
+        else:
+            n_smps = 3 if (len(smps) >= 3 and np.random.rand() < p_trio) else 2
+            chosen = list(np.random.choice(smps, min(n_smps, len(smps)), replace=False))
         n_res = int(np.random.choice(len(p_resistive), p=np.asarray(p_resistive, float)
                                      / float(np.sum(p_resistive))))
         if n_res and resistive:
