@@ -123,6 +123,16 @@ SMPS_OVERLAP_TRIO_P = 0.6
 SMPS_OVERLAP_FOCUS_OFF_P = 0.0
 SMPS_OVERLAP_FOCUS_APP = "minipc"
 
+# steady_loaded — 부하가 실린 채 창 내내 정상상태인 창 (2026-09-10, 13.83.19).
+# 실측은 부하 있는 창 2063개 중 **242개(11.7%)** 가 전이 0개인데 합성은 133개 중
+# **1개**였다. 그 결핍이 "창 안에 큰 계단이 있으면 충전기, 잠잠하면 미니PC" 라는
+# 지름길을 만들었고, 실측 배포는 충전기가 몇 분씩 잠잠하므로 통째로 뒤집힌다.
+#: 켤 기기 수 범위. 실측 배경의 활성 기기 수 중앙이 3~4 다.
+STEADY_LOADED_N_RANGE = (2, 4)
+#: SMPS 를 최소 2대 넣을 확률. 실측 배경의 형제 SMPS ON 이 77.2% 이고
+#: 모델이 무너지는 칸이 바로 그 칸이라 그쪽으로 기울인다.
+STEADY_LOADED_SMPS_PAIR_P = 0.6
+
 # resistive_overlap 를 따로 둔 이유 (2026-08-22)
 # 0.2절이 "저항성끼리 겹칠 때가 진짜 시험대" 라고 했는데 그 시험을 칠 데이터가 없었다.
 # 홀드아웃 8,000창에서 오븐+핫플 동시 발열이 6창(0.07%) 뿐이다.
@@ -249,6 +259,16 @@ class NILMBatchGenerator:
             sample = self.synthesizer.synthesize_high_low_mixed_window(
                 self.window_size, compute_gt_harmonics=gt_h,
                 target_lookahead_cycles=self.target_lookahead_cycles,
+            )
+        elif recipe == "steady_loaded":
+            # 부하가 실린 채 창 내내 정상상태인 창 (13.83.19). 합성이 이 종류를
+            # 0.8% 밖에 안 만들어(실측 11.7%) 모델이 "계단이 있으면 충전기,
+            # 잠잠하면 미니PC" 를 배웠다.
+            sample = self.synthesizer.synthesize_steady_loaded_window(
+                self.window_size, compute_gt_harmonics=gt_h,
+                target_lookahead_cycles=self.target_lookahead_cycles,
+                n_range=STEADY_LOADED_N_RANGE,
+                p_smps_pair=STEADY_LOADED_SMPS_PAIR_P,
             )
         elif recipe == "unplugged_baseline":
             sample = self.synthesizer.synthesize_scenario(

@@ -36,6 +36,7 @@ from src.preprocessing.file_registry import (
     get_smps_appliances,
     get_usage_probability,
     is_low_load,
+    is_periodic_duty,
 )
 
 from .augmentor import DataAugmentor
@@ -746,6 +747,7 @@ class LoadSynthesizer:
         target_biased_placement: bool = False,
         force_active: Optional[Sequence[str]] = None,
         target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
+        full_window_placement: bool = False,
     ) -> SyntheticLoadSample:
         """무작위 복합 윈도우를 빠르게 합성한다.
 
@@ -772,6 +774,16 @@ class LoadSynthesizer:
                 하는 레시피(고부하 + 저부하 동시)에서 쓴다. 지정하면
                 n_active / selection_mode / candidate_appliances 는 무시된다.
                 지속 부하 예산은 그대로 적용되므로 한도를 넘는 조합은 줄어든다.
+            full_window_placement: 활성 구간이 **창 전체를 덮도록** 배치한다 (13.83.19).
+                돌입을 창 **앞**에 두므로 창 안에는 ON/OFF 전이도 돌입도 없다.
+                기본 배치는 `start_c` 를 창 폭만큼 무작위로 흩뿌려 **부하가 실린 창의
+                거의 전부가 창 안에 전이를 갖는다** — 그래서 창 안 고조파 σ 가 실측의
+                1.6~2배가 되고, 모델이 "큰 계단이면 충전기·잠잠하면 미니PC" 를 배운다.
+                실측은 부하 있는 창 2063개 중 **242개(11.7%)** 가 전이 0개인데
+                합성은 133개 중 **1개**였다.
+                ⚠ 증강기가 원본보다 `max_stretch`(3)배 넘게 늘이지 않으므로 짧은
+                활성화가 뽑히면 창을 다 못 덮는다. **호출자가 `gt_is_on` 으로 검사해
+                기각해야 한다** (`synthesize_steady_loaded_window` 참조).
         """
         candidates = list(candidate_appliances or self.known_appliances)
         candidates = [a for a in candidates if a in self.known_appliances]
@@ -816,7 +828,11 @@ class LoadSynthesizer:
             dur_c = int(np.random.randint(window_size_cycles // 2, window_size_cycles * 3))
             # 음수 시작을 허용하고 클램프하지 않는다. 그래야 돌입 전류가
             # 윈도우 안 임의 위치에 오거나, 이미 진행 중인 동작으로 나타난다.
-            if target_biased_placement:
+            if full_window_placement:
+                # 창 [0, W) 를 통째로 덮게 둔다. 돌입은 창 앞(음수 시작)에 둔다.
+                dur_c = 3 * window_size_cycles
+                start_c = -int(np.random.randint(0, window_size_cycles // 2 + 1))
+            elif target_biased_placement:
                 # 요청한 dur_c 를 그대로 믿으면 안 된다. 증강기는 원본보다
                 # max_stretch(3)배 넘게 늘이지 않으므로, 짧은 활성화에 긴 길이를
                 # 요청하면 실제로는 짧은 파형이 돌아온다. 그것을 모르고 멀리
@@ -1141,6 +1157,97 @@ class LoadSynthesizer:
             # 히터 통전 여부까지 강제하면 (resistive_overlap 처럼) 기각률이 치솟는다.
             if all(int(sample.gt_is_on[a][ti]) == 1 for a in chosen[:n_smps]):
                 return sample
+        return sample
+
+    def synthesize_steady_loaded_window(
+        self,
+        window_size_cycles: int = 600,
+        compute_gt_harmonics: Optional[bool] = None,
+        target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
+        n_range: Tuple[int, int] = (2, 4),
+        p_smps_pair: float = 0.6,
+        max_tries: int = 12,
+    ) -> SyntheticLoadSample:
+        """**부하가 실린 채 창 내내 정상상태**인 윈도우 (13.83.19).
+
+        [왜 필요한가]
+        기본 배치는 `start_cycle` 을 창 폭만큼 흩뿌리므로, **부하가 실린 창은 거의
+        전부 창 안에 ON/OFF 계단을 갖는다.** 실측과 견주면:
+
+            부하 있는 창(|I1|>500mA) 중 전이 0개   실측 **242/2063 (11.7%)**
+                                                 합성 **1/133 (0.8%)**
+            창당 전이 (핫플 듀티 라벨 제외)          실측 중앙 2.0 · 합성 3.0
+            창 안 σ|I_h| (전이 1~2개 창, h3)       실측 45.3 · 합성 74.5
+
+        그 결과 모델은 **"큰 고조파 계단이 있으면 충전기, 잠잠하면 미니PC"** 를
+        배운다 (k=1 창의 σ h3 이 충전기 76.0 대 미니PC 24.2 로 3.1배다). 실측
+        배포에서는 충전기가 몇 분씩 켜진 채 잠잠하므로 그 창이 통째로 미니PC 로
+        읽힌다 — 13.83.16 의 오탐(충전기 게이트 0.072 · 미니PC 0.975) 이 그것이다.
+        실측 배경의 σ 만 ×2.4 로 올리면 두 게이트가 참값으로 맞바뀐다.
+
+        [무엇을 만드는가]
+        활성화를 창 앞에서 시작시켜 창 전체를 덮게 하고, **`gt_is_on` 이 창 내내
+        1 인지 검사해 아니면 기각**한다. 증강기가 원본보다 3배 넘게 안 늘이므로
+        짧은 활성화가 뽑히면 못 덮는다 — 그래서 재시도가 필요하다.
+
+        ⚠ 주기 부하(핫플·오븐 서모스탯)는 예외를 둔다. `gt_is_on` 이 듀티 휴지마다
+        0 으로 내려가는 **생성기 결함**(13.82) 때문에 all-1 검사를 통과할 수 없다.
+        그 기기는 **창 양 끝이 1** 인 것만 본다 — 규약상 휴지도 ON 이므로 그것이
+        옳은 검사다. 결함이 고쳐지면 이 분기는 지워도 된다.
+
+        Args:
+            n_range: 켤 기기 수 범위 (양끝 포함).
+            p_smps_pair: SMPS 를 최소 2대 포함시킬 확률. 실측 배경이 그렇다
+                (형제 SMPS ON 77.2%). 그 칸이 바로 모델이 무너지는 칸이다.
+            max_tries: 창을 다 못 덮으면 다시 뽑는 횟수.
+        """
+        smps = [a for a in self.known_appliances if a in set(get_smps_appliances())]
+        others = [a for a in self.known_appliances if a not in set(smps)]
+        lo, hi = int(n_range[0]), int(n_range[1])
+
+        def pick() -> List[str]:
+            k = int(np.random.randint(lo, hi + 1))
+            if len(smps) >= 2 and np.random.rand() < p_smps_pair:
+                base = list(np.random.choice(smps, 2, replace=False))
+            else:
+                base = []
+            rest = [a for a in self.known_appliances if a not in base]
+            need = max(0, k - len(base))
+            if need and rest:
+                base += list(np.random.choice(rest, min(need, len(rest)), replace=False))
+            return base
+
+        chosen = pick()
+        sample = None
+        for _ in range(max_tries):
+            sample = self.synthesize_random_window(
+                window_size_cycles=window_size_cycles,
+                force_active=chosen,
+                force_plugged_all=True,
+                compute_gt_harmonics=compute_gt_harmonics,
+                full_window_placement=True,
+                target_lookahead_cycles=target_lookahead_cycles,
+            )
+            ok = True
+            for a in sample.active_appliances:
+                on = np.asarray(sample.gt_is_on.get(a))
+                if on is None or not len(on):
+                    ok = False
+                    break
+                if is_periodic_duty(a):
+                    # 듀티 휴지는 ON 이다 (13.82). 양 끝만 본다.
+                    ok = ok and bool(on[0]) and bool(on[-1])
+                else:
+                    ok = ok and bool(on.all())
+                if not ok:
+                    break
+            if ok and sample.active_appliances:
+                sample.metadata["steady_loaded"] = True
+                return sample
+            chosen = pick()
+        # 다 실패하면 마지막 것을 그대로 낸다. 표식으로 실패를 남긴다.
+        if sample is not None:
+            sample.metadata["steady_loaded"] = False
         return sample
 
     def synthesize_high_power_window(

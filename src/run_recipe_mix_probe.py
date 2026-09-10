@@ -95,6 +95,25 @@ PRESETS: Dict[str, Dict[str, float]] = {
         "standby_only": 0.03,
         "unplugged_baseline": 0.03,
     },
+    # 13.83.19 — `steady_loaded` 를 넣은 판. 실측은 **부하 있는 창의 11.7%** 가
+    # 창 안 전이 0개인데 합성은 **0.8%** 였다 (133창 중 1창). 그 결핍이
+    # "큰 고조파 계단이 있으면 충전기 · 잠잠하면 미니PC" 라는 지름길을 만들었고,
+    # 충전기가 몇 분씩 잠잠한 실측 배포에서 통째로 뒤집힌다 (13.83.16~18).
+    # ⚠ `steady_loaded` 는 에어컨의 **세 번째 공급원**이다 (레시피 안 양성률 0.19).
+    #   13.83.13 의 굶김이 자동으로 완화되지만 굽기 전에 `positive_rate` 로 확인한다.
+    # `--smps-focus-off-p 0.4` 와 같이 쓴다는 전제는 `decorr2` 와 같다.
+    "steady": {
+        "steady_loaded": 0.15,
+        "smps_overlap": 0.26,
+        "high_low_mixed": 0.17,
+        "low_load_among_standby": 0.155,
+        "random_uniform": 0.095,
+        "random_realistic": 0.07,
+        "high_power_resistive": 0.03,
+        "resistive_overlap": 0.03,
+        "standby_only": 0.02,
+        "unplugged_baseline": 0.02,
+    },
     "half": {                        # 실측까지의 절반
         "random_realistic": 0.23,
         "random_uniform": 0.14,
