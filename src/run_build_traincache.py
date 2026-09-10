@@ -64,6 +64,13 @@ def main() -> int:
                          "**실측 복합은 IDLE 로만 돈다**")
     ap.add_argument("--vtail", action="store_true",
                     help="전압 꼬리(h17~h31)를 텍스처에 얹는다 (13.73/13.78). processed_data/vtail.npz 가 필요하다. 절대 경로(모델 단독)는 확실히 좋아지지만 델타 경로는 나빠진 전례가 있다 — A/B 로 판정하라")
+    ap.add_argument("--steady-crop", default="",
+                    help="SMPS 활성화를 자를 때 전력이 평탄한 60초 구간을 고른다 (13.83.26). 프리셋 "
+                         "'smps_steady' 또는 JSON {가전:{p,max_range_frac}}. 자리 E 충전기 창의 전력 범위 "
+                         "중앙 52W(무릎·램프)를 실측처럼 정상 창 위주로. 비면 옛 경로")
+    ap.add_argument("--standby-jitter-cap", type=float, default=0.0,
+                    help="대기 잔차 풀의 차수별 크기 상한 백분위 (13.83.26). 예 95. 0 이면 옛 경로. "
+                         "합성 배경층 σ|I3| 11~17mA 의 주인이 이 꼬리다 (실측 창 전체 6mA)")
     ap.add_argument("--float-fill", default="",
                     help="상태 채움 + 전력 축소 (13.83.23). 프리셋 'charger_float' 또는 JSON "
                          "{가전:{p,state,scale:[lo,hi]}}. test_1 의 충전기는 만충 뒤 ~14W 부동인데 "
@@ -157,6 +164,16 @@ def main() -> int:
         print(f"  ** 상태 채움 + 전력 축소 '{a.float_fill}' (13.83.23): "
               + ", ".join(f"{k}=s{d['state']} p{d['p']:.2f} x{d['scale'][0]:g}~{d['scale'][1]:g}"
                           for k, d in sorted(ffl.items())) + " **")
+    scr = None
+    if a.steady_crop:
+        from src.synthesis.augmentor import STEADY_CROP_PRESETS
+        scr = (STEADY_CROP_PRESETS[a.steady_crop]
+               if a.steady_crop in STEADY_CROP_PRESETS else json.loads(a.steady_crop))
+        scr = {k: {"p": float(d["p"]), "max_range_frac": float(d["max_range_frac"])} for k, d in scr.items()}
+        print(f"  ** 정상 구간 자르기 '{a.steady_crop}' (13.83.26): "
+              + ", ".join(f"{k}=p{d['p']:.2f} 폭≤{d['max_range_frac']:g}" for k, d in sorted(scr.items())) + " **")
+    if a.standby_jitter_cap:
+        print(f"  ** 대기 잔차 상한 p{a.standby_jitter_cap:g} (13.83.26) **")
     build_cache(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                 time_split=a.split, seed=a.seed, n_workers=a.workers,
                 exclude_activation_files=excl,
@@ -169,7 +186,7 @@ def main() -> int:
                 sp_curves=a.sp_curves, sp_per_texture=a.sp_per_texture, vtail=a.vtail, background=a.background,
                 dither_min_order=a.dither_min_order,
                 smps_focus_off_p=a.smps_focus_off_p,
-                float_fill=ffl)
+                float_fill=ffl, steady_crop=scr, standby_jitter_cap=a.standby_jitter_cap)
     return 0
 
 

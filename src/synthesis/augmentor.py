@@ -160,6 +160,21 @@ FLOAT_FILL_PRESETS: Dict[str, Dict[str, dict]] = {
     "charger_float": {"laptop_charger": {"p": 0.25, "state": 1, "scale": (0.40, 0.70)}},
 }
 
+# ── 정상 구간 자르기 (2026-09-11, 13.83.26) ────────────────────────────────────
+# 자리 E 충전기 활성화는 70~141초짜리라 60초 창 대부분에 벌크->테이퍼 무릎이나 켜짐 램프가 걸린다:
+# 증강기가 내보내는 55~70W 창의 전력 범위 중앙 **52W**, 55~70W 안에 든 사이클 71%, σ|I3| 63mA.
+# 범위가 8W 안인 안정 창만 보면 σ|I3| 5.8 로 풀 원본(5.6)과 같다 — 지터를 만드는 것이 아니라
+# **전이가 든 창을 고르는 것**이 문제다 (13.83.19 ③의 ON/OFF 판과 같은 구조가 기기 내부 상태에서).
+# 실측 배포는 벌크·부동이 분 단위로 이어지므로 정상 창이 대부분이다 (test_2 충전기 7분 60W).
+# 그래서 SMPS 활성화를 자를 때 `p` 의 확률로 **전력이 평탄한 60초 구간**을 고른다 — 후보 32개의
+# 창 안 전력 p5~p95 폭이 중앙의 `max_range_frac` 안이면 그중 무작위, 없으면 가장 평탄한 것.
+# 켜짐·꺼짐 순간을 포함하는 갈래(p_on/p_off)는 그대로 둔다 — 전이 창도 실재한다.
+# ⚠ 목록에 없는 기기는 난수를 한 칸도 안 쓴다 (항등).
+STEADY_CROP_PRESETS: Dict[str, Dict[str, dict]] = {
+    "smps_steady": {"laptop_charger": {"p": 0.90, "max_range_frac": 0.15},
+                    "beam_projector": {"p": 0.90, "max_range_frac": 0.15}},
+}
+
 
 class DataAugmentor:
     """가전 활성화 구간에 도메인 특화 물리 증강을 적용한다."""
@@ -189,6 +204,7 @@ class DataAugmentor:
         sp_curves: bool = False,
         sp_per_texture: bool = False,
         float_fill: Optional[Dict[str, dict]] = None,
+        steady_crop: Optional[Dict[str, dict]] = None,
     ):
         self.duration_scale_range = duration_scale_range
         self.power_scale_std = power_scale_std
@@ -243,6 +259,11 @@ class DataAugmentor:
             a: {"p": float(d["p"]), "state": int(d["state"]),
                 "scale": (float(d["scale"][0]), float(d["scale"][1]))}
             for a, d in (float_fill or {}).items() if float(d.get("p", 0.0)) > 0
+        }
+        #: {가전: {"p", "max_range_frac"}} — 정상 구간 자르기 (`STEADY_CROP_PRESETS`, 13.83.26). 비면 항등.
+        self.steady_crop: Dict[str, dict] = {
+            a: {"p": float(d["p"]), "max_range_frac": float(d["max_range_frac"])}
+            for a, d in (steady_crop or {}).items() if float(d.get("p", 0.0)) > 0
         }
         #: 증강 뒤 전력이 `POWER_RANGE_W` 밖으로 나가지 않게 배율을 자른다 (13.31).
         self.clip_to_recorded_range = bool(clip_to_recorded_range)
@@ -660,9 +681,12 @@ class DataAugmentor:
         orig_len = len(c_series)
         span = orig_len - target_len
         mix = self.state_mix.get(appliance_type)
+        sc = self.steady_crop.get(appliance_type) if self.steady_crop else None
         # 상태 계층화를 쓸 때는 돌입/종료 몫을 25%+25% -> 15%+15% 로 줄인다 (13.35).
         # 그 두 갈래는 활성화의 처음·끝 상태로 고정되므로 상태를 못 고른다.
-        p_on, p_off = (0.15, 0.30) if mix else (0.25, 0.50)
+        # 정상 구간 자르기(13.83.26)를 쓰는 기기도 같다 — 실측 test_2 에서 충전기 창 중 자기 켜짐/꺼짐이
+        # 든 창은 ~30% 다. 나머지 70% 의 대부분을 정상 창으로 가려면 가장자리 몫이 50% 여서는 안 된다.
+        p_on, p_off = (0.15, 0.30) if (mix or sc) else (0.25, 0.50)
         r = np.random.rand()
         start, sel = None, None
         if r < p_on:
@@ -679,6 +703,9 @@ class DataAugmentor:
             if sel is None:
                 start = self._state_start(state_series, on_series, target_len,
                                           span, want)
+        # 정상 구간 자르기 (13.83.26). 켜짐/꺼짐 갈래와 상태 채움 뒤, 전력 계층화 대신.
+        if sel is None and start is None and sc is not None and np.random.rand() < sc["p"]:
+            start = self._steady_start(target_p, on_series, target_len, span, sc["max_range_frac"])
         if sel is None and start is None:               # 그 상태가 이 활성화에 없다
             start = self._stratified_start(target_p, on_series, target_len, span)
         if sel is None:
@@ -766,6 +793,37 @@ class DataAugmentor:
         if len(sel) < target_len:
             return None
         return sel[:target_len]
+
+    def _steady_start(
+        self, target_p: np.ndarray, on_series: np.ndarray, target_len: int, span: int,
+        max_range_frac: float, n_cand: int = 48,
+    ) -> Optional[int]:
+        """**전력이 평탄한** 창의 시작점을 고른다 (13.83.26, `STEADY_CROP_PRESETS`).
+
+        후보 `n_cand` 개를 무작위로 던져 각 창의 통전 전력 p5~p95 폭을 중앙값으로 나눈 값을 재고,
+        `max_range_frac` 안인 후보 중 하나를 무작위로 고른다. 하나도 없으면 가장 평탄한 후보다.
+        p5~p95 인 이유: 한두 주기 스파이크(릴레이·계측)가 60초 창을 '전이 창' 으로 만들면 안 된다.
+        """
+        if span < 1:
+            return None
+        starts = np.random.randint(0, span + 1, size=n_cand)
+        off = np.linspace(0, target_len - 1, 48).astype(np.int64)
+        idx = starts[:, None] + off[None, :]
+        m = on_series[idx].astype(bool)
+        p = np.where(m, target_p[idx], np.nan)
+        with np.errstate(all="ignore"):
+            lo = np.nanpercentile(p, 5, axis=1); hi = np.nanpercentile(p, 95, axis=1)
+            med = np.nanmedian(p, axis=1)
+        frac = np.where(np.isfinite(med) & (med > 1.0), (hi - lo) / np.maximum(med, 1.0), np.inf)
+        # 2단 문턱: 벌크(폭 ≤15%)가 없으면 테이퍼·부동(천천히 내려오며 버스트, 폭 ≤30%)도 정상으로 친다.
+        # charger_5/6 은 15% 문턱에 시작점의 0~1% 만 걸리지만 30~35% 에는 30% 가 걸린다 (13.83.26).
+        for th in (max_range_frac, 2.0 * max_range_frac):
+            ok = np.flatnonzero(frac <= th)
+            if ok.size:
+                return int(starts[ok[int(np.random.randint(0, ok.size))]])
+        if np.isfinite(frac).any():
+            return int(starts[int(np.argmin(frac))])
+        return None
 
     def _stratified_start(
         self, target_p: np.ndarray, on_series: np.ndarray, target_len: int, span: int

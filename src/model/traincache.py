@@ -82,7 +82,9 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           dither_min_order: int = 2,
           couple_ext: bool = False,
           smps_focus_off_p: Optional[float] = None,
-          float_fill_json: str = "") -> None:
+          float_fill_json: str = "",
+          steady_crop_json: str = "",
+          standby_jitter_cap: float = 0.0) -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.augmentor import DataAugmentor
     from src.synthesis.dataset import NILMBatchGenerator
@@ -98,7 +100,9 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
     mix = json.loads(recipe_mix_json) if recipe_mix_json else None
     pool = SegmentPool(npz_dir=npz_dir, time_split=time_split,
                        exclude_activation_files=excl,
-                       carrier_apps=carrier_apps)
+                       carrier_apps=carrier_apps,
+                       # 13.83.26 대기 잔차 상한. 0 이면 옛 경로.
+                       standby_jitter_cap_pct=(float(standby_jitter_cap) if standby_jitter_cap else None))
     # 차수별 지터 (12.62절). 0 이면 `DataAugmentor` 기본과 같다.
     # 기기별 전력 증강 폭 (12.118). 빈 문자열이면 일괄 `power_scale_std` 다.
     pss = json.loads(power_scale_std_json) if power_scale_std_json else None
@@ -116,7 +120,9 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
                         sp_curves=bool(sp_curves),
                         sp_per_texture=bool(sp_per_texture),
                         # 13.83.23 상태 채움 + 전력 축소. 빈 문자열이면 옛 경로 그대로다.
-                        float_fill=(json.loads(float_fill_json) if float_fill_json else None))
+                        float_fill=(json.loads(float_fill_json) if float_fill_json else None),
+                        # 13.83.26 정상 구간 자르기. 빈 문자열이면 옛 경로.
+                        steady_crop=(json.loads(steady_crop_json) if steady_crop_json else None))
     # 13.78: 전압 꼬리(h17~h31)를 켠다. 기본은 꺼짐이라 안 부르면 옛 거동 그대로다.
     from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
     set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
@@ -193,6 +199,8 @@ def build_cache(
     couple_ext: bool = False,
     smps_focus_off_p: Optional[float] = None,
     float_fill: Optional[Dict[str, dict]] = None,
+    steady_crop: Optional[Dict[str, dict]] = None,
+    standby_jitter_cap: float = 0.0,
 ) -> dict:
     """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다.
 
@@ -244,7 +252,9 @@ def build_cache(
                             smx_json, tuple(carrier_apps or ()),
                             int(dither_min_order), bool(couple_ext),
                             smps_focus_off_p,
-                            json.dumps(float_fill) if float_fill else "")) as pool:
+                            json.dumps(float_fill) if float_fill else "",
+                            json.dumps(steady_crop) if steady_crop else "",
+                            float(standby_jitter_cap or 0.0))) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -260,6 +270,8 @@ def build_cache(
         m_.flush()
 
     meta = {"float_fill": float_fill,          # 13.83.23 상태 채움 + 전력 축소 (None 이면 옛 경로)
+            "steady_crop": steady_crop,        # 13.83.26 정상 구간 자르기 (None 이면 옛 경로)
+            "standby_jitter_cap": float(standby_jitter_cap or 0.0),   # 13.83.26 대기 잔차 상한 백분위 (0 = 옛 경로)
             "n_windows": int(pos), "window_cycles": window_cycles, "appliances": apps,
             "time_split": time_split, "seed": seed, "n_wide": n_wide,
             "exclude_activation_files": exclude_activation_files,

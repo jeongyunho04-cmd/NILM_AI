@@ -108,6 +108,10 @@ def main() -> int:
                     help="증강 전력스케일을 s(p) 로 (12.166). **학습 캐시와 같아야 한다**")
     ap.add_argument("--vtail", action="store_true",
                     help="전압 꼬리(h17~h31)를 텍스처에 얹는다 (13.73/13.78). processed_data/vtail.npz 가 필요하다. 절대 경로(모델 단독)는 확실히 좋아지지만 델타 경로는 나빠진 전례가 있다 — A/B 로 판정하라")
+    ap.add_argument("--steady-crop", default="",
+                    help="정상 구간 자르기 (13.83.26). 프리셋 'smps_steady' 또는 JSON. 학습 캐시와 같이")
+    ap.add_argument("--standby-jitter-cap", type=float, default=0.0,
+                    help="대기 잔차 상한 백분위 (13.83.26). 학습 캐시와 같이")
     ap.add_argument("--float-fill", default="",
                     help="상태 채움 + 전력 축소 (13.83.23). 프리셋 'charger_float' 또는 JSON. "
                          "학습 캐시와 같이 켜야 그 부류의 F1 을 잴 수 있다")
@@ -156,8 +160,17 @@ def main() -> int:
         ffl = {k: {"p": float(d["p"]), "state": int(d["state"]),
                    "scale": [float(d["scale"][0]), float(d["scale"][1])]} for k, d in ffl.items()}
         print(f"  ** 상태 채움 + 전력 축소 '{a.float_fill}' (13.83.23) **")
+    scr = None
+    if a.steady_crop:
+        import json as _json2
+        from src.synthesis.augmentor import STEADY_CROP_PRESETS
+        scr = (STEADY_CROP_PRESETS[a.steady_crop]
+               if a.steady_crop in STEADY_CROP_PRESETS else _json2.loads(a.steady_crop))
+        scr = {k: {"p": float(d["p"]), "max_range_frac": float(d["max_range_frac"])} for k, d in scr.items()}
+        print(f"  ** 정상 구간 자르기 '{a.steady_crop}' (13.83.26) **")
     build_holdout(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                   holdout_frac=a.holdout_frac, seed=a.seed, float_fill=ffl,
+                  steady_crop=scr, standby_jitter_cap=a.standby_jitter_cap,
                   ablate_pedestal_apps=a.ablate_pedestal,
                   sp_curves=a.sp_curves, sp_per_texture=a.sp_per_texture, vtail=a.vtail, background=a.background,
                   level_scramble=_parse_scramble(a.level_scramble),

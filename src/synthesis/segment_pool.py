@@ -157,9 +157,16 @@ class SegmentPool:
         only_activation_files: Optional[Dict[str, Sequence[str]]] = None,
         ablate_pedestal_apps: Optional[Sequence[str]] = None,
         carrier_apps: Optional[Sequence[str]] = None,
+        standby_jitter_cap_pct: Optional[float] = None,
     ):
         """
         Args:
+            standby_jitter_cap_pct: 대기 잔차 풀의 차수별 크기 상한 백분위 (13.83.26). None 이면 옛 경로.
+                대기 잔차 풀은 중앙값은 0~2mA 로 조용한데 p99 가 충전기 16·미니PC 18·에어컨 23mA 로
+                뾰족하다(OFF 구간 가장자리 과도). 꽂힌 기기 5~6개의 풀을 이어 붙이면 합성 배경층의
+                창 안 σ|I3| 가 11~17mA 가 되어 실측 창 **전체**의 σ(6mA)보다 크고, 합성 미니PC 자체의
+                σ(15)와 같은 크기라 "흔들리면 미니PC" 라는 합성 전용 단서의 절반을 배경이 보탰다.
+                이 백분위를 넘는 잔차는 그 크기로 자른다(위상 유지).
             time_split: 원본 녹화의 어느 구간을 쓸지.
                 "all"     - 전체 (기본. 기존 동작과 같다)
                 "train"   - 앞 (1-holdout_frac)
@@ -208,6 +215,8 @@ class SegmentPool:
         #: **핫플은 넣지 않는다** — ARMED_IDLE 이 0.55W 로 계측 바닥(1.5W)보다 작아
         #: 검출할 것이 없고, MIN_ON_W 428.8W 의 물리 프라이어와도 부딪힌다.
         self.carrier_apps = set(carrier_apps or ())
+        self.standby_jitter_cap_pct = (None if standby_jitter_cap_pct is None or float(standby_jitter_cap_pct) <= 0
+                                       else float(standby_jitter_cap_pct))
         self.appliance_activations: Dict[str, List[ApplianceActivation]] = {}
         self.standby_profiles: Dict[str, StandbyProfile] = {}
         self.noise_references: Dict[str, NoiseReference] = {}
@@ -505,6 +514,14 @@ class SegmentPool:
 
         # 대기 상태의 미세 변동(잔차). 계측계 잡음 몫을 뺀 나머지가 기기 자신의 흔들림이다.
         residual = (hc_idle - measured_phasor).astype(np.complex64)
+        # 13.83.26: 잔차의 뾰족한 꼬리(OFF 구간 가장자리 과도)를 차수별 백분위로 자른다. 위상은 둔다.
+        cap = getattr(self, "standby_jitter_cap_pct", None)
+        if cap is not None and len(residual) > 10:
+            amp = np.abs(residual)
+            lim = np.percentile(amp, cap, axis=0)[None, :]
+            over = amp > lim
+            if over.any():
+                residual = np.where(over, residual * (lim / np.maximum(amp, 1e-12)), residual).astype(np.complex64)
         total_var = float(np.mean(np.abs(residual) ** 2))
         own_var = max(0.0, total_var - noise_ref.residual_variance)
         jitter_scale = float(np.sqrt(own_var / total_var)) if total_var > 1e-18 else 0.0

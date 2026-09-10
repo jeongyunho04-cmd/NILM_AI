@@ -91,6 +91,8 @@ def build_holdout(
     couple_ext: bool = False,
     smps_focus_off_p: Optional[float] = None,
     float_fill: Optional[Dict[str, dict]] = None,
+    steady_crop: Optional[Dict[str, dict]] = None,
+    standby_jitter_cap: float = 0.0,
 ) -> dict:
     """홀드아웃 구간에서만 평가 셋을 만들어 저장한다.
 
@@ -104,7 +106,8 @@ def build_holdout(
 
     pool = SegmentPool(npz_dir=npz_dir, time_split="holdout", holdout_frac=holdout_frac,
                        ablate_pedestal_apps=ablate_pedestal_apps,
-                       carrier_apps=carrier_apps)
+                       carrier_apps=carrier_apps,
+                       standby_jitter_cap_pct=(float(standby_jitter_cap) if standby_jitter_cap else None))
     # `sp_curves`/`background` 는 **학습 캐시와 반드시 같아야 한다** (12.168.4).
     # 배경 없이 만든 홀드아웃으로 배경 있는 모델을 재면, 모델이 기대하는 5.5W 를
     # 없는 데서 차감해 **최소 부하만** 무너진다 (미니PC −0.119, 선풍기 −0.093).
@@ -116,7 +119,8 @@ def build_holdout(
                         sp_curves=bool(sp_curves),
                         sp_per_texture=bool(sp_per_texture),
                         # 13.83.23 상태 채움 + 전력 축소. None 이면 옛 경로 그대로다.
-                        float_fill=float_fill)
+                        float_fill=float_fill,
+                        steady_crop=steady_crop)
     from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
     set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
     syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
@@ -182,6 +186,8 @@ def build_holdout(
         "couple_ext": bool(couple_ext),
         "smps_focus_off_p": (None if smps_focus_off_p is None else float(smps_focus_off_p)),
         "float_fill": float_fill,          # 13.83.23 (None 이면 옛 경로)
+        "steady_crop": steady_crop,        # 13.83.26
+        "standby_jitter_cap": float(standby_jitter_cap or 0.0),   # 13.83.26
         # 학습 캐시와 짝이 맞아야 하는 설정 (12.168.4)
         "sp_curves": bool(sp_curves),
         "sp_per_texture": bool(sp_per_texture),
