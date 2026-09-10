@@ -108,6 +108,9 @@ def main() -> int:
                     help="증강 전력스케일을 s(p) 로 (12.166). **학습 캐시와 같아야 한다**")
     ap.add_argument("--vtail", action="store_true",
                     help="전압 꼬리(h17~h31)를 텍스처에 얹는다 (13.73/13.78). processed_data/vtail.npz 가 필요하다. 절대 경로(모델 단독)는 확실히 좋아지지만 델타 경로는 나빠진 전례가 있다 — A/B 로 판정하라")
+    ap.add_argument("--float-fill", default="",
+                    help="상태 채움 + 전력 축소 (13.83.23). 프리셋 'charger_float' 또는 JSON. "
+                         "학습 캐시와 같이 켜야 그 부류의 F1 을 잴 수 있다")
     ap.add_argument("--sp-per-texture", action="store_true",
                     help="s(p) 를 **그 녹화의 텍스처**에서 만든 곡선으로 (13.74). 옛 곡선은 "
                          "깨끗한 정현파에서 만들어 자리 차이가 원리적으로 없었다 — 실측 채점에서 "
@@ -132,7 +135,7 @@ def main() -> int:
                     help="창을 자를 때 **상태**를 먼저 뽑는다 (13.35). 프리셋 이름 또는 "
                          "JSON {가전:{상태id:확률}}. **판을 견줄 때는 비워 두고 같은 "
                          "홀드아웃을 그대로 쓴다** — 홀드아웃은 자르는 시간 구간이 달라 "
-                         "미니PC IDLE 이 자연히 47.8% 라 그 자체로 고른 잣대다.")
+                         "미니PC IDLE 이 자연히 47.8%% 라 그 자체로 고른 잣대다.")
     a = ap.parse_args()
 
     if a.inspect:
@@ -144,8 +147,17 @@ def main() -> int:
     print("\n" + "=" * 74)
     print("[NILM AI] 고정 합성 홀드아웃 평가 셋 생성")
     print("=" * 74)
+    ffl = None
+    if a.float_fill:
+        import json as _json
+        from src.synthesis.augmentor import FLOAT_FILL_PRESETS
+        ffl = (FLOAT_FILL_PRESETS[a.float_fill]
+               if a.float_fill in FLOAT_FILL_PRESETS else _json.loads(a.float_fill))
+        ffl = {k: {"p": float(d["p"]), "state": int(d["state"]),
+                   "scale": [float(d["scale"][0]), float(d["scale"][1])]} for k, d in ffl.items()}
+        print(f"  ** 상태 채움 + 전력 축소 '{a.float_fill}' (13.83.23) **")
     build_holdout(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
-                  holdout_frac=a.holdout_frac, seed=a.seed,
+                  holdout_frac=a.holdout_frac, seed=a.seed, float_fill=ffl,
                   ablate_pedestal_apps=a.ablate_pedestal,
                   sp_curves=a.sp_curves, sp_per_texture=a.sp_per_texture, vtail=a.vtail, background=a.background,
                   level_scramble=_parse_scramble(a.level_scramble),

@@ -90,6 +90,7 @@ def build_holdout(
     background: bool = False,
     couple_ext: bool = False,
     smps_focus_off_p: Optional[float] = None,
+    float_fill: Optional[Dict[str, dict]] = None,
 ) -> dict:
     """홀드아웃 구간에서만 평가 셋을 만들어 저장한다.
 
@@ -113,7 +114,9 @@ def build_holdout(
     aug = DataAugmentor(level_scramble=level_scramble or None,
                         state_mix=state_mix,
                         sp_curves=bool(sp_curves),
-                        sp_per_texture=bool(sp_per_texture))
+                        sp_per_texture=bool(sp_per_texture),
+                        # 13.83.23 상태 채움 + 전력 축소. None 이면 옛 경로 그대로다.
+                        float_fill=float_fill)
     from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
     set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
     syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
@@ -178,6 +181,7 @@ def build_holdout(
         # 13.45: 학습 캐시의 `couple_ext` 와 반드시 같아야 한다.
         "couple_ext": bool(couple_ext),
         "smps_focus_off_p": (None if smps_focus_off_p is None else float(smps_focus_off_p)),
+        "float_fill": float_fill,          # 13.83.23 (None 이면 옛 경로)
         # 학습 캐시와 짝이 맞아야 하는 설정 (12.168.4)
         "sp_curves": bool(sp_curves),
         "sp_per_texture": bool(sp_per_texture),
