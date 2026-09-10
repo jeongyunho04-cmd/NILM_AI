@@ -59,6 +59,12 @@ PRESETS: Dict[str, Dict[str, float]] = {
     # 곁들여 전력대 분포도 실측 쪽으로 간다 (30~100W 창 16.6% -> 30.9%,
     # 실측 32.6%). `smps_overlap` 은 오히려 0.26 -> 0.30 으로 올린다 —
     # 실측 SMPS>=2 가 79% 라 그 레시피를 줄이면 안 된다.
+    # ⚠ `decorr` 는 **에어컨을 굶긴다** (2026-09-10, 13.83.13). 아래 `decorr2` 를 써라.
+    #   에어컨은 `random_realistic`(양성률 0.107) 과 `random_uniform`(0.170) **에서만**
+    #   나온다 — 나머지 일곱은 0% 다 (`smps_hi_fix` 주석에 이미 적혀 있었는데 내가
+    #   최적화에 제약으로 안 걸었다). 둘을 0.08+0.11 -> 0.03+0.03 으로 깎으면
+    #   0.06/0.19 = 0.32 배가 되어 캐시 양성률이 **0.028 -> 0.009 (111:1)** 로 떨어진다.
+    #   v28 캐시가 그 상태로 구워졌다.
     "decorr": {
         "smps_overlap": 0.30,
         "low_load_among_standby": 0.296,
@@ -67,6 +73,25 @@ PRESETS: Dict[str, Dict[str, float]] = {
         "high_power_resistive": 0.03,
         "random_realistic": 0.03,
         "random_uniform": 0.03,
+        "standby_only": 0.03,
+        "unplugged_baseline": 0.03,
+    },
+    # `decorr` 에 **에어컨 노출 하한**(v27 수준 0.0272)을 걸고 다시 푼 것 (13.83.13).
+    # 그 하한이 `random_realistic`+`random_uniform` 을 0.19 근처로 묶어 두므로
+    # 탈상관이 조금 후퇴한다 — 대가는 표로 남긴다:
+    #     phi 미↔충 / 미↔프     SMPS>=2   에어컨 양성률
+    #   v27      +0.355 / +0.358   48.6%     0.0272
+    #   decorr   +0.032 / +0.029   48.8%     0.0083   <- 에어컨 굶음
+    #   decorr2  +0.074 / +0.088   47.9%     0.0272
+    # `--smps-focus-off-p 0.4` 와 **같이** 쓴다는 전제는 `decorr` 와 같다.
+    "decorr2": {
+        "smps_overlap": 0.30,
+        "high_low_mixed": 0.205,
+        "low_load_among_standby": 0.185,
+        "random_uniform": 0.111,
+        "random_realistic": 0.079,
+        "high_power_resistive": 0.03,
+        "resistive_overlap": 0.03,
         "standby_only": 0.03,
         "unplugged_baseline": 0.03,
     },
