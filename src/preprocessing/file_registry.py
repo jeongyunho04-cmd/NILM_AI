@@ -240,6 +240,13 @@ DEVICE_FILES: Dict[str, DeviceSpec] = {
     # |I3|/|I1| 이 전력이 내려갈수록 올라간다 (60~80W 0.912 -> 5~25W 0.970) — 미니PC 와
     # 가르는 성분이 저전력에서 오히려 커진다는 뜻이다 (13.83.6 의 Δ 와 같은 방향).
     "laptop_charger_5":  _dev("laptop_charger"),
+    # 충전기 6. 09-10 23:35, **10.6분, 100% 만충 상태** (사용자 녹화, 13.83.24). 머리 대기 1.9W 30초 ->
+    # 꽂자 61W 보충 버스트 30초 -> **27.5W 에서 20.3W 로 9분간 천천히 내려오는 만충 통과 전력**
+    # (30초 σ 2.5~3W, |I13| 34~35mA 평탄) -> 꼬리 1.7W. 16~25W 가 **430초 연속** — 풀에 0초이던 칸이다.
+    # 지문 |I_h|/|I3| .92 .81 .67 .54 .41 .28 은 test_1 부동(.90 .78 .72 .59 .47 .31)과 같은 계열,
+    # φ 는 자리 E 라 test_1(D)보다 h 비례로 −3.7°/h 더 돈다 (charger_5 와 같은 방향). 이 노트북의 만충
+    # 유휴는 20~23W 이고 test_1 의 14W 는 그보다 낮은 활동 상태였다.
+    "laptop_charger_6":  _dev("laptop_charger"),
 }
 
 
@@ -345,7 +352,7 @@ SITE_OF_STEM: Dict[str, str] = {
                         "beam_projector_1", "beam_projector_2", "fan_1", "laptop_charger_2",
                         "minipc_2", "minipc_3")},
     # 세션 E3 (2026-09-09~10). 사용자 확인: **같은 자리 같은 콘센트**다.
-    **{s: "E" for s in ("laptop_charger_3", "laptop_charger_4", "laptop_charger_5",
+    **{s: "E" for s in ("laptop_charger_3", "laptop_charger_4", "laptop_charger_5", "laptop_charger_6",
                         "minipc_4")},
     "test_2": "E",
 }
@@ -386,7 +393,7 @@ SITE_SESSIONS: Dict[str, dict] = {
     # Z 는 못 쟀다 — 충전기뿐이라 kW 급 계단이 없다 (E2 와 같은 이유).
     "E3": {"site": "E", "date": "2026-09-09", "v_rms": 229.5, "vh3_pct": 3.42, "vh5_pct": 1.08,
            "vh7_pct": 0.37, "z_ohm": None,
-           "stems": ("laptop_charger_3", "laptop_charger_4", "laptop_charger_5",
+           "stems": ("laptop_charger_3", "laptop_charger_4", "laptop_charger_5", "laptop_charger_6",
                      "minipc_4")},
 }
 
