@@ -102,6 +102,11 @@ PRESETS: Dict[str, Dict[str, float]] = {
     # ⚠ `steady_loaded` 는 에어컨의 **세 번째 공급원**이다 (레시피 안 양성률 0.19).
     #   13.83.13 의 굶김이 자동으로 완화되지만 굽기 전에 `positive_rate` 로 확인한다.
     # `--smps-focus-off-p 0.4` 와 같이 쓴다는 전제는 `decorr2` 와 같다.
+    # ⚠ `steady` 는 **저항성을 굶긴다** — 쓰지 말고 아래 `steady2` 를 써라.
+    #   핫플(0.883)과 오븐(0.808)의 유일 공급원이 `resistive_overlap` 인데
+    #   `decorr` 가 그것을 0.12 -> 0.035 로 깎았고 나는 0.03 으로 더 깎았다.
+    #   결과: 오븐 0.079 (v27 0.160 의 절반) · 핫플 0.100.
+    #   에어컨 때(13.83.13)와 **완전히 같은 구조**인데 또 반복했다.
     "steady": {
         "steady_loaded": 0.15,
         "smps_overlap": 0.26,
@@ -113,6 +118,28 @@ PRESETS: Dict[str, Dict[str, float]] = {
         "resistive_overlap": 0.03,
         "standby_only": 0.02,
         "unplugged_baseline": 0.02,
+    },
+    # 13.83.19 — **모든 부류에 하한**을 걸고 `results/_recipe_app_table.json`
+    # (레시피 x 기기 양성률 + 결합분포) 위에서 푼 것. 굽지 않고 계산된다.
+    #   제약: 에어컨>=0.027 · 오븐>=0.20 · 핫플>=0.15 · 포트>=0.15 · 드라이기>=0.12
+    #        |phi 미↔충| · |phi 미↔프| <= 0.10 · steady_loaded >= 0.12
+    #   목적: SMPS>=2 최대화 (실측 0.79)
+    # 결과는 v27 을 **모든 축에서** 이긴다 (focus_off 0.4 를 건 같은 조건에서):
+    #                oven  hotpl kettle dryer  a/c   phi미충  SMPS>=2
+    #   v27          0.160 0.176 0.193 0.219 0.029  +0.180   0.485
+    #   steady2      0.201 0.220 0.224 0.268 0.040  +0.072   0.568
+    # `--smps-focus-off-p 0.4` 와 같이 쓴다.
+    "steady2": {
+        "high_low_mixed": 0.238,
+        "smps_overlap": 0.188,
+        "resistive_overlap": 0.162,
+        "steady_loaded": 0.121,
+        "high_power_resistive": 0.091,
+        "random_uniform": 0.056,
+        "low_load_among_standby": 0.044,
+        "unplugged_baseline": 0.041,
+        "random_realistic": 0.030,
+        "standby_only": 0.029,
     },
     "half": {                        # 실측까지의 절반
         "random_realistic": 0.23,
