@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import argparse
 import glob
+import io
 import json
 import os
 import sys
@@ -161,6 +162,58 @@ def deembed(r: dict, session: str) -> np.ndarray:
     return (r["tail"] + Z * r["i_tail"] / v1) / v1_open
 
 
+def firmware_tails(data_dir: str = "data") -> Dict[str, tuple]:
+    """새 펌웨어가 직접 준 `vhhi17~31` 로 세션별 꼬리를 만든다 (13.83.11).
+
+    규약 (원시에서 확인, 2026-09-10):
+        `vhhi_seq` 가 ~61.7초마다 1 증가하고 같은 seq 안에서 값은 **정확히 상수**다
+        (블록 안 σ = 1e-17). 즉 **60초 창 하나당 복소 벡터 하나**다.
+        크기는 vh1 대비 0.02~0.14%.
+    각도 규약은 `vhdeg` 와 같다 — `arg(V_h) − h·arg(V_1)` 이라 그대로 쓴다.
+
+    세션 귀속은 `SITE_SESSIONS[*]["stems"]` 로 한다 (등록부가 정본이다). 스냅샷의
+    `attribute()` 처럼 전압 지문으로 추측하지 않는다 — 여기서는 파일이 곧 세션이다.
+    """
+    import csv as _csv
+    out: Dict[str, list] = {}
+    stem_to_sess = {s: k for k, sp in SITE_SESSIONS.items() for s in sp.get("stems", ())}
+    for path in sorted(glob.glob(str(Path(data_dir) / "*.csv"))):
+        stem = Path(path).name[:-4]
+        sess = stem_to_sess.get(stem)
+        if sess is None:
+            continue
+        with io.open(path, encoding="utf-8", errors="replace") as fh:
+            head = fh.readline().rstrip("\n").split(",")
+        need = ["vh1", "vhhi_seq"] + ["vhhi%d" % h for h in TAIL_ORDERS] \
+            + ["vhhideg%d" % h for h in TAIL_ORDERS]
+        if any(c not in head for c in need):
+            continue                            # 옛 펌웨어(79열) — 꼬리가 없다
+        idx = {c: head.index(c) for c in need}
+        seen: Dict[float, np.ndarray] = {}
+        with io.open(path, encoding="utf-8", errors="replace") as fh:
+            fh.readline()
+            for row in _csv.reader(fh):
+                if len(row) < len(head):
+                    continue
+                try:
+                    v1 = float(row[idx["vh1"]]); s = float(row[idx["vhhi_seq"]])
+                except ValueError:
+                    continue
+                if not np.isfinite(v1) or v1 <= 0 or s in seen:
+                    continue                    # 블록 안에서 상수라 **첫 행 하나면 된다**
+                try:
+                    z = np.array([float(row[idx["vhhi%d" % h]])
+                                  * np.exp(1j * np.deg2rad(float(row[idx["vhhideg%d" % h]]))) / v1
+                                  for h in TAIL_ORDERS], dtype=np.complex128)
+                except ValueError:
+                    continue
+                seen[s] = z
+        if seen:
+            out.setdefault(sess, []).extend(seen.values())
+            print("  펌웨어 꼬리: %-18s -> %-4s 블록 %d개" % (stem, sess, len(seen)))
+    return {k: (_cmedian(np.array(v)), len(v)) for k, v in out.items() if v}
+
+
 def build(raw_glob: str = "data/raw_*.csv") -> dict:
     files = sorted(glob.glob(raw_glob))
     rows: List[dict] = []
@@ -214,6 +267,28 @@ def build(raw_glob: str = "data/raw_*.csv") -> dict:
         note = "자리 중앙 (세션 폴백)" if k == st else ("⚠ 파일 %d개뿐" % len(g) if len(g) < 3 else "")
         print("%-5s %-4s %3d %8.3f %8.3f   %s" % (k, st, len(g), 100 * np.linalg.norm(m), inner, note))
         keys.append(k); tail.append(m); topen.append(mo); nfil.append(len(g)); site.append(st)
+
+    # ── 펌웨어가 직접 준 꼬리 (2026-09-10, 13.83.11) ─────────────────────────
+    # 새 펌웨어(96열)는 `vhhi17~31` 을 **60초에 한 번** 보낸다. 그 세션은 back-fill
+    # 이 필요 없다 — 원시 스냅샷이 없어도 된다. 실제로 09-10 녹화(charger_5,
+    # minipc_4)에는 스냅샷이 없고, 09-09 스냅샷(raw_laptop_charger_9~11)은
+    # vh3 3.96 이라 E2 로 귀속된다. 그대로 두면 E3 구간이 자리 중앙 `E` 로
+    # 텍스처링되는데, 그 오차가 **h13 +22% · h15 +34%** (충전기 10W) 다.
+    fw = firmware_tails()
+    for k, (m, n) in sorted(fw.items()):
+        st = SITE_SESSIONS.get(k, {}).get("site", "")
+        if k in keys:                       # 스냅샷 판을 **덮는다** — 직접 측정이 우선이다
+            i = keys.index(k)
+            print("  %-5s 펌웨어 실측으로 교체 (스냅샷 n=%d -> 펌웨어 파일 %d개)"
+                  % (k, nfil[i], n))
+            tail[i], topen[i], nfil[i] = m, m, n
+        else:
+            print("  %-5s 펌웨어 실측으로 **추가** (파일 %d개 · h17+총 %.3f%%)"
+                  % (k, n, 100 * np.linalg.norm(m)))
+            keys.append(k); tail.append(m); topen.append(m); nfil.append(n); site.append(st)
+    # ⚠ `tail_open` 을 `tail` 과 같게 둔다. 벗기려면 h17~31 의 **전류**가 필요한데
+    #   2Hz 파일은 전류를 h15 까지만 준다. 자리 E 에서 벗기는 양은 꼬리의 7~22% 라
+    #   (위 표) 남는 오차지만, 고치려는 어긋남(2.9배)보다 훨씬 작다.
 
     return {"keys": np.array(keys), "tail": np.array(tail), "tail_open": np.array(topen),
             "orders": np.asarray(TAIL_ORDERS, dtype=np.int64), "n_files": np.array(nfil),

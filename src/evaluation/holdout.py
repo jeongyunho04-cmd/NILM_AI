@@ -89,8 +89,14 @@ def build_holdout(
     vtail: bool = False,
     background: bool = False,
     couple_ext: bool = False,
+    smps_focus_off_p: Optional[float] = None,
 ) -> dict:
-    """홀드아웃 구간에서만 평가 셋을 만들어 저장한다."""
+    """홀드아웃 구간에서만 평가 셋을 만들어 저장한다.
+
+    `smps_focus_off_p` (13.83.4): `smps_overlap` 에서 미니PC 를 끄고 형제 SMPS 만
+    켤 확률. **학습 캐시와 같은 값을 줘야 한다** — 다르면 홀드아웃이 학습과 다른
+    동시성 구조를 재게 된다. None/0.0 이면 옛 경로다.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     np.random.seed(seed)
@@ -116,7 +122,7 @@ def build_holdout(
     gen = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         recipe_mix=recipe_mix or DEFAULT_RECIPE_MIX, synthesizer=syn,
-        compute_gt_harmonics=False,
+        compute_gt_harmonics=False, smps_focus_off_p=smps_focus_off_p,
     )
     apps = gen.appliance_list
     k, tgt = len(apps), gen.target_index
@@ -171,6 +177,7 @@ def build_holdout(
         "carrier_apps": list(carrier_apps or []),
         # 13.45: 학습 캐시의 `couple_ext` 와 반드시 같아야 한다.
         "couple_ext": bool(couple_ext),
+        "smps_focus_off_p": (None if smps_focus_off_p is None else float(smps_focus_off_p)),
         # 학습 캐시와 짝이 맞아야 하는 설정 (12.168.4)
         "sp_curves": bool(sp_curves),
         "sp_per_texture": bool(sp_per_texture),

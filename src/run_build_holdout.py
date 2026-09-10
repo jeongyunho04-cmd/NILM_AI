@@ -97,6 +97,9 @@ def main() -> int:
     ap.add_argument("--ablate-pedestal", nargs="*", default=None, metavar="APP",
                     help="이 가전들의 활성화 끝 기착 구간을 잘라낸 반사실 평가 셋을 만든다 "
                          "(12.63절). 예: --ablate-pedestal beam_projector")
+    ap.add_argument("--smps-focus-off-p", type=float, default=0.0, metavar="P",
+                    help="smps_overlap 에서 미니PC 를 끄고 형제 SMPS 만 켤 확률 (13.83). "
+                         "**학습 캐시와 같은 값을 줘라** — 다르면 홀드아웃이 다른 동시성을 잰다")
     ap.add_argument("--recipe-mix", default="", metavar="NAME|JSON",
                     help="레시피 믹스. 프리셋 이름(half/full) 또는 JSON (12.67절). "
                          "학습 믹스를 바꿨으면 평가 셋도 같은 믹스로 만들어야 "
@@ -150,7 +153,8 @@ def main() -> int:
                   carrier_apps=(None if a.carrier_on is None
                                 else (tuple(a.carrier_on) or ("oven",))),
                   couple_ext=a.couple_ext,
-                  recipe_mix=_parse_mix(a.recipe_mix))
+                  recipe_mix=_parse_mix(a.recipe_mix),
+                  smps_focus_off_p=a.smps_focus_off_p)
     return inspect(a.out)
 
 

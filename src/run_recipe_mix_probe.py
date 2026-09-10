@@ -61,7 +61,7 @@ PRESETS: Dict[str, Dict[str, float]] = {
     # 실측 SMPS>=2 가 79% 라 그 레시피를 줄이면 안 된다.
     "decorr": {
         "smps_overlap": 0.30,
-        "low_load_among_standby": 0.297,
+        "low_load_among_standby": 0.296,
         "high_low_mixed": 0.219,
         "resistive_overlap": 0.035,
         "high_power_resistive": 0.03,
