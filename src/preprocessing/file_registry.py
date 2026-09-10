@@ -224,6 +224,14 @@ DEVICE_FILES: Dict[str, DeviceSpec] = {
     "laptop_charger_3":  _dev("laptop_charger"),
     # 충전기 4. 09-09 19:46, 3.0분. 통전 67.1%, 60~80W 가 55.8% · 대기 0.97W. 사이클 최대 67.7W.
     "laptop_charger_4":  _dev("laptop_charger"),
+    # 미니PC 4. 09-10 16:05, 8.8분. **저부하 장기** 녹화다 — 13.35 이래 미니PC IDLE 의
+    # 연속 구간이 **최장 51.8초**라 60초 창을 혼자 못 채웠는데(그래서 `_state_fill` 을
+    # 만들었다), 이 파일은 **8~11W 를 425.6초 연속**으로 유지한다 (기울기 0.0003 W/s).
+    # 구성: 머리 대기 2.87W 25초 -> 9.0W 평탄 6.5분 -> 꼬리 무부하 1.7W 약 40초.
+    # ⚠ **마지막 14.5초가 NaN 이다** (PLL 잠김 97.3%). 정제기의 is_valid 가 거른다 —
+    #   그래서 꼬리가 짧아 보일 수 있다. 원본 파일명은 `nilm_20260910_160537.csv` 였고
+    #   그 이름은 `COMPOSITE_EVAL_PATTERNS` 에 걸려 복합 평가로 새므로 바꿔 등록했다.
+    "minipc_4":          _dev("minipc"),
     # 충전기 5. 09-10 15:32, **19.5분**. 통전 94.9%, 대기 1.70W, 사이클 최대 68.8W.
     # 66W -> 28W 로 내려가는 **진짜 충전 테이퍼**다: 25~35W 35.8% / 35~45W 35.2% /
     # 45~60W 12.1% / 60~80W 11.8%. 순전력 15~45W 가 총 849초 · **최장 연속 210.1초** ·
@@ -337,7 +345,8 @@ SITE_OF_STEM: Dict[str, str] = {
                         "beam_projector_1", "beam_projector_2", "fan_1", "laptop_charger_2",
                         "minipc_2", "minipc_3")},
     # 세션 E3 (2026-09-09~10). 사용자 확인: **같은 자리 같은 콘센트**다.
-    **{s: "E" for s in ("laptop_charger_3", "laptop_charger_4", "laptop_charger_5")},
+    **{s: "E" for s in ("laptop_charger_3", "laptop_charger_4", "laptop_charger_5",
+                        "minipc_4")},
     "test_2": "E",
 }
 
@@ -377,7 +386,8 @@ SITE_SESSIONS: Dict[str, dict] = {
     # Z 는 못 쟀다 — 충전기뿐이라 kW 급 계단이 없다 (E2 와 같은 이유).
     "E3": {"site": "E", "date": "2026-09-09", "v_rms": 229.5, "vh3_pct": 3.42, "vh5_pct": 1.08,
            "vh7_pct": 0.37, "z_ohm": None,
-           "stems": ("laptop_charger_3", "laptop_charger_4", "laptop_charger_5")},
+           "stems": ("laptop_charger_3", "laptop_charger_4", "laptop_charger_5",
+                     "minipc_4")},
 }
 
 
