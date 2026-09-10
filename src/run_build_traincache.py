@@ -64,6 +64,11 @@ def main() -> int:
                          "**실측 복합은 IDLE 로만 돈다**")
     ap.add_argument("--vtail", action="store_true",
                     help="전압 꼬리(h17~h31)를 텍스처에 얹는다 (13.73/13.78). processed_data/vtail.npz 가 필요하다. 절대 경로(모델 단독)는 확실히 좋아지지만 델타 경로는 나빠진 전례가 있다 — A/B 로 판정하라")
+    ap.add_argument("--float-fill", default="",
+                    help="상태 채움 + 전력 축소 (13.83.23). 프리셋 'charger_float' 또는 JSON "
+                         "{가전:{p,state,scale:[lo,hi]}}. test_1 의 충전기는 만충 뒤 ~14W 부동인데 "
+                         "풀에는 8~20W 연속 구간이 최장 1초라 그 창을 못 만든다 — 상태 1 을 이어 붙여 "
+                         "0.40~0.70 배로 내린다. 비면 옛 경로와 비트 단위로 같다")
     ap.add_argument("--sp-per-texture", action="store_true",
                     help="s(p) 를 **그 녹화의 텍스처**에서 만든 곡선으로 (13.74). 옛 곡선은 "
                          "깨끗한 정현파에서 만들어 자리 차이가 원리적으로 없었다 — 실측 채점에서 "
@@ -142,6 +147,16 @@ def main() -> int:
         print(f"  ** 차수별 지터: 진폭 σ={a.dither_amp:.2f} / 위상 {a.dither_phase_deg:.1f}° "
               f"(홀수차 중앙값, 차수 비례"
               + (f", h{a.dither_min_order} 부터" if a.dither_min_order > 2 else "") + ") **")
+    ffl = None
+    if a.float_fill:
+        from src.synthesis.augmentor import FLOAT_FILL_PRESETS
+        ffl = (FLOAT_FILL_PRESETS[a.float_fill]
+               if a.float_fill in FLOAT_FILL_PRESETS else json.loads(a.float_fill))
+        ffl = {k: {"p": float(d["p"]), "state": int(d["state"]),
+                   "scale": [float(d["scale"][0]), float(d["scale"][1])]} for k, d in ffl.items()}
+        print(f"  ** 상태 채움 + 전력 축소 '{a.float_fill}' (13.83.23): "
+              + ", ".join(f"{k}=s{d['state']} p{d['p']:.2f} x{d['scale'][0]:g}~{d['scale'][1]:g}"
+                          for k, d in sorted(ffl.items())) + " **")
     build_cache(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                 time_split=a.split, seed=a.seed, n_workers=a.workers,
                 exclude_activation_files=excl,
@@ -153,7 +168,8 @@ def main() -> int:
                 carrier_apps=car, couple_ext=a.couple_ext,
                 sp_curves=a.sp_curves, sp_per_texture=a.sp_per_texture, vtail=a.vtail, background=a.background,
                 dither_min_order=a.dither_min_order,
-                smps_focus_off_p=a.smps_focus_off_p)
+                smps_focus_off_p=a.smps_focus_off_p,
+                float_fill=ffl)
     return 0
 
 

@@ -81,7 +81,8 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           carrier_apps: Optional[Sequence[str]] = None,
           dither_min_order: int = 2,
           couple_ext: bool = False,
-          smps_focus_off_p: Optional[float] = None) -> None:
+          smps_focus_off_p: Optional[float] = None,
+          float_fill_json: str = "") -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.augmentor import DataAugmentor
     from src.synthesis.dataset import NILMBatchGenerator
@@ -113,7 +114,9 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
                         level_scramble=level_scramble or None,
                         state_mix=smx,
                         sp_curves=bool(sp_curves),
-                        sp_per_texture=bool(sp_per_texture))
+                        sp_per_texture=bool(sp_per_texture),
+                        # 13.83.23 상태 채움 + 전력 축소. 빈 문자열이면 옛 경로 그대로다.
+                        float_fill=(json.loads(float_fill_json) if float_fill_json else None))
     # 13.78: 전압 꼬리(h17~h31)를 켠다. 기본은 꺼짐이라 안 부르면 옛 거동 그대로다.
     from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
     set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
@@ -189,6 +192,7 @@ def build_cache(
     dither_min_order: int = 2,
     couple_ext: bool = False,
     smps_focus_off_p: Optional[float] = None,
+    float_fill: Optional[Dict[str, dict]] = None,
 ) -> dict:
     """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다.
 
@@ -239,7 +243,8 @@ def build_cache(
                             bool(background), level_scramble,
                             smx_json, tuple(carrier_apps or ()),
                             int(dither_min_order), bool(couple_ext),
-                            smps_focus_off_p)) as pool:
+                            smps_focus_off_p,
+                            json.dumps(float_fill) if float_fill else "")) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -254,7 +259,8 @@ def build_cache(
     for m_ in mm.values():
         m_.flush()
 
-    meta = {"n_windows": int(pos), "window_cycles": window_cycles, "appliances": apps,
+    meta = {"float_fill": float_fill,          # 13.83.23 상태 채움 + 전력 축소 (None 이면 옛 경로)
+            "n_windows": int(pos), "window_cycles": window_cycles, "appliances": apps,
             "time_split": time_split, "seed": seed, "n_wide": n_wide,
             "exclude_activation_files": exclude_activation_files,
             "dither_amp": float(dither_amp), "dither_phase_deg": float(dither_phase_deg),

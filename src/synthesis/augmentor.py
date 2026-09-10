@@ -139,6 +139,27 @@ STATE_MIX_PRESETS: Dict[str, Dict[str, Dict[int, float]]] = {
                       "laptop_charger": {1: 0.35, 2: 0.65}},
 }
 
+# ── 상태 채움 + 전력 축소 (2026-09-10, 13.83.22/23) ────────────────────────────
+# 실측 test_1 의 충전기는 만충 뒤 **~14W 부동(float)** 으로 5분 넘게 머무는데, 풀의 충전기
+# 녹화 다섯 개는 8~20W 연속 구간이 최장 1초라 합성기가 충전기를 28W 아래로 못 놓는다.
+# 학습에서 그 전력대의 정상상태 SMPS 는 미니PC 뿐이라 모델이 부동 충전기를 미니PC 로 읽는다
+# (v25·26·28·29 전부, 합성 충전기를 22W 아래로 줄이면 미니PC 1.000).
+#
+# 처방 B(녹화 전 임시): 충전기 활성화에서 **상태 1(만충·테이퍼, 10~35W)** 사이클을
+# `_state_fill` 로 이어 붙여 창을 채우고, 그 덩어리를 `scale` 배로 **선형** 축소한다
+# (27~35W -> 11~24W). 모양은 보존한다 — 실측 부동 지문(|I_h|/|I3| .90 .78 .72 .59 .47 .31)은
+# charger_5 만충 구간(.91 .80 .65 .51 .37 .25)과 같은 계열이고, 모델은 이어붙임과 실측을
+# 못 가른다 (`run_diag_float.py ③`). s(p) 곡선과 녹화 범위 클립은 **일부러** 건너뛴다 —
+# 녹화 범위 아래로 내리는 것이 목적이고 s(p) 는 그 아래를 모른다.
+#
+# ⚠ 목록에 없는 기기는 난수를 한 칸도 안 쓴다 — 비어 있으면 옛 캐시와 비트 단위로 같다.
+#   목록에 있으면 `p` 만큼의 활성화가 이 경로로 가고 나머지는 옛 경로다.
+FLOAT_FILL_PRESETS: Dict[str, Dict[str, dict]] = {
+    #: 충전기 활성화의 25% 를 상태 1 로 채워 0.40~0.70 배 (13.83.23). 창 양성률 0.54 이므로
+    #: 전체 창의 ~13% 에 축소 충전기가 든다 — minipc_balanced 의 IDLE 몫과 같은 규모다.
+    "charger_float": {"laptop_charger": {"p": 0.25, "state": 1, "scale": (0.40, 0.70)}},
+}
+
 
 class DataAugmentor:
     """가전 활성화 구간에 도메인 특화 물리 증강을 적용한다."""
@@ -167,6 +188,7 @@ class DataAugmentor:
         power_scale_std_map: Optional[Dict[str, float]] = None,
         sp_curves: bool = False,
         sp_per_texture: bool = False,
+        float_fill: Optional[Dict[str, dict]] = None,
     ):
         self.duration_scale_range = duration_scale_range
         self.power_scale_std = power_scale_std
@@ -215,6 +237,13 @@ class DataAugmentor:
             a: {int(s): float(p) for s, p in m.items() if float(p) > 0}
             for a, m in (state_mix or {}).items()
         }
+        #: {가전: {"p", "state", "scale"}} — 상태 채움 + 전력 축소 (`FLOAT_FILL_PRESETS`, 13.83.23).
+        #: 비면 어떤 경로도 안 바뀐다 (항등).
+        self.float_fill: Dict[str, dict] = {
+            a: {"p": float(d["p"]), "state": int(d["state"]),
+                "scale": (float(d["scale"][0]), float(d["scale"][1]))}
+            for a, d in (float_fill or {}).items() if float(d.get("p", 0.0)) > 0
+        }
         #: 증강 뒤 전력이 `POWER_RANGE_W` 밖으로 나가지 않게 배율을 자른다 (13.31).
         self.clip_to_recorded_range = bool(clip_to_recorded_range)
         # 차수별 독립 지터 (12.62절). **0 이면 꺼진다 - 기본은 꺼짐이다.**
@@ -261,7 +290,23 @@ class DataAugmentor:
 
         # 2. 시간 신축 - 부하 종류와 방향에 따라 방식이 갈린다
         includes_onset = True
-        if new_len == orig_len:
+        # 13.83.23 — 상태 채움 + 전력 축소 (`FLOAT_FILL_PRESETS`). 목록에 없는 기기는 난수를
+        # 한 칸도 안 쓴다 (항등 검정). 원본이 창보다 길 때만 — 이어 붙일 재료가 있어야 한다.
+        float_scale = None
+        ff = self.float_fill.get(act.appliance_type) if self.float_fill else None
+        if ff is not None and new_len < orig_len and np.random.rand() < ff["p"]:
+            sel = self._state_fill(act.state_id, act.is_on, new_len, ff["state"])
+            if sel is not None:
+                float_scale = float(np.random.uniform(*ff["scale"]))
+                aug_c = act.net_harmonics_complex[sel].copy()
+                aug_pow = act.net_power_features[sel].copy()
+                aug_state = act.state_id[sel].copy()
+                aug_target_p = act.target_power_w[sel].copy()
+                aug_on = act.is_on[sel].copy()
+                includes_onset = False
+        if float_scale is not None:
+            pass                                    # 위에서 이미 채웠다
+        elif new_len == orig_len:
             aug_c = act.net_harmonics_complex.copy()
             aug_pow = act.net_power_features.copy()
             aug_state = act.state_id.copy()
@@ -308,7 +353,9 @@ class DataAugmentor:
             )
 
         # 3. 전력 / 진폭 스케일링
-        if power_scale is not None:
+        if float_scale is not None:
+            p_scale = float_scale               # 13.83.23: 녹화 범위 **아래로** 내리는 것이 목적이다
+        elif power_scale is not None:
             p_scale = float(power_scale)
         elif act.appliance_type in self.level_scramble:
             lo, hi = self.level_scramble[act.appliance_type]
@@ -326,7 +373,7 @@ class DataAugmentor:
         #   처음에 `clip(p_scale, lo/med, hi/med)` 로 썼더니, 활성화 중앙이 녹화 하한보다
         #   낮은 경우(듀티 부하의 저출력 구간 등) 배율을 1 위로 올려 **전력을 키웠다** —
         #   전력 상한 검사 5개가 깨졌다.
-        if self.clip_to_recorded_range:
+        if self.clip_to_recorded_range and float_scale is None:
             rng_w = POWER_RANGE_W.get(act.appliance_type)
             on = aug_pow[:, 0] > 0.5
             if rng_w is not None and np.any(on):
@@ -344,10 +391,11 @@ class DataAugmentor:
             cv = self._sp_tex.get(f"{act.appliance_type}@{act.source_file}")
         if cv is None and self._sp:
             cv = self._sp.get(act.appliance_type)
-        if cv is not None:
+        if cv is not None and float_scale is None:
             from .sp_curves import rescale_to_power
             aug_c = rescale_to_power(aug_c, aug_pow[:, 0], p_scale, cv)
         else:
+            # 축소 경로(13.83.23)는 **선형**이다 — s(p) 는 녹화 하한(16W) 아래를 모른다.
             aug_c = aug_c * p_scale
         aug_pow = aug_pow.copy()
         aug_pow[:, 0] *= p_scale  # P
