@@ -112,3 +112,15 @@ for k in ('avg', 'bin'):
     print('%-10s | %13.1f %11.1f %11.1f %14.1f'
           % ('평균(지금)' if k == 'avg' else '전력구간별', np.median(on), np.median(off),
              np.median(on) - np.median(off), np.percentile(off, 90)))
+
+print('\n판정 — 수준이 밀린 것인가 분리가 된 것인가')
+print('%-10s | %s' % ('사전', '참ON p25/p50/p75   참OFF p50/p75/p90   >5W ON/OFF     AUC'))
+for k in ('avg', 'bin'):
+    on = np.array(res[k]['on']); off = np.array(res[k]['off'])
+    auc = float(np.mean([[(a > b) + 0.5 * (a == b) for b in off] for a in on]))
+    print('%-10s | %5.1f/%5.1f/%5.1f  %5.1f/%5.1f/%5.1f  %4.0f%%/%4.0f%%   **%.3f**'
+          % ('평균(지금)' if k == 'avg' else '전력구간별',
+             np.percentile(on, 25), np.median(on), np.percentile(on, 75),
+             np.median(off), np.percentile(off, 75), np.percentile(off, 90),
+             100 * (on > 5).mean(), 100 * (off > 5).mean(), auc))
+print('\n   AUC 는 순위만 보므로 **전체가 위로 밀리면 안 변한다**. 이것이 진짜 판정이다.')
