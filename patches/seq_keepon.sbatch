@@ -110,7 +110,8 @@ wait $C || RC=1
 echo "=== A: keep-on 0.3 ==="; tail -20 "results/seq_keep03_s${SEED}.log"
 echo "=== B: keep-on 1.0 ==="; tail -20 "results/seq_keep10_s${SEED}.log"
 echo "=== C: keep-on 0.3 + 가림해제 ==="; tail -20 "results/seq_keep03nm_s${SEED}.log"
-# ⚠ 여기서도 죽이지 마라 — 969137 이 끝의 이 한 줄 때문에 FAILED 로 찍혔다 (결과는 멀쩡했다).
-$MM --block-size auto 2>/dev/null | tail -2 || echo "[쿼터] 이 노드에서 못 읽는다"
+# ⚠⚠ 끝단에서 mmlsquota 를 부르지 않는다 — 969137·969590 이 바로 이 한 줄 때문에
+# FAILED 로 찍혔다 (결과는 멀쩡했다). 노드의 GPFS 데몬이 작업 끝 무렵 무응답이 되면
+# `|| echo` 로 감싸도 그 뒤 줄의 기록 자체가 안 남는다. 쿼터는 로그인 노드에서 따로 본다 (HPC_RULES §7-5).
 echo "끝 $(date '+%F %H:%M:%S') · rc=$RC"
 exit $RC

@@ -211,9 +211,17 @@ tar czf - src patches | ssh gate1_External 'cd ~/NILM_AI && tar xzf -'     # 8MB
 4. **⚠ 관문으로 작업을 죽이지 마라 — 그 관문이 없어도 되는 것이라면.**
    쿼터 관문이 n055 에서 `mmlsquota: GPFS is down on this node` 로 실패해 `set -e` 가
    작업을 6초 만에 죽였다. 파일 읽기는 멀쩡했고 우리가 쓰는 건 10MB 였다. 비치명으로 바꿨다.
-5. **epoch 마다 체크포인트를 덮어쓴다.** 짧은 시간을 걸어 backfill 에 끼는 대가다.
-6. **`trap ... EXIT` 로 램을 반납한다.**
-7. 명령은 `ssh gate1_External` **그대로**. `-p 8000` 을 붙이면 라즈베리파이 키의 `permitopen`
+5. **⚠⚠ 스크립트 **끝**에서 `mmlsquota` 를 부르지 마라 — 세 번 같은 자리에서 당했다.**
+   969002 는 앞의 관문에서(위 4번), **969137·969590 은 끝단의 정보용 한 줄**에서 `FAILED` 로 찍혔다.
+   셋 다 계산은 멀쩡히 끝나고 체크포인트도 다 저장된 뒤였다. 노드의 GPFS 클라이언트 데몬이
+   작업 끝 무렵 무응답이 되면(`Failed to connect to file system daemon`) `set -euo pipefail` 아래에서
+   그 한 줄이 종료코드를 바꾼다. **쿼터는 로그인 노드에서 따로 본다.** 계산 노드 스크립트에는 넣지 않는다.
+   `|| echo` 로 감싸는 것으로는 부족했다 — 파일시스템이 죽으면 그 뒤 줄의 기록 자체가 안 남는다.
+6. **epoch 마다 체크포인트를 덮어쓴다.** 짧은 시간을 걸어 backfill 에 끼는 대가다.
+7. **`trap ... EXIT` 로 램을 반납한다.**
+8. **끝나면 `sacct` 의 `State` 만 보고 판정하지 마라.** 위 이유로 `FAILED` 인데 결과가 온전할 수 있다.
+   **로그 끝과 체크포인트 개수를 같이 본다.**
+9. 명령은 `ssh gate1_External` **그대로**. `-p 8000` 을 붙이면 라즈베리파이 키의 `permitopen`
    이 거부한다 (`administratively prohibited`). 포트는 `~/.ssh/config` 에 있다.
 
 ---
