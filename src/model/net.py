@@ -340,6 +340,9 @@ class NILMNet(nn.Module):
         }
         if self.aux_z:
             out["log_z"] = self.z_head(z).squeeze(-1)      # (B,)
+        # 몸통 표현. 사슬 구조(13.84.24)가 방출·전이 머리를 여기에 얹는다.
+        # 옛 경로는 이 키를 안 보므로 동작은 그대로다.
+        out["z"] = z
         return out
 
 

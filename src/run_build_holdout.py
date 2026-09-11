@@ -112,6 +112,8 @@ def main() -> int:
                     help="정상 구간 자르기 (13.83.26). 프리셋 'smps_steady' 또는 JSON. 학습 캐시와 같이")
     ap.add_argument("--standby-jitter-cap", type=float, default=0.0,
                     help="대기 잔차 상한 백분위 (13.83.26). 학습 캐시와 같이")
+    ap.add_argument("--sibling-rotate", default="",
+                    help="형제 전용 차수 비례 회전 (13.84.8 ②). 프리셋 'smps_rot10' 또는 JSON. 학습 캐시와 같이")
     ap.add_argument("--float-fill", default="",
                     help="상태 채움 + 전력 축소 (13.83.23). 프리셋 'charger_float' 또는 JSON. "
                          "학습 캐시와 같이 켜야 그 부류의 F1 을 잴 수 있다")
@@ -168,9 +170,19 @@ def main() -> int:
                if a.steady_crop in STEADY_CROP_PRESETS else _json2.loads(a.steady_crop))
         scr = {k: {"p": float(d["p"]), "max_range_frac": float(d["max_range_frac"])} for k, d in scr.items()}
         print(f"  ** 정상 구간 자르기 '{a.steady_crop}' (13.83.26) **")
+    srot = None
+    if a.sibling_rotate:
+        import json as _json3
+        from src.synthesis.augmentor import SIBLING_ROTATE_PRESETS
+        srot = (SIBLING_ROTATE_PRESETS[a.sibling_rotate]
+                if a.sibling_rotate in SIBLING_ROTATE_PRESETS else _json3.loads(a.sibling_rotate))
+        # ⚠ 키를 깎지 않는다 — 13.84.16 의 뒤섞기·기울기 항이 여기서 조용히 사라진다.
+        srot = {k: dict(d) for k, d in srot.items()}
+        print(f"  ** 형제 전용 편차 '{a.sibling_rotate}' (13.84.8 ② · 13.84.16) **")
     build_holdout(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                   holdout_frac=a.holdout_frac, seed=a.seed, float_fill=ffl,
                   steady_crop=scr, standby_jitter_cap=a.standby_jitter_cap,
+                  sibling_rotate=srot,
                   ablate_pedestal_apps=a.ablate_pedestal,
                   sp_curves=a.sp_curves, sp_per_texture=a.sp_per_texture, vtail=a.vtail, background=a.background,
                   level_scramble=_parse_scramble(a.level_scramble),

@@ -175,6 +175,43 @@ STEADY_CROP_PRESETS: Dict[str, Dict[str, dict]] = {
                     "beam_projector": {"p": 0.90, "max_range_frac": 0.15}},
 }
 
+# ── 형제 전용 구조 회전 (2026-09-11, 13.84.8 ②) ─────────────────────────────────
+# 1단계 몸통은 "형제 틀이 설명 못 하는 SMPS 전류" 를 미니PC 로 부호화한다 (13.84.5: 실측 충전기+프로젝터
+# 창의 z 이웃 95% 가 합성 +미니PC 창). 합성에서 형제는 언제나 풀 녹화 그대로라 그 특징이 완벽한 판별자이고,
+# 제자리 형제가 풀과 다르면(프로젝터 φ3/5/7 풀 −27/−45/−60° 대 현장 −5/−7/−6°, 즉 차수 비례 +7.4°/h)
+# 그 차이가 그대로 미니PC 로 읽힌다. 그래서 **형제 활성화의 고조파만** 기본파에 대해 차수 비례로 돌린다:
+#     θ_h <- θ_h + c·h  (h >= 2, h1 은 그대로)   c ~ U(−c_max, +c_max) [°/h], 활성화당 1회
+# 순수 시간 이동(모든 차수 h·θ)은 φ_h = θ_h − h·θ_1 을 정확히 불변으로 남기므로(12.62) h1 을 두어야
+# φ_h 가 c·h 만큼 움직인다. 크기는 안 건드린다 — 짝수차는 크기만 쓰므로 영향이 없고, 전력 라벨(P 는 기본파)도 정확히 남는다.
+# 옛 차수별 독립 지터(`_apply_harmonic_dither`)와 다른 점: (i) 차수마다 독립 잡음이 아니라 **한 c 로 차수 비례**
+# (실측 편차의 모양), (ii) **목록의 기기만**(형제) — 목표 기기 자기 지문은 안 흔든다.
+# ⚠ 목록에 없는 기기는 난수를 한 칸도 안 쓴다 (항등).
+# ── 형제 편차 한꺼번에 (2026-09-11, 13.84.16) ───────────────────────────────────
+# 회전만 건 v33 은 합성 회전에는 불변이 됐지만 실측 실패 ② 를 못 움직였다. 모델은 단서를 하나 지울
+# 때마다 다음 단서로 옮겨 갔다(회전 -> 전압 짝 -> 고차 위상 -> 기본파·P·Q). 그래서 "형제 잔차" 라는
+# **축 전체**를 한 번에 못 쓰게 만든다. 회전에 더해:
+#     ② h >= `scramble_from` 위상 뒤섞기   θ_h += U(−180°, +180°)   (차수마다 독립)
+#     ③ 매끄러운 크기 기울기               |I_h| *= t^((h−1)/(H−1)),  t ~ U(tilt_lo, tilt_hi)
+#     ④ 고차 크기 흔들기                   h >= `dither_from` 에 독립 배율 U(dith_lo, dith_hi)
+# h1 은 크기·위상 모두 **정확히** 그대로 둔다 — P 라벨과 φ_h 기준이 기본파다.
+# ⚠ 폭은 그럴듯함이 아니라 **미니PC 자기 기여와 견줘** 정한다 (`run_diag_sibgap.py`,
+#   [[augmentation-can-erase-the-discriminant]]). 형제의 h 차 크기가 미니PC 의 r 배면 배율 폭 (1±x) 는
+#   총전류를 |I_h^sib|·x 만큼 흔들고, x > 1/r 이면 미니PC 를 통째로 묻는다.
+# `run_diag_sibgap.py` 측정 (자리 D, 충전기 29W + 프로젝터 45W + 미니PC 14W, 총 70~110W, 창 80개):
+#     차수     1     3     5     7     9    11    13    15
+#     미니PC/형제 0.202 0.202 0.219 0.260 0.311 0.483 0.333 0.277
+# 형제 크기를 (1±a) 로 흔들면 총전류가 |I_h^sib|·a 만큼 흔들리므로 **3σ <= r** 를 폭의 상한으로 삼는다.
+# 아래 값은 h3 에서 3σ/r = 0.20, h9 0.60, h15 1.27 이다 — 고차에서만 미니PC 기여와 같은 크기다
+# (그 차수는 v35 가 이미 가려 쓰고 있었다). 위상은 h>=9 에서 **통째로** 뒤섞는다 — 그 축을 없애는 것이 목적이다.
+SIBLING_ROTATE_PRESETS: Dict[str, Dict[str, dict]] = {
+    "smps_rot10": {"laptop_charger": {"p": 1.0, "c_max": 10.0},
+                   "beam_projector": {"p": 1.0, "c_max": 10.0}},
+    "smps_dev1": {a: {"p": 1.0, "c_max": 10.0, "scramble_from": 9,
+                      "tilt_lo": 0.85, "tilt_hi": 1.18,
+                      "dither_from": 9, "dith_lo": 0.88, "dith_hi": 1.12}
+                  for a in ("laptop_charger", "beam_projector")},
+}
+
 
 class DataAugmentor:
     """가전 활성화 구간에 도메인 특화 물리 증강을 적용한다."""
@@ -205,6 +242,7 @@ class DataAugmentor:
         sp_per_texture: bool = False,
         float_fill: Optional[Dict[str, dict]] = None,
         steady_crop: Optional[Dict[str, dict]] = None,
+        sibling_rotate: Optional[Dict[str, dict]] = None,
     ):
         self.duration_scale_range = duration_scale_range
         self.power_scale_std = power_scale_std
@@ -264,6 +302,14 @@ class DataAugmentor:
         self.steady_crop: Dict[str, dict] = {
             a: {"p": float(d["p"]), "max_range_frac": float(d["max_range_frac"])}
             for a, d in (steady_crop or {}).items() if float(d.get("p", 0.0)) > 0
+        }
+        #: {가전: cfg} — 형제 전용 편차 (`SIBLING_ROTATE_PRESETS`, 13.84.8 ② · 13.84.16). 비면 항등.
+        #: cfg 는 `p`(적용 확률) 와 회전 `c_max`, 위상 뒤섞기 `scramble_from`,
+        #: 크기 기울기 `tilt_lo`/`tilt_hi`, 고차 크기 흔들기 `dither_from`/`dith_lo`/`dith_hi` 를 갖는다.
+        #: 어느 하나만 있어도 되고 **키를 통째로 넘긴다** — 여기서 깎으면 새 항이 조용히 사라진다.
+        self.sibling_rotate: Dict[str, dict] = {
+            a: dict(d) for a, d in (sibling_rotate or {}).items()
+            if float(d.get("p", 0.0)) > 0
         }
         #: 증강 뒤 전력이 `POWER_RANGE_W` 밖으로 나가지 않게 배율을 자른다 (13.31).
         self.clip_to_recorded_range = bool(clip_to_recorded_range)
@@ -446,6 +492,8 @@ class DataAugmentor:
 
         # 6. 차수별 독립 지터 (12.62절) - 켜져 있을 때만
         aug_c = self._apply_harmonic_dither(aug_c)
+        # 6b. 형제 전용 차수 비례 회전 (13.84.8 ②) - 목록의 기기만, 비면 항등
+        aug_c = self._apply_sibling_rotate(act.appliance_type, aug_c)
 
         # 7. Real / Imag 2채널 배열 재구성
         actual_len = len(aug_c)
@@ -471,6 +519,49 @@ class DataAugmentor:
             v_ref_v=act.v_ref_v,
             periodic_duty=act.periodic_duty,
         )
+
+    def _apply_sibling_rotate(self, appliance_type: str, aug_c: np.ndarray) -> np.ndarray:
+        """형제 전용 편차. **활성화당 1회** 뽑아 그 활성화 전체에 건다 (13.84.8 ② · 13.84.16).
+
+        네 항을 순서대로 곱한다 — 회전 θ_h += c·h, h>=`scramble_from` 위상 뒤섞기,
+        매끄러운 크기 기울기 t^((h−1)/(H−1)), h>=`dither_from` 독립 크기 배율.
+        **h1 은 크기·위상 모두 정확히 불변**이다 (P 라벨과 φ_h 기준).
+        `SIBLING_ROTATE_PRESETS` 주석에 근거가 있다. 목록에 없는 기기는 난수를 안 쓴다 (항등).
+        """
+        cfg = self.sibling_rotate.get(appliance_type) if self.sibling_rotate else None
+        if cfg is None or aug_c.shape[1] < 2:
+            return aug_c
+        if float(cfg.get("p", 1.0)) < 1.0 and np.random.uniform() >= float(cfg["p"]):
+            return aug_c
+        nh = aug_c.shape[1]
+        h = np.arange(1, nh + 1, dtype=np.float64)
+        phase = np.zeros(nh)
+        gain = np.ones(nh)
+
+        c_max = float(cfg.get("c_max", 0.0))
+        if c_max > 0:                                   # ① 차수 비례 회전 (13.84.8 ②)
+            phase += np.radians(np.random.uniform(-c_max, c_max)) * h
+
+        sf = int(cfg.get("scramble_from", 0))
+        if sf >= 2:                                     # ② 고차 위상 뒤섞기
+            k = h >= sf
+            phase[k] += np.random.uniform(-np.pi, np.pi, size=int(k.sum()))
+
+        t_lo, t_hi = float(cfg.get("tilt_lo", 1.0)), float(cfg.get("tilt_hi", 1.0))
+        if t_lo != 1.0 or t_hi != 1.0:                  # ③ 매끄러운 크기 기울기
+            t = float(np.random.uniform(t_lo, t_hi))
+            gain *= np.power(max(t, 1e-6), (h - 1.0) / max(nh - 1.0, 1.0))
+
+        df = int(cfg.get("dither_from", 0))
+        d_lo, d_hi = float(cfg.get("dith_lo", 1.0)), float(cfg.get("dith_hi", 1.0))
+        if df >= 2 and (d_lo != 1.0 or d_hi != 1.0):    # ④ 고차 크기 독립 흔들기
+            k = h >= df
+            gain[k] *= np.random.uniform(d_lo, d_hi, size=int(k.sum()))
+
+        phase[0] = 0.0                                  # 기본파는 크기·위상 모두 그대로
+        gain[0] = 1.0
+        fac = (gain * np.exp(1j * phase)).astype(np.complex64)
+        return (aug_c * fac[np.newaxis, :]).astype(aug_c.dtype)
 
     def _apply_harmonic_dither(self, aug_c: np.ndarray) -> np.ndarray:
         """차수별 독립 지터. **활성화당 1회** 뽑아 그 활성화 전체에 건다.

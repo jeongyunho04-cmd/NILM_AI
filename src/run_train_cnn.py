@@ -39,7 +39,8 @@ from src.evaluation import (
     score_appliances, summarize, total_power_residual,
 )
 from src.model.inputs import (ZERO_EVEN_HARMONICS, FINE_CYCLES, FINE_LAYOUT,
-                             TARGET_LOOKAHEAD, WIDE_CHANNELS, build_inputs)
+                             FINE_VOLT0, TARGET_LOOKAHEAD, VOLT_ORDERS, WIDE_CHANNELS,
+                             WIDE_VOLT0, build_inputs)
 from src.synthesis.dataset import chunk_seed
 from src.model.traincache import CachedWindows
 from src.model.losses import (LossWeights, NILMLoss, PHASE_COHERENT_EVEN,
@@ -166,6 +167,32 @@ class CacheBatchDataset(Dataset):
         return tuple(torch.from_numpy(x) for x in self._c.batch(self.plan[i]))
 
 
+def vswap(fine: torch.Tensor, wide: torch.Tensor, p: float) -> None:
+    """전압 고조파 채널(V_h h1~11 Re/Im, 세밀 45~56 · 광역 35~46)을 **같은 자리의 다른 창** 것으로
+    바꿔 끼운다 — 창 단위 확률 `p`, 제자리 수정 (13.84.11).
+
+    왜: 모델이 생성기의 **정확한 V→I 법칙**(회로 델타 + 텍스처별 s(p))을 판별자로 배운다. 합성 충전기+
+    프로젝터 창의 전압 채널을 같은 자리의 다른 합성 창 것으로 바꾸기만 해도(전압도 전류도 각각은 학습 분포
+    안) 미니PC 유령이 8~12% -> 24~32% 로 뛰고, 실측 전압을 붙이면 0.12 -> 0.50 이다. 실측의 (V, I) 짝은
+    생성기 법칙에서 벗어나므로 그 잔차가 "설명 안 되는 SMPS 전류 = 미니PC" 로 읽힌다 (실패 ②의 운반자).
+    같은 자리 안에서만 바꾸므로 자리·Z 수준의 정보는 남고 텍스처 단위의 정확한 짝만 깨진다. V 실효값 채널
+    (세밀 25 · 광역 2)은 안 건드린다 — 자리 대리이자 Z 정보다. 0 이면 아무것도 안 한다.
+    """
+    if p <= 0:
+        return
+    B = fine.shape[0]
+    nv = 2 * len(VOLT_ORDERS)
+    site_d = wide[:, 2].mean(1) < 0                 # 광역 V 채널 부호: 자리 D(216V) 음수 / E(229V) 양수
+    perm = torch.arange(B, device=fine.device)
+    for s in (True, False):
+        idx = torch.nonzero(site_d == s).squeeze(1)
+        if len(idx) > 1:
+            perm[idx] = idx[torch.randperm(len(idx), device=fine.device)]
+    sel = torch.where(torch.rand(B, device=fine.device) < p, perm, torch.arange(B, device=fine.device))
+    fine[:, FINE_VOLT0:FINE_VOLT0 + nv] = fine[sel][:, FINE_VOLT0:FINE_VOLT0 + nv]
+    wide[:, WIDE_VOLT0:WIDE_VOLT0 + nv] = wide[sel][:, WIDE_VOLT0:WIDE_VOLT0 + nv]
+
+
 def to_targets(batch, dev):
     (fine, wide, yp, yo, ypl, ys, yst, oh, pn, pobs, zg) = [
         b.to(dev, non_blocking=True) for b in batch]
@@ -247,6 +274,14 @@ def main() -> int:
                          "13.54 측정: 입력 57채널에서 log Z 를 R² 0.935 로 뽑는데 "
                          "몸통에서는 0.661 로 흐려진다. 참 전력은 Z 에 불변인데 "
                          "예측은 86%% 폭으로 흔들렸다. 라벨은 캐시의 z_grid 다")
+    ap.add_argument("--harm-grad-balance", default="off",
+                    choices=("off", "smps", "all"),
+                    help="L_harm 의 기울기를 기기별로 균등화한다 (12.120). 값은 안 바뀌고 "
+                         "기울기만 바뀐다. smps 는 SMPS 3종 안에서만, all 은 9종 전부. "
+                         "**2단계 전용이었다** (`run_adapt`) — 13.84.17 에서 1단계에도 넣었다: "
+                         "프로젝터가 와트당 지문 노름이 가장 작아(0.1219 대 미니PC 0.1697) "
+                         "잔여의 값싼 흡수처가 되는데, 실측에는 `y_power` 가 없어 "
+                         "'1단계는 L_power 가 붙잡아 준다' 가 실측 채점에는 안 걸린다. 기본 off")
     ap.add_argument("--fine-dropout", type=float, default=0.0,
                     help="학습 중 세밀 갈래를 통째로 가릴 확률 (12.21절). 합성에서 학습한 "
                          "선형 probe 가 실측에서 세밀은 AUC 0.32 로 뒤집히고 광역은 0.69 를 "
@@ -340,6 +375,10 @@ def main() -> int:
                          "12.114 가 바로 그 재학습 잡음에 묻혀 판정을 못 했다. "
                          "여기서는 구조·초기화·자료 순서가 전부 같고 그 채널의 "
                          "**값만** 없어진다")
+    ap.add_argument("--vswap-p", type=float, default=0.0, metavar="P",
+                    help="학습 배치에서 전압 고조파 채널을 **같은 자리의 다른 창** 것으로 바꿔 끼울 확률 "
+                         "(13.84.11). 생성기의 정확한 V->I 법칙을 판별자로 배우는 것을 막는다 — 합성끼리 "
+                         "전압만 바꿔도 미니PC 유령 8%% -> 32%%, 실측 전압을 붙이면 0.12 -> 0.50. 0 이면 옛 경로.")
     ap.add_argument("--fine-channels", type=int, default=None, metavar="N",
                     help="세밀 갈래가 쓸 채널 수 (기본: inputs.FINE_CHANNELS). "
                          "캐시는 그대로 두고 앞에서부터 N 개만 쓴다. "
@@ -455,6 +494,9 @@ def main() -> int:
             [1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
             dtype=torch.float32) if a.harm_even_by_class else None),
         gate_smooth=a.gate_smooth, gate_focal=a.gate_focal,
+        harm_grad_balance=a.harm_grad_balance,
+        smps_group=[apps.index(x) for x in
+                    ("beam_projector", "laptop_charger", "minipc") if x in apps],
         weights=LossWeights(harm=a.w_harm, cons=a.w_cons, over=a.w_over,
                             state_power=a.w_state_power, z=a.w_z),
         s_state=(build_state_scales(apps, [S_I[x] for x in apps])
@@ -548,6 +590,8 @@ def main() -> int:
                     "wide_summary": a.wide_summary, "wide_target": a.wide_target,
                     "periodicity": a.periodicity,
                     "fine_dropout": a.fine_dropout,
+                    # L_harm 기울기 균등화 (12.120). 13.84.17 에서 1단계에도 열었다.
+                    "harm_grad_balance": a.harm_grad_balance,
                     # 세밀 채널 수를 반드시 남긴다. 12.34 에서 38 -> 44 로
                     # 늘었고, 이 키가 없는 체크포인트는 38 로 간주된다.
                     "fine_channels": model.fine_channels,
@@ -565,6 +609,7 @@ def main() -> int:
                     "aux_z": bool(model.aux_z),
                     # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
+                    "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)
                     # ⚠ 이것은 **추론에도 써야 한다** — 0 으로 배운 채널에 값을
                     # 주면 본 적 없는 입력이 된다. 채점 쪽이 읽어 같이 0 으로
                     # 만들 수 있게 남긴다 (13.80.10).
@@ -582,6 +627,7 @@ def main() -> int:
                 fine[:, ZERO_CH] = 0.0        # 12.114 재시험의 조인 대조
             if ZERO_W:
                 wide[:, ZERO_W] = 0.0
+            vswap(fine, wide, a.vswap_p)          # 13.84.11 — 0 이면 아무것도 안 한다
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
                 out = model(fine, wide)
                 parts = crit(out, tgt)

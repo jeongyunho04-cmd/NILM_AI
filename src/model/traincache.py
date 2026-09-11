@@ -84,7 +84,8 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           smps_focus_off_p: Optional[float] = None,
           float_fill_json: str = "",
           steady_crop_json: str = "",
-          standby_jitter_cap: float = 0.0) -> None:
+          standby_jitter_cap: float = 0.0,
+          sibling_rotate_json: str = "") -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.augmentor import DataAugmentor
     from src.synthesis.dataset import NILMBatchGenerator
@@ -122,7 +123,9 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
                         # 13.83.23 상태 채움 + 전력 축소. 빈 문자열이면 옛 경로 그대로다.
                         float_fill=(json.loads(float_fill_json) if float_fill_json else None),
                         # 13.83.26 정상 구간 자르기. 빈 문자열이면 옛 경로.
-                        steady_crop=(json.loads(steady_crop_json) if steady_crop_json else None))
+                        steady_crop=(json.loads(steady_crop_json) if steady_crop_json else None),
+                        # 13.84.8 ② 형제 전용 차수 비례 회전. 빈 문자열이면 옛 경로.
+                        sibling_rotate=(json.loads(sibling_rotate_json) if sibling_rotate_json else None))
     # 13.78: 전압 꼬리(h17~h31)를 켠다. 기본은 꺼짐이라 안 부르면 옛 거동 그대로다.
     from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
     set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
@@ -201,6 +204,7 @@ def build_cache(
     float_fill: Optional[Dict[str, dict]] = None,
     steady_crop: Optional[Dict[str, dict]] = None,
     standby_jitter_cap: float = 0.0,
+    sibling_rotate: Optional[Dict[str, dict]] = None,
 ) -> dict:
     """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다.
 
@@ -254,7 +258,8 @@ def build_cache(
                             smps_focus_off_p,
                             json.dumps(float_fill) if float_fill else "",
                             json.dumps(steady_crop) if steady_crop else "",
-                            float(standby_jitter_cap or 0.0))) as pool:
+                            float(standby_jitter_cap or 0.0),
+                            json.dumps(sibling_rotate) if sibling_rotate else "")) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -272,6 +277,7 @@ def build_cache(
     meta = {"float_fill": float_fill,          # 13.83.23 상태 채움 + 전력 축소 (None 이면 옛 경로)
             "steady_crop": steady_crop,        # 13.83.26 정상 구간 자르기 (None 이면 옛 경로)
             "standby_jitter_cap": float(standby_jitter_cap or 0.0),   # 13.83.26 대기 잔차 상한 백분위 (0 = 옛 경로)
+            "sibling_rotate": sibling_rotate,  # 13.84.8 ② 형제 전용 차수 비례 회전 (None 이면 옛 경로)
             "n_windows": int(pos), "window_cycles": window_cycles, "appliances": apps,
             "time_split": time_split, "seed": seed, "n_wide": n_wide,
             "exclude_activation_files": exclude_activation_files,

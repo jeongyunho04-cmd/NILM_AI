@@ -40,9 +40,10 @@ from src.run_gate_check import load_model
 from src.synthesis.segment_pool import SegmentPool
 from src.synthesis.synthesizer import LoadSynthesizer
 
-MODE = (sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] in ("float", "pair") else "float")
-MODELS = [a for a in sys.argv[1:] if a not in ("float", "pair")] or ["cnn_v29", "cnn_v25"]
-FILES = ["test_1", "test_2", "test_3", "test_4"] if MODE == "float" else ["test_3", "test_4"]
+MODE = (sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] in ("float", "pair", "pair4") else "float")
+MODELS = [a for a in sys.argv[1:] if a not in ("float", "pair", "pair4")] or ["cnn_v29", "cnn_v25"]
+# pair4 (13.84.11): test_4 의 충전기(테이퍼 30~50W)+프로젝터·미니PC OFF 창만 — 핫플 문맥 없이 실패 ② 를 가른다
+FILES = (["test_1", "test_2", "test_3", "test_4"] if MODE == "float" else ["test_4"] if MODE == "pair4" else ["test_3", "test_4"])
 SIB = ["laptop_charger", "beam_projector"]
 W, STRIDE = WINDOW_CYCLES, 60
 N_SYN_TARGET = 129 if MODE == "float" else 60
@@ -75,8 +76,15 @@ for stem in FILES:
             s |= on[a]
     for t0 in range(0, n - W + 1, STRIDE):
         sl = slice(t0, t0 + W)
-        if iv[sl].all() and not y[sl].any() and not unc[sl].any() \
-                and s[sl].std() == 0 and s[t0]:
+        if MODE == "pair4":
+            # 세밀 갈래가 보는 뒤 15초만 조건을 건다 (실측 채점의 타깃 시점 라벨과 같은 규약). 구간이 61초라
+            # 창 전체를 걸면 창이 하나뿐이다. 앞부분에 미니PC ON 이 섞여도 타깃 근방은 충전기+프로젝터·미니PC OFF 다.
+            tl = slice(t0 + W - 900, t0 + W)
+            ok = (iv[sl].all() and not y[tl].any() and not unc[tl].any()
+                  and on["laptop_charger"][tl].all() and on["beam_projector"][tl].all())
+        else:
+            ok = (iv[sl].all() and not y[sl].any() and not unc[sl].any() and s[sl].std() == 0 and s[t0])
+        if ok:
             bg.append(x[:, sl]); bgp.append(float(np.median(x[30, sl])))
             bg_on.append({a: float(on[a][sl].mean()) for a in on})
 bg = np.stack(bg); bgp = np.asarray(bgp)
@@ -95,15 +103,18 @@ syn_gen = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=True)
 np.random.seed(0)
 syn, syn_meta, syn_smps = [], [], []
 tries = 0
-lo_p, hi_p = np.percentile(bgp, 5), np.percentile(bgp, 95)
-lo_c, hi_c = ((np.percentile(p_chg_est, 5), np.percentile(p_chg_est, 95)) if MODE == "float" else (40.0, 66.0))
+lo_p, hi_p = ((70.0, 100.0) if MODE == "pair4" else (np.percentile(bgp, 5), np.percentile(bgp, 95)))
+lo_c, hi_c = ((np.percentile(p_chg_est, 5), np.percentile(p_chg_est, 95)) if MODE == "float" else (30.0, 50.0) if MODE == "pair4" else (40.0, 66.0))
 while len(syn) < N_SYN_TARGET and tries < 4000:
     tries += 1
-    force = ["hotplate", "laptop_charger"]
-    if MODE == "pair" and np.random.rand() < 0.7:
-        force.append("beam_projector")
-    if np.random.rand() < 0.5:
-        force.append("oven")
+    if MODE == "pair4":
+        force = ["laptop_charger", "beam_projector"]
+    else:
+        force = ["hotplate", "laptop_charger"]
+        if MODE == "pair" and np.random.rand() < 0.7:
+            force.append("beam_projector")
+        if np.random.rand() < 0.5:
+            force.append("oven")
     try:
         smp = syn_gen.synthesize_random_window(
             window_size_cycles=W, force_active=force, full_window_placement=True,
@@ -114,9 +125,13 @@ while len(syn) < N_SYN_TARGET and tries < 4000:
         continue
     if not smp.gt_is_on["laptop_charger"].all():
         continue
-    hp = smp.gt_is_on["hotplate"]
-    if not (hp[:60].all() and hp[-60:].all()):               # 핫플 듀티 라벨 결함(13.82) — 양 끝만
-        continue
+    if MODE == "pair4":
+        if set(smp.active_appliances) != {"laptop_charger", "beam_projector"} or not smp.gt_is_on["beam_projector"].all():
+            continue
+    else:
+        hp = smp.gt_is_on["hotplate"]
+        if not (hp[:60].all() and hp[-60:].all()):               # 핫플 듀티 라벨 결함(13.82) — 양 끝만
+            continue
     if "minipc" in smp.active_appliances or (MODE == "float" and "beam_projector" in smp.active_appliances):
         continue
     pc = float(np.median(smp.gt_target_power_w["laptop_charger"]))

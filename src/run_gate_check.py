@@ -109,7 +109,13 @@ def assert_target_config(ck: dict, ckpt_path: str) -> None:
             + chr(10) + "  (그 값으로 만든 캐시·홀드아웃도 함께 써야 합니다)")
 
 
-def load_model(ckpt_path: str, dev: str):
+def load_model(ckpt_path: str, dev: str, weights: bool = True):
+    """`weights=False` 면 **구조·가림만** 체크포인트에서 가져오고 가중치는 새로 뽑는다 (13.84.27).
+
+    처음부터 학습하는 판의 초기점이다. 이렇게 해야 두 판 사이에 바뀐 것이 **가중치 하나**다
+    ([[match-the-scoring-convention-before-comparing]]) — 구조·기기 순서·가린 채널이 같이 어긋나면
+    무엇이 이겼는지 못 가른다.
+    """
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     assert_target_config(ck, ckpt_path)
     apps = ck["appliances"]
@@ -122,10 +128,26 @@ def load_model(ckpt_path: str, dev: str):
                     prior_beta=ck.get("prior_beta", 0.5),
                     aux_z=ck.get("aux_z", False),
                     fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
-    model.load_state_dict(ck["model"])
+    if weights:
+        model.load_state_dict(ck["model"])
     model.eval()
     # 체크포인트가 자기 입력 프레임을 안다 (12.181). `forward_file` 이 기본으로 쓴다.
     model.site_transfer = site_transfer_from_ckpt(ck)
+    # 학습 때 0 으로 가린 채널은 **추론에서도** 0 이어야 한다 (13.80.10 · 13.84.12). 값이 있으면 본 적 없는 입력이
+    # 된다 — v35 를 가리지 않고 채점하면 홀드아웃 F1 0.929 가 0.856 으로 나온다. 채점 경로가 여럿이라(forward_file,
+    # run_score_holdout, 진단 스크립트) 모델에 forward pre-hook 으로 붙여 어느 경로든 자동으로 가린다.
+    zf = [int(x) for x in str(ck.get("zero_channels", "") or "").split(",") if x.strip()]
+    zw = [int(x) for x in str(ck.get("zero_wide_channels", "") or "").split(",") if x.strip()]
+    if zf or zw:
+        def _zero_inputs(m, args):
+            f, w = args[0], args[1]
+            if zf:
+                f = f.clone(); f[:, [c for c in zf if c < f.shape[1]]] = 0.0
+            if zw:
+                w = w.clone(); w[:, [c for c in zw if c < w.shape[1]]] = 0.0
+            return (f, w) + tuple(args[2:])
+        model.register_forward_pre_hook(_zero_inputs)
+    model.zero_channels_applied = (zf, zw)
     return model, apps, ck
 
 
@@ -145,7 +167,7 @@ def forward_file(model, stem: str, dev: str, stride: int = 30,
     if isinstance(site_transfer, str) and site_transfer == "ckpt":
         site_transfer = getattr(model, "site_transfer", None)
     rw = dense_targets(stem, stride=stride, site_transfer=site_transfer)
-    G, R, SB, PL, PN, POBS, OH = [], [], [], [], [], [], []
+    G, R, SB, PL, PN, POBS, OH, ZT, OL = [], [], [], [], [], [], [], [], []
     for i in range(0, len(rw), 512):
         idx = np.arange(i, min(i + 512, len(rw)))
         f, w, pobs, oh, pn = rw.batch(idx)
@@ -157,12 +179,15 @@ def forward_file(model, stem: str, dev: str, stride: int = 30,
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
             o = model(ft, wt)
         G.append(torch.sigmoid(o["on_logit"]).float().cpu().numpy())
+        OL.append(o["on_logit"].float().cpu().numpy())
         R.append(o["power_raw"].float().cpu().numpy())
         SB.append(o["standby"].float().cpu().numpy())
         # 대기 전류 항의 계수. `NILMLoss` 가 L_harm 을 만들 때 쓰는 것과 같은 식이라
         # 채점 쪽에서 그 손실을 재현할 수 있다 (12.139 의 유령 인과 분해).
         PL.append((torch.sigmoid(o["plugged_logit"])
                    * (1.0 - torch.sigmoid(o["on_logit"]))).float().cpu().numpy())
+        if "z" in o:
+            ZT.append(o["z"].float().cpu().numpy())
         PN.append(pn); POBS.append(pobs); OH.append(oh)
     return {"gate": np.concatenate(G), "p_raw": np.concatenate(R),
             "standby": np.concatenate(SB), "idle": np.concatenate(PL),
@@ -173,6 +198,11 @@ def forward_file(model, stem: str, dev: str, stride: int = 30,
             # 관측 고조파 (n,15,2) Re/Im. 12.40 의 전이 스냅이 |I3| 를 쓴다 —
             # 저항 부하는 3차를 거의 안 흘려서 SMPS 계단만 남는다 (12.37.2).
             "obs_harm": np.concatenate(OH),
+            # 몸통 표현 (n, Z). 사슬 구조(13.84.24)가 쓴다.
+            "z": np.concatenate(ZT) if ZT else None,
+            # 게이트의 원시 로짓 (n,K). 사슬의 방출 초기값이 캐시와 **정확히 같아야** 한다 —
+            # sigmoid 를 되돌리면 클립(1e-4)에서 ±9.2 로 잘려 캐시와 어긋난다.
+            "on_logit": np.concatenate(OL),
             # 관측 무효전력 (n,). 12.133 이 **두 번째 판별자**로 확정했다 —
             # SMPS 쌍 d′ 2.31~4.64 로 고조파(0.91~1.85)보다 2.2~2.5배 잘 가른다.
             "q_observed": rw.reactive(np.arange(len(rw))).astype(np.float64)}

@@ -71,6 +71,10 @@ def main() -> int:
     ap.add_argument("--standby-jitter-cap", type=float, default=0.0,
                     help="대기 잔차 풀의 차수별 크기 상한 백분위 (13.83.26). 예 95. 0 이면 옛 경로. "
                          "합성 배경층 σ|I3| 11~17mA 의 주인이 이 꼬리다 (실측 창 전체 6mA)")
+    ap.add_argument("--sibling-rotate", default="",
+                    help="형제 SMPS 활성화의 고조파를 기본파에 대해 차수 비례로 돌린다 (13.84.8 ②). "
+                         "프리셋 'smps_rot10' 또는 JSON {가전:{p,c_max}} — θ_h += c·h, c~U(±c_max °/h). "
+                         "몸통이 '형제 틀이 설명 못 하는 SMPS 전류' 를 미니PC 로 배우는 것을 막는다. 비면 옛 경로")
     ap.add_argument("--float-fill", default="",
                     help="상태 채움 + 전력 축소 (13.83.23). 프리셋 'charger_float' 또는 JSON "
                          "{가전:{p,state,scale:[lo,hi]}}. test_1 의 충전기는 만충 뒤 ~14W 부동인데 "
@@ -174,6 +178,16 @@ def main() -> int:
               + ", ".join(f"{k}=p{d['p']:.2f} 폭≤{d['max_range_frac']:g}" for k, d in sorted(scr.items())) + " **")
     if a.standby_jitter_cap:
         print(f"  ** 대기 잔차 상한 p{a.standby_jitter_cap:g} (13.83.26) **")
+    srot = None
+    if a.sibling_rotate:
+        from src.synthesis.augmentor import SIBLING_ROTATE_PRESETS
+        srot = (SIBLING_ROTATE_PRESETS[a.sibling_rotate]
+                if a.sibling_rotate in SIBLING_ROTATE_PRESETS else json.loads(a.sibling_rotate))
+        # ⚠ 키를 깎지 않는다 — 13.84.16 의 뒤섞기·기울기 항이 여기서 조용히 사라진다.
+        srot = {k: dict(d) for k, d in srot.items()}
+        print(f"  ** 형제 전용 편차 '{a.sibling_rotate}' (13.84.8 ② · 13.84.16): "
+              + ", ".join(f"{k}={{{', '.join(f'{kk}={vv}' for kk, vv in sorted(d.items()))}}}"
+                          for k, d in sorted(srot.items())) + " **")
     build_cache(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                 time_split=a.split, seed=a.seed, n_workers=a.workers,
                 exclude_activation_files=excl,
@@ -186,7 +200,8 @@ def main() -> int:
                 sp_curves=a.sp_curves, sp_per_texture=a.sp_per_texture, vtail=a.vtail, background=a.background,
                 dither_min_order=a.dither_min_order,
                 smps_focus_off_p=a.smps_focus_off_p,
-                float_fill=ffl, steady_crop=scr, standby_jitter_cap=a.standby_jitter_cap)
+                float_fill=ffl, steady_crop=scr, standby_jitter_cap=a.standby_jitter_cap,
+                sibling_rotate=srot)
     return 0
 
 

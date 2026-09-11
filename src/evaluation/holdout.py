@@ -93,6 +93,7 @@ def build_holdout(
     float_fill: Optional[Dict[str, dict]] = None,
     steady_crop: Optional[Dict[str, dict]] = None,
     standby_jitter_cap: float = 0.0,
+    sibling_rotate: Optional[Dict[str, dict]] = None,
 ) -> dict:
     """홀드아웃 구간에서만 평가 셋을 만들어 저장한다.
 
@@ -120,7 +121,9 @@ def build_holdout(
                         sp_per_texture=bool(sp_per_texture),
                         # 13.83.23 상태 채움 + 전력 축소. None 이면 옛 경로 그대로다.
                         float_fill=float_fill,
-                        steady_crop=steady_crop)
+                        steady_crop=steady_crop,
+                        # 13.84.8 ② 형제 전용 차수 비례 회전. None 이면 옛 경로.
+                        sibling_rotate=sibling_rotate)
     from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
     set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
     syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
@@ -188,6 +191,7 @@ def build_holdout(
         "float_fill": float_fill,          # 13.83.23 (None 이면 옛 경로)
         "steady_crop": steady_crop,        # 13.83.26
         "standby_jitter_cap": float(standby_jitter_cap or 0.0),   # 13.83.26
+        "sibling_rotate": sibling_rotate,  # 13.84.8 ②
         # 학습 캐시와 짝이 맞아야 하는 설정 (12.168.4)
         "sp_curves": bool(sp_curves),
         "sp_per_texture": bool(sp_per_texture),
