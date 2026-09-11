@@ -93,6 +93,35 @@ class ChainHeads(nn.Module):
         return em, on + b, off + b, self.init_head(z[:, 0])
 
 
+class BgHead(nn.Module):
+    """기록(=세션) 하나당 **배경 전류 하나** (13.84.38).
+
+    `L_harm` 의 `noise_sig` 는 전역 상수 하나인데 실측 배경은 파일마다 다르다 — 전부 OFF 구간이
+    파일 **안** 0.19~0.66mA 로 거의 완벽히 일정한데 파일 **간** 3.6~22.6mA 고, h15 에서는
+    미니PC 12W(5.7mA)보다 크다 (13.84.35⑧). 표현할 항이 없으면 그 전류는 기기로 간다.
+
+    ⚠ **창마다 자유로우면 슬랙이 된다** ([[unsupervised-heads-become-slack]] · 13.84.29 의 잔차 채널
+      세 판이 그래서 죽었다). 그래서 **열 전체를 평균낸 z 하나**에서 값 하나를 낸다 — 구성이 다른
+      창들이 같은 값을 공유해야 하므로 기기와 축퇴되지 않는다.
+    ⚠ 크기를 `cap` 으로 막는다. 실측에서 잰 파일 간 차이가 3.6~22.6mA 이므로 50mA 면 넉넉하다.
+      0 에서 출발하므로 **끄면 옛 동작과 같다.**
+    """
+
+    def __init__(self, z_dim: int, n_harm: int = 15, hidden: int = 64, cap: float = 0.05):
+        super().__init__()
+        self.cap = float(cap)
+        self.net = nn.Sequential(nn.Linear(z_dim, hidden), nn.GELU(),
+                                 nn.Linear(hidden, 2 * n_harm))
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+        self.n_harm = n_harm
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        """z (B,T,Z) -> 배경 (B,H,2). 열 평균 하나에서 낸다."""
+        h = self.net(z.mean(1))
+        return self.cap * torch.tanh(h).reshape(-1, self.n_harm, 2)
+
+
 def crf_nll(em: torch.Tensor, sw_on: torch.Tensor, sw_off: torch.Tensor,
             y: torch.Tensor, init: Optional[torch.Tensor] = None) -> torch.Tensor:
     """기기별 2상태 선형 사슬의 음의 로그가능도. 기기 축은 서로 독립이다.

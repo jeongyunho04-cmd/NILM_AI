@@ -423,6 +423,57 @@ def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 
     return sig.astype(np.float32), used
 
 
+def harmonic_signatures_by_power(pool, appliances: Sequence[str], n_harm: int = 15,
+                                 n_bands: int = 3, min_cycles: int = 300
+                                 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """기기 x **전력대**별 와트당 페이저의 **보정비** (K,B,n_harm,2) 와 경계 (K,B−1), 쓸 수 있는지 (K,B).
+
+    13.84.32/35 — `L_harm` 은 `Σ_k sig_k·power_k` 라 **전력에 선형**인데, 와트당 고차 함량이
+    동작점에 따라 47~109% 변한다 (충전기 h11 이 15~28W 에서 2.31, 63~65W 에서 1.10 mA/W).
+    13.84.35 에서 전력 구간별 사전으로 바꾸면 순방향 잔차가 **13~34%** 준다.
+
+    ⚠ **지문을 갈아 끼우지 않고 `비`를 낸다.** `g[k,b,h] = sig_band[k,b,h] / sig[k,h]` (복소).
+    그래야 상태별 지문(`sig_state`, 13.11)과 **곱해서 같이** 쓸 수 있고, 표본이 얇은 칸은
+    `g = 1` 로 두면 지금 동작과 **정확히 같다** ([[copy-the-inclusion-rule-when-adding-an-axis]]).
+
+    경계는 그 기기 통전 전력의 `n_bands` 분위수다. `harmonic_signatures` 와 **같은 포함 규칙**
+    (전력이 p90 의 절반 이상)을 쓴다 — 다른 문턱을 쓰면 축이 조용히 빈다.
+    """
+    base = harmonic_signatures(pool, appliances, n_harm)               # (K,H,2)
+    bc = base[..., 0] + 1j * base[..., 1]                             # (K,H)
+    gain = np.zeros((len(appliances), n_bands, n_harm, 2), np.float32)
+    gain[..., 0] = 1.0                                                # g = 1 (항등)
+    edges = np.zeros((len(appliances), max(n_bands - 1, 1)), np.float32)
+    used = np.zeros((len(appliances), n_bands), bool)
+    for j, app in enumerate(appliances):
+        acts = pool.appliance_activations.get(app, [])
+        if not acts:
+            continue
+        thr = 0.5 * pool.get_steady_power_w(app)
+        cs, ps = [], []
+        for a in acts:
+            m = a.target_power_w > max(thr, 1.0)
+            if m.any():
+                cs.append(a.net_harmonics_complex[m]); ps.append(a.target_power_w[m])
+        if not cs:
+            continue
+        c = np.concatenate(cs); p = np.concatenate(ps)
+        q = np.quantile(p, np.linspace(0.0, 1.0, n_bands + 1))[1:-1]
+        edges[j, :len(q)] = q
+        per_w = c / np.maximum(p, 1e-6)[:, None]
+        b_idx = np.digitize(p, q)
+        for b in range(n_bands):
+            m = b_idx == b
+            if m.sum() < min_cycles:
+                continue
+            v = np.median(np.real(per_w[m]), 0) + 1j * np.median(np.imag(per_w[m]), 0)
+            g = v / np.where(np.abs(bc[j]) > 1e-12, bc[j], 1.0)
+            g = np.where(np.abs(bc[j]) > 1e-12, g, 1.0)
+            gain[j, b, :, 0], gain[j, b, :, 1] = np.real(g), np.imag(g)
+            used[j, b] = True
+    return gain, edges, used
+
+
 def standby_signatures(pool, appliances: Sequence[str], n_harm: int = 15) -> np.ndarray:
     """기기별 **대기 상태 고조파 페이저** (K, n_harm, 2). 3.4절의 누락 항 ①."""
     sig = np.zeros((len(appliances), n_harm, 2), dtype=np.float32)

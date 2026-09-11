@@ -33,7 +33,7 @@ from src import env_guard  # noqa: F401
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from src.model.chain import ChainHeads, crf_nll, viterbi
+from src.model.chain import BgHead, ChainHeads, crf_nll, viterbi
 from src.model.inputs import build_inputs
 from src.model.lossbuild import build_loss
 from src.model.losses import LossWeights
@@ -159,6 +159,14 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--lr-heads", type=float, default=3e-4)
     ap.add_argument("--w-crf", type=float, default=0.3)
+    ap.add_argument("--pow-sig", action="store_true",
+                    help="전력 의존 지문 (13.84.38). `L_harm` 이 전력에 선형인 것을 고친다 — "
+                         "와트당 고차가 동작점에 따라 47~109%% 변한다 (13.84.32). 순방향 잔차 −13~34%%")
+    ap.add_argument("--bg-head", action="store_true",
+                    help="기록(=세션)당 배경 전류 하나 (13.84.38). `noise_sig` 는 전역 상수 하나인데 "
+                         "실측 배경은 파일 간 3.6~22.6mA 로 다르고 h15 에서 미니PC 보다 크다 (13.84.35)")
+    ap.add_argument("--w-bg", type=float, default=3.0, metavar="W",
+                    help="배경 항의 크기 벌점. 0 이면 자유 항이 되어 **슬랙**이 된다")
     ap.add_argument("--keep-on", type=float, default=0.0, metavar="F",
                     help="켜짐 BCE 를 얼마나 남길지 (0=통째로 뺌, 1=그대로 두고 CRF 를 더함). "
                          "처음부터 배우는 판은 0 이면 게이트가 무감독이 된다 (13.84.27)")
@@ -206,6 +214,7 @@ def main():
                          torch.zeros(1, 47, 120, device=dev))["z"].shape[1])
     torch.manual_seed(a.seed)
     heads = ChainHeads(zdim, N_FEAT + 2, K, hidden=a.hidden, score_norm=a.score_norm).to(dev)
+    bghead = BgHead(zdim).to(dev) if a.bg_head else None
 
     n_rec = meta["records"]
     n_ho = max(1, int(n_rec * a.holdout_frac))
@@ -222,12 +231,16 @@ def main():
              + (" · **처음부터**(무작위 몸통)" if scratch else " · 초기점 " + Path(a.init).stem)
              + (" · vswap %.2f" % a.vswap_p if a.vswap_p else "")
              + (" · 가림 해제" if a.no_mask else "")
-             + (" · keep-on %.2f" % a.keep_on if a.keep_on else "")), flush=True)
+             + (" · keep-on %.2f" % a.keep_on if a.keep_on else "")
+             + (" · 전력의존지문" if a.pow_sig else "")
+             + (" · 세션배경(벌점 %.1f)" % a.w_bg if a.bg_head else "")), flush=True)
 
     if a.freeze_trunk:
         for p in model.parameters():
             p.requires_grad_(False)
     groups = [{"params": heads.parameters(), "lr": a.lr_heads}]
+    if bghead is not None:
+        groups.append({"params": bghead.parameters(), "lr": a.lr_heads})
     if not a.freeze_trunk:
         groups.append({"params": model.parameters(), "lr": a.lr})
     opt = torch.optim.AdamW(groups, weight_decay=0.01)
@@ -237,7 +250,8 @@ def main():
     crit = None
     if not a.no_window_loss:
         crit = build_loss(apps, dev, weights=LossWeights(
-            harm=a.w_harm, cons=0.0, over=a.w_over, z=a.w_z))
+            harm=a.w_harm, cons=0.0, over=a.w_over, z=a.w_z),
+            power_signatures=a.pow_sig)
         print("[seq] 창 단위 손실 조립 · 켜짐 가중 %.2f 를 CRF %.2f 로 갈아 끼운다"
               % (crit.w.on, a.w_crf), flush=True)
 
@@ -308,6 +322,8 @@ def main():
                     "appliances": apps, "meta": meta, "hidden": a.hidden,
                     "score_norm": a.score_norm, "init": a.init, "ref": a.ref,
                     "vswap_p": a.vswap_p, "no_mask": a.no_mask, "keep_on": a.keep_on,
+                    "pow_sig": a.pow_sig, "bg_head": a.bg_head, "w_bg": a.w_bg,
+                    "bghead": (bghead.state_dict() if bghead is not None else None),
                 "epoch": ep, "epochs": a.epochs,
                     "holdout_chain": r, "holdout_window": b,
                     "zdim": zdim, "ddim": N_FEAT + 2}, "results/%s.pt" % a.tag)
@@ -331,6 +347,11 @@ def main():
             z = o["z"].reshape(B, T, -1)
             em, on, off, ini = heads(z, bt["dfeat"].to(dev), o["on_logit"].reshape(B, T, K))
             crf = crf_nll(em, on, off, bt["y_on"].to(dev).bool(), ini)
+            # 세션 배경 — 조각 하나당 값 **하나**를 내고 그 안의 모든 창에 같이 건다 (13.84.38).
+            bg_off = None
+            if bghead is not None:
+                bg = bghead(z)                                          # (B,H,2)
+                bg_off = bg[:, None].expand(B, T, -1, -1).flatten(0, 1)
             if crit is None:
                 loss = a.w_crf * crf
             else:
@@ -343,7 +364,7 @@ def main():
                       "obs_harm": bt["obs_harm"].to(dev).flatten(0, 1),
                       "p_noise": bt["p_noise"].to(dev).flatten(0, 1),
                       "p_observed": bt["p_observed"].to(dev).flatten(0, 1),
-                      "harm_offset": None,
+                      "harm_offset": bg_off,
                       "log_z": torch.log(bt["z_grid"].to(dev)[..., 0].clamp(min=1e-3)).flatten(0, 1)}
                 parts = crit(o, tg)
                 # ⚠ `--keep-on` 이 0 이면 켜짐 BCE 를 **통째로** 뺀다 — v37 에서 이어 배울 때는
@@ -353,10 +374,14 @@ def main():
                 #   일부를 남기면 한 판으로 끝난다 — 2단계 학습을 안 해도 된다.
                 loss = (parts["total"] - (1.0 - a.keep_on) * crit.w.on * parts["on"]
                         + a.w_crf * crf)
+                if bghead is not None:
+                    # ⚠ 크기 벌점이 없으면 자유 항이 되어 기기에서 전류를 빼앗는다.
+                    loss = loss + a.w_bg * (bg / crit.harm_scale[None, :, None]).pow(2).mean()
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
-                list(heads.parameters()) + list(model.parameters()), 5.0)
+                list(heads.parameters()) + list(model.parameters())
+                + (list(bghead.parameters()) if bghead is not None else []), 5.0)
             opt.step()
             sched.step()
             tot += float(loss.detach())

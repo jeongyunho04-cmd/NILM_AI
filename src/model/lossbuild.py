@@ -14,8 +14,8 @@ import numpy as np
 import torch
 
 from src.model.losses import LossWeights, NILMLoss, PHASE_COHERENT_EVEN, build_state_scales
-from src.model.net import (harmonic_scales, harmonic_signatures, harmonic_signatures_by_state,
-                           noise_signature, standby_signatures)
+from src.model.net import (harmonic_scales, harmonic_signatures, harmonic_signatures_by_power,
+                           harmonic_signatures_by_state, noise_signature, standby_signatures)
 from src.run_baseline import S_I
 
 
@@ -25,6 +25,8 @@ def build_loss(apps: Sequence[str], dev: str, *,
                standby_operating: str = "session",
                background: bool = True,
                state_signatures: bool = True,
+               power_signatures: bool = False,
+               power_bands: int = 3,
                harm_even_magnitude: bool = True,
                harm_odd_only: bool = False,
                harm_even_by_class: bool = False,
@@ -60,6 +62,13 @@ def build_loss(apps: Sequence[str], dev: str, *,
         if verbose:
             print("  ** 상시 배경 (12.166): +%.2fW **" % background_power())
     h_scale = harmonic_scales(pool, apps)
+    pow_gain = pow_edges = None
+    if power_signatures:
+        pow_gain, pow_edges, pow_used = harmonic_signatures_by_power(
+            pool, apps, n_bands=power_bands)
+        if verbose:
+            print("  ** 전력 의존 지문 (13.84.38): %d/%d 칸을 따로 맞췄다 (나머지는 보정비 1) **"
+                  % (int(pow_used.sum()), pow_used.size))
     sig_state = None
     if state_signatures:
         sig_state, used = harmonic_signatures_by_state(pool, apps)
@@ -76,6 +85,8 @@ def build_loss(apps: Sequence[str], dev: str, *,
         harm_odd_only=harm_odd_only,
         off_detach_praw=off_detach_praw,
         signatures_state=(torch.from_numpy(sig_state) if state_signatures else None),
+        power_gain=(torch.from_numpy(pow_gain) if pow_gain is not None else None),
+        power_edges=(torch.from_numpy(pow_edges) if pow_edges is not None else None),
         harm_even_magnitude=harm_even_magnitude,
         even_coherent=(torch.tensor([1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
                                     dtype=torch.float32) if harm_even_by_class else None),

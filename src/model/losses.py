@@ -164,6 +164,9 @@ class NILMLoss(torch.nn.Module):
         even_coherent: Optional[torch.Tensor] = None,   # (K,) 짝수차 위상이 기기 속성인 기기 (13.45)
         signatures_site: Optional[torch.Tensor] = None,      # (Nz,K,H,2) 자리별 지문 (13.59)
         signatures_state_site: Optional[torch.Tensor] = None,  # (Nz,K,S,H,2) 자리x상태별 (13.59)
+        power_gain: Optional[torch.Tensor] = None,        # (K,B,H,2) 전력대별 **보정비** (13.84.38)
+        power_edges: Optional[torch.Tensor] = None,       # (K,B−1) 전력대 경계 W
+        power_tau: float = 0.15,                          # 경계의 부드러움 (경계값 대비 비율)
         standby_w: Optional[torch.Tensor] = None,            # (K,) 측정된 대기 전력 W (13.60)
     ):
         super().__init__()
@@ -307,6 +310,17 @@ class NILMLoss(torch.nn.Module):
         self.register_buffer("sig_state_site", signatures_state_site
                              if signatures_state_site is not None else torch.zeros(0))
         self.use_site_sig = signatures_site is not None
+        # ── 전력 의존 지문 (2026-09-12, 13.84.38) ──────────────────────────
+        # 13.84.32/35 — 손실은 `Σ_k sig_k·power_k` 라 **전력에 선형**인데 와트당 고차 함량이
+        # 동작점에 따라 47~109% 변한다. 전력 구간별 사전으로 바꾸면 순방향 잔차가 13~34% 준다.
+        # ⚠ 지문을 갈아 끼우지 않고 **보정비 g** 를 곱한다 — 상태별 지문과 같이 쓰이고,
+        #   표본이 얇은 칸은 g=1 이라 지금 동작과 정확히 같다.
+        #     pred_h = Σ_k [Σ_b w_kb(p_k)·g[k,b,h]] ⊙ (기기 k 의 지금 기여)
+        #   `w` 는 부드러운 문턱의 분할이다(합 1). 딱딱하게 자르면 경계에서 경사가 끊긴다.
+        self.register_buffer("pow_gain", power_gain if power_gain is not None else torch.zeros(0))
+        self.register_buffer("pow_edges", power_edges if power_edges is not None else torch.zeros(0))
+        self.use_pow_sig = power_gain is not None
+        self.pow_tau = float(power_tau)
         # ── 짝수차는 크기 공간에서 (2026-09-06, 13.11) ─────────────────────
         # 플러그를 반대로 꽂으면 `I_h -> −(−1)^h I_h` 라 **짝수차만 180° 돈다.**
         # 드라이기 약풍의 격리 녹화 대 복합 녹화에서 h2 가 −6.63° 대 +172.60°,
@@ -538,17 +552,35 @@ class NILMLoss(torch.nn.Module):
         use_site = self.use_site_sig and site_idx is not None
         if not self.use_state_sig or out.get("power_mix") is None \
                 or out.get("power_states") is None:
-            if use_site:
-                return torch.einsum("bk,bkhc->bhc", power, self.sig_site[site_idx])
-            return torch.einsum("bk,khc->bhc", power, self.sig)
+            sg = self.sig_site[site_idx] if use_site else self.sig[None]      # (B|1,K,H,2)
+            per_k = power[..., None, None] * sg                               # (B,K,H,2)
+            return self._apply_pow_gain(per_k, power).sum(1)
         # power = 게이트 · p_raw 이므로 게이트는 power/p_raw 로 되살린다 —
         # `power` 가 detach 등으로 손질된 판일 수 있어 out["on_logit"] 을 다시 쓰지 않는다.
         praw = out["power_raw"].clamp(min=1e-6)
         gate = (power / praw)[..., None]                       # (B,K,1)
         pw = gate * out["power_mix"] * out["power_states"]      # (B,K,S)
-        if use_site:
-            return torch.einsum("bks,bkshc->bhc", pw, self.sig_state_site[site_idx])
-        return torch.einsum("bks,kshc->bhc", pw, self.sig_state)
+        sgs = self.sig_state_site[site_idx] if use_site else self.sig_state[None]
+        per_k = torch.einsum("bks,bkshc->bkhc", pw, sgs.expand(pw.shape[0], -1, -1, -1, -1))
+        return self._apply_pow_gain(per_k, power).sum(1)
+
+    def _apply_pow_gain(self, per_k: torch.Tensor, power: torch.Tensor) -> torch.Tensor:
+        """기기별 기여 (B,K,H,2) 에 **전력대 보정비**를 복소 곱한다 (13.84.38).
+
+        `pow_gain` 이 없으면 그대로 돌려준다 — 옛 동작과 **비트 단위로 같다.**
+        경계는 부드럽게 나눈다: `u_b = σ((p − e_b)/(τ·e_b))` 로 분할의 합이 1 이 되게 한다.
+        """
+        if not self.use_pow_sig:
+            return per_k
+        e = self.pow_edges                                     # (K,NB−1)
+        p = power.clamp(min=0.0)[..., None]                    # (B,K,1)
+        u = torch.sigmoid((p - e[None]) / (self.pow_tau * e[None].clamp(min=1e-3)))
+        one = torch.ones_like(u[..., :1])
+        w = torch.cat([one, u], -1) - torch.cat([u, torch.zeros_like(u[..., :1])], -1)  # (B,K,NB)
+        g = torch.einsum("bkn,knhc->bkhc", w, self.pow_gain)   # 복소비를 실/허로 쌓아 둔 것
+        gr, gi = g[..., 0:1], g[..., 1:2]
+        ar, ai = per_k[..., 0:1], per_k[..., 1:2]
+        return torch.cat([ar * gr - ai * gi, ar * gi + ai * gr], -1)
 
     def forward(self, out: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         # 12.9.9절 — 정답 상태에 맞는 척도를 쓴다. 손실은 학습 라벨을 봐도 되고,
@@ -651,6 +683,16 @@ class NILMLoss(torch.nn.Module):
             idle = torch.sigmoid(out["plugged_logit"]) * (1.0 - torch.sigmoid(out["on_logit"]))
             pred = pred + torch.einsum("bk,khc->bhc", idle, self.standby_sig)
             pred = pred + self.noise_sig[None]
+            # ── 세션 배경 (2026-09-12, 13.84.38) ────────────────────────────
+            # `noise_sig` 는 **전역 상수 하나**인데 실측에서 배경은 파일마다 다르다:
+            # 전부 OFF 구간이 파일 **안** 0.19~0.66mA 로 거의 완벽히 일정한데 파일 **간**
+            # 3.6~22.6mA 다 (13.84.35⑧). h15 에서는 미니PC 12W(5.7mA)보다 크다.
+            # 손실에 그것을 표현할 항이 없으면 갈 곳은 기기뿐이다.
+            # ⚠ **자유 항은 슬랙이 된다** ([[unsupervised-heads-become-slack]]). 그래서 이것은
+            #   창마다 자유로운 값이 **아니라** 학습기가 기록(=세션) 하나당 하나로 묶어 넣는다.
+            #   그래야 구성이 다른 창들이 같이 그 값을 정해 **식별**된다.
+            if tgt.get("harm_offset") is not None:
+                pred = pred + tgt["harm_offset"]
             # 차수별로 같은 무게를 준다. 정규화하지 않으면 I1 이 전부 지배해
             # 고조파 제약이 전력 제약과 같아진다.
             err = self._harm_err(pred, tgt["obs_harm"],
