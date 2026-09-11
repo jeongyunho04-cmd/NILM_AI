@@ -144,6 +144,12 @@ def main():
                     help="몸통 초기점. 'scratch' 면 **무작위 초기화**로 처음부터 배운다 (13.84.27)")
     ap.add_argument("--ref", default="results/cnn_v37.pt",
                     help="--init scratch 일 때 **구조·가림**을 가져올 체크포인트")
+    ap.add_argument("--no-mask", action="store_true",
+                    help="v37 이 가린 고차 위상 채널(세밀 4~7,12~15,37,38 · 광역 33,34)을 **살린다** "
+                         "(13.84.27). ⚠ --init scratch 에서만 쓸 것 — 물려받은 가중치에는 본 적 없는 "
+                         "입력이 된다. 가린 이유는 생성기가 h9~15 위상을 못 만들어서였는데(13.84.12), "
+                         "지금 캐시는 sibling_rotate 로 그 단서를 원천에서 없앴고 전이 머리는 어차피 "
+                         "원시를 가리지 않고 본다")
     ap.add_argument("--vswap-p", type=float, default=0.0, metavar="P",
                     help="학습 배치에서 전압 고조파 채널을 다른 창 것으로 바꿔 끼운다 (13.84.11). "
                          "⚠ v37 은 0.5 로 배웠다 — 0 으로 이어 학습하면 그 규제가 풀린다")
@@ -153,6 +159,9 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--lr-heads", type=float, default=3e-4)
     ap.add_argument("--w-crf", type=float, default=0.3)
+    ap.add_argument("--keep-on", type=float, default=0.0, metavar="F",
+                    help="켜짐 BCE 를 얼마나 남길지 (0=통째로 뺌, 1=그대로 두고 CRF 를 더함). "
+                         "처음부터 배우는 판은 0 이면 게이트가 무감독이 된다 (13.84.27)")
     ap.add_argument("--hidden", type=int, default=128)
     ap.add_argument("--score-norm", type=int, default=0)
     ap.add_argument("--workers", type=int, default=6)
@@ -187,7 +196,10 @@ def main():
     scratch = str(a.init).lower() in ("scratch", "random", "none")
     if scratch:
         torch.manual_seed(a.seed)
-    model, apps_m = load_model(a.ref if scratch else a.init, dev, weights=not scratch)[:2]
+    if a.no_mask and not scratch:
+        raise SystemExit("--no-mask 는 --init scratch 에서만 쓴다 (물려받은 가중치엔 본 적 없는 입력이다)")
+    model, apps_m = load_model(a.ref if scratch else a.init, dev,
+                               weights=not scratch, mask=not a.no_mask)[:2]
     assert list(apps_m) == list(apps), "기기 열 순서가 캐시와 다르다"
     with torch.no_grad():
         zdim = int(model(torch.zeros(1, model.fine_channels, 600, device=dev),
@@ -208,7 +220,9 @@ def main():
           % (n_rec, len(tr_i), len(grid), a.chunk, zdim, K, dev,
              (" · 몸통 얼림" if a.freeze_trunk else "")
              + (" · **처음부터**(무작위 몸통)" if scratch else " · 초기점 " + Path(a.init).stem)
-             + (" · vswap %.2f" % a.vswap_p if a.vswap_p else "")), flush=True)
+             + (" · vswap %.2f" % a.vswap_p if a.vswap_p else "")
+             + (" · 가림 해제" if a.no_mask else "")
+             + (" · keep-on %.2f" % a.keep_on if a.keep_on else "")), flush=True)
 
     if a.freeze_trunk:
         for p in model.parameters():
@@ -293,7 +307,8 @@ def main():
         torch.save({"model": model.state_dict(), "heads": heads.state_dict(),
                     "appliances": apps, "meta": meta, "hidden": a.hidden,
                     "score_norm": a.score_norm, "init": a.init, "ref": a.ref,
-                    "vswap_p": a.vswap_p, "epoch": ep, "epochs": a.epochs,
+                    "vswap_p": a.vswap_p, "no_mask": a.no_mask, "keep_on": a.keep_on,
+                "epoch": ep, "epochs": a.epochs,
                     "holdout_chain": r, "holdout_window": b,
                     "zdim": zdim, "ddim": N_FEAT + 2}, "results/%s.pt" % a.tag)
         print("     저장 results/%s.pt (epoch %d)" % (a.tag, ep), flush=True)
@@ -331,7 +346,13 @@ def main():
                       "harm_offset": None,
                       "log_z": torch.log(bt["z_grid"].to(dev)[..., 0].clamp(min=1e-3)).flatten(0, 1)}
                 parts = crit(o, tg)
-                loss = parts["total"] - crit.w.on * parts["on"] + a.w_crf * crf
+                # ⚠ `--keep-on` 이 0 이면 켜짐 BCE 를 **통째로** 뺀다 — v37 에서 이어 배울 때는
+                #   그 감독을 이미 받은 몸통이라 괜찮지만, **처음부터 배우면 게이트가 한 번도
+                #   감독을 못 받는다** (13.84.27). 그러면 방출이 base 와 emit 의 **큰 값 상쇄**로
+                #   풀려 실측에서 부서진다 (항 규모 ±0.6 대 v37 판 ±0.05, 잔차는 둘 다 −0.05~−0.09).
+                #   일부를 남기면 한 판으로 끝난다 — 2단계 학습을 안 해도 된다.
+                loss = (parts["total"] - (1.0 - a.keep_on) * crit.w.on * parts["on"]
+                        + a.w_crf * crf)
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(

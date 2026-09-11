@@ -28,7 +28,9 @@ def score(ck_path, dev, real_cache):
     ck = torch.load(ck_path, map_location=dev, weights_only=False)
     apps = ck["appliances"]
     # 몸통은 체크포인트가 통째로 담고 있다. 구조·가림은 `--init`/`--ref` 가 가리키던 판에서 온다.
-    model = load_model(ck.get("ref", "results/cnn_v37.pt"), dev, weights=False)[0]
+    # ⚠ 학습 때와 **같은 가림**이어야 한다. 체크포인트가 그 사실을 담고 있다.
+    model = load_model(ck.get("ref", "results/cnn_v37.pt"), dev, weights=False,
+                       mask=not bool(ck.get("no_mask", False)))[0]
     model.load_state_dict(ck["model"])
     model.eval()
     heads = ChainHeads(ck["zdim"], ck["ddim"], len(apps), hidden=ck["hidden"],
@@ -72,7 +74,10 @@ def main():
         out[c] = score(c, dev, cache)
         print("%-28s 실측 사슬 %.4f / 창별 %.4f" % (c, out[c][0], out[c][1]), flush=True)
     print("\n미니PC 시간 정확도 (실측)")
-    print("  파일     " + "".join("  %-14s" % c.split("/")[-1][:-3] for c in cks) + "   창별")
+    # ⚠ 마지막 칸은 v37 기준선이 **아니다** — 첫 체크포인트가 그 시점에 낸 창별 값이다.
+    #   몸통이 학습되면서 같이 움직인다. 고정 기준선과 견주려면 cnn_v37 을 따로 채점하라.
+    print("  파일     " + "".join("  %-14s" % c.split("/")[-1][:-3] for c in cks)
+          + "   %s의창별" % cks[0].split("/")[-1][:-3][:8])
     for stem in FILES:
         if stem not in out[cks[0]][2]:
             continue

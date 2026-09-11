@@ -109,7 +109,7 @@ def assert_target_config(ck: dict, ckpt_path: str) -> None:
             + chr(10) + "  (그 값으로 만든 캐시·홀드아웃도 함께 써야 합니다)")
 
 
-def load_model(ckpt_path: str, dev: str, weights: bool = True):
+def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True):
     """`weights=False` 면 **구조·가림만** 체크포인트에서 가져오고 가중치는 새로 뽑는다 (13.84.27).
 
     처음부터 학습하는 판의 초기점이다. 이렇게 해야 두 판 사이에 바뀐 것이 **가중치 하나**다
@@ -136,8 +136,11 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True):
     # 학습 때 0 으로 가린 채널은 **추론에서도** 0 이어야 한다 (13.80.10 · 13.84.12). 값이 있으면 본 적 없는 입력이
     # 된다 — v35 를 가리지 않고 채점하면 홀드아웃 F1 0.929 가 0.856 으로 나온다. 채점 경로가 여럿이라(forward_file,
     # run_score_holdout, 진단 스크립트) 모델에 forward pre-hook 으로 붙여 어느 경로든 자동으로 가린다.
-    zf = [int(x) for x in str(ck.get("zero_channels", "") or "").split(",") if x.strip()]
-    zw = [int(x) for x in str(ck.get("zero_wide_channels", "") or "").split(",") if x.strip()]
+    # ⚠ `mask=False` 는 **처음부터 배우는 판에서만** 쓴다 (13.84.27). 물려받은 가중치는
+    #   그 채널이 0 인 상태로 배웠으므로 값을 넣으면 본 적 없는 입력이 된다 — v35 를 안 가리고
+    #   채점했다가 0.929 가 0.856 으로 떨어진 자리다 (13.80.10 · 13.84.13).
+    zf = [int(x) for x in str(ck.get("zero_channels", "") or "").split(",") if x.strip()] if mask else []
+    zw = [int(x) for x in str(ck.get("zero_wide_channels", "") or "").split(",") if x.strip()] if mask else []
     if zf or zw:
         def _zero_inputs(m, args):
             f, w = args[0], args[1]
