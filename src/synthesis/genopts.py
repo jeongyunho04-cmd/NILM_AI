@@ -72,11 +72,22 @@ PRESETS: Dict[str, Dict[str, Any]] = {"v32": V32, "v36": V36, "v36r": V36R, "v36
 
 
 def resolve(spec: str) -> Dict[str, Any]:
-    """프리셋 이름이나 JSON 을 설정 딕셔너리로."""
+    """프리셋 이름이나 JSON 을 설정 딕셔너리로.
+
+    ⚠ **모르는 이름을 JSON 으로 읽으려 하지 않는다** (14.8). HPC 는 git repo 가 아니라
+    파일을 손으로 골라 올리는데, `genopts.py` 를 빼먹고 올리면 `resolve('v32')` 가
+    `json.loads('v32')` 로 가서 `JSONDecodeError: Expecting value` 로 죽었다 — 진짜 원인
+    ("그 프리셋이 없다")이 메시지 어디에도 안 나온다. 979780 이 그렇게 날아갔다.
+    """
     if not spec:
         return dict(LEGACY)
     if spec in PRESETS:
         return dict(PRESETS[spec])
+    if not spec.lstrip().startswith(("{", "[")):
+        raise SystemExit(
+            "[genopts] 모르는 생성기 프리셋 %r — 있는 것: %s\n"
+            "  (JSON 을 주려면 '{' 로 시작해야 한다. 코드를 다 올렸는지 확인하라)"
+            % (spec, " ".join(sorted(PRESETS))))
     return json.loads(spec)
 
 
