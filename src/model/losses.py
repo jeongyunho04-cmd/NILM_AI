@@ -174,6 +174,8 @@ class NILMLoss(torch.nn.Module):
         gate_smooth: float = 0.0,                    # 게이트 BCE 라벨 완화 (13.80)
         gate_focal: float = 0.0,                     # 쉬운 창 가중 낮추기 (13.80)                  # 꺼진 창에서 p_raw 를 detach (13.11)
         signatures_state: Optional[torch.Tensor] = None,  # (K,S,H,2) 상태별 지문 (13.11)
+        #: 14.26 — `L_harm` 의 지문을 창 전압으로 나눈다 (`I/P ∝ 1/V`). **기본 꺼짐 = 항등**.
+        harm_sig_vnorm: bool = False,
         harm_even_magnitude: bool = False,              # 짝수차를 크기 공간에서 잰다 (13.11)
         even_coherent: Optional[torch.Tensor] = None,   # (K,) 짝수차 위상이 기기 속성인 기기 (13.45)
         signatures_site: Optional[torch.Tensor] = None,      # (Nz,K,H,2) 자리별 지문 (13.59)
@@ -298,6 +300,9 @@ class NILMLoss(torch.nn.Module):
         self.register_buffer("sig_state", signatures_state
                              if signatures_state is not None else torch.zeros(0))
         self.use_state_sig = signatures_state is not None
+        #: 14.26 — `L_harm` 지문의 전압 정규화. `_vrel` 은 `forward` 가 `tgt["vrel"]` 로 채운다.
+        self.harm_sig_vnorm = bool(harm_sig_vnorm)
+        self._vrel = None
         # ── 자리별 지문 (2026-09-08, 13.59) ────────────────────────────────
         # 지문은 기기의 성질만이 아니다. 같은 SMPS 를 자리 D(Z≈1.19Ω)와 E(0.42Ω)에서
         # 격리 녹화해 재면 와트당 h13 전류가 프로젝터 0.47배·충전기 0.30배·미니PC
@@ -586,10 +591,23 @@ class NILMLoss(torch.nn.Module):
         `site_idx` (B,) 를 주면 **창마다** 그 자리의 지문을 골라 쓴다 (13.59).
         `sig_site` 를 안 넣었으면 무시한다.
         """
+        # ── 14.26: 지문을 **창 전압으로** 고친다 (`harm_sig_vnorm`) ──────────────
+        #   `sig = median(I/P)` 인데 물리는 `I = P/V` 라 **`I/P ∝ 1/V`** 다. 상수 `sig` 는
+        #   "전압이 녹화 때 그대로" 라는 가정이고, 그러면 `L_harm` 이 관측 전류에서
+        #   `power ∝ I ∝ V¹` 를 읽어 **지수 1** 을 민다 (물리는 2). 그것이 14.21 이 잰
+        #   "모델의 지수가 정확히 1" 의 출처이고, test_5 의 과예측 **예상 91W 대 실측 95W** 다.
+        #   고치면 `power ≈ I·V/(sig·V_ref) ∝ V²` 로 전력 손실과 **부호가 맞는다**.
+        #   ⚠ SMPS 도 `P` 일정 · `I ∝ V⁻¹` 이라 `I/P ∝ 1/V` — **같은 보정이 맞다**.
+        #   ⚠ `vrel` 이 없으면 **옛 경로 그대로**다 (비트 동일).
+        _vn = None
+        if self.harm_sig_vnorm and self._vrel is not None:
+            _vn = self._vrel.reshape(-1, 1, 1, 1)
         use_site = self.use_site_sig and site_idx is not None
         if not self.use_state_sig or out.get("power_mix") is None \
                 or out.get("power_states") is None:
             sg = self.sig_site[site_idx] if use_site else self.sig[None]      # (B|1,K,H,2)
+            if _vn is not None:
+                sg = sg / _vn.reshape(-1, 1, 1)
             per_k = power[..., None, None] * sg                               # (B,K,H,2)
             return self._apply_pow_gain(per_k, power).sum(1)
         # power = 게이트 · p_raw 이므로 게이트는 power/p_raw 로 되살린다 —
@@ -598,7 +616,10 @@ class NILMLoss(torch.nn.Module):
         gate = (power / praw)[..., None]                       # (B,K,1)
         pw = gate * out["power_mix"] * out["power_states"]      # (B,K,S)
         sgs = self.sig_state_site[site_idx] if use_site else self.sig_state[None]
-        per_k = torch.einsum("bks,bkshc->bkhc", pw, sgs.expand(pw.shape[0], -1, -1, -1, -1))
+        sgs = sgs.expand(pw.shape[0], -1, -1, -1, -1)
+        if _vn is not None:
+            sgs = sgs / _vn[..., None]                          # (B,1,1,1,1)
+        per_k = torch.einsum("bks,bkshc->bkhc", pw, sgs)
         return self._apply_pow_gain(per_k, power).sum(1)
 
     def _apply_pow_gain(self, per_k: torch.Tensor, power: torch.Tensor) -> torch.Tensor:
@@ -631,6 +652,8 @@ class NILMLoss(torch.nn.Module):
         # 사영이 걸린 출력인가 (`net._project` 가 남기는 표식). `off_detach_praw` 가
         # 그것을 조용히 지우는 것을 막는 데만 쓴다.
         self._proj_seen = 1.0 if "proj_r" in out else 0.0
+        # 14.26 — 창 전압비. 없으면 None 이라 `L_harm` 이 옛 경로 그대로 간다.
+        self._vrel = tgt.get("vrel") if self.harm_sig_vnorm else None
         parts: Dict[str, torch.Tensor] = {}
 
         # ── 꺼진 창은 `p_raw` 에 경사를 주지 않는다 (2026-09-06, 13.11) ──────────

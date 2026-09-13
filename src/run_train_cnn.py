@@ -39,7 +39,8 @@ from src.evaluation import (
     score_appliances, summarize, total_power_residual,
 )
 from src.model.inputs import (ZERO_EVEN_HARMONICS, FINE_CYCLES, FINE_LAYOUT,
-                             FINE_VOLT0, TARGET_LOOKAHEAD, VOLT_ORDERS, WIDE_CHANNELS,
+                             FINE_VOLT0, TARGET_LOOKAHEAD, V_CENTER, V_SPAN,
+                             VOLT_ORDERS, WIDE_CHANNELS,
                              WIDE_VOLT0, build_inputs, RAW_CHANNELS)
 from src.synthesis.dataset import chunk_seed
 from src.model.traincache import CachedWindows
@@ -240,6 +241,9 @@ def to_targets(batch, dev):
     return fine, wide, {
         "y_power": yp, "y_on": yo, "y_plugged": ypl, "y_standby": ys, "y_state": yst,
         "obs_harm": oh, "p_noise": pn, "p_observed": pobs, "harm_offset": None,
+        # 14.26 — 창 전압비 V/V_CENTER. `L_harm` 의 지문을 이것으로 나눈다 (`--harm-sig-vnorm`).
+        #   세밀 채널 25 가 `(v − V_CENTER)/V_SPAN` 이다 (`net.V_CH_FINE`).
+        "vrel": (fine[:, 25].mean(-1) * V_SPAN + V_CENTER) / V_CENTER,
         # 13.55 — 이 창의 선로 저항 [Ω]. 옛 캐시면 NaN 이고 손실이 알아서 건너뛴다.
         "log_z": torch.log(zg[:, 0].clamp(min=1e-3)),
     }
@@ -310,6 +314,10 @@ def main() -> int:
                          "잘 내는데 **같은 상태 안의 V² 의존**을 0.33~0.83 로만 읽어 순 지수가 "
                          "0.85 다(물리는 2). 저전압에서 과예측한다 (14.6). 끄면 비트 동일")
     ap.add_argument("--w-harm", type=float, default=0.1)
+    ap.add_argument("--harm-sig-vnorm", action="store_true",
+                    help="L_harm 의 지문을 창 전압으로 나눈다 (14.26). sig=median(I/P) 인데 "
+                         "I=P/V 라 I/P ∝ 1/V 다 — 상수 sig 는 power ∝ V¹ 을 밀어 모델 지수를 "
+                         "1 에 앉힌다 (물리 2). 끄면 비트 동일")
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
     ap.add_argument("--w-state-power", type=float, default=0.0, metavar="W",
                     help="상태별 전력 출력을 그 상태의 실제 전력에 묶는 항 (12.35). "
@@ -546,6 +554,7 @@ def main() -> int:
         off_detach_praw=a.off_detach_praw,
         signatures_state=(torch.from_numpy(sig_state) if a.state_signatures else None),
         harm_even_magnitude=a.harm_even_magnitude,
+        harm_sig_vnorm=a.harm_sig_vnorm,
         even_coherent=(torch.tensor(
             [1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
             dtype=torch.float32) if a.harm_even_by_class else None),
