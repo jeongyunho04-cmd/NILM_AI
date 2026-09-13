@@ -263,6 +263,11 @@ def main() -> int:
     ap.add_argument("--width", type=float, default=1.0, help="채널 폭 배수 (용량 부족 시 2)")
     ap.add_argument("--workers", type=int, default=11)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--vexp", action="store_true",
+                    help="전압 지수를 구조에 박는다 (14.7). `p_raw *= (V/V_CENTER)^e_k` 로 "
+                         "저항 e=2 · SMPS 0 · 유도기 0.6. 모델은 상태 명목값은 기울기 1.00 으로 "
+                         "잘 내는데 **같은 상태 안의 V² 의존**을 0.33~0.83 로만 읽어 순 지수가 "
+                         "0.85 다(물리는 2). 저전압에서 과예측한다 (14.6). 끄면 비트 동일")
     ap.add_argument("--w-harm", type=float, default=0.1)
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
     ap.add_argument("--w-state-power", type=float, default=0.0, metavar="W",
@@ -478,7 +483,8 @@ def main() -> int:
                     fine_dropout=a.fine_dropout,
                     prior_kappa=a.prior_kappa, prior_beta=a.prior_beta,
                     fine_channels=a.fine_channels,
-                    aux_z=(a.w_z > 0)).to(dev)
+                    aux_z=(a.w_z > 0),
+                    vexp=a.vexp).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
     crit = NILMLoss(
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
@@ -607,6 +613,8 @@ def main() -> int:
                     # `net.py` 가 conv 입력 채널로 직결한다.
                     "wide_channels": WIDE_CHANNELS,
                     "aux_z": bool(model.aux_z),
+                    # ⚠ **추론에도 써야 한다** — 지수를 박고 배운 모델이다 (14.7).
+                    "vexp": bool(model.vexp),
                     # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)

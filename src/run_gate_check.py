@@ -142,6 +142,9 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
                     proj_cap=pk.get("proj_cap", 0.5),
                     proj_floor=pk.get("proj_floor", 5.0),
                     proj_resp=pk.get("proj_resp", "power"),
+                    # 전압 지수 (14.7). 옛 체크포인트에는 키가 없어 False 이고,
+                    # False 면 지수가 전부 0 이라 `vrel**0 = 1` -> **완전한 하위호환**이다.
+                    vexp=bool(pk.get("vexp", False)),
                     # 기기 축 어텐션 (13.93). 없으면 0 이고 키 자체가 안 생긴다.
                     appl_attn=pk.get("appl_attn", 0),
                     appl_attn_heads=pk.get("appl_attn_heads", 4),

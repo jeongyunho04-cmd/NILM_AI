@@ -48,9 +48,32 @@ import torch.nn.functional as F
 
 from src.model.inputs import (
     FINE_CHANNELS, FINE_CYCLES, LEGACY_FINE_CHANNELS, POWER_SCALE,
-    WIDE_CHANNELS, fine_target_index, wide_target_index)
+    V_CENTER, V_SPAN, WIDE_CHANNELS, fine_target_index, wide_target_index)
 
 MAX_STATES = 5
+V_CH_FINE = 25      #: 세밀 갈래의 `(v − V_CENTER)/V_SPAN` 채널 (`inputs.py:378`)
+
+#: 기기별 **전압 지수** `P ∝ V^e` (14.7, 2026-09-13).
+#:
+#: 왜 필요한가: 모델은 **상태 명목값**을 잘 낸다 — 상태가 바뀔 때(모양이 바뀔 때) 예측이
+#: 참값을 기울기 **1.00** 으로 따라간다(오븐 13W~1326W). 그런데 **같은 상태 안**에서는
+#: 0.33~0.83 밖에 안 따라간다. 그리고 고정 저항에서 상태 안 전력 변화는 **오직 전압**이다:
+#:     합성 캐시에서 잰 `log P ~ e·log V` — 포트 2.01 · 드라이기 2.00/1.99 · 핫플 2.02 ·
+#:     오븐 2.00/1.96 (r 0.46~0.91) · 충전기 0.24/−0.42 · 미니PC −0.02/0.05 (r≈0)
+#: 그 결과 모델의 **순 전압 지수가 0.85** 다(물리는 2). 저전압에서 과예측한다 — 실측 test_5
+#: (210.6V, 드라이기 녹화 227.2V)가 v25 이후 **모든 모델**에서 +2.3~7.9% 과예측이다 (14.6).
+#:
+#: ⚠ **상태별이 아니라 기기별로 둔다.** 상태마다 재도 같은 기기 안에서는 일치한다
+#: (오븐 2.00/1.96 · 드라이기 2.00/1.99 · 선풍기 0.59/0.65/0.67). 상수를 늘릴 이유가 없다.
+#: ⚠ 적합값을 그대로 쓰지 않고 **물리로 정리**했다 — 충전기 −0.42 는 정전압 제어에서 나올 수
+#: 없는 값이라 적합 잡음이다. 저항 2.0 · SMPS 0.0 · 유도기 0.6 으로 묶는다.
+V_EXP: Dict[str, float] = {
+    "electiric_kettle": 2.0, "hair_dryer": 2.0, "hotplate": 2.0, "oven": 2.0,   # 순저항
+    "beam_projector": 0.0, "laptop_charger": 0.0, "minipc": 0.0,                # SMPS 정전압
+    "fan": 0.6, "air_conditioner": 0.6,                                          # 유도기
+}
+#: 외삽을 막는 상대전압 상하한. 학습 범위가 192~245V 이므로 ±12% 면 충분히 덮는다.
+V_REL_CLAMP = (0.88, 1.12)
 P_CH_FINE = 23      # 세밀 갈래의 asinh(P/100) 채널 (배치 v2, 13.12. v1 에서는 30 이었다)
 P_CH_WIDE = 0       # 광역 갈래의 asinh(P/100) 채널 (1.3절)
 WINDOW_STATS = 4    # 헤드에 직접 잇는 원시 창 통계 (아래 forward 참조)
@@ -141,6 +164,7 @@ class NILMNet(nn.Module):
         proj_cap: float = 0.5,
         #: 책임 분모의 하한 (W). **이것이 로버스트 슬랙이다** — 아래 forward 주석 참조.
         proj_floor: float = 5.0,
+        vexp: bool = False,
         #: 책임 가중.
         #:   `power`  매개변수를 안 늘린다 (Wisdom et al. 의 에너지 비례). 다만
         #:            **창별 곱셈 재조정과 같다** — 크기만 고치고 배분은 못 옮긴다
@@ -345,6 +369,15 @@ class NILMNet(nn.Module):
         on_states = self.state_mask.clone()
         on_states[:, 0] = 0.0
         self.register_buffer("power_mix_mask", on_states)
+        # ── 전압 지수 (14.7) ────────────────────────────────────────────────
+        # `p_raw` 는 **V_CENTER 에서의** 상태 명목값이 되고 전압 의존은 구조가 낸다.
+        # ⚠ 꺼지면 지수가 전부 0 이라 `vrel**0 = 1` — 옛 동작과 **비트 동일**이다.
+        self.vexp = bool(vexp)
+        # ⚠ `persistent=False` — **유도 상수**지 배우는 값이 아니다. state_dict 에 넣으면
+        #   옛 체크포인트가 "Missing key" 로 안 실린다.
+        self.register_buffer("v_exp", torch.tensor(
+            [V_EXP.get(a, 0.0) if vexp else 0.0 for a in self.appliances], dtype=torch.float32),
+            persistent=False)
 
     def forward(self, fine: torch.Tensor, wide: torch.Tensor) -> Dict[str, torch.Tensor]:
         t = self.target_pos
@@ -432,6 +465,11 @@ class NILMNet(nn.Module):
         p_states = F.softplus(o[..., 0:MAX_STATES])                     # (B,K,S)
         mix = state.masked_fill(self.power_mix_mask[None] == 0, -1e4).softmax(-1)
         p_raw = (mix * p_states).sum(-1)                                 # (B,K)
+        if self.vexp:
+            # 창의 전압을 세밀 채널에서 되살린다 (`inputs.py` 가 (v−V_CENTER)/V_SPAN 로 넣는다).
+            v = fine[:, V_CH_FINE].mean(-1) * V_SPAN + V_CENTER           # (B,)
+            vrel = (v / V_CENTER).clamp(*V_REL_CLAMP)[:, None]            # (B,1)
+            p_raw = p_raw * vrel.pow(self.v_exp[None])                    # 기기별 지수
         out = {
             # 전력은 on/off 로 게이팅한다. 게이팅이 없으면 꺼진 기기에도 전력이 샌다.
             "power": torch.sigmoid(on_logit) * p_raw,
