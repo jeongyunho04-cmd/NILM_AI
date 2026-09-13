@@ -26,7 +26,10 @@
 #   그 캐시에는 14.25 의 상태별 지수(오븐 FAN_LIGHT 1.75)가 **묻어 들어간다** — 평균 0.128W 라
 #   이 비교에는 영향이 없고, A·B 가 **같은 캐시**를 쓰므로 짝 비교는 깨끗하다.
 #SBATCH -J nilm_signv
-#SBATCH -p gpu3,gpu4,gpu5,gpu2,gpu6,gpu1
+# 사용자 지시 (2026-09-14): **A6000 Ada / A6000 만.** gpu3=a6000ada · gpu4·gpu5=a6000.
+#   a10(gpu2·gpu6)·rtx3090(gpu1)은 뺀다 — A10 은 2020 Ampere 라 느리다 (HPC_RULES §2).
+#   ⚠ 대신 대기가 길어질 수 있다. 980573 은 이 목록의 첫판으로 **n071(RTX 6000 Ada)** 에 즉시 붙었다.
+#SBATCH -p gpu3,gpu4,gpu5
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 16

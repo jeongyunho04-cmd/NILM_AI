@@ -607,7 +607,10 @@ class NILMLoss(torch.nn.Module):
                 or out.get("power_states") is None:
             sg = self.sig_site[site_idx] if use_site else self.sig[None]      # (B|1,K,H,2)
             if _vn is not None:
-                sg = sg / _vn.reshape(-1, 1, 1)
+                # ⚠ `sg` 는 (B|1, K, H, 2) 라 `_vn` 을 (B,1,1,1) 그대로 쓴다.
+                #   `.reshape(-1,1,1)` 로 줄이면 오른쪽 정렬 방송이 K 축과 B 를 맞부딪친다
+                #   (980573 이 그렇게 죽었다: "size of tensor a (9) ... b (8)").
+                sg = sg / _vn
             per_k = power[..., None, None] * sg                               # (B,K,H,2)
             return self._apply_pow_gain(per_k, power).sum(1)
         # power = 게이트 · p_raw 이므로 게이트는 power/p_raw 로 되살린다 —
