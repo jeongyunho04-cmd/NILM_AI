@@ -107,7 +107,10 @@ def main():
     ap.add_argument("--npz-dir", default="processed_data/npz")
     ap.add_argument("--split", default="train")
     ap.add_argument("--gen", default="v32",
-                    help="생성기 설정. 'v36'(=cache_v36.sbatch 와 같은 값) · 'legacy'(seqraw_v1) · JSON")
+                    help="생성기 설정. **기본 'v32'** = 사슬 이전 판 (= v36 − sibling_rotate, 14.4). "
+                         "'v36'(=cache_v36.sbatch 와 같은 값) · 'v36p'(위상 폭 실측, 13.84.49) · "
+                         "'v36r'(녹화별 대기 지문, 13.84.40) · 'v36d/d47/dp'(실측 표류, 13.84.61) · "
+                         "'legacy'(seqraw_v1) · JSON")
     a = ap.parse_args()
 
     N = int(a.record_s * FS)
