@@ -106,7 +106,7 @@ def main():
                          "고전력 노출을 창 캐시 수준으로 되돌린다 (13.84.39)")
     ap.add_argument("--npz-dir", default="processed_data/npz")
     ap.add_argument("--split", default="train")
-    ap.add_argument("--gen", default="v36",
+    ap.add_argument("--gen", default="v32",
                     help="생성기 설정. 'v36'(=cache_v36.sbatch 와 같은 값) · 'legacy'(seqraw_v1) · JSON")
     a = ap.parse_args()
 

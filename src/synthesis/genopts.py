@@ -30,6 +30,20 @@ V36: Dict[str, Any] = dict(
     sibling_rotate="smps_dev1",          # 13.84.16 형제 편차 한꺼번에
 )
 
+#: **사슬 이전 생성기** (14.4, 2026-09-13). 사용자 결정으로 본선을 창별로 되돌리면서 생성기도 같이.
+#:
+#: 사슬 커밋(`0cbf7ff`, 09-12 01:06) 직전의 캐시 sbatch 와 대 보면 v32 와 v36 이 다른 것은
+#: **`--sibling-rotate smps_dev1` 하나뿐**이고 나머지 열넷(carrier-on·couple-ext·float-fill·
+#: power-scale-std·recipe-mix·smps-focus-off-p·sp-curves·sp-per-texture·standby-jitter-cap·
+#: state-mix·steady-crop·vtail·window-cycles·windows)은 전부 같다. 그래서 되돌림은 한 플래그다.
+#:
+#: ⚠ **이득은 무승부에 가깝다.** 가림까지 맞춘 짝(`cnn_v35` 끔 대 `cnn_v37` 켬)을 같은 채점기
+#: (`run_diag_rollback.py`)로 재면 SMPS 신원 +0.008 · on/off **−0.023** · 잔차 −0.3W 다.
+#: 판정 줄(on/off)로는 오히려 손해다. 그래도 되돌리는 것은 **사용자 결정**이다 (14.4).
+#: ⚠ 되돌리면 13.83.25 가 잡은 **합성 전용 단서**가 되살아난다 — `sibling_rotate` 는 그것을
+#: 원천에서 없애려고 넣은 것이었다 (13.84.16). 실패 ③(미니PC 미탐)이 다시 나오면 여기를 의심하라.
+V32: Dict[str, Any] = {k: v for k, v in V36.items() if k != "sibling_rotate"}
+
 #: V36 + **녹화별 대기 지문을 기록당 하나씩** (13.84.40).
 #: 실측 전부-OFF 배경의 파일 간 편차에서 꽂힌 기기 대기로 설명되는 몫을 빼면
 #: h9~h15 에 4.7~7.0mA 가 남는데 V36 은 1.3~1.5mA 밖에 안 준다 (계측계 잡음 참조 3개).
@@ -52,7 +66,7 @@ V36DP: Dict[str, Any] = dict(V36, sibling_rotate="smps_driftp")
 #: `seqraw_v1` 을 그대로 다시 만드는 설정 (대조군용).
 LEGACY: Dict[str, Any] = dict(carrier_apps=("oven",))
 
-PRESETS: Dict[str, Dict[str, Any]] = {"v36": V36, "v36r": V36R, "v36p": V36P,
+PRESETS: Dict[str, Dict[str, Any]] = {"v32": V32, "v36": V36, "v36r": V36R, "v36p": V36P,
                                       "v36d": V36D, "v36d47": V36D47, "v36dp": V36DP,
                                       "legacy": LEGACY}
 
@@ -115,6 +129,10 @@ def check(opts: Dict[str, Any], gen) -> Sequence[str]:
     a = gen.augmentor
     if opts.get("sibling_rotate") and not getattr(a, "sibling_rotate", None):
         bad.append("sibling_rotate 가 안 걸렸다")
+    # ⚠ **끈 것도 확인한다** (14.4). v32 로 되돌릴 때 어딘가에서 형제 편차가 살아 있으면
+    #   되돌린 줄 알고 안 되돌린 캐시를 굽는다 ([[verify-the-gate-runs-that-path]] 의 반대 방향).
+    if not opts.get("sibling_rotate") and getattr(a, "sibling_rotate", None):
+        bad.append("sibling_rotate 를 안 걸었는데 증강기에 남아 있다")
     if opts.get("sp_curves") and not getattr(a, "_sp", None):
         bad.append("sp_curves 가 안 걸렸다 (processed_data/sp_curves.npz)")
     if opts.get("sp_per_texture") and not getattr(a, "_sp_tex", None):
