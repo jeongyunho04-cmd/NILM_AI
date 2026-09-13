@@ -15,11 +15,16 @@
 
 ⚠ 토막을 지우지 않는다. 지울지는 사람이 정한다.
 
-⚠ **로그인 노드에 두기엔 무겁다** (2026-09-14 실측). 30만창이면 `fine.npy` 만 20.5GB 이고
-   GPFS 에서 원본 둘을 읽어 합본에 **단일 스레드로** 쓴다 — 약 22MB/s, 전체 **~25분**이다.
-   (굽기가 노드 둘로 12분인데 이어붙이기가 그보다 오래 걸린다.)
-   공용 계정이라 로그인 노드 I/O 를 오래 물고 있는 것은 좋지 않다 —
-   **작은 CPU 작업(`-c 2 --mem=8G -t 00:40:00`)으로 돌리는 편이 낫다.**
+⚠⚠ **memmap 으로 복사하지 마라 — GPFS 에서 120배 느리다** (2026-09-14 실측).
+   처음에 `open_memmap` + 슬라이스 대입으로 짰더니 30만창에 **30분**이 걸렸다.
+   ```
+   WCHAN = ZN10gpfsNode_t8mmapLockEyPKjy    <- 페이지마다 GPFS **mmap 락**
+   STAT  = Dl (중단 불가 I/O 대기)  ·  13 MB/s
+   ```
+   `.npy` 는 **머리말 + C순서 연속 바이트**라 축 0 이어붙이기는 **바이트 이어붙이기**와 같다.
+   머리말만 새로 쓰고 자료부를 `shutil.copyfileobj` 로 순차 복사하면 **15초**다 (~1.6GB/s).
+   사용자가 *"이어붙이는 게 그렇게 오래 걸려?"* 라고 묻지 않았으면 그게 정상인 줄 알았을 것이다.
+   ⇒ 로그인 노드에서 15초면 되므로 별도 작업으로 뺄 이유도 없다.
 """
 import argparse
 import json
@@ -43,6 +48,20 @@ SAME = ("window_cycles", "appliances", "time_split", "seed", "n_wide", "chunk",
         "state_mix", "carrier_apps", "couple_ext", "sp_curves", "sp_per_texture",
         "vtail", "float_fill", "steady_crop", "standby_jitter_cap", "sibling_rotate",
         "exclude_activation_files", "dither_amp", "dither_phase_deg", "level_scramble")
+
+
+def _npy_info(path):
+    """`.npy` 의 (창 수, 자료부 시작 오프셋, dtype, fortran_order). 머리말을 건너뛴다."""
+    with open(path, "rb") as f:
+        ver = np.lib.format.read_magic(f)
+        # ⚠ `_read_array_header` 는 비공개라 numpy 판마다 이름이 다르다 — 공개 API 로 나눈다.
+        if ver == (1, 0):
+            shape, fortran, dtype = np.lib.format.read_array_header_1_0(f)
+        elif ver == (2, 0):
+            shape, fortran, dtype = np.lib.format.read_array_header_2_0(f)
+        else:
+            raise SystemExit("[merge] 모르는 .npy 판 %s: %s" % (ver, path))
+        return shape[0], f.tell(), dtype, bool(fortran)
 
 
 def main():
@@ -119,21 +138,30 @@ def main():
             raise SystemExit("[merge] 배열이 없다: %s" % miss)
         a0 = np.load(srcs[0], mmap_mode="r")
         shape = (N,) + a0.shape[1:]
-        dst = np.lib.format.open_memmap(out / ("%s.npy" % name), mode="w+",
-                                        dtype=a0.dtype, shape=shape)
-        pos = 0
         for p in srcs:
             src = np.load(p, mmap_mode="r")
             if src.shape[1:] != a0.shape[1:] or src.dtype != a0.dtype:
                 raise SystemExit("[merge] %s 의 모양/자료형이 다르다: %s %s 대 %s %s"
                                  % (p, src.shape, src.dtype, a0.shape, a0.dtype))
-            # 큰 배열은 조각내 옮긴다 (fine 은 토막당 수 GB 다)
-            step = max(1, int(2e8 // max(int(np.prod(src.shape[1:], dtype=np.int64))
-                                         * src.dtype.itemsize, 1)))
-            for i in range(0, len(src), step):
-                dst[pos + i:pos + i + len(src[i:i + step])] = src[i:i + step]
-            pos += len(src)
-        dst.flush()
+            del src
+        del a0
+        # ⚠ **memmap 으로 복사하지 마라** (2026-09-14 실측). `open_memmap` + 슬라이스 대입은
+        #   페이지마다 GPFS mmap 락을 잡아 **13MB/s** 밖에 안 난다 (`WCHAN=gpfsNode::mmapLock`,
+        #   `STAT=Dl`). 24GB 에 30분이다.
+        #   `.npy` 는 **머리말 + C순서 연속 바이트**라 축 0 이어붙이기는 **바이트 이어붙이기**와
+        #   같다. 머리말만 새로 쓰고 자료부는 `copyfileobj` 로 순차 복사한다.
+        _n0, _off0, _d0, _f0 = _npy_info(srcs[0])
+        with open(out / ("%s.npy" % name), "wb") as fo:
+            np.lib.format.write_array_header_2_0(
+                fo, {"descr": np.lib.format.dtype_to_descr(_d0),
+                     "fortran_order": False, "shape": shape})
+            for p in srcs:
+                n_, off_, dt_, fo_ = _npy_info(p)
+                if fo_:
+                    raise SystemExit("[merge] fortran_order 인 토막은 못 붙인다: %s" % p)
+                with open(p, "rb") as fi:
+                    fi.seek(off_)
+                    shutil.copyfileobj(fi, fo, length=32 * 1024 * 1024)
         print("   %-12s %s" % (name, shape))
 
     meta = dict(base)
