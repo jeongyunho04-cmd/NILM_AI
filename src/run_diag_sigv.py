@@ -115,7 +115,9 @@ def main():
 
     base_res = None
     res = {}
-    for name, fix in (("고침 없음", False), ("**sig ÷ (V/222)**", True)):
+    for name, fix, wh in (("전력만 (wh 0)", False, 0.0),
+                          ("고침 없음 (wh .1)", False, 0.1),
+                          ("**sig 고침 (wh .1)**", True, 0.1)):
         model, _ = load_model(a.ckpt, dev)[:2]
         model.eval()
         for p in model.parameters():
@@ -131,7 +133,7 @@ def main():
             harm_even_magnitude=True,
             s_state=build_state_scales(apps_m, [S_I[x] for x in apps_m]),
             signatures_state=torch.from_numpy(sig_state),
-            weights=LossWeights(harm=0.1),
+            weights=LossWeights(harm=wh),
         ).to(dev)
         L.NILMLoss._harm_pred_active = patched if fix else orig
 
@@ -158,14 +160,16 @@ def main():
     L.NILMLoss._harm_pred_active = orig
 
     print("\n**검정 절반** 지수 — 상태 라벨로 묶어 잼 (선택 치우침 없음)")
-    print("  %-18s %5s %6s %8s %8s %11s %18s"
-          % ("기기", "상태", "창", "참값 e", "원래", "재적합", "재적합+sig 고침"))
+    print("  %-18s %5s %6s %8s %8s %11s %12s %14s"
+          % ("기기", "상태", "창", "참값 e", "원래", "전력만", "고침없음", "**sig 고침**"))
     for key in sorted(base_res):
         a_, st = key
         nn_, et, e0 = base_res[key]
-        r1 = res["고침 없음"].get(key, (0, 0, float("nan")))[2]
-        r2 = res["**sig ÷ (V/222)**"].get(key, (0, 0, float("nan")))[2]
-        print("  %-18s %5d %6d %8.2f %8.2f %11.2f %18.2f" % (a_, st, nn_, et, e0, r1, r2))
+        r0 = res["전력만 (wh 0)"].get(key, (0, 0, float("nan")))[2]
+        r1 = res["고침 없음 (wh .1)"].get(key, (0, 0, float("nan")))[2]
+        r2 = res["**sig 고침 (wh .1)**"].get(key, (0, 0, float("nan")))[2]
+        print("  %-18s %5d %6d %8.2f %8.2f %11.2f %12.2f %14.2f"
+              % (a_, st, nn_, et, e0, r0, r1, r2))
     print("\n  **예측**: 마지막 열이 2 에 가까워야 이 설명이 맞다. 안 가면 이것도 틀렸다.")
     return 0
 
