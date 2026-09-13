@@ -181,6 +181,36 @@ class GridSimulator:
         LoadClass.PASSIVE: (1.0, 1.0),
     }
 
+    #: **상태별** 덮어쓰기 `(기기, 상태) -> (i_exp, p_exp)` (14.25, 2026-09-14).
+    #:
+    #: 위 표는 **부하 분류별**이라 한 기기의 모든 상태가 같은 지수를 받는다. 그런데 오븐의
+    #: `FAN_LIGHT`(상태 1, 16.8W)는 **팬(모터) + 조명**이라 히터(상태 2, 1357W)와 물리가 다른데
+    #: 둘 다 `RESISTIVE (1.0, 2.0)` 을 받고 있었다.
+    #:
+    #: 실측(`run_diag_vexp_state.py`, 60초 블록, 원본 npz):
+    #: ```
+    #: oven s1 FAN_LIGHT   11블록  14.6W   e = 1.65  (시간 통제 뒤 1.86)   <- 2.0 이 아니다
+    #: oven s2 HEATING      5블록 1088.9W  e = 1.88                        <- 저항이 맞다
+    #: ```
+    #: ⚠ **시간을 통제해야 한다.** 같은 절차로 `beam_projector s2` 가 e=2.18 (SMPS 인데!) 로
+    #:   나왔는데 `log P ~ e·log V + b·t` 로 재니 **−1.14** 로 무너졌다 — 예열 표류였다.
+    #:   오븐은 1.65 -> 1.86 으로 살아남았다.
+    #: ⚠ **22개 (기기,상태) 조합 중 잴 수 있는 것이 이 하나뿐이다.** 나머지는 녹화 안에서
+    #:   전압이 거의 안 움직여(`std(log V) < 0.002`) 추정이 안 된다. 표를 더 못 채운다 —
+    #:   채우려면 **전압이 움직이는 녹화**가 필요하다.
+    #: ⚠ 값의 크기는 작다: 15W 상태에서 지수 0.25 차이면 ±3.5% 전압에서 **0.1W** 다.
+    #:   이것만으로 캐시를 다시 굽지 마라. 다른 이유로 구울 때 묻어가면 된다.
+    #:
+    #: 비어 있으면 `_LOAD_EXPONENTS` 만 쓰므로 **옛 경로와 비트 동일**이다.
+    _STATE_EXPONENTS: Dict[Tuple[str, int], Tuple[float, float]] = {
+        # 1.65(V만)와 1.86(V+시간)의 중간. 팬(0.7)과 조명(2.0) 사이라 물리와도 맞는다.
+        # ⚠ **전류 지수는 반드시 `p_exp − 1` 이다** — `P = V·I` 이므로 둘을 따로 고르면
+        #   생성기가 물리적으로 모순된 창을 만든다 (전류는 V^1.0, 전력은 V^1.75 이면 P=V·I 가
+        #   V^2.0 을 뜻한다). 처음에 0.88 로 적었다가 끝단 검정에서 `obs_harm` 은 그대로인데
+        #   `y_power` 만 바뀌는 것을 보고 잡았다. [[pin-the-two-entry-points-against-each-other]]
+        ("oven", 1): (0.75, 1.75),
+    }
+
     def __init__(
         self,
         voltage_clusters: Tuple[VoltageCluster, ...] = OBSERVED_VOLTAGE_CLUSTERS,
@@ -521,21 +551,42 @@ class GridSimulator:
         ref = float(v_ref) if v_ref and v_ref > 1.0 else self.default_ref_voltage
         return (np.asarray(v_bus, dtype=np.float32) / ref).astype(np.float32)
 
-    def current_voltage_exponent(self, appliance_type: str) -> float:
-        """전압 변화에 대한 전류 지수. I ∝ V^exp"""
+    def power_voltage_exponent(self, appliance_type: str, state: Optional[int] = None) -> float:
+        """전압 변화에 대한 유효전력 지수. P ∝ V^exp.
+
+        `state` 를 주면 `_STATE_EXPONENTS` 의 덮어쓰기를 먼저 본다 (14.25). 없으면 분류 기본값.
+        """
+        if state is not None:
+            ov = self._STATE_EXPONENTS.get((appliance_type, int(state)))
+            if ov is not None:
+                return ov[1]
+        return self._LOAD_EXPONENTS[get_load_class(appliance_type)][1]
+
+    def current_voltage_exponent(self, appliance_type: str, state: Optional[int] = None) -> float:
+        """전류 지수. I ∝ V^exp. `power_voltage_exponent` 와 같은 규약이다."""
+        if state is not None:
+            ov = self._STATE_EXPONENTS.get((appliance_type, int(state)))
+            if ov is not None:
+                return ov[0]
         return self._LOAD_EXPONENTS[get_load_class(appliance_type)][0]
 
-    def power_voltage_exponent(self, appliance_type: str) -> float:
-        """전압 변화에 대한 유효전력 지수. P ∝ V^exp"""
-        return self._LOAD_EXPONENTS[get_load_class(appliance_type)][1]
+    def state_exponent_states(self, appliance_type: str) -> Tuple[int, ...]:
+        """이 기기에 상태별 덮어쓰기가 걸린 상태 번호들 (없으면 빈 튜플)."""
+        return tuple(sorted(s for (a, s) in self._STATE_EXPONENTS if a == appliance_type))
 
     def apply_cross_appliance_coupling(
         self,
         appliance_type: str,
         harmonics_complex: np.ndarray,  # (N, 15) complex64
         kappa_v: np.ndarray,            # (N,) float32 전압 비율 V_bus(t) / v_ref
+        state_id: Optional[np.ndarray] = None,   # (N,) 14.25 상태별 지수용
     ) -> np.ndarray:
-        """전압 변화(kappa_v)에 따른 가전별 비선형 물리 전류 및 고조파 변형을 적용합니다."""
+        """전압 변화(kappa_v)에 따른 가전별 비선형 물리 전류 및 고조파 변형을 적용합니다.
+
+        `state_id` 를 주면 `_STATE_EXPONENTS` 가 걸린 상태만 그 전류 지수로 계산한다 (14.25).
+        **표가 비거나 `state_id` 가 None 이면 옛 경로와 비트 동일**이다. 전력 쪽
+        (`apply_power_voltage_response`) 과 **반드시 같이** 걸어야 `P = V·I` 가 유지된다.
+        """
         if harmonics_complex.size == 0:
             return harmonics_complex.astype(np.complex64)
 
@@ -554,6 +605,18 @@ class GridSimulator:
             scale = 1.0 / kappa_col
         else:
             scale = np.power(kappa_col, i_exp)
+        # 14.25: 상태별 전류 지수 덮어쓰기. 표가 비거나 state_id 가 None 이면 건너뛴다.
+        ov_states = self.state_exponent_states(appliance_type) if state_id is not None else ()
+        if ov_states:
+            scale = np.broadcast_to(np.asarray(scale, np.float32),
+                                    kappa_col.shape).astype(np.float32).copy()
+            sid = np.asarray(state_id)
+            for st in ov_states:
+                m = sid == st
+                if not m.any():
+                    continue
+                e = self.current_voltage_exponent(appliance_type, st)
+                scale[m] = np.power(kappa_col[m], e).astype(np.float32)
         mod_c = harmonics_complex * scale
 
         # SMPS 는 저전압에서 정류 다이오드 도통각이 좁아져 3차 고조파 왜율이 상승한다.
@@ -765,14 +828,33 @@ class GridSimulator:
         appliance_type: str,
         power_w: np.ndarray,
         kappa_v: np.ndarray,
+        state_id: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """전압 변화에 따른 유효전력 변화를 적용한다. P ∝ V^exp"""
-        exp = self.power_voltage_exponent(appliance_type)
+        """전압 변화에 따른 유효전력 변화를 적용한다. P ∝ V^exp.
+
+        `state_id` (N,) 를 주면 `_STATE_EXPONENTS` 가 걸린 상태만 그 지수로 따로 계산한다
+        (14.25). **표가 비어 있거나 `state_id` 가 None 이면 옛 경로와 비트 동일**이다.
+        """
         p = np.asarray(power_w, dtype=np.float32)
-        if exp == 0.0:
-            return p                                       # SMPS 정전력
         if not p.any():
             return p                                       # 꺼진 기기 - 계산할 것이 없다
         k = np.clip(np.asarray(kappa_v, dtype=np.float32), 0.80, 1.20)
-        scale = k * k if exp == 2.0 else (k if exp == 1.0 else np.power(k, exp))
-        return (p * scale).astype(np.float32)
+
+        def _scale(e):
+            return k * k if e == 2.0 else (k if e == 1.0 else np.power(k, e))
+
+        ov_states = self.state_exponent_states(appliance_type) if state_id is not None else ()
+        base = self.power_voltage_exponent(appliance_type)
+        out = p if base == 0.0 else (p * _scale(base)).astype(np.float32)
+        if not ov_states:
+            return np.asarray(out, dtype=np.float32)
+        # 덮어쓴 상태만 다시 계산한다 — 나머지 사이클은 위 결과 그대로다.
+        out = np.array(out, dtype=np.float32, copy=True)
+        sid = np.asarray(state_id)
+        for st in ov_states:
+            m = sid == st
+            if not m.any():
+                continue
+            e = self.power_voltage_exponent(appliance_type, st)
+            out[m] = (p[m] if e == 0.0 else p[m] * _scale(e)[m]).astype(np.float32)
+        return out
