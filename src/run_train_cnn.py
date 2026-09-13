@@ -40,7 +40,7 @@ from src.evaluation import (
 )
 from src.model.inputs import (ZERO_EVEN_HARMONICS, FINE_CYCLES, FINE_LAYOUT,
                              FINE_VOLT0, TARGET_LOOKAHEAD, VOLT_ORDERS, WIDE_CHANNELS,
-                             WIDE_VOLT0, build_inputs)
+                             WIDE_VOLT0, build_inputs, RAW_CHANNELS)
 from src.synthesis.dataset import chunk_seed
 from src.model.traincache import CachedWindows
 from src.model.losses import (LossWeights, NILMLoss, PHASE_COHERENT_EVEN,
@@ -65,10 +65,22 @@ class SynthBatchDataset(Dataset):
     넘으므로 IPC 도 5배 가볍다.
     """
 
-    def __init__(self, n_batches: int, batch_size: int, seed: int):
+    def __init__(self, n_batches: int, batch_size: int, seed: int,
+                 gen_spec: str = "v32", recipe_mix: str = "steady2",
+                 smps_focus_off_p: float = 0.4):
         self.n_batches = n_batches
         self.bs = batch_size
         self.seed = seed
+        #: 생성기 설정 (14.8). ⚠ **이 경로는 오래 맨몸이었다** — `LoadSynthesizer(segment_pool=pool)`
+        #: 만 만들어 `cache_v32.sbatch` 가 캐시에 건 설정 **열하나가 빠져 있었다**
+        #: (couple_ext · sp_curves · sp_per_texture · vtail · float_fill · steady_crop ·
+        #:  standby_jitter_cap · state_mix · power_scale_std, 그리고 창 층의 recipe_mix ·
+        #:  smps_focus_off_p). 13.84.27 이 `run_build_seqraw` 의 **같은 결함**을 찾아
+        #: `genopts.py` 를 만들었는데 여기는 안 고쳐져 있었다.
+        #: [[derive-commands-from-config-not-prose]] [[verify-the-gate-runs-that-path]]
+        self.gen_spec = gen_spec
+        self.recipe_mix = recipe_mix
+        self.smps_focus_off_p = float(smps_focus_off_p)
         self.gen = None
 
     def __len__(self) -> int:
@@ -77,15 +89,27 @@ class SynthBatchDataset(Dataset):
     def _ensure(self):
         if self.gen is not None:
             return
+        import json as _json
         from src.synthesis.dataset import NILMBatchGenerator
-        from src.synthesis.segment_pool import SegmentPool
-        from src.synthesis.synthesizer import LoadSynthesizer
+        from src.synthesis.genopts import build_synthesizer, check, describe, resolve
         # 시드는 여기서 걸지 않는다 - `__getitem__` 이 배치 번호로 건다.
-        pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+        opts = resolve(self.gen_spec)
+        syn = build_synthesizer(opts, "processed_data/npz", "train")
+        bad = check(opts, syn)
+        if bad:
+            raise SystemExit("[train_cnn] 생성기 설정이 안 걸렸다: " + " / ".join(bad))
+        mix = None
+        if self.recipe_mix:
+            from src.run_recipe_mix_probe import PRESETS
+            mix = (PRESETS[self.recipe_mix] if self.recipe_mix in PRESETS
+                   else _json.loads(self.recipe_mix))
         self.gen = NILMBatchGenerator(
-            segment_pool=pool, window_size_cycles=WINDOW_CYCLES,
-            synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False),
-            compute_gt_harmonics=False)
+            segment_pool=syn.pool, window_size_cycles=WINDOW_CYCLES,
+            synthesizer=syn, compute_gt_harmonics=False,
+            recipe_mix=mix, smps_focus_off_p=self.smps_focus_off_p)
+        print("[train_cnn] 실시간 합성 생성기 '%s': %s · recipe_mix=%s · smps_focus_off_p=%.2f"
+              % (self.gen_spec, describe(opts), self.recipe_mix, self.smps_focus_off_p),
+              flush=True)
 
     def __getitem__(self, i: int):
         self._ensure()
@@ -95,7 +119,10 @@ class SynthBatchDataset(Dataset):
         g, n = self.gen, self.bs
         k = len(g.appliance_list)
         ti = g.target_index
-        xs = np.empty((n, 33, WINDOW_CYCLES), np.float32)
+        # ⚠ **33 이 박혀 있었다** (14.8). 13.26 이 전압 고조파 12채널을 더해 `RAW_CHANNELS`
+        #   가 45 가 됐는데 이 경로만 안 따라왔다 — 그 뒤로 한 번도 안 돌았다는 뜻이다.
+        #   상수를 박지 말고 `inputs.RAW_CHANNELS` 를 쓴다.
+        xs = np.empty((n, RAW_CHANNELS, WINDOW_CYCLES), np.float32)
         yp = np.empty((n, k), np.float32); yo = np.empty((n, k), np.float32)
         ypl = np.empty((n, k), np.float32); ys = np.empty((n, k), np.float32)
         yst = np.empty((n, k), np.int64)
@@ -366,6 +393,15 @@ def main() -> int:
     ap.add_argument("--holdout", default=HOLDOUT_DIR, metavar="DIR",
                     help="합성 홀드아웃 디렉터리. TARGET_LOOKAHEAD 를 바꾸면 라벨 시점이 "
                          "달라지므로 홀드아웃도 그 값으로 다시 만들어야 한다 (12.45)")
+    ap.add_argument("--gen", default="v32", metavar="NAME|JSON",
+                    help="**실시간 합성**(`--cache none`)일 때의 생성기 설정 (14.8). "
+                         "`genopts.PRESETS` 의 이름이나 JSON. 기본 'v32' = 사슬 이전 판 "
+                         "(= v36 − sibling_rotate). ⚠ 캐시를 쓰면 이 값은 무시된다 — "
+                         "그때는 캐시를 구울 때의 설정이 정본이다")
+    ap.add_argument("--recipe-mix", default="steady2", metavar="NAME|JSON",
+                    help="실시간 합성의 **창 층** 레시피 믹스. `cache_v32.sbatch` 와 같은 기본값")
+    ap.add_argument("--smps-focus-off-p", type=float, default=0.4, metavar="P",
+                    help="실시간 합성의 SMPS 집중 창 비율. `cache_v32.sbatch` 와 같은 기본값")
     ap.add_argument("--cache", default="cache/train60",
                     help="학습 캐시 경로. 'none' 이면 실시간 합성 (12.8.2절 참조)")
     ap.add_argument("--zero-wide-channels", default="", metavar="LIST",
@@ -545,7 +581,9 @@ def main() -> int:
         dl = None
     else:
         print(f"학습 데이터: 실시간 합성 (워커 {a.workers}) — 창 재사용 0")
-        dl = DataLoader(SynthBatchDataset(n_batches, a.batch, a.seed), batch_size=None,
+        dl = DataLoader(SynthBatchDataset(n_batches, a.batch, a.seed,
+                                          gen_spec=a.gen, recipe_mix=a.recipe_mix,
+                                          smps_focus_off_p=a.smps_focus_off_p), batch_size=None,
                         num_workers=a.workers, persistent_workers=a.workers > 0,
                         prefetch_factor=2 if a.workers else None,
                         pin_memory=(dev == "cuda"))
