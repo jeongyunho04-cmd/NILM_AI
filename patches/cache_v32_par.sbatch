@@ -42,8 +42,11 @@ echo "노드 $(hostname) · 토막 ${SLURM_ARRAY_TASK_ID}/${NSHARD} · 코어 ${
 $PY -X utf8 -m src.run_build_traincache --help | grep -q -- "--shard" || {
   echo "run_build_traincache 에 --shard 가 없다 — 코드를 안 올렸다"; exit 1; }
 test -f src/run_merge_traincache.py || { echo "run_merge_traincache.py 가 없다"; exit 1; }
-USED=$(/usr/lpp/mmfs/bin/mmlsquota --block-size auto 2>/dev/null | awk '/gpfs/{print $3}' | tr -d 'G')
-echo "쿼터 사용 ${USED:-?}G / 소프트 100G — 이 굽기가 토막당 ~12G 를 쓴다"
+# ⚠⚠ **여기에 `mmlsquota` 를 넣지 마라** (HPC_RULES §7-5). 980495 가 **네 번째**로 그렇게
+#   죽었다 (앞의 셋: 969002 · 969137 · 969590). `set -euo pipefail` 아래에서 계산 노드의
+#   GPFS 데몬이 무응답이면 그 대입문 하나가 **종료코드 50** 으로 작업을 죽인다 —
+#   `2>/dev/null` 도 `${USED:-?}` 도 소용없다. 죽는 것은 대입문 자체다.
+#   **쿼터는 제출 전에 로그인 노드에서 본다.** 이 굽기는 토막당 약 12GB 를 쓴다.
 
 # ── 굽기: 전체 기준값은 **양쪽 같게**, 토막만 다르게 ───────────────────────
 #   `cache_v32.sbatch` 와 같은 값 (= genopts.V32 + 창 층 둘)
