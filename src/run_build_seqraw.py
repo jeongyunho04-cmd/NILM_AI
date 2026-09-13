@@ -31,7 +31,7 @@ if sys.platform == "win32":
 from src import env_guard  # noqa: F401
 
 from src.model.inputs import VOLT_ORDERS
-from src.synthesis.sequence import DUTY_CLOSE_S, _close_gaps, make_record, to_raw45
+from src.synthesis.sequence import DUTY_CLOSE_S, MIXES, _close_gaps, make_record, to_raw45
 
 FS = 60
 W_CYC = 3600
@@ -42,7 +42,7 @@ PRE = 13
 _G = {}
 
 
-def _init(npz_dir, split, gen_json):
+def _init(npz_dir, split, gen_json, mix_name="seq"):
     from src.synthesis.genopts import build_synthesizer, check, resolve
     opts = resolve(gen_json)
     gen = build_synthesizer(opts, npz_dir, split)
@@ -51,6 +51,10 @@ def _init(npz_dir, split, gen_json):
         raise SystemExit("[seqraw] 생성기 설정이 안 걸렸다: " + " / ".join(bad))
     _G["gen"] = gen
     _G["apps"] = sorted(gen.known_appliances)
+    # ⚠ 워커는 spawn 이라 전역을 안 물려받는다 — 판 이름을 넘겨 여기서 고른다 (13.84.39).
+    if mix_name not in MIXES:
+        raise SystemExit("[seqraw] 모르는 mix: %r" % mix_name)
+    _G["mix"] = MIXES[mix_name]
 
 
 def _one(args):
@@ -62,7 +66,7 @@ def _one(args):
     from src.synthesis.dataset import chunk_seed
     sd = chunk_seed(seed, i)
     np.random.seed(sd)
-    smp = make_record(gen, n_cyc, np.random.RandomState(sd))
+    smp = make_record(gen, n_cyc, np.random.RandomState(sd), probs=_G["mix"])
     raw = to_raw45(smp, VOLT_ORDERS)
     g = int(DUTY_CLOSE_S * FS)
     K = len(apps)
@@ -97,6 +101,9 @@ def main():
     ap.add_argument("--grid-s", type=float, default=2.0)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--mix", default="seq", choices=sorted(MIXES),
+                    help="기록당 기기 포함 확률 판. 'hp' 는 저항 기기 넷을 올려 "
+                         "고전력 노출을 창 캐시 수준으로 되돌린다 (13.84.39)")
     ap.add_argument("--npz-dir", default="processed_data/npz")
     ap.add_argument("--split", default="train")
     ap.add_argument("--gen", default="v36",
@@ -136,7 +143,7 @@ def main():
     ctx = mp.get_context("spawn")
     import json as _json
     with ctx.Pool(a.workers, initializer=_init,
-                  initargs=(a.npz_dir, a.split, _json.dumps(gen_opts))) as pool:
+                  initargs=(a.npz_dir, a.split, _json.dumps(gen_opts), a.mix)) as pool:
         for done, r in enumerate(pool.imap_unordered(_one, tasks, chunksize=4), 1):
             i, raw, y_on, y_pow, y_plg, y_sb, y_st, oh, pn, po, zg = r
             mm["raw"][i] = raw
@@ -154,7 +161,7 @@ def main():
                 print("  %d/%d  (%.2f초/기록, 남은 %.0f분)"
                       % (done, a.records, el / done, (a.records - done) * el / done / 60),
                       flush=True)
-    meta = dict(records=a.records, record_s=a.record_s, grid_s=a.grid_s, steps=T,
+    meta = dict(records=a.records, record_s=a.record_s, grid_s=a.grid_s, steps=T, mix=a.mix,
                 appliances=apps, seed=a.seed, window_cycles=W_CYC,
                 target_lookahead=LOOK, target_offset=TGT_OFF,
                 duty_close_s=DUTY_CLOSE_S, gen=a.gen, gen_opts=gen_opts, grid=[int(x) for x in grid[:3]] + ["..."],
