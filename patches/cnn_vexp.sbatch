@@ -75,15 +75,16 @@ import sys
 sys.path.insert(0, '.')
 from src import env_guard
 import torch
-from src.model.net import NILMNet, V_EXP
+from src.model.net import NILMNet, V_EXP, appliance_state_counts
 from src.run_baseline import S_I
-from src.model.traincache import appliance_state_counts
 apps = sorted(S_I)
 off = NILMNet(apps, appliance_state_counts(apps), vexp=False)
 on = NILMNet(apps, appliance_state_counts(apps), vexp=True)
 if float(off.v_exp.abs().sum()) != 0.0: sys.exit('끈 판의 v_exp 가 0 이 아니다')
 want = [V_EXP.get(x, 0.0) for x in apps]
-if [float(x) for x in on.v_exp] != want: sys.exit('켠 판의 v_exp 가 V_EXP 와 다르다')
+# ⚠ float32 라 **정확한 등호를 쓰지 마라** — 0.6 이 0.60000002 로 들어간다.
+if max(abs(float(x) - y) for x, y in zip(on.v_exp, want)) > 1e-5:
+    sys.exit('켠 판의 v_exp 가 V_EXP 와 다르다')
 print('관문: v_exp 버퍼 %s' % ' '.join('%.1f' % x for x in on.v_exp))
 "
 
