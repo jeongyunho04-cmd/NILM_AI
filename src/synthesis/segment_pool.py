@@ -158,9 +158,16 @@ class SegmentPool:
         ablate_pedestal_apps: Optional[Sequence[str]] = None,
         carrier_apps: Optional[Sequence[str]] = None,
         standby_jitter_cap_pct: Optional[float] = None,
+        standby_per_record: bool = False,
     ):
         """
         Args:
+            standby_per_record: 대기 지문을 기기당 하나로 평균하지 않고 **녹화별로** 남겨 두었다가
+                기록마다 하나를 뽑는다 (13.84.40). 실측에서 전부-OFF 배경의 파일 간 편차 중
+                꽂힌 기기 대기로 설명되는 몫을 빼고 남는 것이 h9~h15 에서 4.7~7.0mA 인데
+                지금 합성은 1.3~1.5mA 밖에 안 준다. 녹화별로 바꾸면 2.2~3.6mA 가 되어
+                `--bg-head` 가 맡을 **미모형 세션 배경**이 처음으로 생긴다.
+                ⚠ 꺼져 있으면 난수를 한 번도 안 건드린다 — 옛 캐시와 비트 동일이어야 한다.
             standby_jitter_cap_pct: 대기 잔차 풀의 차수별 크기 상한 백분위 (13.83.26). None 이면 옛 경로.
                 대기 잔차 풀은 중앙값은 0~2mA 로 조용한데 p99 가 충전기 16·미니PC 18·에어컨 23mA 로
                 뾰족하다(OFF 구간 가장자리 과도). 꽂힌 기기 5~6개의 풀을 이어 붙이면 합성 배경층의
@@ -217,8 +224,13 @@ class SegmentPool:
         self.carrier_apps = set(carrier_apps or ())
         self.standby_jitter_cap_pct = (None if standby_jitter_cap_pct is None or float(standby_jitter_cap_pct) <= 0
                                        else float(standby_jitter_cap_pct))
+        self.standby_per_record = bool(standby_per_record)
         self.appliance_activations: Dict[str, List[ApplianceActivation]] = {}
         self.standby_profiles: Dict[str, StandbyProfile] = {}
+        #: 녹화별 대기 지문 (13.84.40). `standby_per_record` 가 켜져야 쓰인다.
+        self.standby_profiles_all: Dict[str, List[StandbyProfile]] = {}
+        #: 이번 기록에서 고른 녹화 색인. `new_record()` 가 비운다.
+        self._standby_pick: Dict[str, int] = {}
         self.noise_references: Dict[str, NoiseReference] = {}
         self.rejected_files: List[Tuple[str, str]] = []  # (파일명, 거부 사유)
         # 주기 부하의 통전 반복 주기 (시작-시작 간격, 사이클). 조리 세션 재구성에 쓴다.
@@ -381,8 +393,10 @@ class SegmentPool:
             )
 
         # 같은 가전 종류의 여러 파일에서 나온 대기 지문을 합친다.
+        # ⚠ 합친 것이 **기본**이다. 녹화별 원본은 따로 남겨 `standby_per_record` 만 쓴다 (13.84.40).
         for app, profiles in raw_standby.items():
             self.standby_profiles[app] = self._merge_standby_profiles(app, profiles)
+            self.standby_profiles_all[app] = list(profiles)
 
         self._build_legacy_noise_view()
 
@@ -827,8 +841,33 @@ class SegmentPool:
             return acts[int(np.random.randint(0, len(acts)))]
         return acts[int(np.random.choice(len(acts), p=w / total))]
 
+    def new_record(self) -> None:
+        """기록(=세션) 하나가 시작된다 — 대기 지문을 다시 뽑는다 (13.84.40).
+
+        ⚠ `standby_per_record` 가 꺼져 있으면 **아무것도 하지 않는다**. 난수도 안 건드린다.
+        추첨은 `get_standby_profile` 이 처음 불릴 때 게으르게 한다 — 그래야 그 기록에
+        실제로 꽂힌 기기만 난수를 먹고, 기기 수가 달라도 흐름이 어긋나지 않는다.
+        """
+        if self.standby_per_record:
+            self._standby_pick = {}
+
     def get_standby_profile(self, appliance_type: str) -> StandbyProfile:
-        """가전의 대기 전기 지문을 반환한다 (없으면 0 대기전력)."""
+        """가전의 대기 전기 지문을 반환한다 (없으면 0 대기전력).
+
+        `standby_per_record` 면 이 기록에서 뽑은 **녹화 하나**의 지문을 준다. 같은 기록 안에서는
+        `sample_standby_series` 까지 같은 것을 보도록 고른 색인을 기억한다.
+        """
+        if self.standby_per_record:
+            alts = self.standby_profiles_all.get(appliance_type)
+            if alts:
+                j = self._standby_pick.get(appliance_type)
+                if j is None:
+                    # 표본 수 가중 — 합친 지문과 **같은 기댓값**이라 평균은 안 옮긴다.
+                    w = np.array([p.sample_count for p in alts], dtype=np.float64)
+                    j = (0 if len(alts) == 1 else
+                         int(np.random.choice(len(alts), p=w / w.sum())))
+                    self._standby_pick[appliance_type] = j
+                return alts[j]
         if appliance_type in self.standby_profiles:
             return self.standby_profiles[appliance_type]
         return StandbyProfile(

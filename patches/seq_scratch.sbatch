@@ -115,6 +115,9 @@ wait $B || RC=1
 
 echo "=== A: v37 이어학습 ==="; tail -20 "results/seq_v37_s${SEED}.log"
 echo "=== B: 처음부터 ===";    tail -20 "results/seq_scratch_s${SEED}.log"
-$MM --block-size auto | tail -2
+# ⚠⚠ 끝단에서 mmlsquota 를 부르지 않는다 — 969137·969590 이 바로 이 한 줄 때문에
+# FAILED 로 찍혔다 (계산은 멀쩡히 끝나고 체크포인트도 다 저장된 뒤였다).
+# 노드의 GPFS 데몬이 작업 끝 무렵 무응답이 되면 `|| echo` 로 감싸도 그 뒤 줄의 기록이 안 남는다.
+# 쿼터는 로그인 노드에서 따로 본다 (HPC_RULES §7-5).
 echo "끝 $(date '+%F %H:%M:%S') · rc=$RC"
 exit $RC

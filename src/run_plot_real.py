@@ -66,12 +66,29 @@ def _font():
 def load_model(ckpt: str, dev: str):
     ck = torch.load(ckpt, map_location=dev, weights_only=False)
     apps = ck["appliances"]
-    m = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0),
-                prior_kappa=ck.get("prior_kappa", 0.0),
-                prior_beta=ck.get("prior_beta", 0.5),
-                aux_z=ck.get("aux_z", False),
-                fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
-    m.load_state_dict(ck["model"]); m.eval()
+    # ── 시퀀스 체크포인트도 받는다 (13.84.74) ─────────────────────────────────
+    # 이 도구는 CNN 시절 것이라 **구조를 체크포인트에서 안 읽는다** (세밀 38채널 고정).
+    # 시퀀스 판(13.84.26~)은 몸통만 담고 구조·가림은 `ref` 가 가리키는 판에 있다 —
+    # `run_gate_check.load_model` 이 그 규약을 안다. 옛 CNN 판은 `heads` 키가 없으므로
+    # 아래 옛 경로를 그대로 탄다 (**비트 단위로 같다**).
+    if "heads" in ck:
+        from src.run_gate_check import load_model as _lm
+        m = _lm(ck.get("ref", "results/cnn_v37.pt"), dev, weights=False,
+                mask=not bool(ck.get("no_mask", False)),
+                proj_from={k: ck[k] for k in
+                           ("proj", "proj_cap", "proj_floor", "proj_resp",
+                            "appl_attn", "appl_attn_heads") if k in ck})[0]
+        m.load_state_dict(ck["model"]); m.eval()
+        return m, apps, ck
+    # ⚠⚠ **2026-09-13 고침 — 여기가 `zero_channels` 를 안 읽었다.**
+    #   옛 갈래가 `NILMNet` 을 직접 지어서 **가림 훅이 안 붙었다.** 그래서 `cnn_v37`
+    #   처럼 가림이 있는 판은 그림에서 **학습 때 0 이던 채널에 실제 값**을 받았다 —
+    #   본 적 없는 입력이다 (13.80.10: *"v35 를 안 가리고 채점하면 0.929 -> 0.856"*).
+    #   증상: 같은 파일에서 그림 잔차 82.1W 대 채점기 40.7W 로 **2배**가 어긋났다.
+    #   v36 은 가림이 없어 멀쩡했고 **v37 에서만** 틀려, 두 판 비교가 통째로 뒤집혔다.
+    #   `run_gate_check.load_model` 이 그 규약(구조·가림·site_transfer)을 다 안다.
+    from src.run_gate_check import load_model as _lm
+    m = _lm(ckpt, dev)[0]
     return m, apps, ck
 
 

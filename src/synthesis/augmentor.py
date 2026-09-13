@@ -203,6 +203,9 @@ STEADY_CROP_PRESETS: Dict[str, Dict[str, dict]] = {
 # 형제 크기를 (1±a) 로 흔들면 총전류가 |I_h^sib|·a 만큼 흔들리므로 **3σ <= r** 를 폭의 상한으로 삼는다.
 # 아래 값은 h3 에서 3σ/r = 0.20, h9 0.60, h15 1.27 이다 — 고차에서만 미니PC 기여와 같은 크기다
 # (그 차수는 v35 가 이미 가려 쓰고 있었다). 위상은 h>=9 에서 **통째로** 뒤섞는다 — 그 축을 없애는 것이 목적이다.
+#: 표류 기저 기본 경로 — `run_build_drift.py` 가 형제 녹화로만 만든다 (13.84.52)
+DRIFT_BASIS = "results/drift_basis.npz"
+
 SIBLING_ROTATE_PRESETS: Dict[str, Dict[str, dict]] = {
     "smps_rot10": {"laptop_charger": {"p": 1.0, "c_max": 10.0},
                    "beam_projector": {"p": 1.0, "c_max": 10.0}},
@@ -210,7 +213,86 @@ SIBLING_ROTATE_PRESETS: Dict[str, Dict[str, dict]] = {
                       "tilt_lo": 0.85, "tilt_hi": 1.18,
                       "dither_from": 9, "dith_lo": 0.88, "dith_hi": 1.12}
                   for a in ("laptop_charger", "beam_projector")},
+    # ── 13.84.49 — 폭을 **실측에 맞춘다**. `smps_dev1` 의 반성이다 ────────────
+    # 13.84.48 이 격리 녹화에서 잰 충전기 **녹화 간** 상대위상 표준편차 (도):
+    #     h5 2.4 · h9 4.1 · h11 5.3 · h13 7.5 · h15 13.6
+    # 이것은 차수 비례 회전 θ_h += c·h 의 모양 그대로이고 c ≈ 0.5°/h 다 —
+    # 13.84.8 이 고른 **모형은 맞았고 폭만 12~42배 넓었다** (`run_gate_phase.py`).
+    # 그리고 h>=9 뒤섞기는 그 축을 통째로 지웠는데, 13.84.48 이 보인 대로 그 축은
+    # 합성이 못 만드는 잡음이 아니라 **충전기와 미니PC 를 LORO AUC 1.000 으로 가르는 신호**다.
+    #   ① 회전 c_max 10.0 -> **0.9** (관문이 실측의 0.7~1.2배로 확인)
+    #   ② `scramble_from` **제거**
+    #   ③ 크기 항(tilt·dither)은 그대로 — 크기는 실측 녹화 간 CV 가 실제로 24~35% 다
+    # ⚠ 이 프리셋으로 구운 캐시에서만 `--no-mask` 가 뜻을 갖는다 (13.84.37 은 위상이
+    #   뒤섞인 캐시에서 가림만 풀어 아무 일도 안 일어났다).
+    "smps_dev2": {a: {"p": 1.0, "c_max": 0.9,
+                      "tilt_lo": 0.85, "tilt_hi": 1.18,
+                      "dither_from": 9, "dith_lo": 0.88, "dith_hi": 1.12}
+                  for a in ("laptop_charger", "beam_projector")},
+    # ── 13.84.61 — 모수를 버리고 **실측 표류 자체**를 넣는다 ──────────────────
+    # 위의 세 프리셋은 형제 지문 변동을 **임의로 모수화**한다 (차수 비례 회전 + 크기
+    # 기울기 + 고차 흔들기). 모양은 13.84.8 이 눈으로 고른 것이고 폭은 13.84.49 가
+    # 뒤늦게 맞췄다. 그런데 13.84.52·56·57 이 그 변동의 **실체**를 쟀다:
+    #   · 3차원이다 (94%). 회전 1개 + 기울기 1개 + 흔들기 7개 = 9자유도가 아니다
+    #   · 정체는 **동작점 응답**이다 — PC1 부하전력·PC2 계통 3차전압·PC3 계통전압크기
+    #   · 회로 야코비 span 안에 주각 0°/3°/13° 로 들어간다 (13.84.57)
+    # 그러면 모수를 지어낼 이유가 없다. `results/drift_basis.npz` 의 3차원 안에서
+    # **측정된 표준편차**로 뽑아 **더한다** (곱이 아니라 덧셈 — 표류는 암페어 단위 편차다).
+    #
+    # ⚠ 왜 손실이 아니라 생성기인가: 13.84.60 이 같은 부분공간을 `L_harm` 에서
+    #   **사영으로 지워** 봤고 졌다 — 표류 PC1 이 미니PC-형제 판별축과 24~25° 라
+    #   표류와 함께 판별력이 간다. 지울 수 없으면 **가르치는** 수밖에 없다.
+    # ⚠ 폭 상한 ([[augmentation-can-erase-the-discriminant]]): 표류 3σ 71.6mA 대
+    #   미니PC 신호 82.2mA = 0.87 인데 **차수별로는** h9 1.16 · h11 1.39 · h13 1.65 ·
+    #   h15 2.13 으로 1 을 넘는다. `smps_dev1` 이 빠진 바로 그 함정이다. 그래서
+    #   `drift_scale` 을 둔다 — 1.0 이 실측이고, **h15 까지 안전하려면 0.47** 이다.
+    #   실측 그대로가 정직하지만 모델이 미니PC 를 포기할 수 있다. 관문이 비를 찍는다.
+    # ⚠ h1 은 건드리지 않는다 (P 라벨·φ_h 기준). 기저의 h1 성분은 **잘라내고** 넣는다.
+    "smps_drift": {a: {"p": 1.0, "drift_k": 3, "drift_scale": 1.0,
+                       "tilt_lo": 0.85, "tilt_hi": 1.18,
+                       "dither_from": 9, "dith_lo": 0.88, "dith_hi": 1.12}
+                   for a in ("laptop_charger", "beam_projector")},
+    #: **순수판** — 곱셈 항(tilt·dither)을 빼고 표류만. 13.84.61 의 관문이 잰 대로
+    #: tilt·dither 가 실측 표류 부분공간 **밖**으로 13.6% 를 내보내고 으뜸축을 미니PC 쪽으로
+    #: 17° 당긴다 (실측 89° -> 72°). 다만 그 둘이 모형하던 **녹화 간** 크기 산포(CV 24~35%)
+    #: 는 여기서 사라진다 — 표류(녹화 **안**)와 다른 양이다. 둘 다 실재하므로 A/B 로 가른다.
+    "smps_driftp": {a: {"p": 1.0, "drift_k": 3, "drift_scale": 1.0}
+                    for a in ("laptop_charger", "beam_projector")},
+    #: 폭을 차수별 상한 아래로 낮춘 판 (h15 에서 3σ/미니PC = 1.0)
+    "smps_drift47": {a: {"p": 1.0, "drift_k": 3, "drift_scale": 0.47,
+                         "tilt_lo": 0.85, "tilt_hi": 1.18,
+                         "dither_from": 9, "dith_lo": 0.88, "dith_hi": 1.12}
+                     for a in ("laptop_charger", "beam_projector")},
 }
+
+#: 표류 기저 캐시 — 한 번만 읽는다. (V(k,2Ho) 를 h1 뺀 nh차 복소 기저로 편 것, 성분 표준편차)
+_DRIFT_CACHE: Dict[str, tuple] = {}
+
+
+def _drift_dirs(path: str, k: int, nh: int):
+    """`run_build_drift.py` 기저 -> (k, nh) complex 방향과 (k,) 성분 표준편차.
+
+    ⚠ **h1 성분은 0 으로 잘라낸다.** 기본파를 건드리면 전력 라벨과 φ_h 기준이 움직인다
+      (이 모듈의 다른 항이 전부 h1 을 정확히 불변으로 두는 것과 같은 이유다).
+    ⚠ 표준편차는 기저를 만든 그 표류 표본에서 잰 값이고 `drift_basis.npz` 에 같이 들어 있다.
+      없으면 13.84.61 이 잰 값(PC1 17.4 · PC2 14.5 · PC3 7.5 mA)을 쓴다.
+    """
+    key = "%s|%d|%d" % (path, k, nh)
+    if key in _DRIFT_CACHE:
+        return _DRIFT_CACHE[key]
+    B = np.load(path, allow_pickle=True)
+    V = np.asarray(B["V"], np.float64)[:k]
+    ordr = [int(x) for x in B["orders"]]
+    ho = len(ordr)
+    sd = (np.asarray(B["comp_sd"], np.float64)[:k] if "comp_sd" in B.files
+          else np.array([0.0174, 0.0145, 0.0075])[:k])
+    out = np.zeros((k, nh), np.complex128)
+    for i, o in enumerate(ordr):
+        if o == 1 or o > nh:                       # h1 은 잘라낸다
+            continue
+        out[:, o - 1] = V[:, i] + 1j * V[:, i + ho]
+    _DRIFT_CACHE[key] = (out, sd)
+    return out, sd
 
 
 class DataAugmentor:
@@ -523,8 +605,9 @@ class DataAugmentor:
     def _apply_sibling_rotate(self, appliance_type: str, aug_c: np.ndarray) -> np.ndarray:
         """형제 전용 편차. **활성화당 1회** 뽑아 그 활성화 전체에 건다 (13.84.8 ② · 13.84.16).
 
-        네 항을 순서대로 곱한다 — 회전 θ_h += c·h, h>=`scramble_from` 위상 뒤섞기,
-        매끄러운 크기 기울기 t^((h−1)/(H−1)), h>=`dither_from` 독립 크기 배율.
+        네 항을 순서대로 곱하고, 다섯째는 **더한다** — 회전 θ_h += c·h,
+        h>=`scramble_from` 위상 뒤섞기, 매끄러운 크기 기울기 t^((h−1)/(H−1)),
+        h>=`dither_from` 독립 크기 배율, 그리고 `drift_scale`>0 이면 **실측 표류**(13.84.61).
         **h1 은 크기·위상 모두 정확히 불변**이다 (P 라벨과 φ_h 기준).
         `SIBLING_ROTATE_PRESETS` 주석에 근거가 있다. 목록에 없는 기기는 난수를 안 쓴다 (항등).
         """
@@ -561,7 +644,17 @@ class DataAugmentor:
         phase[0] = 0.0                                  # 기본파는 크기·위상 모두 그대로
         gain[0] = 1.0
         fac = (gain * np.exp(1j * phase)).astype(np.complex64)
-        return (aug_c * fac[np.newaxis, :]).astype(aug_c.dtype)
+        out = (aug_c * fac[np.newaxis, :]).astype(aug_c.dtype)
+
+        # ⑤ 실측 표류 주입 (13.84.61) — 곱이 아니라 **덧셈**이다
+        ds = float(cfg.get("drift_scale", 0.0))
+        if ds > 0:
+            V, sd = _drift_dirs(str(cfg.get("drift_basis", DRIFT_BASIS)),
+                                int(cfg.get("drift_k", 3)), nh)
+            # 2σ 에서 자른다 — 꼬리가 미니PC 를 묻는 쪽이라 재표집이 아니라 자르기다
+            a = np.clip(np.random.standard_normal(len(sd)), -2.0, 2.0) * sd * ds
+            out = (out + (a @ V).astype(np.complex64)[np.newaxis, :]).astype(aug_c.dtype)
+        return out
 
     def _apply_harmonic_dither(self, aug_c: np.ndarray) -> np.ndarray:
         """차수별 독립 지터. **활성화당 1회** 뽑아 그 활성화 전체에 건다.

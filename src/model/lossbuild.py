@@ -35,9 +35,12 @@ def build_loss(apps: Sequence[str], dev: str, *,
                gate_focal: float = 0.0,
                harm_grad_balance: str = "off",
                per_state_scale: bool = True,
+               drift_basis: str = "",
+               drift_k: int = 1,
                weights: Optional[LossWeights] = None,
                verbose: bool = True) -> NILMLoss:
     """`run_train_cnn` 과 같은 `NILMLoss` 를 만든다."""
+
     from src.synthesis.segment_pool import SegmentPool
     pool = SegmentPool(npz_dir=npz_dir, time_split=time_split)
     sig = harmonic_signatures(pool, apps)
@@ -62,6 +65,9 @@ def build_loss(apps: Sequence[str], dev: str, *,
         if verbose:
             print("  ** 상시 배경 (12.166): +%.2fW **" % background_power())
     h_scale = harmonic_scales(pool, apps)
+    dproj = None
+    if drift_basis and drift_k > 0:
+        dproj = build_drift_proj(drift_basis, drift_k, len(h_scale), verbose=verbose)
     pow_gain = pow_edges = None
     if power_signatures:
         pow_gain, pow_edges, pow_used = harmonic_signatures_by_power(
@@ -83,6 +89,7 @@ def build_loss(apps: Sequence[str], dev: str, *,
         noise_sig=torch.from_numpy(nz_sig),
         harm_scale=torch.from_numpy(h_scale),
         harm_odd_only=harm_odd_only,
+        drift_proj=dproj,
         off_detach_praw=off_detach_praw,
         signatures_state=(torch.from_numpy(sig_state) if state_signatures else None),
         power_gain=(torch.from_numpy(pow_gain) if pow_gain is not None else None),
@@ -97,3 +104,36 @@ def build_loss(apps: Sequence[str], dev: str, *,
         weights=weights or LossWeights(),
         s_state=(build_state_scales(apps, [S_I[x] for x in apps]) if per_state_scale else None),
     ).to(dev)
+
+
+def build_drift_proj(path: str, k: int, n_ord: int, verbose: bool = True) -> torch.Tensor:
+    """`run_build_drift.py` 가 굳힌 기저 -> `L_harm` 용 (2H,2H) 사영 `I − VᵀV` (13.84.60).
+
+    기저는 홀수차 일부(보통 h1~h15 의 8개)에만 있다. 나머지 차수는 **항등**으로 둔다 —
+    그래야 사영을 꺼도 켜도 그 차수들이 비트 단위로 같다.
+
+    레이아웃은 `run_diag_driftdim.vec()` 과 같아야 한다: 앞 Ho 개가 Re, 뒤 Ho 개가 Im,
+    차수 순서는 npz 의 `orders` 다. 여기서 (2H,2H) 로 펼 때 그 자리를 정확히 맞춘다.
+    """
+    B = np.load(path, allow_pickle=True)
+    V = np.asarray(B["V"], np.float64)[:k]                       # (k, 2Ho)
+    ordr = [int(x) for x in B["orders"]]
+    ho = len(ordr)
+    if V.shape[1] != 2 * ho:
+        raise ValueError("기저 모양 %s 가 차수 %d개와 안 맞는다" % (V.shape, ho))
+    # 정규직교인지 확인한다 — 아니면 I−VᵀV 가 사영이 아니다
+    g = V @ V.T
+    if not np.allclose(g, np.eye(k), atol=1e-6):
+        raise ValueError("기저가 정규직교가 아니다 (VVᵀ 최대 이탈 %.2e)"
+                         % np.abs(g - np.eye(k)).max())
+    idx = [o - 1 for o in ordr]
+    if max(idx) >= n_ord:
+        raise ValueError("기저 차수 %s 가 손실의 %d차를 넘는다" % (ordr, n_ord))
+    full = np.zeros((k, 2 * n_ord))
+    full[:, idx] = V[:, :ho]                                     # Re
+    full[:, [i + n_ord for i in idx]] = V[:, ho:]                # Im
+    P = np.eye(2 * n_ord) - full.T @ full
+    if verbose:
+        print("  ** 고정 표류 사영 (13.84.60): %s k=%d · 차수 %s · 버리는 차원 %d/%d **"
+              % (path, k, ordr, k, 2 * n_ord))
+    return torch.from_numpy(P.astype(np.float32))

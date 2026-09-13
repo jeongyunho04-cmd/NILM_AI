@@ -68,7 +68,20 @@ S_STATE: Dict[str, Dict[int, float]] = {
     "electiric_kettle": {1: 1534.5},
     "fan": {1: 23.2, 2: 31.1, 3: 39.7},
     "hair_dryer": {1: 529.2, 2: 1022.5},
-    "hotplate": {1: 549.6},
+    # ⚠⚠ **2026-09-12 정정 (13.92) — 슬롯이 어긋나 있었다.**
+    #   옛값 `{1: 549.6}` 은 **통전 전력을 휴지 상태(state 1)에 얹고**, 실제 통전
+    #   상태(state 2)는 **정의조차 없었다**. 라벨 쪽 실측:
+    #       녹화 hotplate_1/2   state 1 ARMED_IDLE     2.0 W
+    #                          state 2 HEATING_ACTIVE 456 W
+    #       세그먼트 풀        state 1 0.0 W · state 2 454.7 W (p90 457.9)
+    #   오븐은 `{1: 16.8, 2: 1357.1}` 로 슬롯이 맞다 (FAN_LIGHT 16.2 · HEATING 1108).
+    #   증상: `state_power_init` 이 **휴지 슬롯을 549.6W 로** 띄우고 통전 슬롯은
+    #   안 띄웠다. cnn_v37 의 핫플 `p_states` 가 [0, **241**, 424, 0, 3] 로, 휴지
+    #   슬롯이 241W 에 떠 있다 (오븐은 [2, 13, 1080, ...] 로 깨끗하다).
+    #   고침은 **숫자를 다시 재는 것이 아니라 슬롯을 옮기는 것**이다 — 549.6 을
+    #   그대로 2번으로 보낸다. (풀 p90 은 457.9 라 549.6 이 ~20% 높은데, 오븐도
+    #   1357 대 1117 로 같은 정도 높다. 측정 관례가 달라서지 슬롯 문제와 별개다.)
+    "hotplate": {1: MIN_STATE_SCALE_W, 2: 549.6},
     "laptop_charger": {1: 36.4, 2: 68.0},
     "minipc": {1: 10.7, 2: 25.0},
     "oven": {1: 16.8, 2: 1357.1},
@@ -147,6 +160,7 @@ class NILMLoss(torch.nn.Module):
         harm_grad_balance: str = "off",             # off | smps | all  (12.120)
         smps_group: Optional[Sequence[int]] = None,  # SMPS 열 인덱스
         harm_deadzone: float = 0.0,                 # L_harm 불감대 배수 (12.122.16)
+        drift_proj: Optional[torch.Tensor] = None,  # (2H,2H) 고정 표류 사영 I−VᵀV (13.84.60)
         harm_weight: str = "off",                   # 차수별 신뢰도 가중 (12.135)
         reactive_qp: Optional[torch.Tensor] = None,  # (K,) 기기별 Q/P (12.133)
         noise_q: float = 0.0,                        # 계측계 무효전력 (VAR)
@@ -190,6 +204,20 @@ class NILMLoss(torch.nn.Module):
                              else torch.zeros(h, 2))
         self.register_buffer("harm_scale", harm_scale if harm_scale is not None
                              else torch.ones(h))
+        # ── 고정 표류 사영 (13.84.60 = 13.84.52 ⓐ) ────────────────────────
+        # 13.84.56~57 이 잰 것: 형제 지문 표류는 **동작점의 함수**이고 실효 3차원이다.
+        # 그 방향의 오차는 **배분과 무관한 순방향 모형 오차**인데 `L_harm` 이 그것도
+        # 줄이라고 밀면 기기 전력으로 흡수된다 (101행의 경고와 같은 구조다).
+        # 여기서는 **파일별 추정도 신탁도 없이** 한 번 굳힌 행렬 하나로 그 방향을 깎는다.
+        #
+        # ⚠ 사영은 `harm_scale` 로 나누기 **전에** 건다. 기저는 암페어 공간에서
+        #   (`run_build_drift.py`) 만들었으므로 같은 공간에서 사영해야 직교가 직교다.
+        # ⚠ k 를 키우면 미니PC 신호도 같이 버린다. 채점 시점 보정(13.84.53)은 부분공간
+        #   **안에서 값을 추정해 빼는** 것이라 k=3 을 감당하지만, 이 고정 사영은 그
+        #   부분공간을 **통째로 버린다.** k=1 이 미니PC −0.5% · 표류 −44% 이고,
+        #   k=3 은 미니PC 를 **−38.7%** 버린다. 기본은 k=1 이다.
+        self.register_buffer("drift_proj", drift_proj if drift_proj is not None
+                             else torch.zeros(0))
         # ── 전력 사전 (12.145) — 격리 녹화에서 통전 전력이 좁은 기기만 ──────
         # `power_ref.REFERENCE_W` 의 값이고 **사람 라벨이 아니다** (기기를 한 번
         # 따로 녹화한 상수). 모르는 기기는 0 이라 항에서 빠진다.
@@ -529,9 +557,18 @@ class NILMLoss(torch.nn.Module):
         핫플(0.60)·드라이기(0.54)는 짝수차 위상이 기기 속성이다. `w_coh` 를 주면
         그 몫만큼 복소 오차를 되살린다.
         """
-        err = (pred - obs).abs() / self.harm_scale[None, :, None]
+        d = pred - obs
+        if self.drift_proj.numel():
+            # (B,H,2) -> (B,2H) [Re 전부, Im 전부] -> 사영 -> 되돌린다.
+            # 행렬은 표류 차수 밖에서 항등이라 짝수차·비대상 차수는 **비트 그대로**다.
+            H = d.shape[1]
+            v = torch.cat([d[..., 0], d[..., 1]], dim=1) @ self.drift_proj
+            d = torch.stack([v[:, :H], v[:, H:]], dim=-1)
+        err = d.abs() / self.harm_scale[None, :, None]
         if not self.harm_even_mag:
             return err
+        # 짝수차 크기 경로는 `pred`/`obs` 로 직접 재므로 사영이 안 닿는다 (의도한 것이다 —
+        # 표류 기저는 홀수차에서만 만들었다).
         pm = pred.pow(2).sum(-1).clamp(min=1e-18).sqrt()
         om = obs.pow(2).sum(-1).clamp(min=1e-18).sqrt()
         emag = ((pm - om).abs() / self.harm_scale[None, :] * 0.5)[..., None].expand_as(err)
@@ -591,6 +628,9 @@ class NILMLoss(torch.nn.Module):
                              2, idx[..., None]).squeeze(-1)                   # (B,K)
         else:
             s = self.s_i[None]
+        # 사영이 걸린 출력인가 (`net._project` 가 남기는 표식). `off_detach_praw` 가
+        # 그것을 조용히 지우는 것을 막는 데만 쓴다.
+        self._proj_seen = 1.0 if "proj_r" in out else 0.0
         parts: Dict[str, torch.Tensor] = {}
 
         # ── 꺼진 창은 `p_raw` 에 경사를 주지 않는다 (2026-09-06, 13.11) ──────────
@@ -610,6 +650,10 @@ class NILMLoss(torch.nn.Module):
         # 학습에만 걸린다 — 추론 경로도 저장되는 가중치의 뜻도 그대로다.
         if (self.off_detach_praw and tgt.get("y_on") is not None
                 and out.get("power_raw") is not None and out.get("on_logit") is not None):
+            if float(getattr(self, "_proj_seen", 0.0)) > 0:
+                raise ValueError(
+                    "off_detach_praw 와 사영(proj>0)은 같이 못 쓴다 — 여기서 "
+                    "out['power'] 을 다시 만들면 사영이 지워진다 (net._project 독스트링)")
             _pr = out["power_raw"]
             _on = tgt["y_on"] > 0.5
             out = dict(out)

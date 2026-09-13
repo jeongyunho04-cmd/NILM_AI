@@ -391,6 +391,10 @@ class LoadSynthesizer:
                 None 이면 생성자에서 정한 기본값을 따른다.
                 전력·상태 회귀만 학습한다면 False 로 두는 편이 낫다.
         """
+        # 기록(=세션) 하나의 시작. `standby_per_record` 일 때만 대기 지문을 다시 뽑는다
+        # (13.84.40). 꺼져 있으면 no-op 이라 난수 흐름이 옛날과 같다.
+        self.pool.new_record()
+
         N = int(total_duration_cycles)
         want_gt_harmonics = (
             self.compute_gt_harmonics if compute_gt_harmonics is None else bool(compute_gt_harmonics)

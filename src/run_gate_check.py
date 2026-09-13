@@ -109,7 +109,8 @@ def assert_target_config(ck: dict, ckpt_path: str) -> None:
             + chr(10) + "  (그 값으로 만든 캐시·홀드아웃도 함께 써야 합니다)")
 
 
-def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True):
+def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True,
+               state_power_init: bool = True, proj_from: dict = None):
     """`weights=False` 면 **구조·가림만** 체크포인트에서 가져오고 가중치는 새로 뽑는다 (13.84.27).
 
     처음부터 학습하는 판의 초기점이다. 이렇게 해야 두 판 사이에 바뀐 것이 **가중치 하나**다
@@ -119,6 +120,10 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     assert_target_config(ck, ckpt_path)
     apps = ck["appliances"]
+    # 시퀀스 체크포인트는 **구조를 `ref`(cnn_v37)에서** 가져오는데 사영 설정은 자기가
+    # 들고 있다. `proj_resp="head"` 는 `proj_head.*` 키를 만들므로 **`load_state_dict`
+    # 전에** 그 설정이 반영돼야 한다 — 안 그러면 "unexpected key" 로 죽는다.
+    pk = dict(ck) if proj_from is None else {**ck, **proj_from}
     model = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0),
                     wide_summary=ck.get("wide_summary", False),
                     wide_target=ck.get("wide_target", False),
@@ -127,6 +132,19 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
                     prior_kappa=ck.get("prior_kappa", 0.0),
                     prior_beta=ck.get("prior_beta", 0.5),
                     aux_z=ck.get("aux_z", False),
+                    # 13.84.68/70 — 상태 전력 슬롯을 잰 값에서 출발시킨다. `weights=True`
+                    # 면 곧바로 덮어써지므로 **물려받는 경로에는 영향이 없다**.
+                    # `weights=False`(처음부터 배우는 판)에서만 실제로 듣는다.
+                    state_power_init=state_power_init,
+                    # 합 정합성 사영 (계획 A, 14.3). 옛 체크포인트에는 키가 없어 0 이고,
+                    # 0 이면 `_project` 를 아예 안 부른다 -> **완전한 하위호환**이다.
+                    proj=pk.get("proj", 0.0),
+                    proj_cap=pk.get("proj_cap", 0.5),
+                    proj_floor=pk.get("proj_floor", 5.0),
+                    proj_resp=pk.get("proj_resp", "power"),
+                    # 기기 축 어텐션 (13.93). 없으면 0 이고 키 자체가 안 생긴다.
+                    appl_attn=pk.get("appl_attn", 0),
+                    appl_attn_heads=pk.get("appl_attn_heads", 4),
                     fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
     if weights:
         model.load_state_dict(ck["model"])

@@ -25,10 +25,18 @@
 #SBATCH -p gpu6,gpu5,gpu4,gpu3,gpu2
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -c 44
+# ⚠ 코어는 **첫 파티션 gpu6 의 QOS 상한 40** 에 맞춘다 (HPC_RULES §3).
+#   44 로 부르면 gpu6(25노드, 가장 큰 backfill 풀)에서 QOSMaxCpuPerNode 로 걸린다.
+#   4판 x 워커 8 + 주 프로세스 4 = 36 (여유 4). 판당 워커가 969137 의 14 보다 적어
+#   970310 에서 판당 **1,725~1,789 창/초** 로 실측됐다 — 2판x14 (3,381~3,418) 의 52% 다.
+#   그래도 노드 풀을 택한다 — §2 의 backfill 차이는 "1분 대 5일" 이라 처리량보다 크다.
+#SBATCH -c 40
 #SBATCH --gres=gpu:4
 #SBATCH --mem=240G
-#SBATCH -t 03:30:00
+# ⚠ 970310 이 이 모양으로 03:30 에 **초과**했다 (elapsed 03:30:16, epoch 11/12 에서 잘림).
+#   실측: 캐시 굽기 9.8분 + epoch 당 995초 x 12 = 3시간 19분 => 합 3시간 31분.
+#   4:00 은 13% 여유다. 더 줄이려면 판 수를 줄이든가 epoch 을 줄여야 한다.
+#SBATCH -t 04:00:00
 #SBATCH -o %x_%j.out
 #SBATCH -e %x_%j.out
 set -euo pipefail
@@ -52,6 +60,7 @@ trap cleanup EXIT
 $PY -X utf8 -m src.run_build_seqraw --help | grep -q -- "--gen"      || { echo "run_build_seqraw 에 --gen 이 없다 — 코드를 안 올렸다"; exit 1; }
 $PY -X utf8 -m src.run_train_seq    --help | grep -q -- "--pow-sig"  || { echo "run_train_seq 에 --pow-sig 가 없다 — 코드를 안 올렸다"; exit 1; }
 $PY -X utf8 -m src.run_train_seq    --help | grep -q -- "--bg-head"  || { echo "run_train_seq 에 --bg-head 가 없다 — 코드를 안 올렸다"; exit 1; }
+$PY -X utf8 -m src.run_train_seq    --help | grep -q -- "--keep-last" || { echo "run_train_seq 에 --keep-last 가 없다 — 코드를 안 올렸다"; exit 1; }
 test -f results/cnn_v37.pt || { echo "results/cnn_v37.pt 가 없다"; exit 1; }
 
 # 새 손실이 **실제로 달라지는지** 먼저 확인한다 ([[verify-the-gate-runs-that-path]]).
@@ -84,7 +93,7 @@ print('관문: 배경 머리 0 출발 · 상한 %.0f mA' % (1000 * bh.cap))
 
 # ── 램 자리 ─────────────────────────────────────────────────────────────────
 # 기록당 3.269MB (원시 45x18000x4 = 3.240 + 라벨 0.029).
-# ⚠ SLURM cgroup 이 /dev/shm 을 `--mem` 에 잡는다: 캐시 98GB + 워커 44개 + 주 프로세스 4판.
+# ⚠ SLURM cgroup 이 /dev/shm 을 `--mem` 에 잡는다: 캐시 98GB + 워커 32개 + 주 프로세스 4판.
 NEED=$(( RECORDS * 4 / 1000 ))
 FREE=$(df -BG /dev/shm | tail -1 | awk '{gsub("G","",$4); print $4}')
 echo "[램] /dev/shm 여유 ${FREE}GB · 필요 어림 ${NEED}GB"
@@ -111,8 +120,9 @@ cp "$SHM/meta.json" "results/seqraw_v2_meta.json"
 # ── ② 네 판을 동시에 ────────────────────────────────────────────────────────
 # 같은 캐시·같은 씨앗·같은 초기점·같은 예산. 바뀌는 것은 **손실 항 둘**뿐이다.
 COMMON="--cache $SHM --epochs $EPOCHS --seed $SEED --records-per-batch 6 --chunk 64 \
-        --workers 10 --vswap-p 0.5 --eval-every 1 --no-real --holdout-records 300 \
-        --init results/cnn_v37.pt --ref results/cnn_v37.pt --lr 1e-4"
+        --workers 8 --vswap-p 0.5 --eval-every 1 --no-real --holdout-records 300 \
+        --init results/cnn_v37.pt --ref results/cnn_v37.pt --lr 1e-4 \
+        --keep-last 4"
 
 CUDA_VISIBLE_DEVICES=0 $PY -X utf8 -m src.run_train_seq $COMMON                       --tag seq_h38_base > "results/seq_h38_base_s${SEED}.log" 2>&1 &
 A=$!

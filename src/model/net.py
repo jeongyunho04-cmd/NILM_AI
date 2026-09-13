@@ -130,6 +130,36 @@ class NILMNet(nn.Module):
         min_on_w: Optional[Sequence[float]] = None,
         fine_channels: Optional[int] = None,
         aux_z: bool = False,
+        #: 상태별 전력 슬롯을 `S_STATE` 의 잰 값에서 출발시킨다 (13.84.68). 학습된
+        #: 체크포인트는 `load_state_dict` 가 덮으므로 **영향 없다** — 새 판에만 듣는다.
+        #: `False` 로 두면 옛 초기화(전부 0)로 돌아간다.
+        state_power_init: bool = True,
+        # ── 합 정합성 사영 (계획 A, 14.3) ────────────────────────────────────
+        #: 사영 강도 [0,1]. **0 이면 정확히 지금과 같다** (`run_gate_proj.py` [1] 이 확인).
+        proj: float = 0.0,
+        #: `|r|` 을 관측 전력의 이 비율로 자른다 — 이상치 창이 배분을 독식하는 것을 막는다.
+        proj_cap: float = 0.5,
+        #: 책임 분모의 하한 (W). **이것이 로버스트 슬랙이다** — 아래 forward 주석 참조.
+        proj_floor: float = 5.0,
+        #: 책임 가중.
+        #:   `power`  매개변수를 안 늘린다 (Wisdom et al. 의 에너지 비례). 다만
+        #:            **창별 곱셈 재조정과 같다** — 크기만 고치고 배분은 못 옮긴다
+        #:            (13.87 [2] 측정. `_project` 독스트링 참조)
+        #:   `head`   `z` 에서 책임을 배운다. **배분을 옮길 수 있는 유일한 모드**다.
+        #:            ⚠ 새 키를 만든다 — 옛 체크포인트로 지으면 `load_state_dict` 가
+        #:            거부한다 (`aux_z` 와 같은 규약).
+        proj_resp: str = "power",
+        #: 계측계 바닥 잡음 (W). `file_registry` 의 1.4~2.4 중앙. 라벨이 아니라 상수라
+        #: **추론 때도 쓸 수 있다** — `L_cons` 가 쓰는 `tgt["p_noise"]` 와 다른 점이다.
+        proj_noise_w: float = 1.9,
+        # ── 기기 축 어텐션 (13.93) ───────────────────────────────────────────
+        #: 토큰 차원. **0 이면 완전히 꺼진다** (키 자체가 안 생긴다 — `aux_z` 규약).
+        #: 기기 9개를 토큰으로 놓고 자기어텐션을 건다. 시간 축이 아니라 **기기 축**이다:
+        #: 시간 문맥은 12.8(120초가 더 나쁨)·12.44 가 세 번 반증했고, 빠진 것은
+        #: FHMM 의 **기기 간 결합**이다 (13.84.74 [7] · 13.86).
+        appl_attn: int = 0,
+        #: 어텐션 머리 수. `appl_attn` 이 이것으로 나눠떨어져야 한다.
+        appl_attn_heads: int = 4,
     ):
         super().__init__()
         # 세밀 갈래가 실제로 쓸 채널 수. 입력은 항상 FINE_CHANNELS 개로 오지만
@@ -217,6 +247,30 @@ class NILMNet(nn.Module):
             # 눌려 수렴이 느려진다 (2.4절).
             with torch.no_grad():
                 hd.bias[self.i_on] = on_bias_init
+        # ── 상태별 전력 슬롯을 **잰 값 근처에서** 출발시킨다 (13.84.68) ────────
+        # 전력은 곱이다: `p_raw = Σ_s mix[s]·p_states[s]`, `p_states = softplus(·)`.
+        # 바이어스 0 에서 출발하면 모든 슬롯이 `softplus(0) = 0.69W` 인데 참값은
+        # 487~1456W 다. 혼합이 안 고르는 슬롯은 기울기가 `mix[s]·∂L/∂p_raw ≈ 0` 이라
+        # 못 오르고, 가중감쇠가 더 밀어내려 **음의 포화**로 간다. 거기서는
+        # `∂softplus/∂x ≈ e^x ≈ 0` 이라 나중에 혼합이 그 슬롯을 골라도 **못 살아난다.**
+        #
+        # 실제로 그렇게 죽었다: 드라이기 약풍 슬롯이 `p_states[1] = 0` 이고, 시퀀스
+        # 학습이 `L_state` 로 분류를 정확하게 만들어 `mix[1] = 0.997` 이 되자 전력이
+        # **466W -> 3W** 로 무너졌다 (13.84.68). 분류가 좋아져서 전력이 나빠진 것이다.
+        #
+        # `S_STATE` 는 격리 녹화에서 잰 상태별 정상 전력이다 (`losses.S_STATE`, 규칙 14).
+        # `softplus(b) = W` 가 되게 b 를 둔다 — 큰 값에서는 `log(e^W−1) ≈ W` 다.
+        # ⚠ **이미 학습된 체크포인트에는 영향이 없다** — `load_state_dict` 가 바이어스를
+        #   덮어쓴다. 관문 `src/run_gate_states.py` [1] 이 그것을 확인한다.
+        self.state_power_init = bool(state_power_init)
+        if self.state_power_init:
+            from src.model.losses import S_STATE
+            with torch.no_grad():
+                for j, a in enumerate(self.appliances):
+                    for sid, w in S_STATE.get(a, {}).items():
+                        if 0 <= sid < self.n_pow and w > 0 and sid < n_states[j]:
+                            self.heads[j].bias[sid] = (
+                                float(w) if w > 20.0 else float(np.log(np.expm1(w))))
         # 세밀 유래 차원 표식. **연결 순서를 바꾸지 않고** 마스킹만 한다.
         # 순서를 바꾸면 이전 체크포인트가 뒤섞인 입력을 받는다 (실제로 한 번 겪었다).
         fine_flags: List[int] = (
@@ -248,6 +302,44 @@ class NILMNet(nn.Module):
         if self.aux_z:
             self.z_head = nn.Linear(h, 1)
             nn.init.zeros_(self.z_head.bias)
+
+        # ── 합 정합성 사영 (계획 A, 14.3) ────────────────────────────────────
+        # 13.86 이 근거를 크게 키웠다: CO-P 가 **잔차 1.2W** 를 내므로 이산 상태공간
+        # 안에 총전력을 맞추는 해가 **실재한다**. 우리 40.7~69.5W 는 물리 한계가 아니다.
+        #
+        # 12.12.2 가 `L_cons` 를 **벌점**으로 0.05 걸었다가 붕괴했다 (포트 편향 −879W,
+        # F1 0.937 → 0.643). 그때는 벌점이 개별 감독과 **경쟁**했다 — 제일 큰 부하에
+        # 몰아주면 벌점이 이긴다. 사영은 경쟁 항이 아니라 **재매개화**다:
+        # `L_power` 가 채점하는 대상이 사영된 출력이므로 r 을 엉뚱한 기기에 실으면
+        # 곧바로 벌받는다. 그것이 이번에 다른 점이다.
+        self.proj = float(proj)
+        self.proj_cap = float(proj_cap)
+        self.proj_floor = float(proj_floor)
+        self.proj_resp = str(proj_resp)
+        self.proj_noise_w = float(proj_noise_w)
+        if self.proj_resp not in ("power", "head"):
+            raise ValueError("proj_resp 는 power 또는 head 다: %r" % proj_resp)
+        if self.proj_resp == "head":
+            self.proj_head = nn.Linear(h, k)
+            nn.init.zeros_(self.proj_head.weight)
+            nn.init.zeros_(self.proj_head.bias)
+
+        # ── 기기 축 어텐션 (13.93) ───────────────────────────────────────────
+        # ⚠ `attn_out` 을 0 으로 초기화한다 — 그래야 출발점이 **정확히 지금 모델**이고
+        #   두 팔의 차이가 "배운 것" 이지 출발점 차이가 아니다 (13.87 [5b] 에서
+        #   `proj_resp=head` 를 그렇게 맞추지 않았다가 29.6W 어긋난 적이 있다).
+        self.appl_attn = int(appl_attn)
+        if self.appl_attn:
+            d = self.appl_attn
+            if d % int(appl_attn_heads):
+                raise ValueError("appl_attn %d 이 머리 %d 로 안 나눠떨어진다"
+                                 % (d, appl_attn_heads))
+            self.attn_in = nn.Linear(h, d)
+            self.attn_tok = nn.Parameter(torch.randn(k, d) * 0.02)   # 기기 정체 토큰
+            self.attn = nn.MultiheadAttention(d, int(appl_attn_heads), batch_first=True)
+            self.attn_out = nn.Linear(d, h)
+            nn.init.zeros_(self.attn_out.weight)
+            nn.init.zeros_(self.attn_out.bias)
 
         # 전력 혼합에서 state 0(OFF_STANDBY)은 뺀다 — 켜진 상태들만 섞어야 한다.
         on_states = self.state_mask.clone()
@@ -304,7 +396,22 @@ class NILMNet(nn.Module):
             x = x * (1.0 - self.fine_dim_mask[None] * (1.0 - keep))
         z = self.trunk(x)
 
-        o = torch.stack([hd(z) for hd in self.heads], dim=1)   # (B, K, 13)
+        # ── 기기 축 어텐션 (13.93) ───────────────────────────────────────────
+        # 지금까지 기기별 머리 9개가 **같은 z 에서 서로 못 보고** 갈라졌다
+        # (`chain.crf_nll`: *"기기 축은 서로 독립이다"*). FHMM 이 구조로 갖고 있는
+        # **기기 간 결합**이 우리 구조 어디에도 없다는 것이 13.84.74 [7] 의 결론이고,
+        # 13.86 이 그 자리를 다시 가리켰다 — FHMM 이 CO 위에 얹는 것이 그 결합이다.
+        #
+        # 여기서는 시간 축이 아니라 **기기 축**에 어텐션을 건다. 토큰이 9개뿐이라
+        # 자료 요구가 거의 없다 (실측 5.5시간이라 시간 축 트랜스포머는 10절이 막는다).
+        # `attn_out` 을 **0 으로 초기화**하므로 출발점이 정확히 지금 모델이다 —
+        # `chain.ChainHeads.emit` 과 `proj_head` 와 같은 규약이다.
+        zk = z[:, None, :].expand(-1, len(self.heads), -1)      # (B,K,H)
+        if self.appl_attn:
+            tok = self.attn_in(z)[:, None, :] + self.attn_tok[None]   # (B,K,d)
+            att, _ = self.attn(tok, tok, tok, need_weights=False)
+            zk = zk + self.attn_out(att)                        # 0 초기화면 zk = z
+        o = torch.stack([hd(zk[:, j]) for j, hd in enumerate(self.heads)], dim=1)
         on_logit = o[..., self.i_on]
 
         # ── 물리 프라이어 (12.9.8절) ──────────────────────────────────────
@@ -340,10 +447,79 @@ class NILMNet(nn.Module):
         }
         if self.aux_z:
             out["log_z"] = self.z_head(z).squeeze(-1)      # (B,)
+        if self.proj > 0:
+            self._project(out, fine, z)
         # 몸통 표현. 사슬 구조(13.84.24)가 방출·전이 머리를 여기에 얹는다.
         # 옛 경로는 이 키를 안 보므로 동작은 그대로다.
         out["z"] = z
         return out
+
+    def _project(self, out: Dict[str, torch.Tensor], fine: torch.Tensor,
+                 z: torch.Tensor) -> None:
+        """합 정합성 사영 (계획 A, 14.3). `out["power"]` 을 **제자리에서** 갈아 끼운다.
+
+            r      = P_관측 − (Σ P̂ + Σ Ŝ + 잡음바닥)
+            w_k    = gate_k·p_k / max(Σ gate·p, proj_floor)      (Σw ≤ 1)
+            P̂_k   <- relu(P̂_k + proj · w_k · clip(r))
+
+        [왜 이것이 추론 때도 되나] `P_관측` 을 **입력 채널에서** 되꺼낸다 —
+        `fine[:, 23, t]` 가 `asinh(P/100)` 이다 (0.0003W 오차로 복원됨, 13.87 [1]).
+        라벨이 아니므로 실측·배포에서도 같은 식이 돈다. `L_cons` 가 쓰는
+        `tgt["p_noise"]` 는 캐시 라벨이라 2단계에서 못 쓴다 — 그것이 `cons=0.0` 으로
+        박혀 있던 이유 중 하나다.
+
+        ⚠⚠ **`proj_resp="power"` 는 결국 창별 곱셈 재조정이다** (13.87 [2] 에서 측정).
+        `w_k ∝ gate_k·p_k` 이고 `P̂_k = gate_k·p_k` 이므로
+
+            P̂_k  <-  P̂_k · (1 + proj·r / Σ_j P̂_j)      — **모든 기기에 같은 배율**
+
+        이다 (창 안 기기 간 배율 표준편차 4e-8 = float32 잡음). 따라서:
+          · 순위를 보존한다 -> **신원을 못 바꾼다. 좋게도, 나쁘게도.**
+          · `on_logit` 을 안 건드린다 -> **검출을 못 바꾼다.**
+          · 고칠 수 있는 것은 **크기뿐**이다.
+        학습된 판에 그냥 켰을 때 on/off 0.8520 과 신원 0.9640/0.9630 이 **한 자리도**
+        안 움직인 것이 그래서다 — 안전하다는 증거가 아니라 **구조적으로 그럴 수밖에**다.
+        배분을 옮기려면 `proj_resp="head"` 여야 한다.
+
+        [로버스트 슬랙은 분모 하한이 한다 — 따로 매개변수를 두지 않는다]
+        `Σ w_k = min(1, Σgate·p / proj_floor)` 다. 500W 가 관측되는데 모델이 0W 를
+        예측하는 창은 *배분* 문제가 아니라 *검출* 문제이고, 거기에 500W 를 쏟으면
+        유령이 된다. `L_on`·`L_power` 가 검출을 따로 벌한다. AFAMAP 의 로버스트 성분이
+        이 자리다.
+        ⚠ 분모가 `Σ gate·p` 라 **게이트가 낮아도 p 가 크면 많이 받는다** — 관문 [4] 가
+          `gate<0.5` 인 기기에 w=0.94 가 실린 것을 찍는다. 곱셈 재조정이므로 그 기기의
+          몫이 원래 컸다는 뜻이고 유령을 *새로* 만들지는 않지만, "꺼진 기기는 안 받는다"
+          는 **아니다**. `head` 모드만 로그게이트로 그것을 민다.
+
+        [자르기] `|r| ≤ proj_cap·P_관측`. 순방향 모형 오차가 큰 창(13.84.23 이 잰
+        SMPS 잔차 17~27%)이 배분을 독식하지 않게 한다.
+
+        ⚠ `off_detach_praw` 와 같이 쓰면 손실 쪽(`losses.py:640`)이 `out["power"]` 을
+          다시 만들어 **사영이 지워진다.** `build_loss` 가 그 조합을 거부한다.
+        """
+        t = self.target_pos
+        p_obs = torch.sinh(fine[:, P_CH_FINE, t]) * POWER_SCALE          # (B,)
+        gate = torch.sigmoid(out["on_logit"])                            # (B,K)
+        recon = out["power"].sum(1) + out["standby"].sum(1) + self.proj_noise_w
+        r = p_obs - recon
+        cap = self.proj_cap * p_obs.abs().clamp(min=1.0)
+        r = torch.maximum(torch.minimum(r, cap), -cap)
+        e = gate * out["power_raw"]                                      # 에너지 비례
+        tot = e.sum(1, keepdim=True)
+        # 슬랙 — 두 모드가 **같은** 것을 쓴다. 안 그러면 팔 사이 차이가 슬랙 차이와 섞인다.
+        slack = (tot / tot.clamp(min=self.proj_floor)).clamp(max=1.0)
+        if self.proj_resp == "head":
+            # ⚠ 기준을 `log(gate·p)` 로 잡는다 — **0 초기화에서 `power` 모드와 정확히
+            #   같아지게** 하기 위해서다 (`softmax(log(gate·p)) = gate·p / Σ`).
+            #   `log(gate)` 로 잡았더니 출발점이 29.6W 어긋났다. `chain.ChainHeads` 가
+            #   `emit` 을 0 으로 두어 "초기점이 정확히 v37" 을 만든 것과 같은 규약이다.
+            lg = self.proj_head(z) + torch.log(e.clamp(min=1e-9))
+            w = lg.softmax(-1) * slack
+        else:
+            w = e / tot.clamp(min=self.proj_floor)
+        out["proj_r"] = r
+        out["proj_w"] = w
+        out["power"] = (out["power"] + self.proj * w * r[:, None]).clamp(min=0.0)
 
 
 def appliance_state_counts(appliances: Sequence[str]) -> List[int]:

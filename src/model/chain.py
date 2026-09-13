@@ -123,12 +123,34 @@ class BgHead(nn.Module):
 
 
 def crf_nll(em: torch.Tensor, sw_on: torch.Tensor, sw_off: torch.Tensor,
-            y: torch.Tensor, init: Optional[torch.Tensor] = None) -> torch.Tensor:
+            y: torch.Tensor, init: Optional[torch.Tensor] = None,
+            on_cpu: bool = False) -> torch.Tensor:
     """기기별 2상태 선형 사슬의 음의 로그가능도. 기기 축은 서로 독립이다.
 
     점수 S(y) = Σ_t em[t]·y[t] + Σ_{t: 0->1} sw_on[t] + Σ_{t: 1->0} sw_off[t]
     분배함수는 앞으로 알고리즘으로 정확히 센다.
+
+    [`on_cpu` — 왜 있나 (13.84.63)]
+    아래 앞으로-알고리즘은 **T 를 파이썬 루프로** 돈다. 한 반복이 `logaddexp` 를 `(B,K)`
+    텐서에 거는데 학습 설정에서 그것이 **6x9 = 54개**다. 계산량은 없고 **커널 실행
+    오버헤드만** 남는다 — 측정하면 순전파+역전파가 **배치 크기와 무관하게** 약 30ms 다:
+    ```
+    B    2    6   12   24   48      (T=64)
+    ms  30.7 30.7 31.6 30.4 29.8    <- B 를 24배 키워도 그대로
+    ```
+    그래서 학습 주 루프의 CPU 77.6ms/배치 중 3분의 1 이상이 이 항이고, **창을 더 넣어도
+    안 줄어든다.** 54개짜리 텐서는 CPU 가 훨씬 빠르다 — 옮기면 **4~4.8배**다.
+    값과 기울기는 float32 잡음 안에서 같다 (값 상대차 1.2e-07 · 기울기 1.0e-06).
+
+    ⚠ `.cpu()` 는 동기점이다. 앞선 GPU 작업이 끝날 때까지 주 루프가 멈춘다. 이 작업은
+      GPU 점유가 34~42% 라 잃을 겹침이 거의 없어서 이득이지만, GPU 가 포화된 설정에서는
+      **다시 재고 켜라**. 관문: `src/run_gate_mainloop.py`.
     """
+    if on_cpu and em.device.type != "cpu":
+        dev = em.device
+        r = crf_nll(em.cpu(), sw_on.cpu(), sw_off.cpu(), y.cpu(),
+                    None if init is None else init.cpu(), on_cpu=False)
+        return r.to(dev)
     B, T, K = em.shape
     # 정답 경로 점수
     yf = y.float()
