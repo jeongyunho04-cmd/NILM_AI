@@ -136,6 +136,70 @@ sinfo -N -h -o '%P|%n|%C|%t' -p gpu1,gpu2,gpu3,gpu4,gpu5,gpu6 | awk -F'|' '
 ⇒ 실제로 그날 `-c 48` 세 작업 중 둘은 100초 안에 gpu2(n057)·gpu3(n071)에 잡혔고,
   셋째는 `QOSMaxCpuPerNode` 로 멈췄다. **40 으로 고쳐 내리자 2분 만에 n017(gpu6)** 에 잡혔다.
 
+### ⚠⚠ GPU 작업이면 **코어로 세지 마라 — GPU 로 세라** (2026-09-13)
+
+위 awk 는 **코어만 센다.** GPU 를 쓰는 작업에서 그것으로 판단하면 틀린다.
+2026-09-13 에 `>=48코어 6노드, 그중 셋이 gpu3(A6000 Ada)` 를 보고 "자리 있다" 고 판단해
+`-p gpu3,gpu4,gpu5 -c 48 --gres=gpu:2` 로 냈더니 **내일 00:05 시작**으로 잡혔다. 이유:
+```
+n066  CfgTRES  cpu=56 gres/gpu:a6000ada=4
+      AllocTRES cpu=4  gres/gpu=4            <- 코어 4개만 쓰면서 GPU 4장을 다 잡았다
+n068 · n070 도 같다. gpu3 10노드 전부 GPU 4/4 사용중.
+```
+**코어 4개짜리 GPU 작업들이 클러스터의 GPU 를 다 쥐고 있다.** 그래서 코어 여유와 GPU 여유가
+**반대로 움직인다** — 그날 실측:
+```
+GPU 4장 비었는데 코어 4~8 :  n093~n100 · n102~n106 (a6000 13노드)
+코어 40~52 비었는데 GPU 0 :  n066 · n068 · n070 (a6000ada)
+둘 다 있는 곳            :  n059(gpu2 a10, GPU4 · 코어48) · n091(gpu4 a6000, GPU2 · 코어40)
+```
+
+**GPU 여유까지 세는 질의** (`%G` 는 설정값이라 쓸 수 없다 — `AllocTRES` 를 봐야 한다):
+```bash
+NODES=$(sinfo -h -N -o '%n %t' -p gpu1,gpu2,gpu3,gpu4,gpu5,gpu6 | awk '$2=="mix"||$2=="idle"{print $1}' | sort -u)
+for N in $NODES; do
+  S=$(scontrol show node $N)
+  T=$(echo "$S" | grep -oE 'gres/gpu:[a-z0-9]+=[0-9]+' | head -1)
+  CG=$(echo "$T" | cut -d= -f2); GT=$(echo "$T" | sed 's|gres/gpu:||;s|=.*||')
+  AG=$(echo "$S" | grep -oE 'AllocTRES=[^ ]*' | grep -oE 'gres/gpu=[0-9]+' | cut -d= -f2)
+  C=$(echo "$S" | grep -oE 'CPUAlloc=[0-9]+' | cut -d= -f2)
+  CT=$(echo "$S" | grep -oE 'CPUTot=[0-9]+' | cut -d= -f2)
+  P=$(echo "$S" | grep -oE 'Partitions=[^ ]*' | cut -d= -f2)
+  F=$((CG-${AG:-0}))
+  FMT='  %-6s %-6s %-10s GPU여유 %d/%d · 코어여유 %d\n'
+  [ "$F" -ge 2 ] && printf "$FMT" "$N" "$P" "$GT" $F $CG $((CT-C))
+done | sort -k3
+```
+⇒ **GPU 작업의 backfill 확률은 `min(GPU 여유 충족 노드, 코어 상한 충족 노드)` 다.**
+
+### GPU 노드에서 캐시를 굽지 마라 — CPU 가 다르다 (2026-09-13)
+
+경합이 아니라 **CPU 자체가 다르다.** n037 은 우리 40코어 말고 8코어만 남았는데도(= 다른 부하
+거의 없음) 절반 속도였다:
+```
+963826  cpu2 노드(256코어)  64코어  213 win/s  = 3.33 win/s/코어   30만창 23분 30초
+979865  gpu6 노드( 48코어)  40코어   78 win/s  = 1.95 win/s/코어   30만창 ~70분
+```
+그래서 GPU 노드 안에서 코어를 40 -> 48 로 늘려봐야 1.2배다. **굽기는 cpu2 에서** 하는 것이
+옳다 — 다만 `/dev/shm` 은 노드 국소라 그러려면 캐시를 GPFS 에 둘 자리(22.8G)가 있어야 한다.
+
+### 자원은 실측으로 잡아라 — 예상시간의 1.5배, 램은 잰 값 (2026-09-13, 사용자 지시)
+
+```
+-t     예상의 **1.5배**. 짧을수록 backfill 이 잘 문다. 2.5시간을 부르면 그만큼 늦게 잡힌다
+--mem  **실측 MaxRSS** 로. 캐시 크기가 아니라 **굽기 워커**가 진짜 소비자다
+-c     파티션 상한표(위)를 보고 고르되, GPU 작업이면 GPU 여유부터 센다
+```
+실측 (`sacct -j <id> --format=JobID,AllocCPUS,ReqMem,MaxRSS,Elapsed`, `.batch` 단계에 있다):
+```
+963826 굽기 64코어  ReqMem 100G  MaxRSS 113GB  23:30  완료
+963828 학습 16코어  ReqMem  96G  MaxRSS 104GB  32:06  완료
+979865 굽기 40코어  ReqMem 200G  MaxRSS  54GB          <- 200G 는 과했다
+```
+⚠ **MaxRSS 는 공유 페이지를 프로세스마다 세서 부풀려진다** — 113GB 가 `--mem=100G` 안에서
+완료된 것이 증거다. 상한이 아니라 **순위**로 읽어라. 굽기+학습 한 작업이면 **100G** 면 된다.
+워커당 RSS 는 13.2 이후 330MB 가 아니라 **~1.4GB** 다.
+
 **한계는 노드 크기 *와* 노드당 QOS 상한 둘이다.** `-N 1` 이면 둘 중 작은 쪽을 못 넘고,
 더 쓰려면 **노드를 늘리거나 작업을 나눠야 한다**.
 

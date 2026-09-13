@@ -44,6 +44,21 @@ V36: Dict[str, Any] = dict(
 #: 원천에서 없애려고 넣은 것이었다 (13.84.16). 실패 ③(미니PC 미탐)이 다시 나오면 여기를 의심하라.
 V32: Dict[str, Any] = {k: v for k, v in V36.items() if k != "sibling_rotate"}
 
+#: V32 + **텍스처 표집 간격을 20초로** (14.12). 형제 편차를 *더하지* 않고, 이미 있는 기전의
+#: **구동이 뭉개진 것**을 푼다.
+#:
+#: 14.11 이 잰 것: 표류는 계통 전압에 대한 회로 응답이고 자유도 0 의 야코비(h15 까지)가
+#: 분산의 65%를 계산한다. 생성기는 그 응답을 13.2 부터 넣고 있었다 (텍스처 델타).
+#: 14.12 가 잰 것: **자를 맞추면** 합성 표류가 이미 실측의 0.75배(녹화 안)·0.92배(녹화 사이)이고
+#: 방향도 맞다 (실측 3차원 기저와 주각 1°·20°·45° · 그 안에 85.5%, 무작위는 18.8%).
+#: 모자란 몫의 정체는 `DEFAULT_STEP_S=60` 이다 — 텍스처가 60초 **중앙값**이라 파일 안 전압
+#: 산포가 원시 10초 블록의 0.73배로 뭉개져 있었다. 20초면 0.95 다.
+#:
+#: ⚠ **`sibling_rotate` 를 켜지 않는다.** 0.75배 위에 `smps_drift`(1.0)를 더하면 1.25배가 된다 —
+#:   `smps_dev1` 이 "실측의 12~42배" 가 된 것이 이 덧셈이다 ([[augmentation-can-erase-the-discriminant]]).
+#: ⚠ 텍스처가 280 -> 819개라 `SmpsCircuit` 캐시 키 공간이 2.9배다. 굽기가 느려질 수 있다 (13.10.5).
+V32T: Dict[str, Any] = dict(V32, vtex_step_s=20.0)
+
 #: V36 + **녹화별 대기 지문을 기록당 하나씩** (13.84.40).
 #: 실측 전부-OFF 배경의 파일 간 편차에서 꽂힌 기기 대기로 설명되는 몫을 빼면
 #: h9~h15 에 4.7~7.0mA 가 남는데 V36 은 1.3~1.5mA 밖에 안 준다 (계측계 잡음 참조 3개).
@@ -66,7 +81,7 @@ V36DP: Dict[str, Any] = dict(V36, sibling_rotate="smps_driftp")
 #: `seqraw_v1` 을 그대로 다시 만드는 설정 (대조군용).
 LEGACY: Dict[str, Any] = dict(carrier_apps=("oven",))
 
-PRESETS: Dict[str, Dict[str, Any]] = {"v32": V32, "v36": V36, "v36r": V36R, "v36p": V36P,
+PRESETS: Dict[str, Dict[str, Any]] = {"v32": V32, "v32t": V32T, "v36": V36, "v36r": V36R, "v36p": V36P,
                                       "v36d": V36D, "v36d47": V36D47, "v36dp": V36DP,
                                       "legacy": LEGACY}
 
@@ -99,7 +114,8 @@ def build_synthesizer(opts: Dict[str, Any], npz_dir: str, time_split: str,
                                          STATE_MIX_PRESETS, STEADY_CROP_PRESETS)
     from src.synthesis.segment_pool import SegmentPool
     from src.synthesis.synthesizer import LoadSynthesizer
-    from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
+    from src.synthesis.vtexture import (DEFAULT_VTAIL_NPZ, set_default_step_s,
+                                        set_default_vtail)
 
     def _p(table, v):
         if not v:
@@ -125,6 +141,9 @@ def build_synthesizer(opts: Dict[str, Any], npz_dir: str, time_split: str,
         steady_crop=_p(STEADY_CROP_PRESETS, opts.get("steady_crop")),
         sibling_rotate=_p(SIBLING_ROTATE_PRESETS, opts.get("sibling_rotate")))
     set_default_vtail(DEFAULT_VTAIL_NPZ if opts.get("vtail") else None)
+    # 14.12 — 텍스처 표집 간격. 60초 중앙값이면 그보다 짧은 전압 변동이 뭉개져
+    # 합성 표류가 실측의 0.75배가 된다. `set_default_step_s` 주석에 측정표가 있다.
+    set_default_step_s(opts.get("vtex_step_s"))
     return LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=compute_gt_harmonics,
                            augmentor=aug, background=bool(opts.get("background")),
                            couple_ext=bool(opts.get("couple_ext")))
@@ -144,6 +163,16 @@ def check(opts: Dict[str, Any], gen) -> Sequence[str]:
     #   되돌린 줄 알고 안 되돌린 캐시를 굽는다 ([[verify-the-gate-runs-that-path]] 의 반대 방향).
     if not opts.get("sibling_rotate") and getattr(a, "sibling_rotate", None):
         bad.append("sibling_rotate 를 안 걸었는데 증강기에 남아 있다")
+    # 14.12 — 텍스처 표집 간격이 실제로 걸렸는지. 이 상수가 합성 표류의 크기를 정한다.
+    want = opts.get("vtex_step_s")
+    if want:
+        try:
+            from src.synthesis.vtexture import default_library
+            n = len(default_library())
+        except Exception:
+            n = -1
+        if 0 <= n <= 400:
+            bad.append("vtex_step_s=%s 인데 텍스처가 %d개다 (60초면 280개) — 안 걸렸다" % (want, n))
     if opts.get("sp_curves") and not getattr(a, "_sp", None):
         bad.append("sp_curves 가 안 걸렸다 (processed_data/sp_curves.npz)")
     if opts.get("sp_per_texture") and not getattr(a, "_sp_tex", None):

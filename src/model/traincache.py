@@ -205,8 +205,14 @@ def build_cache(
     steady_crop: Optional[Dict[str, dict]] = None,
     standby_jitter_cap: float = 0.0,
     sibling_rotate: Optional[Dict[str, dict]] = None,
+    shard: Optional[Tuple[int, int]] = None,
 ) -> dict:
     """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다.
+
+    `shard=(k, n)`: 청크 목록의 **k/n 번째 토막만** 만든다 (14.13). 노드 여러 대로 나눠 굽고
+    `run_merge_traincache` 로 번호순으로 이어붙이면 단일 노드 결과와 **비트 동일**하다 —
+    `_chunk` 가 **청크 번호**로 시드하고(`chunk_seed`) `imap` 이 순서를 보장하기 때문이다.
+    시드·청크 크기·`n_windows` 는 전체 기준 그대로 줘야 한다. 그래야 번호가 안 밀린다.
 
     `smps_focus_off_p`: `smps_overlap` 에서 미니PC 를 끄고 형제 SMPS 만 켤 확률
     (13.83). None/0.0 이면 옛 경로 그대로다. **`recipe_mix` 재조정과 같이** 써야
@@ -224,27 +230,43 @@ def build_cache(
     k = len(apps)
     n_wide = window_cycles // 30
 
+    # ── 14.13 토막 나누기. memmap 크기를 정하기 **전에** 몫을 확정한다 ──────────
+    sizes_all = [chunk] * (n_windows // chunk)
+    if n_windows % chunk:
+        sizes_all.append(n_windows % chunk)
+    tasks_all = list(enumerate(sizes_all))
+    if shard is None:
+        tasks = tasks_all
+    else:
+        sk, sn = int(shard[0]), int(shard[1])
+        if not (0 <= sk < sn):
+            raise SystemExit("[traincache] shard=%s 가 잘못됐다 (0 <= k < n)" % (shard,))
+        lo = (len(tasks_all) * sk) // sn
+        hi = (len(tasks_all) * (sk + 1)) // sn
+        tasks = tasks_all[lo:hi]
+        if not tasks:
+            raise SystemExit("[traincache] 토막 %d/%d 에 청크가 없다 (청크 %d개)"
+                             % (sk, sn, len(tasks_all)))
+    n_out = int(sum(sz for _, sz in tasks))
+
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
     shapes = {
-        "fine": (n_windows, FINE_CHANNELS, FINE_CYCLES),
-        "wide": (n_windows, WIDE_CHANNELS, n_wide),
-        "y_power": (n_windows, k), "y_on": (n_windows, k), "y_plugged": (n_windows, k),
-        "y_standby": (n_windows, k), "y_state": (n_windows, k),
-        "obs_harm": (n_windows, 15, 2), "p_noise": (n_windows,), "p_observed": (n_windows,),
-        "z_grid": (n_windows, 2),
+        "fine": (n_out, FINE_CHANNELS, FINE_CYCLES),
+        "wide": (n_out, WIDE_CHANNELS, n_wide),
+        "y_power": (n_out, k), "y_on": (n_out, k), "y_plugged": (n_out, k),
+        "y_standby": (n_out, k), "y_state": (n_out, k),
+        "obs_harm": (n_out, 15, 2), "p_noise": (n_out,), "p_observed": (n_out,),
+        "z_grid": (n_out, 2),
     }
     mm = {name: np.lib.format.open_memmap(out / f"{name}.npy", mode="w+",
                                           dtype=_SPEC[name][0], shape=shapes[name])
           for name in shapes}
     total = sum(int(np.prod(s, dtype=np.int64)) * np.dtype(_SPEC[n][0]).itemsize
                 for n, s in shapes.items())
-    print(f"[traincache] 독립 창 {n_windows:,}개 x {window_cycles/60:.0f}초 "
-          f"| 예상 {total/1e9:.2f} GB | 창당 {total/n_windows/1024:.0f} KB")
-
-    sizes = [chunk] * (n_windows // chunk)
-    if n_windows % chunk:
-        sizes.append(n_windows % chunk)
-    tasks = list(enumerate(sizes))
+    _tag = "" if shard is None else (" [토막 %d/%d · 청크 %d~%d]"
+                                     % (shard[0], shard[1], tasks[0][0], tasks[-1][0]))
+    print(f"[traincache] 독립 창 {n_out:,}개 x {window_cycles/60:.0f}초{_tag} "
+          f"| 예상 {total/1e9:.2f} GB | 창당 {total/n_out/1024:.0f} KB")
     t0 = time.time(); pos = 0
     ctx = mp.get_context("spawn")
     with ctx.Pool(n_workers, initializer=_init,
@@ -269,8 +291,8 @@ def build_cache(
             pos += m
             if i % 40 == 0:
                 el = time.time() - t0
-                print(f"  {pos:>7,}/{n_windows:,}  ({pos/el:,.0f} win/s, "
-                      f"남은 {max(0,(n_windows-pos)/max(pos/el,1))/60:.1f}분)", flush=True)
+                print(f"  {pos:>7,}/{n_out:,}  ({pos/el:,.0f} win/s, "
+                      f"남은 {max(0,(n_out-pos)/max(pos/el,1))/60:.1f}분)", flush=True)
     for m_ in mm.values():
         m_.flush()
 
@@ -279,6 +301,10 @@ def build_cache(
             "standby_jitter_cap": float(standby_jitter_cap or 0.0),   # 13.83.26 대기 잔차 상한 백분위 (0 = 옛 경로)
             "sibling_rotate": sibling_rotate,  # 13.84.8 ② 형제 전용 차수 비례 회전 (None 이면 옛 경로)
             "n_windows": int(pos), "window_cycles": window_cycles, "appliances": apps,
+            # 14.13 — 토막이면 전체 기준값과 맡은 청크 범위를 남긴다. 이어붙일 때 관문이 읽는다.
+            "shard": (None if shard is None else [int(shard[0]), int(shard[1])]),
+            "shard_chunks": (None if shard is None else [tasks[0][0], tasks[-1][0]]),
+            "n_windows_total": int(n_windows), "chunk": int(chunk),
             "time_split": time_split, "seed": seed, "n_wide": n_wide,
             "exclude_activation_files": exclude_activation_files,
             "dither_amp": float(dither_amp), "dither_phase_deg": float(dither_phase_deg),
