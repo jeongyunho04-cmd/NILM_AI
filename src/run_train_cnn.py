@@ -235,6 +235,19 @@ def vswap(fine: torch.Tensor, wide: torch.Tensor, p: float) -> None:
     wide[:, WIDE_VOLT0:WIDE_VOLT0 + nv] = wide[sel][:, WIDE_VOLT0:WIDE_VOLT0 + nv]
 
 
+def _vnorm_exp(apps):
+    """기기별 `I/P` 의 전압 지수 `(i_exp − p_exp)` (K,) — 14.28.
+
+    저항 `(1.0, 2.0)` · SMPS `(−1.0, 0.0)` 은 둘 다 **−1**, 모터 `(0.7, 0.7)` 과
+    수동 `(1.0, 1.0)` 은 **0** 이다. 균일 −1 을 걸면 모터에 틀린 물리를 가르친다.
+    """
+    from src.preprocessing.file_registry import get_load_class
+    from src.synthesis.grid_simulator import GridSimulator
+    t = GridSimulator()._LOAD_EXPONENTS
+    return torch.tensor([float(t[get_load_class(a)][0] - t[get_load_class(a)][1])
+                         for a in apps], dtype=torch.float32)
+
+
 def to_targets(batch, dev):
     (fine, wide, yp, yo, ypl, ys, yst, oh, pn, pobs, zg) = [
         b.to(dev, non_blocking=True) for b in batch]
@@ -555,6 +568,8 @@ def main() -> int:
         signatures_state=(torch.from_numpy(sig_state) if a.state_signatures else None),
         harm_even_magnitude=a.harm_even_magnitude,
         harm_sig_vnorm=a.harm_sig_vnorm,
+        # 14.28 — 기기별 `I/P` 전압 지수. 모터는 0 이라 보정이 안 걸린다.
+        harm_vnorm_exp=(_vnorm_exp(apps) if a.harm_sig_vnorm else None),
         even_coherent=(torch.tensor(
             [1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
             dtype=torch.float32) if a.harm_even_by_class else None),

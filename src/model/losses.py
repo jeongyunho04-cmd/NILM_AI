@@ -174,8 +174,13 @@ class NILMLoss(torch.nn.Module):
         gate_smooth: float = 0.0,                    # 게이트 BCE 라벨 완화 (13.80)
         gate_focal: float = 0.0,                     # 쉬운 창 가중 낮추기 (13.80)                  # 꺼진 창에서 p_raw 를 detach (13.11)
         signatures_state: Optional[torch.Tensor] = None,  # (K,S,H,2) 상태별 지문 (13.11)
-        #: 14.26 — `L_harm` 의 지문을 창 전압으로 나눈다 (`I/P ∝ 1/V`). **기본 꺼짐 = 항등**.
+        #: 14.26 — `L_harm` 의 지문을 창 전압으로 고친다. **기본 꺼짐 = 항등**.
         harm_sig_vnorm: bool = False,
+        #: 14.28 — 기기별 `I/P` 의 전압 지수 `(i_exp − p_exp)` (K,). **None 이면 전부 −1**
+        #: (14.26 의 균일 판)인데 그것은 **모터에 틀리다** — 모터는 `P ∝ V^0.7 · I ∝ V^0.7`
+        #: 이라 `I/P ∝ V⁰` 로 전압과 **무관**하다. 균일 −1 을 걸면 에어컨 MAE 가 17.19 ->
+        #: 19.35 로 나빠진다 (14.27 ⑦). 저항·SMPS 는 둘 다 −1 이라 안 바뀐다.
+        harm_vnorm_exp: Optional[torch.Tensor] = None,
         harm_even_magnitude: bool = False,              # 짝수차를 크기 공간에서 잰다 (13.11)
         even_coherent: Optional[torch.Tensor] = None,   # (K,) 짝수차 위상이 기기 속성인 기기 (13.45)
         signatures_site: Optional[torch.Tensor] = None,      # (Nz,K,H,2) 자리별 지문 (13.59)
@@ -303,6 +308,10 @@ class NILMLoss(torch.nn.Module):
         #: 14.26 — `L_harm` 지문의 전압 정규화. `_vrel` 은 `forward` 가 `tgt["vrel"]` 로 채운다.
         self.harm_sig_vnorm = bool(harm_sig_vnorm)
         self._vrel = None
+        self.register_buffer("vnorm_exp",
+                             (torch.as_tensor(harm_vnorm_exp, dtype=torch.float32)
+                              if harm_vnorm_exp is not None
+                              else torch.full((len(s_i),), -1.0)), persistent=False)
         # ── 자리별 지문 (2026-09-08, 13.59) ────────────────────────────────
         # 지문은 기기의 성질만이 아니다. 같은 SMPS 를 자리 D(Z≈1.19Ω)와 E(0.42Ω)에서
         # 격리 녹화해 재면 와트당 h13 전류가 프로젝터 0.47배·충전기 0.30배·미니PC
@@ -607,10 +616,11 @@ class NILMLoss(torch.nn.Module):
                 or out.get("power_states") is None:
             sg = self.sig_site[site_idx] if use_site else self.sig[None]      # (B|1,K,H,2)
             if _vn is not None:
-                # ⚠ `sg` 는 (B|1, K, H, 2) 라 `_vn` 을 (B,1,1,1) 그대로 쓴다.
-                #   `.reshape(-1,1,1)` 로 줄이면 오른쪽 정렬 방송이 K 축과 B 를 맞부딪친다
-                #   (980573 이 그렇게 죽었다: "size of tensor a (9) ... b (8)").
-                sg = sg / _vn
+                # ⚠ `sg` 는 (B|1, K, H, 2). 지수는 **기기마다 다르다** (14.28) —
+                #   저항·SMPS 는 −1, 모터·수동은 0. (B,K,1,1) 로 만들어 곱한다.
+                #   ⚠ `.reshape(-1,1,1)` 로 줄이면 오른쪽 정렬 방송이 K 축과 B 를 맞부딪친다
+                #     (980573 이 그렇게 죽었다: "size of tensor a (9) ... b (8)").
+                sg = sg * _vn.pow(self.vnorm_exp.reshape(1, -1, 1, 1))
             per_k = power[..., None, None] * sg                               # (B,K,H,2)
             return self._apply_pow_gain(per_k, power).sum(1)
         # power = 게이트 · p_raw 이므로 게이트는 power/p_raw 로 되살린다 —
@@ -621,7 +631,8 @@ class NILMLoss(torch.nn.Module):
         sgs = self.sig_state_site[site_idx] if use_site else self.sig_state[None]
         sgs = sgs.expand(pw.shape[0], -1, -1, -1, -1)
         if _vn is not None:
-            sgs = sgs / _vn[..., None]                          # (B,1,1,1,1)
+            # (B,K,1,1,1) — 기기별 지수 (14.28)
+            sgs = sgs * _vn[..., None].pow(self.vnorm_exp.reshape(1, -1, 1, 1, 1))
         per_k = torch.einsum("bks,bkshc->bkhc", pw, sgs)
         return self._apply_pow_gain(per_k, power).sum(1)
 
