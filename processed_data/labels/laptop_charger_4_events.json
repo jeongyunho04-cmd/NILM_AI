@@ -1,0 +1,62 @@
+[
+  {
+    "sample_idx": 2090,
+    "t_s": 34.833,
+    "from_state_id": 0,
+    "from_state_name": "IDLE_UNPLUGGED",
+    "to_state_id": 2,
+    "to_state_name": "FAST_ACTIVE_CHARGE",
+    "event_type": "ON",
+    "p_before_w": 1.62,
+    "p_after_w": 60.16,
+    "delta_p_w": 58.54,
+    "delta_q_var": 88.52,
+    "prev_state_duration_s": 34.83,
+    "at_segment_seam": false
+  },
+  {
+    "sample_idx": 2273,
+    "t_s": 37.883,
+    "from_state_id": 2,
+    "from_state_name": "FAST_ACTIVE_CHARGE",
+    "to_state_id": 1,
+    "to_state_name": "TRICKLE_IDLE_CHARGE",
+    "event_type": "MODE_CHANGE",
+    "p_before_w": 46.72,
+    "p_after_w": 28.67,
+    "delta_p_w": -18.05,
+    "delta_q_var": -26.29,
+    "prev_state_duration_s": 3.05,
+    "at_segment_seam": false
+  },
+  {
+    "sample_idx": 3293,
+    "t_s": 54.883,
+    "from_state_id": 1,
+    "from_state_name": "TRICKLE_IDLE_CHARGE",
+    "to_state_id": 2,
+    "to_state_name": "FAST_ACTIVE_CHARGE",
+    "event_type": "MODE_CHANGE",
+    "p_before_w": 15.79,
+    "p_after_w": 61.74,
+    "delta_p_w": 45.94,
+    "delta_q_var": -123.1,
+    "prev_state_duration_s": 17.0,
+    "at_segment_seam": false
+  },
+  {
+    "sample_idx": 9291,
+    "t_s": 154.85,
+    "from_state_id": 2,
+    "from_state_name": "FAST_ACTIVE_CHARGE",
+    "to_state_id": 0,
+    "to_state_name": "IDLE_UNPLUGGED",
+    "event_type": "OFF",
+    "p_before_w": 61.71,
+    "p_after_w": 2.89,
+    "delta_p_w": -58.81,
+    "delta_q_var": 93.47,
+    "prev_state_duration_s": 99.97,
+    "at_segment_seam": false
+  }
+]

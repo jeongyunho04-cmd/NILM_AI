@@ -1,0 +1,123 @@
+{
+ "adapt_v14_s0+pp+rm0.02": {
+  "per_file": {
+   "test_1": {
+    "hotplate": {
+     "ref_w": 446.79835767650775,
+     "n": 8935,
+     "n_detected": 8935,
+     "detect_rate": 1.0,
+     "guarded": true,
+     "n_intervals": 2,
+     "n_intervals_kept": 2,
+     "cycle_coverage": 0.26418497383282574,
+     "median_abs_err_w": 0.15730484604540607,
+     "mean_err_w": -0.9221134892632149,
+     "p90_abs_err_w": 0.16827535930389104,
+     "within_band": 0.006715165081141578
+    },
+    "oven": {
+     "ref_w": 1106.9593479401585,
+     "n": 6630,
+     "n_detected": 6630,
+     "detect_rate": 1.0,
+     "guarded": true,
+     "n_intervals": 2,
+     "n_intervals_kept": 2,
+     "cycle_coverage": 0.20680620106678313,
+     "median_abs_err_w": 13.13528761395969,
+     "mean_err_w": 12.11513690674919,
+     "p90_abs_err_w": 13.313572519032732,
+     "within_band": 0.0
+    }
+   },
+   "test_2": {
+    "electiric_kettle": {
+     "ref_w": 1476.7035636031528,
+     "n": 2728,
+     "n_detected": 2728,
+     "detect_rate": 1.0,
+     "guarded": true,
+     "n_intervals": 2,
+     "n_intervals_kept": 2,
+     "cycle_coverage": 0.5003668378576669,
+     "median_abs_err_w": 8.202608951733737,
+     "mean_err_w": 34.349288468423744,
+     "p90_abs_err_w": 140.06121206117155,
+     "within_band": 0.0
+    }
+   }
+  },
+  "summary": {
+   "hotplate": {
+    "median_abs_err_w": 0.15730484604540607,
+    "mean_err_w": -0.9221134892632149,
+    "p90_abs_err_w": 0.16827535930389104,
+    "within_band": 0.006715165081141578,
+    "ref_w": 446.79835767650775,
+    "n": 8935,
+    "n_detected": 8935,
+    "detect_rate": 1.0,
+    "n_files": 1
+   },
+   "oven": {
+    "median_abs_err_w": 13.135287613959692,
+    "mean_err_w": 12.11513690674919,
+    "p90_abs_err_w": 13.313572519032732,
+    "within_band": 0.0,
+    "ref_w": 1106.9593479401585,
+    "n": 6630,
+    "n_detected": 6630,
+    "detect_rate": 1.0,
+    "n_files": 1
+   },
+   "electiric_kettle": {
+    "median_abs_err_w": 8.202608951733737,
+    "mean_err_w": 34.349288468423744,
+    "p90_abs_err_w": 140.06121206117155,
+    "within_band": 0.0,
+    "ref_w": 1476.7035636031528,
+    "n": 2728,
+    "n_detected": 2728,
+    "detect_rate": 1.0,
+    "n_files": 1
+   }
+  }
+ },
+ "_config": {
+  "argv": [
+   "C:\\Users\\yunho\\Documents\\NILM_train\\NILM_AI-main\\src\\run_power_check.py",
+   "--ckpt",
+   "results/adapt_v14_s0.pt",
+   "--postproc",
+   "on",
+   "--resmatch",
+   "0.02",
+   "--rm-snap",
+   "--out",
+   "results/_pc_v14_pp.json"
+  ],
+  "args": {
+   "events": "",
+   "ckpt": [
+    "results/adapt_v14_s0.pt"
+   ],
+   "stems": null,
+   "postproc": "on",
+   "resmatch": 0.02,
+   "rm_snap": true,
+   "snap": 0.0,
+   "snap_no_redist": false,
+   "squelch": 0.0,
+   "absorb_norton": "",
+   "absorb_mode": "cos",
+   "absorb_limit": false,
+   "absorb_wq": 3.0,
+   "absorb_cap_scale": 1.0,
+   "absorb": 0.0,
+   "stride": 30,
+   "recompute_ref": false,
+   "out": "results/_pc_v14_pp.json"
+  }
+ }
+}

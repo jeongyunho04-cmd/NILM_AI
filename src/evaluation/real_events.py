@@ -77,15 +77,93 @@ def build_on_off_truth(
     return on, scorable
 
 
+# ── 세션 단위 채점 (2026-08-31, 12.119절) ────────────────────────────────────
+# **오븐만 라벨과 모델의 granularity 가 다르다.** 12.111 이 오븐의 ON 을 '히터
+# 통전' 으로 바꿨는데 `real_events.json` 의 사람 기록은 '스위치를 켠 세션 전체'
+# 다. 그래서 모델이 옳게 예측해도 서모스탯이 끊은 구간이 전부 오답이 된다.
+#
+# 재 보면 라벨상 오븐 ON 인 2,198초 중 히터가 실제로 통전한 시간이 1,334초
+# (60.7%) 다. **그것이 재현율의 천장**이고, 실측 재현율 0.528 은 그 천장의
+# 87% 다 — 오븐 F1 0.648 의 거의 전부가 정의 차이다.
+#
+# 12.13.1 은 같은 문제를 핫플에서 겪고 **라벨을 통전 단위로 고쳐** 풀었다
+# (원래 세션은 `_sessions` 에 보존). 오븐은 그 변환을 안 했고, 하려면 사람
+# 기록을 신호 추정으로 내려야 하므로 여기서는 **정답을 건드리지 않는다.**
+#
+# 대신 **예측과 정답 양쪽에 같은 병합을 걸어** 세션 단위로 잰다. 라벨이 이미
+# 세션이면 정답 쪽은 안 바뀌고 예측만 이어지며, 라벨이 통전 단위여도 양쪽이
+# 같이 세션이 되므로 어느 granularity 든 공정하다.
+#
+# 병합 상한은 `segment_pool.PERIODIC_MERGE_GAP_CAP_CYCLES` 와 같은 값이다 —
+# 그쪽이 오븐 공백을 25~31초(p90 35, 최대 78)로 재고 90초를 상한으로 잡았다.
+# 이 채점기에서 다시 재도 공백 중앙값 24.0초, p90 31.0초로 같다.
+#
+# **핫플도 넣는다 (2026-09-03, 12.164.21).** 원래는 "12.13.1 이 라벨 쪽에서 이미
+# 통전 단위로 맞춰 놨다" 고 빼 뒀는데, `real_events_refined.json`(12.155 의 재라벨)
+# 이 그것을 **세션 단위로 되돌렸다**:
+#     real_events.json          test_5  192구간 / 252초  (중앙 1.3초, 공백 0.7초)
+#     real_events_refined.json  test_5    1구간 / 376초
+# 참 ON 시간이 1.3~1.5배 부풀어 재현율 천장이 깎인다. 같은 체크포인트로 재면
+# 핫플 F1 이 통전라벨 0.925/0.935 -> 세션라벨 0.771/0.834 다 (정밀도는 0.96~1.00
+# 로 같고 재현율만 0.90 -> 0.63). 장소 B(test_15~18)는 세션 라벨밖에 없어서
+# 그 손해를 전부 본다.
+#
+# 병합 상한 5초(300 사이클)의 근거: 실측 통전 공백 661개의 중앙 0.74초, p90 1.13,
+# p99 1.52 로 **99.5% 가 5초 이하**인데, 세션 사이는 98~226초다. 두 자리가
+# 두 자릿수 배로 떨어져 있어 안전하다.
+SESSION_MERGE_CYCLES: Dict[str, int] = {"oven": 5400,      # 90초 @ 60Hz
+                                        "hotplate": 300}   # 5초 @ 60Hz
+
+
+def close_gaps(x: np.ndarray, limit: int) -> np.ndarray:
+    """(n,) bool 에서 `limit` 이하의 공백을 메운다. **팽창이 아니라 닫기다** —
+    맨 앞뒤로는 번지지 않고, ON 구간이 하나뿐이면 아무 일도 안 한다."""
+    x = np.asarray(x, bool)
+    if limit <= 0 or not x.any():
+        return x
+    d = np.diff(x.astype(np.int8))
+    starts = np.flatnonzero(d == 1) + 1
+    ends = np.flatnonzero(d == -1) + 1
+    if x[0]:
+        starts = np.r_[0, starts]
+    if x[-1]:
+        ends = np.r_[ends, len(x)]
+    if len(starts) < 2:
+        return x
+    out = x.copy()
+    for e, s in zip(ends[:-1], starts[1:]):
+        if s - e <= limit:
+            out[e:s] = True
+    return out
+
+
 def score_on_off(
     pred_on: np.ndarray,             # (n_cycles, K) bool
     stem: str,
     appliances: Sequence[str],
     events: Optional[dict] = None,
+    session_merge: Optional[Dict[str, int]] = None,
 ) -> Dict[str, dict]:
-    """실측 on/off F1. uncertain 구간은 세지 않는다."""
+    """실측 on/off F1. uncertain 구간은 세지 않는다.
+
+    Args:
+        session_merge: {기기: 최대 공백 사이클}. 주면 그 기기를 **세션 단위**로
+            잰다 — `SESSION_MERGE_CYCLES` 주석 참조. **예측과 정답 양쪽에**
+            같은 병합을 걸므로 라벨의 granularity 와 무관하게 공정하다.
+            기본 None 이면 예전과 완전히 같다 (채점 도구의 기본은 안 바꾼다,
+            12.113.2 의 규율).
+    """
     pred_on = np.asarray(pred_on, bool)
     truth, scorable = build_on_off_truth(stem, appliances, len(pred_on), events)
+    if session_merge:
+        pred_on = pred_on.copy()
+        truth = truth.copy()
+        for j, app in enumerate(appliances):
+            lim = int(session_merge.get(app, 0))
+            if lim <= 0:
+                continue
+            pred_on[:, j] = close_gaps(pred_on[:, j], lim)
+            truth[:, j] = close_gaps(truth[:, j], lim)
     out = {}
     for j, app in enumerate(appliances):
         m = scorable[:, j]
@@ -104,6 +182,51 @@ def score_on_off(
     return out
 
 
+def score_absent(
+    pred_power: np.ndarray,          # (n, K) 기기별 예측 전력 (창 단위여도 된다)
+    stem: str,
+    appliances: Sequence[str],
+    pred_on: Optional[np.ndarray] = None,    # (n, K) bool
+    s_i: Optional[Dict[str, float]] = None,
+    events: Optional[dict] = None,
+) -> dict:
+    """**그 파일에 없던 기기에 붙인 전력** — 라벨 없이 잴 수 있는 오귀속 지표.
+
+    12.4절 표는 "기기별 FA 는 실측에서 못 잰다 (라벨 없음)" 고 적었는데,
+    **그 파일에 없는 기기는 정답이 0 으로 확정이다.** `appliances_present` 가
+    어느 기기가 없었는지 알려주므로 FA 를 정확히 계산할 수 있다.
+
+    이것이 2단계(4.2절)의 주 판정 지표다. `L_cons` 는 합만 보므로 오귀속을
+    전혀 못 본다 (12.5절). 실제로 1차 적응에서 모자란 합을 채우라고 시키자
+    모델이 이미 틀린 기기(핫플레이트)에 16.8W 를 더 붙였다.
+    """
+    assert_not_sealed(stem)
+    files = events if events is not None else load_events()
+    present = set(files[stem]["appliances_present"])
+    p = np.asarray(pred_power, dtype=np.float64)
+    rows, total = {}, 0.0
+    for j, app in enumerate(appliances):
+        if app in present:
+            continue
+        mu = float(p[:, j].mean())
+        total += mu
+        rows[app] = {
+            "mean_w": mu,
+            "p95_w": float(np.percentile(p[:, j], 95)),
+            "max_w": float(p[:, j].max()),
+            "on_rate": float(np.asarray(pred_on)[:, j].mean()) if pred_on is not None else float("nan"),
+            "fa_rel": mu / s_i[app] if s_i and app in s_i else float("nan"),
+        }
+    tot_pred = float(p.sum(1).mean())
+    return {
+        "absent": rows,
+        "absent_sum_w": total,
+        "pred_total_w": tot_pred,
+        "absent_share": total / tot_pred if tot_pred > 0 else float("nan"),
+        "n_absent": len(rows),
+    }
+
+
 def score_events(
     pred_power: np.ndarray,          # (n_cycles, K) 기기별 예측 전력
     stem: str,
@@ -116,6 +239,11 @@ def score_events(
 
     타임라인이 "이벤트 시각과 ΔP 는 정확하다" 고 밝힌 부분만 쓴다 (4.2절).
     전이 앞뒤 `settle_s` 구간의 중앙값 차이를 예측 ΔP 로 본다.
+
+    **`delta_p_w` 가 없는 이벤트는 건너뛴다.** test_6 / test_7 은 스위치를 누른
+    사람이 전이 **시각**만 기록했고 ΔP 는 적지 않았다 (`_note` 에 ΔI3 가 mA 로만
+    있다). 참값이 없으면 이 지표는 정의되지 않으므로 세지 않는다 — 0 으로 두면
+    맞게 예측한 것이 큰 오차로 잡힌다. 시각은 `score_on_off` 가 이미 쓴다.
     """
     assert_not_sealed(stem)
     files = events if events is not None else load_events()
@@ -130,6 +258,8 @@ def score_events(
         app = ev["appliance"]
         if app not in appliances:
             continue
+        if ev.get("delta_p_w") is None:
+            continue                      # 참 ΔP 가 없는 전이 (위 docstring)
         j = list(appliances).index(app)
         c = int(ev["t_s"] * SAMPLING_HZ)
         pre = pred_power[max(0, c - tol - w):max(1, c - tol), j]

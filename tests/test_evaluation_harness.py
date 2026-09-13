@@ -8,6 +8,8 @@ from pathlib import Path
 import json
 
 import numpy as np
+
+from src.model.inputs import RAW_CHANNELS
 import pytest
 
 from src.evaluation.holdout import build_holdout, load_holdout
@@ -218,55 +220,85 @@ def test_summary_reports_target_pass(toy):
 
 # ── 실측 이벤트 ─────────────────────────────────────────────────────────────
 def test_real_events_file_is_wellformed():
+    """봉인 파일이 섞이지 않았는가 + 각 항목이 채점 가능한 형태인가.
+
+    **정확한 집합 일치로 쓰면 안 된다.** 앞선 판은 `set(ev) == {"test.2", "test3"}`
+    였는데, 검증용 복합 부하를 하나 추가할 때마다(2026-08-22 `test_4`) 봉인과 무관하게
+    깨졌다. 실제로 지켜야 할 불변식은 '봉인된 것이 없다' 하나다.
+    """
+    from src.evaluation import sealing
+
     ev = load_events()
-    assert set(ev) == {"test.2", "test3"}, "봉인된 test.csv 가 들어 있으면 안 됩니다"
+    assert ev, "real_events.json 이 비어 있습니다"
+    sealed = [stem for stem in ev if sealing.is_sealed(stem)]
+    assert not sealed, f"봉인된 파일이 들어 있습니다: {sealed} (설계 문서 4.3절)"
     for stem, spec in ev.items():
         assert spec["duration_s"] > 0
+        assert spec["cycles"] > 0
         for e in spec["events"]:
             assert e["appliance"] and e["kind"] in ("on", "off", "mode")
+        # 구간은 파일 길이 안에 있고 순서가 맞아야 한다
+        for app, iv in spec["intervals"].items():
+            for key in ("on", "uncertain"):
+                for t0, t1 in iv.get(key, []):
+                    assert 0 <= t0 < t1 <= spec["duration_s"], (
+                        f"{stem}/{app}/{key} 구간이 파일 범위를 벗어납니다: [{t0}, {t1}]")
+
+
+def _first_labeled():
+    """지금 있는 라벨 중 첫 파일 (2026-09-06 부터 라벨은 `run_write_labels` 산출물 하나다 — 규칙 4)."""
+    ev = load_events()
+    stem = sorted(ev)[0]
+    return stem, ev[stem]
 
 
 def test_uncertain_regions_are_not_scored():
-    """오븐의 팬/조명 구간은 채점에서 빠져야 한다.
+    """`uncertain` 구간은 채점에서 빠지고, 확실히 켜진 구간은 uncertain 안이어도 채점된다.
 
-    타임라인은 히터 통전만 적어 두었다. 그 사이 구간을 OFF 로 채점하면
-    모델이 맞게 예측해도 오답이 된다.
+    옛 판은 `test3`(옛 계측기 자료, 삭제)의 오븐 팬/조명 구간을 박아 두었다. 지금은 있는 라벨로 잰다.
     """
-    apps = ["minipc", "beam_projector", "oven"]
-    n = int(413.0 * 60)
-    on, scorable = build_on_off_truth("test3", apps, n)
-    j = apps.index("oven")
-    assert on[:, j].any(), "오븐 통전 구간이 없습니다"
-    assert (~scorable[:, j]).any(), "오븐 불확실 구간이 표시되지 않았습니다"
-    # 통전 구간은 불확실 안에 있어도 채점 대상이어야 한다
-    assert scorable[on[:, j], j].all()
-    # 미니PC 는 전 구간 확실
-    assert scorable[:, apps.index("minipc")].all()
+    stem, spec = _first_labeled()
+    apps = list(spec["appliances_present"])
+    n = int(spec["cycles"])
+    on, scorable = build_on_off_truth(stem, apps, n)
+    assert on.any(), "켜진 구간이 하나도 없습니다"
+    for a in apps:
+        j = apps.index(a)
+        if spec["intervals"].get(a, {}).get("uncertain"):
+            assert (~scorable[:, j]).any(), f"{a} 불확실 구간이 표시되지 않았습니다"
+        # 확실히 켜진 구간은 불확실 안에 있어도 채점 대상이어야 한다
+        assert scorable[on[:, j], j].all()
 
 
 def test_on_off_scoring_rewards_a_correct_predictor():
-    apps = ["minipc", "beam_projector", "oven"]
-    n = int(413.0 * 60)
-    truth, _ = build_on_off_truth("test3", apps, n)
-    good = score_on_off(truth, "test3", apps)
-    assert good["minipc"]["f1"] == pytest.approx(1.0)
-    assert good["beam_projector"]["f1"] == pytest.approx(1.0)
-    bad = score_on_off(np.zeros_like(truth), "test3", apps)
-    assert bad["beam_projector"]["f1"] == 0.0
-    assert good["oven"]["ignored_uncertain"] > 0
+    stem, spec = _first_labeled()
+    apps = list(spec["appliances_present"])
+    n = int(spec["cycles"])
+    truth, _ = build_on_off_truth(stem, apps, n)
+    good = score_on_off(truth, stem, apps)
+    bad = score_on_off(np.zeros_like(truth), stem, apps)
+    for j, a in enumerate(apps):
+        if truth[:, j].any():
+            assert good[a]["f1"] == pytest.approx(1.0), a
+            assert bad[a]["f1"] == 0.0, a
 
 
 def test_event_delta_p_scoring():
-    """빔프로젝터가 t=102.7s 에 +46.7W 로 켜지는 것을 재현하는 예측기는 통과해야 한다."""
-    apps = ["minipc", "beam_projector", "oven"]
-    n = int(413.0 * 60)
-    pred = np.zeros((n, 3))
-    pred[int(102.7 * 60):, apps.index("beam_projector")] = 46.7
-    pred[int(63.4 * 60):, apps.index("oven")] = 1157.4
-    rows = {r["appliance"]: r for r in score_events(pred, "test3", apps)}
-    assert abs(rows["beam_projector"]["error_w"]) < 1.0
-    assert rows["beam_projector"]["sign_correct"]
-    assert abs(rows["oven"]["error_rel"]) < 0.02
+    """라벨의 사건(t_s, ΔP)을 그대로 재현하는 예측기는 ΔP 오차 없이 통과해야 한다."""
+    stem, spec = _first_labeled()
+    apps = list(spec["appliances_present"])
+    n = int(spec["cycles"])
+    pred = np.zeros((n, len(apps)))
+    evs = [e for e in spec["events"] if e["kind"] in ("on", "off") and e.get("delta_p_w") is not None]
+    assert evs, "ΔP 가 있는 사건이 없습니다"
+    for e in evs:                                   # 계단을 그대로 쌓는다
+        j = apps.index(e["appliance"])
+        pred[int(e["t_s"] * 60):, j] += float(e["delta_p_w"])
+    rows = score_events(pred, stem, apps)
+    assert rows, "채점된 사건이 없습니다"
+    for r in rows:
+        assert abs(r["error_w"]) < 1.0, r
+        assert r["sign_correct"], r
 
 
 def test_real_scoring_refuses_sealed_file():
@@ -280,10 +312,11 @@ def test_holdout_build_and_load(tmp_path):
                          seed=7, progress_every=0)
     hs = load_holdout(tmp_path / "h")
     assert len(hs) == 40
-    assert hs.X.shape == (40, 33, 600) and hs.X.dtype == np.float32
+    assert hs.X.shape == (40, RAW_CHANNELS, 600) and hs.X.dtype == np.float32
     assert hs.y_power.shape == (40, len(hs.appliances))
     assert meta["time_split"] == "holdout"
-    assert meta["target_index"] == 539
+    from src.model.inputs import target_index as _ti
+    assert meta["target_index"] == _ti(600)      # lookahead 를 따라간다
     assert len(meta["content_sha256"]) == 16
     # 부분집합 추출
     sub = hs.subset(hs.recipe == hs.recipe[0])
@@ -314,32 +347,45 @@ def test_lookahead_reaches_the_placement_logic(pools):
     이 배선이 끊겨 있으면 lookahead 를 바꿔도 활성화는 기본값(끝-1초) 자리를
     계속 겨냥한다. 창 크기·타깃 위치 스윕이 통째로 무의미해지는데,
     지표는 그럴듯하게 나오므로 **조용히 틀린다.**
+
+    [활성 구간의 '중심' 으로 재면 안 된다 - 2026-08-22 에 고쳤다]
+    앞선 판은 on-mask 중심의 중앙값을 두 설정에서 비교해 30 사이클 이상 벌어지길
+    요구했다. 그런데 창을 통째로 덮는 활성화가 35~40% 라 그쪽 중심은 항상 299.5 에
+    고정되고(정보 없음), 남은 표본이 어느 활성화를 뽑았느냐에 따라 중앙값이 흔들린다.
+    실제로 풀에 파일 3개를 추가하자 격차가 30.7 -> 20.9 로 떨어져 테스트가 깨졌는데,
+    **배선은 멀쩡했다.** 옛 풀에서도 여유가 0.7 사이클(2%)뿐이었다.
+
+    대신 **각 설정이 자기 타깃 인덱스를 덮는 빈도**를 직접 본다. 배치 편향이 겨냥하는
+    것이 바로 그 지점이라 포화되지 않고, 풀 구성이 바뀌어도 0.87~0.90 으로 일정하다
+    (남의 타깃은 0.68~0.78). 측정한 여유는 최소 0.09 다.
     """
     from src.synthesis.dataset import NILMBatchGenerator
 
     pool = pools["train"]
-    marks = {}
-    for la in (60, 299):
+    targets = {la: 600 - 1 - la for la in (60, 299)}
+    hits = {}
+    for la, tgt in targets.items():
         np.random.seed(3)
         g = NILMBatchGenerator(
             segment_pool=pool, window_size_cycles=600, target_lookahead_cycles=la,
             recipe_mix={"high_power_resistive": 1.0})
-        assert g.target_index == 600 - 1 - la
-        # 이 레시피는 target_biased_placement 를 쓰므로, 활성 구간의 중심이
-        # 타깃 쪽으로 쏠려야 한다.
-        centers = []
-        for _ in range(120):
+        assert g.target_index == tgt
+        own = other = 0
+        other_idx = targets[299 if la == 60 else 60]
+        for _ in range(400):
             smp, _ = g._synthesize_window()
             on = np.zeros(600, bool)
             for a in smp.appliance_types:
                 on |= smp.gt_is_on[a].astype(bool)
-            if on.any():
-                centers.append(float(np.mean(np.where(on)[0])))
-        marks[la] = float(np.median(centers))
+            own += int(on[tgt]); other += int(on[other_idx])
+        hits[la] = (own / 400, other / 400)
 
-    # 타깃이 300 인 쪽의 활성 구간 중심이 타깃 539 인 쪽보다 확실히 앞에 있어야 한다
-    assert marks[299] < marks[60] - 30, (
-        f"lookahead 를 바꿔도 배치가 따라오지 않습니다: {marks}")
+    # 두 설정 모두 '자기 타깃' 을 '남의 타깃' 보다 자주 덮어야 한다.
+    # 배선이 끊기면 둘 다 기본값(539)만 겨냥하므로 la=299 에서 부호가 뒤집힌다.
+    for la, (own, other) in hits.items():
+        assert own > other + 0.04, (
+            f"lookahead={la} (타깃 {targets[la]}) 배치가 따라오지 않습니다: "
+            f"자기 타깃 {own:.3f} vs 남의 타깃 {other:.3f} | 전체 {hits}")
 
 
 def test_lookahead_flows_through_training_set_builder():
@@ -354,3 +400,146 @@ def test_lookahead_flows_through_training_set_builder():
         out[la] = yo.mean()
     # 값 자체보다 '다르게 나오는가' 가 핵심이다 (같으면 배선이 끊긴 것)
     assert out[60] != out[299], f"lookahead 가 라벨에 영향을 주지 않습니다: {out}"
+
+
+def test_real_event_labels_are_physically_possible():
+    """정답이 "켜짐" 이라 한 구간의 **총전력**이 그 기기의 최저 소비보다 낮으면 안 된다.
+
+    설계 문서 12.25절. `test.2` 는 정답 ON 의 8.5%, `test3` 는 14.6% 가 이 검사에
+    걸렸다 — 총전력이 0.76W 인데 미니PC(최저 유휴 7.8W)가 켜져 있다고 적혀 있었다.
+    12.13 의 핫플 granularity 오류와 같은 종류이고, 이 한 줄 검사로 잡힌다.
+
+    `uncertain` 구간은 채점에서 빠지므로 여기서도 뺀다.
+    """
+    import json
+    import numpy as np
+    from pathlib import Path
+    from src.preprocessing import load_nilm_npz
+
+    ev_path = Path("processed_data/real_events.json")
+    if not ev_path.exists():
+        pytest.skip("real_events.json 이 없습니다")
+    files = json.loads(ev_path.read_text(encoding="utf-8"))["files"]
+
+    from src.preprocessing.file_registry import is_periodic_duty
+
+    # 기기별 최저 소비 (개별 녹화의 p10 중 최솟값). 여유를 두고 보수적으로 잡는다.
+    MIN_W = {"minipc": 7.0, "beam_projector": 35.0, "laptop_charger": 15.0,
+             "hotplate": 300.0, "oven": 10.0, "electiric_kettle": 800.0,
+             "hair_dryer": 300.0, "fan": 15.0, "air_conditioner": 10.0}
+    GUARD_CYCLES = 15          # 0.25초. 라벨 시각 해상도(0.5초)의 절반
+
+    bad = []
+    for stem, spec in files.items():
+        npz = Path("processed_data/composite_eval") / f"{stem}.npz"
+        if not npz.exists():
+            continue
+        p = np.asarray(load_nilm_npz(npz)["power_features"])[:, 0]
+        n = len(p)
+        for app, iv in spec.get("intervals", {}).items():
+            floor = MIN_W.get(app)
+            if floor is None or not iv.get("on"):
+                continue
+            m = np.zeros(n, bool)
+            for a, b in iv["on"]:
+                i0, i1 = int(a * 60), int(b * 60)
+                # 라벨 시각은 seq 기준이라 **0.5초 양자화**돼 있다 (t_s = seq x 0.5).
+                # 핫플 통전 펄스는 중앙 1.5초라, 경계가 반 칸만 어긋나도 펄스의
+                # 10% 넘게 통전 밖 사이클이 섞인다. 실제로 test_5 는 가드 없이
+                # 10.85%, 0.25초 가드로 0.53% 다 — 라벨 오류가 아니라 해상도다.
+                # 가드는 펄스 길이의 1/4 를 넘지 않게 해 짧은 펄스를 지우지 않는다.
+                guard = min(GUARD_CYCLES, max(0, (i1 - i0) // 4))
+                m[i0 + guard:max(i0 + guard, i1 - guard)] = True
+            for a, b in iv.get("uncertain", []):
+                m[int(a * 60):int(b * 60)] = False
+            if not m.any():
+                continue
+            if is_periodic_duty(app):
+                # **듀티 부하는 하한 검사를 못 쓴다.** 라벨이 세션 단위인데
+                # 릴레이/서모스탯이 통전을 끊으므로, 휴지 구간에는 총전력이
+                # 정당하게 0 근처로 내려간다 (test_11 의 핫플 세션 중 14.8%).
+                # 대신 **통전이 실제로 있었는가** 를 본다.
+                duty = float((p[m] >= floor).mean())
+                if duty < 0.15:
+                    bad.append(f"{stem}/{app}: ON 구간에서 {floor}W 이상인 사이클이 "
+                               f"{100*duty:.1f}% 뿐 (듀티 부하라 통전율로 본다)")
+                continue
+            share = float((p[m] < floor).mean())
+            if share > 0.02:
+                bad.append(f"{stem}/{app}: ON 구간의 {100*share:.1f}% 에서 "
+                           f"총전력이 {floor}W 미만 (최소 {p[m].min():.2f}W)")
+    assert not bad, "정답이 신호와 모순됩니다: " + " | ".join(bad)
+
+def test_후처리는_상한을_지키고_총합을_보존한다():
+    """물리 전력 상한 후처리 (12.102절).
+
+    프로젝터는 격리에서 폭 ±0.5W 인데 단독 모델이 137W 까지 붙인다. 초과분을
+    잘라 다른 SMPS 로 넘기되 **총합은 보존해야 한다** — 버리면 잔차가
+    8.88 -> 22.86W 로 무너진다 (12.100.2).
+    """
+    import numpy as np
+    from src.model.postproc import CAP_W, apply_postproc
+
+    apps = ["beam_projector", "laptop_charger", "minipc", "oven"]
+    P = np.array([[120.0, 5.0, 2.0, 500.0], [48.0, 60.0, 20.0, 0.0]])
+    g = np.array([[0.9, 0.3, 0.6, 1.0], [1.0, 1.0, 1.0, 0.0]])
+    Pn, gn = apply_postproc(P, g, apps)
+
+    assert Pn[:, 0].max() <= CAP_W["beam_projector"] + 1e-9
+    assert np.allclose(Pn.sum(1), P.sum(1)), "총합이 보존되지 않았습니다"
+    assert Pn[0, 3] == P[0, 3], "저항 부하는 건드리면 안 됩니다"
+    # 상한 아래인 창은 그대로다
+    assert np.allclose(Pn[1], P[1])
+
+
+def test_게이트_동기는_넘겨받은_기기만_켠다():
+    """전력만 옮기면 on/off F1 이 안 변한다 (게이트를 안 건드리므로, 12.101.1)."""
+    import numpy as np
+    from src.model.postproc import GATE_ON_W, apply_postproc
+
+    apps = ["beam_projector", "laptop_charger", "minipc"]
+    P = np.array([[150.0, 1.0, 0.5]])
+    g = np.array([[0.9, 0.05, 0.05]])
+    _, g_off = apply_postproc(P, g, apps, gate_sync=False)
+    Pn, g_on = apply_postproc(P, g, apps, gate_sync=True)
+
+    assert np.allclose(g_off, g), "동기를 끄면 게이트가 그대로여야 합니다"
+    for j, a in enumerate(apps[1:], start=1):
+        if Pn[0, j] >= GATE_ON_W[a]:
+            assert g_on[0, j] > 0.5, f"{a} 가 {Pn[0, j]:.1f}W 를 받고도 꺼져 있습니다"
+
+def test_잔차_흡수는_닮은_기기에만_준다():
+    """총전력 잔차를 고조파가 닮은 SMPS 로만 넘긴다 (12.104절).
+
+    저항 부하의 잔차까지 SMPS 로 가면 오귀속이 된다. 실측에서도 `test_9`
+    (저항만)는 25.65 -> 25.35W 로 거의 안 변하고 `test_5` 는 12.25 -> 3.52W 다.
+    """
+    import numpy as np
+    from src.model.postproc import absorb_residual
+
+    apps = ["beam_projector", "minipc", "oven"]
+    K, H = len(apps), 15
+    sig = np.zeros((K, H, 2), dtype=np.float32)
+    sig[0, ::2, 0] = [1.0, 0.6, 0.3, 0.1, 0.05, 0.02, 0.01, 0.0]   # 프로젝터
+    sig[1, ::2, 0] = [1.0, 0.9, 0.8, 0.7, 0.60, 0.50, 0.40, 0.3]   # 미니PC
+    sig[2, 0, 0] = 1.0                                             # 오븐 (기본파만)
+    sb = np.zeros_like(sig); nz = np.zeros((H, 2), dtype=np.float32)
+
+    P = np.array([[40.0, 10.0, 500.0]])
+    gate = np.array([[0.9, 0.9, 0.9]])
+    standby = np.zeros((1, K)); p_noise = np.zeros(1)
+
+    # 잔차 20W 가 **오븐 모양**(기본파만)으로 들어오면 SMPS 는 거의 안 받는다
+    obs_oven = np.einsum("nk,khc->nhc", P + np.array([[0.0, 0.0, 20.0]]), sig)
+    out = absorb_residual(P, gate, apps, standby, p_noise,
+                          np.array([P.sum() + 20.0]), obs_oven, sig, sb, nz, frac=1.0)
+    smps_gain = out[0, :2].sum() - P[0, :2].sum()
+
+    # 같은 20W 가 **미니PC 모양**이면 미니PC 가 받는다
+    obs_mini = np.einsum("nk,khc->nhc", P + np.array([[0.0, 20.0, 0.0]]), sig)
+    out2 = absorb_residual(P, gate, apps, standby, p_noise,
+                           np.array([P.sum() + 20.0]), obs_mini, sig, sb, nz, frac=1.0)
+    assert out2[0, 1] - P[0, 1] > smps_gain, (
+        f"미니PC 모양 잔차를 미니PC 가 더 받아야 합니다 "
+        f"({out2[0, 1] - P[0, 1]:.1f}W vs 오븐 모양일 때 SMPS 합 {smps_gain:.1f}W)")
+    assert out[0, 2] == P[0, 2], "저항 부하는 흡수 대상이 아닙니다"

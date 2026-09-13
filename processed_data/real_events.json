@@ -1,69 +1,1148 @@
 {
-  "_comment": [
-    "TEST_DATASET_TIMELINE_ANALYSIS.txt 를 기계가 읽을 수 있게 옮긴 것.",
-    "설계 문서 4.2절대로 **정상상태 귀속은 옮기지 않았다** - 그 부분에 오류가 확인되었다",
-    "(예: '미니PC 단독 18.9W' -> 실제 4.3W). 여기 담긴 것은 두 가지뿐이다:",
-    "  1) intervals : 그 기기가 확실히 켜져 있던 구간 (on/off F1 채점용)",
-    "  2) events    : 시각과 ΔP 가 명시된 전이 (ΔP 채점용)",
-    "uncertain 구간은 어느 쪽으로도 채점하지 않는다. 오븐이 대표적이다 -",
-    "타임라인은 히터 통전만 적어 두었고 팬/조명(state 1, is_on=1)이 언제 켜졌는지는",
-    "알 수 없다. 그 구간을 OFF 로 채점하면 모델을 부당하게 벌하게 된다.",
-    "test.csv 는 봉인 대상이라 여기 없다 (sealing.py). 최종 평가 때 별도로 옮길 것."
-  ],
-  "files": {
-    "test.2": {
-      "duration_s": 466.0,
-      "cycles": 27960,
-      "v_mean": 220.9,
-      "appliances_present": ["minipc", "beam_projector", "oven"],
-      "intervals": {
-        "minipc": {"on": [[0.0, 466.0]], "uncertain": []},
-        "beam_projector": {"on": [[105.3, 235.4], [327.1, 437.0]], "uncertain": []},
-        "oven": {
-          "on": [[127, 137], [167, 180], [207, 223], [247, 264],
-                 [287, 303], [327, 343], [372, 380], [412, 418]],
-          "uncertain": [[127.0, 420.0]],
-          "_note": "on 은 히터 통전 펄스. uncertain 은 조리 세션 전체 - 그 사이에 팬/조명만 도는 구간이 섞여 있다"
-        },
-        "electiric_kettle": {"on": [], "uncertain": []},
-        "hair_dryer": {"on": [], "uncertain": []},
-        "hotplate": {"on": [], "uncertain": []},
-        "air_conditioner": {"on": [], "uncertain": []},
-        "fan": {"on": [], "uncertain": []},
-        "laptop_charger": {"on": [], "uncertain": []}
-      },
-      "events": [
-        {"t_s": 105.3, "appliance": "beam_projector", "kind": "on",  "delta_p_w": 43.0},
-        {"t_s": 235.4, "appliance": "beam_projector", "kind": "off", "delta_p_w": -43.3},
-        {"t_s": 327.1, "appliance": "beam_projector", "kind": "on",  "delta_p_w": 46.2},
-        {"t_s": 437.0, "appliance": "beam_projector", "kind": "off", "delta_p_w": -45.0}
+ "_comment": [
+  "run_write_labels 산출 (12.155). 원본 real_events.json 을 대체하지 않는다.",
+  "delta_p_w 는 **그 기기 몫**이다 — 총전력 계단이 아니다. SMPS 는 h3 에서",
+  "되돌린 값이라 오븐·핫플 듀티에 오염되지 않는다.",
+  "t_s 는 신호 계단이다 (사람 기록 대비 |Δt| 중앙 0.2~1.5초).",
+  "uncertain 은 사람이 적었는데 신호에 계단이 없는 자리다. 채점에서 뺀다."
+ ],
+ "_label_provenance_levels": {
+  "human_switching_log_signal_refined": "사람이 그 자리에서 적은 기록을 신호로 정밀화. 시각과 ΔP 는 신호, 정체는 사람. 물리 적합·부호를 전부 검사했다."
+ },
+ "files": {
+  "test_1": {
+   "appliances_present": [
+    "hotplate",
+    "laptop_charger",
+    "minipc",
+    "oven"
+   ],
+   "intervals": {
+    "laptop_charger": {
+     "on": [
+      [
+       0.0,
+       137.05
+      ],
+      [
+       165.12,
+       531.68
       ]
+     ],
+     "uncertain": []
     },
-    "test3": {
-      "duration_s": 413.0,
-      "cycles": 24780,
-      "v_mean": 219.8,
-      "appliances_present": ["minipc", "beam_projector", "oven"],
-      "intervals": {
-        "minipc": {"on": [[0.0, 413.0]], "uncertain": []},
-        "beam_projector": {"on": [[102.7, 413.0]], "uncertain": []},
-        "oven": {
-          "on": [[63.4, 140.0], [145, 170], [185, 201], [225, 235],
-                 [265, 278], [305, 315], [345, 355], [385, 395]],
-          "uncertain": [[63.4, 395.0]],
-          "_note": "63.4~140 은 연속 예열, 이후는 서모스탯 주기 펄스 7회"
-        },
-        "electiric_kettle": {"on": [], "uncertain": []},
-        "hair_dryer": {"on": [], "uncertain": []},
-        "hotplate": {"on": [], "uncertain": []},
-        "air_conditioner": {"on": [], "uncertain": []},
-        "fan": {"on": [], "uncertain": []},
-        "laptop_charger": {"on": [], "uncertain": []}
-      },
-      "events": [
-        {"t_s": 63.4,  "appliance": "oven",           "kind": "on", "delta_p_w": 1157.4},
-        {"t_s": 102.7, "appliance": "beam_projector", "kind": "on", "delta_p_w": 46.7}
+    "hotplate": {
+     "on": [
+      [
+       37.42,
+       305.35
+      ],
+      [
+       424.13,
+       719.87
       ]
+     ],
+     "uncertain": []
+    },
+    "oven": {
+     "on": [
+      [
+       60.97,
+       195.8
+      ],
+      [
+       266.72,
+       666.2
+      ]
+     ],
+     "uncertain": []
+    },
+    "minipc": {
+     "on": [
+      [
+       104.38,
+       224.5
+      ],
+      [
+       317.87,
+       447.28
+      ],
+      [
+       542.33,
+       778.1
+      ]
+     ],
+     "uncertain": []
     }
+   },
+   "events": [
+    {
+     "t_s": 37.42,
+     "appliance": "hotplate",
+     "kind": "on",
+     "delta_p_w": 463.8,
+     "_note": "cost 0.93, Δt +2.9s, ΔP출처 total, 총 +463.8W"
+    },
+    {
+     "t_s": 60.97,
+     "appliance": "oven",
+     "kind": "on",
+     "delta_p_w": 12.7,
+     "_note": "cost 0.67, Δt -1.0s, ΔP출처 total, 총 +12.7W"
+    },
+    {
+     "t_s": 104.38,
+     "appliance": "minipc",
+     "kind": "on",
+     "delta_p_w": 9.1,
+     "_note": "cost 1.08, Δt -0.1s, ΔP출처 h3, 총 +5.9W"
+    },
+    {
+     "t_s": 137.05,
+     "appliance": "laptop_charger",
+     "kind": "off",
+     "delta_p_w": -13.2,
+     "_note": "cost 2.79, Δt +0.1s, ΔP출처 h3, 총 -397.3W"
+    },
+    {
+     "t_s": 165.12,
+     "appliance": "laptop_charger",
+     "kind": "on",
+     "delta_p_w": 52.1,
+     "_note": "cost 0.92, Δt +1.1s, ΔP출처 h3, 총 -395.0W"
+    },
+    {
+     "t_s": 195.8,
+     "appliance": "oven",
+     "kind": "off",
+     "delta_p_w": -13.5,
+     "_note": "cost 0.13, Δt +1.3s, ΔP출처 rescue, 총 -13.5W"
+    },
+    {
+     "t_s": 224.5,
+     "appliance": "minipc",
+     "kind": "off",
+     "delta_p_w": -7.7,
+     "_note": "cost 1.25, Δt +0.5s, ΔP출처 h3, 총 +439.7W"
+    },
+    {
+     "t_s": 266.72,
+     "appliance": "oven",
+     "kind": "on",
+     "delta_p_w": 12.7,
+     "_note": "cost 0.52, Δt -1.3s, ΔP출처 total, 총 +12.7W"
+    },
+    {
+     "t_s": 305.35,
+     "appliance": "hotplate",
+     "kind": "off",
+     "delta_p_w": -449.6,
+     "_note": "cost 1.60, Δt -1.1s, ΔP출처 total, 총 -449.6W"
+    },
+    {
+     "t_s": 317.87,
+     "appliance": "minipc",
+     "kind": "on",
+     "delta_p_w": 9.8,
+     "_note": "cost 1.38, Δt +0.9s, ΔP출처 h3, 총 +8.3W"
+    },
+    {
+     "t_s": 424.13,
+     "appliance": "hotplate",
+     "kind": "on",
+     "delta_p_w": 453.3,
+     "_note": "cost 0.36, Δt +3.6s, ΔP출처 rescue, 총 +453.3W"
+    },
+    {
+     "t_s": 447.28,
+     "appliance": "minipc",
+     "kind": "off",
+     "delta_p_w": -11.4,
+     "_note": "cost 1.20, Δt +0.3s, ΔP출처 h3, 총 -11.7W"
+    },
+    {
+     "t_s": 531.68,
+     "appliance": "laptop_charger",
+     "kind": "off",
+     "delta_p_w": -13.5,
+     "_note": "cost 2.87, Δt +0.2s, ΔP출처 h3, 총 -11.4W"
+    },
+    {
+     "t_s": 542.33,
+     "appliance": "minipc",
+     "kind": "on",
+     "delta_p_w": 9.8,
+     "_note": "cost 1.29, Δt +1.3s, ΔP출처 h3, 총 +457.7W"
+    },
+    {
+     "t_s": 666.2,
+     "appliance": "oven",
+     "kind": "off",
+     "delta_p_w": -13.6,
+     "_note": "cost 1.05, Δt +1.7s, ΔP출처 total, 총 -13.6W"
+    },
+    {
+     "t_s": 719.87,
+     "appliance": "hotplate",
+     "kind": "off",
+     "delta_p_w": -454.6,
+     "_note": "cost 0.04, Δt +0.4s, ΔP출처 rescue, 총 -454.6W"
+    },
+    {
+     "t_s": 778.1,
+     "appliance": "minipc",
+     "kind": "off",
+     "delta_p_w": -8.9,
+     "_note": "cost 1.11, Δt +0.6s, ΔP출처 h3, 총 -8.5W"
+    }
+   ],
+   "_label_provenance": "human_switching_log_signal_refined",
+   "duration_s": 800.0,
+   "cycles": 48000,
+   "v_mean": 213.5
+  },
+  "test_2": {
+   "appliances_present": [
+    "beam_projector",
+    "electiric_kettle",
+    "fan",
+    "hair_dryer",
+    "laptop_charger",
+    "minipc"
+   ],
+   "intervals": {
+    "fan": {
+     "on": [
+      [
+       0.0,
+       252.03
+      ],
+      [
+       305.82,
+       681.85
+      ],
+      [
+       736.5,
+       824.7
+      ]
+     ],
+     "uncertain": []
+    },
+    "laptop_charger": {
+     "on": [
+      [
+       54.33,
+       462.75
+      ],
+      [
+       484.48,
+       795.63
+      ]
+     ],
+     "uncertain": []
+    },
+    "minipc": {
+     "on": [
+      [
+       88.8,
+       504.58
+      ],
+      [
+       529.0,
+       845.0
+      ]
+     ],
+     "uncertain": []
+    },
+    "electiric_kettle": {
+     "on": [
+      [
+       139.08,
+       178.82
+      ],
+      [
+       231.4,
+       282.53
+      ]
+     ],
+     "uncertain": []
+    },
+    "hair_dryer": {
+     "on": [
+      [
+       160.75,
+       195.07
+      ],
+      [
+       212.73,
+       260.08
+      ],
+      [
+       621.47,
+       655.07
+      ],
+      [
+       666.13,
+       696.03
+      ],
+      [
+       757.97,
+       778.53
+      ]
+     ],
+     "uncertain": []
+    },
+    "beam_projector": {
+     "on": [
+      [
+       343.07,
+       553.78
+      ],
+      [
+       586.0,
+       804.72
+      ]
+     ],
+     "uncertain": []
+    }
+   },
+   "events": [
+    {
+     "t_s": 54.33,
+     "appliance": "laptop_charger",
+     "kind": "on",
+     "delta_p_w": 57.0,
+     "_note": "cost 1.11, Δt +1.8s, ΔP출처 h3, 총 +57.0W"
+    },
+    {
+     "t_s": 88.8,
+     "appliance": "minipc",
+     "kind": "on",
+     "delta_p_w": 10.2,
+     "_note": "cost 1.34, Δt -0.2s, ΔP출처 h3, 총 +10.5W"
+    },
+    {
+     "t_s": 139.08,
+     "appliance": "electiric_kettle",
+     "kind": "on",
+     "delta_p_w": 1464.5,
+     "_note": "cost 0.17, Δt +0.1s, ΔP출처 total, 총 +1464.5W"
+    },
+    {
+     "t_s": 160.75,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "delta_p_w": 932.3,
+     "_note": "cost 0.20, Δt +0.2s, ΔP출처 total, 총 +932.3W"
+    },
+    {
+     "t_s": 178.82,
+     "appliance": "electiric_kettle",
+     "kind": "off",
+     "delta_p_w": -1393.2,
+     "_note": "cost 0.27, Δt -0.2s, ΔP출처 total, 총 -1393.2W"
+    },
+    {
+     "t_s": 195.07,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "delta_p_w": -971.0,
+     "_note": "cost 0.33, Δt +0.1s, ΔP출처 total, 총 -971.0W"
+    },
+    {
+     "t_s": 212.73,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "delta_p_w": 491.1,
+     "_note": "cost 0.48, Δt +0.2s, ΔP출처 total, 총 +491.1W"
+    },
+    {
+     "t_s": 231.4,
+     "appliance": "electiric_kettle",
+     "kind": "on",
+     "delta_p_w": 1430.4,
+     "_note": "cost 0.34, Δt -0.1s, ΔP출처 total, 총 +1430.4W"
+    },
+    {
+     "t_s": 252.03,
+     "appliance": "fan",
+     "kind": "off",
+     "delta_p_w": -20.1,
+     "_note": "cost 0.98, Δt +0.0s, ΔP출처 total, 총 -20.1W"
+    },
+    {
+     "t_s": 260.08,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "delta_p_w": -457.1,
+     "_note": "cost 0.45, Δt -0.4s, ΔP출처 total, 총 -457.1W"
+    },
+    {
+     "t_s": 282.53,
+     "appliance": "electiric_kettle",
+     "kind": "off",
+     "delta_p_w": -1436.4,
+     "_note": "cost 0.27, Δt -0.5s, ΔP출처 total, 총 -1436.4W"
+    },
+    {
+     "t_s": 305.82,
+     "appliance": "fan",
+     "kind": "on",
+     "delta_p_w": 30.2,
+     "_note": "cost 1.81, Δt +0.3s, ΔP출처 total, 총 +30.2W"
+    },
+    {
+     "t_s": 343.07,
+     "appliance": "beam_projector",
+     "kind": "on",
+     "delta_p_w": 41.6,
+     "_note": "cost 0.75, Δt +1.1s, ΔP출처 h3, 총 +41.9W"
+    },
+    {
+     "t_s": 462.75,
+     "appliance": "laptop_charger",
+     "kind": "off",
+     "delta_p_w": -60.3,
+     "_note": "cost 2.89, Δt +0.2s, ΔP출처 h3, 총 -59.6W"
+    },
+    {
+     "t_s": 484.48,
+     "appliance": "laptop_charger",
+     "kind": "on",
+     "delta_p_w": 48.5,
+     "_note": "cost 1.06, Δt +2.0s, ΔP출처 h3, 총 +48.2W"
+    },
+    {
+     "t_s": 504.58,
+     "appliance": "minipc",
+     "kind": "off",
+     "delta_p_w": -5.3,
+     "_note": "cost 1.85, Δt +0.6s, ΔP출처 h3, 총 -5.3W"
+    },
+    {
+     "t_s": 529.0,
+     "appliance": "minipc",
+     "kind": "on",
+     "delta_p_w": 8.5,
+     "_note": "cost 1.18, Δt +0.5s, ΔP출처 h3, 총 +8.2W"
+    },
+    {
+     "t_s": 553.78,
+     "appliance": "beam_projector",
+     "kind": "off",
+     "delta_p_w": -39.4,
+     "_note": "cost 1.70, Δt +0.8s, ΔP출처 h3, 총 -39.2W"
+    },
+    {
+     "t_s": 586.0,
+     "appliance": "beam_projector",
+     "kind": "on",
+     "delta_p_w": 39.9,
+     "_note": "cost 0.79, Δt +2.0s, ΔP출처 h3, 총 +40.0W"
+    },
+    {
+     "t_s": 621.47,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "delta_p_w": 985.6,
+     "_note": "cost 0.42, Δt +0.5s, ΔP출처 total, 총 +985.6W"
+    },
+    {
+     "t_s": 655.07,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "delta_p_w": -977.2,
+     "_note": "cost 0.58, Δt +1.1s, ΔP출처 total, 총 -977.2W"
+    },
+    {
+     "t_s": 666.13,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "delta_p_w": 494.9,
+     "_note": "cost 0.55, Δt +0.1s, ΔP출처 total, 총 +494.9W"
+    },
+    {
+     "t_s": 681.85,
+     "appliance": "fan",
+     "kind": "off",
+     "delta_p_w": -28.0,
+     "_note": "cost 1.33, Δt -0.1s, ΔP출처 total, 총 -28.0W"
+    },
+    {
+     "t_s": 696.03,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "delta_p_w": -494.3,
+     "_note": "cost 0.73, Δt +1.0s, ΔP출처 total, 총 -494.3W"
+    },
+    {
+     "t_s": 736.5,
+     "appliance": "fan",
+     "kind": "on",
+     "delta_p_w": 39.3,
+     "_note": "cost 0.97, Δt +0.5s, ΔP출처 total, 총 +39.3W"
+    },
+    {
+     "t_s": 757.97,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "delta_p_w": 985.4,
+     "_note": "cost 0.34, Δt -0.0s, ΔP출처 total, 총 +985.4W"
+    },
+    {
+     "t_s": 778.53,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "delta_p_w": -976.3,
+     "_note": "cost 0.42, Δt +0.5s, ΔP출처 total, 총 -976.3W"
+    },
+    {
+     "t_s": 795.63,
+     "appliance": "laptop_charger",
+     "kind": "off",
+     "delta_p_w": -61.5,
+     "_note": "cost 2.94, Δt +0.6s, ΔP출처 h3, 총 -61.4W"
+    },
+    {
+     "t_s": 804.72,
+     "appliance": "beam_projector",
+     "kind": "off",
+     "delta_p_w": -40.8,
+     "_note": "cost 1.61, Δt +0.2s, ΔP출처 h3, 총 -39.7W"
+    },
+    {
+     "t_s": 824.7,
+     "appliance": "fan",
+     "kind": "off",
+     "delta_p_w": -37.8,
+     "_note": "cost 1.97, Δt +0.2s, ΔP출처 total, 총 -37.8W"
+    },
+    {
+     "t_s": 845.0,
+     "appliance": "minipc",
+     "kind": "off",
+     "delta_p_w": -6.1,
+     "_note": "cost 1.65, Δt +0.0s, ΔP출처 h3, 총 -5.1W"
+    }
+   ],
+   "_label_provenance": "human_switching_log_signal_refined",
+   "duration_s": 863.5,
+   "cycles": 51810,
+   "v_mean": 229.3
+  },
+  "test_3": {
+   "appliances_present": [
+    "beam_projector",
+    "hair_dryer",
+    "hotplate",
+    "laptop_charger",
+    "minipc",
+    "oven"
+   ],
+   "intervals": {
+    "laptop_charger": {
+     "on": [
+      [
+       0.0,
+       153.67
+      ],
+      [
+       211.12,
+       305.55
+      ],
+      [
+       454.22,
+       547.97
+      ]
+     ],
+     "uncertain": []
+    },
+    "hotplate": {
+     "on": [
+      [
+       31.9,
+       143.73
+      ],
+      [
+       272.65,
+       486.48
+      ]
+     ],
+     "uncertain": []
+    },
+    "beam_projector": {
+     "on": [
+      [
+       38.07,
+       133.68
+      ],
+      [
+       176.67,
+       283.62
+      ],
+      [
+       430.15,
+       533.57
+      ]
+     ],
+     "uncertain": []
+    },
+    "oven": {
+     "on": [
+      [
+       63.22,
+       199.03
+      ],
+      [
+       380.6,
+       520.12
+      ]
+     ],
+     "uncertain": []
+    },
+    "minipc": {
+     "on": [
+      [
+       85.52,
+       248.77
+      ],
+      [
+       318.83,
+       562.45
+      ]
+     ],
+     "uncertain": []
+    },
+    "hair_dryer": {
+     "on": [
+      [
+       102.23,
+       220.03
+      ],
+      [
+       337.0,
+       363.95
+      ]
+     ],
+     "uncertain": []
+    }
+   },
+   "events": [
+    {
+     "t_s": 31.9,
+     "appliance": "hotplate",
+     "kind": "on",
+     "delta_p_w": 459.8,
+     "_note": "cost 1.31, Δt +3.9s, ΔP출처 total, 총 +459.8W"
+    },
+    {
+     "t_s": 38.07,
+     "appliance": "beam_projector",
+     "kind": "on",
+     "delta_p_w": 39.4,
+     "_note": "cost 1.15, Δt +1.1s, ΔP출처 h3, 총 +491.5W"
+    },
+    {
+     "t_s": 63.22,
+     "appliance": "oven",
+     "kind": "on",
+     "delta_p_w": 2.0,
+     "_note": "cost 3.88, Δt +0.7s, ΔP출처 total, 총 +2.0W"
+    },
+    {
+     "t_s": 85.52,
+     "appliance": "minipc",
+     "kind": "on",
+     "delta_p_w": 5.8,
+     "_note": "cost 2.72, Δt +0.5s, ΔP출처 h3, 총 -396.2W"
+    },
+    {
+     "t_s": 102.23,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "delta_p_w": 413.1,
+     "_note": "cost 2.19, Δt +2.7s, ΔP출처 total, 총 +413.1W"
+    },
+    {
+     "t_s": 133.68,
+     "appliance": "beam_projector",
+     "kind": "off",
+     "delta_p_w": -35.7,
+     "_note": "cost 3.19, Δt +0.2s, ΔP출처 h3, 총 -451.7W"
+    },
+    {
+     "t_s": 143.73,
+     "appliance": "hotplate",
+     "kind": "off",
+     "delta_p_w": -417.2,
+     "_note": "cost 0.50, Δt -0.3s, ΔP출처 total, 총 -417.2W"
+    },
+    {
+     "t_s": 153.67,
+     "appliance": "laptop_charger",
+     "kind": "off",
+     "delta_p_w": -36.9,
+     "_note": "cost 1.48, Δt +0.2s, ΔP출처 h3, 총 -36.7W"
+    },
+    {
+     "t_s": 168.87,
+     "appliance": "hair_dryer",
+     "kind": "mode",
+     "delta_p_w": -417.3,
+     "_note": "cost 2.01, Δt +0.4s, ΔP출처 total, 총 -417.3W"
+    },
+    {
+     "t_s": 176.67,
+     "appliance": "beam_projector",
+     "kind": "on",
+     "delta_p_w": 40.9,
+     "_note": "cost 0.78, Δt -0.3s, ΔP출처 h3, 총 +41.6W"
+    },
+    {
+     "t_s": 199.03,
+     "appliance": "oven",
+     "kind": "off",
+     "delta_p_w": -13.3,
+     "_note": "cost 2.01, Δt +0.5s, ΔP출처 total, 총 -13.3W"
+    },
+    {
+     "t_s": 211.12,
+     "appliance": "laptop_charger",
+     "kind": "on",
+     "delta_p_w": 49.1,
+     "_note": "cost 1.35, Δt +1.6s, ΔP출처 h3, 총 +50.8W"
+    },
+    {
+     "t_s": 220.03,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "delta_p_w": -430.6,
+     "_note": "cost 2.52, Δt +0.0s, ΔP출처 total, 총 -430.6W"
+    },
+    {
+     "t_s": 248.77,
+     "appliance": "minipc",
+     "kind": "off",
+     "delta_p_w": -5.7,
+     "_note": "cost 1.89, Δt -0.7s, ΔP출처 h3, 총 -7.8W"
+    },
+    {
+     "t_s": 272.65,
+     "appliance": "hotplate",
+     "kind": "on",
+     "delta_p_w": 455.7,
+     "_note": "cost 1.29, Δt +3.6s, ΔP출처 total, 총 +455.7W"
+    },
+    {
+     "t_s": 283.62,
+     "appliance": "beam_projector",
+     "kind": "off",
+     "delta_p_w": -39.2,
+     "_note": "cost 2.83, Δt -0.4s, ΔP출처 h3, 총 -494.5W"
+    },
+    {
+     "t_s": 305.55,
+     "appliance": "laptop_charger",
+     "kind": "off",
+     "delta_p_w": -37.6,
+     "_note": "cost 1.45, Δt +0.6s, ΔP출처 h3, 총 -492.8W"
+    },
+    {
+     "t_s": 318.83,
+     "appliance": "minipc",
+     "kind": "on",
+     "delta_p_w": 9.6,
+     "_note": "cost 1.18, Δt -0.2s, ΔP출처 h3, 총 +466.2W"
+    },
+    {
+     "t_s": 337.0,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "delta_p_w": 416.9,
+     "_note": "cost 2.02, Δt +2.5s, ΔP출처 total, 총 +416.9W"
+    },
+    {
+     "t_s": 363.95,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "delta_p_w": -412.3,
+     "_note": "cost 1.64, Δt -0.1s, ΔP출처 total, 총 -412.3W"
+    },
+    {
+     "t_s": 380.6,
+     "appliance": "oven",
+     "kind": "on",
+     "delta_p_w": 13.6,
+     "_note": "cost 0.06, Δt +0.6s, ΔP출처 rescue, 총 +13.6W"
+    },
+    {
+     "t_s": 430.15,
+     "appliance": "beam_projector",
+     "kind": "on",
+     "delta_p_w": 40.2,
+     "_note": "cost 0.82, Δt +1.1s, ΔP출처 h3, 총 -366.5W"
+    },
+    {
+     "t_s": 454.22,
+     "appliance": "laptop_charger",
+     "kind": "on",
+     "delta_p_w": 50.8,
+     "_note": "cost 1.28, Δt +1.7s, ΔP출처 h3, 총 -394.8W"
+    },
+    {
+     "t_s": 486.48,
+     "appliance": "hotplate",
+     "kind": "off",
+     "delta_p_w": -450.8,
+     "_note": "cost 1.66, Δt +0.5s, ΔP출처 total, 총 -450.8W"
+    },
+    {
+     "t_s": 520.12,
+     "appliance": "oven",
+     "kind": "off",
+     "delta_p_w": -13.8,
+     "_note": "cost 1.00, Δt +0.6s, ΔP출처 total, 총 -13.8W"
+    },
+    {
+     "t_s": 533.57,
+     "appliance": "beam_projector",
+     "kind": "off",
+     "delta_p_w": -39.5,
+     "_note": "cost 2.72, Δt +0.1s, ΔP출처 h3, 총 -40.7W"
+    },
+    {
+     "t_s": 547.97,
+     "appliance": "laptop_charger",
+     "kind": "off",
+     "delta_p_w": -36.4,
+     "_note": "cost 1.47, Δt +0.5s, ΔP출처 h3, 총 -35.7W"
+    },
+    {
+     "t_s": 562.45,
+     "appliance": "minipc",
+     "kind": "off",
+     "delta_p_w": -6.0,
+     "_note": "cost 1.77, Δt +1.0s, ΔP출처 h3, 총 -5.8W"
+    }
+   ],
+   "_label_provenance": "human_switching_log_signal_refined",
+   "duration_s": 581.0,
+   "cycles": 34860,
+   "v_mean": 213.5
+  },
+  "test_4": {
+   "appliances_present": [
+    "beam_projector",
+    "laptop_charger",
+    "minipc"
+   ],
+   "intervals": {
+    "laptop_charger": {
+     "on": [
+      [
+       16.07,
+       221.43
+      ],
+      [
+       258.77,
+       441.15
+      ]
+     ],
+     "uncertain": []
+    },
+    "beam_projector": {
+     "on": [
+      [
+       37.32,
+       178.28
+      ],
+      [
+       203.13,
+       423.62
+      ]
+     ],
+     "uncertain": []
+    },
+    "minipc": {
+     "on": [
+      [
+       52.43,
+       310.17
+      ],
+      [
+       371.35,
+       460.0
+      ]
+     ],
+     "uncertain": []
+    }
+   },
+   "events": [
+    {
+     "t_s": 16.07,
+     "appliance": "laptop_charger",
+     "kind": "on",
+     "delta_p_w": 46.7,
+     "_note": "cost 0.99, Δt +1.1s, ΔP출처 h3, 총 +46.3W"
+    },
+    {
+     "t_s": 37.32,
+     "appliance": "beam_projector",
+     "kind": "on",
+     "delta_p_w": 35.5,
+     "_note": "cost 0.87, Δt -1.7s, ΔP출처 h3, 총 +35.4W"
+    },
+    {
+     "t_s": 52.43,
+     "appliance": "minipc",
+     "kind": "on",
+     "delta_p_w": 8.6,
+     "_note": "cost 1.16, Δt -0.1s, ΔP출처 h3, 총 +9.3W"
+    },
+    {
+     "t_s": 178.28,
+     "appliance": "beam_projector",
+     "kind": "off",
+     "delta_p_w": -37.4,
+     "_note": "cost 2.82, Δt +0.3s, ΔP출처 h3, 총 -36.9W"
+    },
+    {
+     "t_s": 203.13,
+     "appliance": "beam_projector",
+     "kind": "on",
+     "delta_p_w": 41.2,
+     "_note": "cost 0.87, Δt +1.6s, ΔP출처 h3, 총 +41.8W"
+    },
+    {
+     "t_s": 221.43,
+     "appliance": "laptop_charger",
+     "kind": "off",
+     "delta_p_w": -36.2,
+     "_note": "cost 3.02, Δt +0.4s, ΔP출처 h3, 총 -36.3W"
+    },
+    {
+     "t_s": 258.77,
+     "appliance": "laptop_charger",
+     "kind": "on",
+     "delta_p_w": 47.6,
+     "_note": "cost 1.29, Δt +2.3s, ΔP출처 h3, 총 +48.2W"
+    },
+    {
+     "t_s": 310.17,
+     "appliance": "minipc",
+     "kind": "off",
+     "delta_p_w": -5.4,
+     "_note": "cost 1.79, Δt +0.2s, ΔP출처 h3, 총 -5.1W"
+    },
+    {
+     "t_s": 371.35,
+     "appliance": "minipc",
+     "kind": "on",
+     "delta_p_w": 9.5,
+     "_note": "cost 1.35, Δt +0.9s, ΔP출처 h3, 총 +9.4W"
+    },
+    {
+     "t_s": 423.62,
+     "appliance": "beam_projector",
+     "kind": "off",
+     "delta_p_w": -37.4,
+     "_note": "cost 2.73, Δt +0.6s, ΔP출처 h3, 총 -37.2W"
+    },
+    {
+     "t_s": 441.15,
+     "appliance": "laptop_charger",
+     "kind": "off",
+     "delta_p_w": -34.8,
+     "_note": "cost 2.91, Δt +0.1s, ΔP출처 h3, 총 -34.1W"
+    },
+    {
+     "t_s": 460.0,
+     "appliance": "minipc",
+     "kind": "off",
+     "delta_p_w": -6.6,
+     "_note": "cost 1.56, Δt +0.5s, ΔP출처 h3, 총 -6.3W"
+    }
+   ],
+   "_label_provenance": "human_switching_log_signal_refined",
+   "duration_s": 498.0,
+   "cycles": 29880,
+   "v_mean": 216.7
+  },
+  "test_5": {
+   "appliances_present": [
+    "electiric_kettle",
+    "hair_dryer",
+    "hotplate",
+    "oven"
+   ],
+   "intervals": {
+    "hair_dryer": {
+     "on": [
+      [
+       30.73,
+       143.47
+      ],
+      [
+       215.68,
+       271.8
+      ]
+     ],
+     "uncertain": []
+    },
+    "oven": {
+     "on": [
+      [
+       48.23,
+       127.9
+      ],
+      [
+       157.0,
+       280.8
+      ]
+     ],
+     "uncertain": []
+    },
+    "hotplate": {
+     "on": [
+      [
+       73.93,
+       193.33
+      ],
+      [
+       262.55,
+       291.63
+      ]
+     ],
+     "uncertain": []
+    },
+    "electiric_kettle": {
+     "on": [
+      [
+       82.47,
+       182.45
+      ]
+     ],
+     "uncertain": []
+    }
+   },
+   "events": [
+    {
+     "t_s": 30.73,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "delta_p_w": 854.4,
+     "_note": "cost 0.00, Δt +15.2s, ΔP출처 total, 총 +854.4W"
+    },
+    {
+     "t_s": 48.23,
+     "appliance": "oven",
+     "kind": "on",
+     "delta_p_w": 9.9,
+     "_note": "cost 0.00, Δt +7.2s, ΔP출처 total, 총 +9.9W"
+    },
+    {
+     "t_s": 73.93,
+     "appliance": "hotplate",
+     "kind": "on",
+     "delta_p_w": 375.8,
+     "_note": "cost 1.15, Δt +3.9s, ΔP출처 total, 총 +375.8W"
+    },
+    {
+     "t_s": 82.47,
+     "appliance": "electiric_kettle",
+     "kind": "on",
+     "delta_p_w": 1043.5,
+     "_note": "cost 1.45, Δt -0.0s, ΔP출처 total, 총 +1043.5W"
+    },
+    {
+     "t_s": 101.38,
+     "appliance": "hair_dryer",
+     "kind": "mode",
+     "delta_p_w": -329.4,
+     "_note": "cost 2.16, Δt -1.6s, ΔP출처 total, 총 -329.4W"
+    },
+    {
+     "t_s": 127.9,
+     "appliance": "oven",
+     "kind": "off",
+     "delta_p_w": -11.8,
+     "_note": "cost 0.01, Δt -0.1s, ΔP출처 rescue, 총 -11.8W"
+    },
+    {
+     "t_s": 143.47,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "delta_p_w": -400.6,
+     "_note": "cost 1.69, Δt +1.0s, ΔP출처 total, 총 -400.6W"
+    },
+    {
+     "t_s": 157.0,
+     "appliance": "oven",
+     "kind": "on",
+     "delta_p_w": 1.3,
+     "_note": "cost 8.31, Δt +0.0s, ΔP출처 total, 총 +1.3W"
+    },
+    {
+     "t_s": 182.45,
+     "appliance": "electiric_kettle",
+     "kind": "off",
+     "delta_p_w": -1741.0,
+     "_note": "cost 1.91, Δt +0.4s, ΔP출처 total, 총 -1741.0W"
+    },
+    {
+     "t_s": 193.33,
+     "appliance": "hotplate",
+     "kind": "off",
+     "delta_p_w": -455.6,
+     "_note": "cost 1.39, Δt +0.3s, ΔP출처 total, 총 -455.6W"
+    },
+    {
+     "t_s": 215.68,
+     "appliance": "hair_dryer",
+     "kind": "on",
+     "delta_p_w": 375.8,
+     "_note": "cost 2.02, Δt +0.2s, ΔP출처 total, 총 +375.8W"
+    },
+    {
+     "t_s": 234.78,
+     "appliance": "hair_dryer",
+     "kind": "mode",
+     "delta_p_w": 416.9,
+     "_note": "cost 1.93, Δt +0.3s, ΔP출처 total, 총 +416.9W"
+    },
+    {
+     "t_s": 262.55,
+     "appliance": "hotplate",
+     "kind": "on",
+     "delta_p_w": 423.5,
+     "_note": "cost 0.88, Δt +2.6s, ΔP출처 total, 총 +423.5W"
+    },
+    {
+     "t_s": 271.8,
+     "appliance": "hair_dryer",
+     "kind": "off",
+     "delta_p_w": -1265.9,
+     "_note": "cost 2.90, Δt -0.2s, ΔP출처 total, 총 -1265.9W"
+    },
+    {
+     "t_s": 280.8,
+     "appliance": "oven",
+     "kind": "off",
+     "delta_p_w": -13.6,
+     "_note": "cost 0.32, Δt -3.2s, ΔP출처 rescue, 총 -13.6W"
+    },
+    {
+     "t_s": 291.63,
+     "appliance": "hotplate",
+     "kind": "off",
+     "delta_p_w": -457.1,
+     "_note": "cost 0.01, Δt +0.1s, ΔP출처 rescue, 총 -457.1W"
+    }
+   ],
+   "_label_provenance": "human_switching_log_signal_refined",
+   "duration_s": 306.0,
+   "cycles": 18360,
+   "v_mean": 209.6
   }
+ }
 }

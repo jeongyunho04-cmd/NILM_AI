@@ -91,7 +91,9 @@ def extract(x: np.ndarray, target_index: int = 539) -> np.ndarray:
     x = np.asarray(x, dtype=np.float32)
     b, c, w = x.shape
     if c < 33:
-        raise ValueError(f"33채널 입력이 필요합니다: {c}")
+        raise ValueError(f"33채널 이상이 필요합니다: {c}")
+    # 13.26 에서 원시가 45채널(전압 고조파 12개 추가)이 됐다. 이 기준선은 그것을 안 쓴다.
+    x, c = x[:, :33], 33
     n_harm = 15
 
     re, im = x[:, 0:n_harm], x[:, n_harm:2 * n_harm]

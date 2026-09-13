@@ -51,6 +51,41 @@ def inspect(d: str) -> int:
     return 0
 
 
+def _parse_mix(spec):
+    """프리셋 이름 또는 JSON -> dict. 합이 1 이 아니면 거부한다."""
+    if not spec:
+        return None
+    import json as _json
+    from src.run_recipe_mix_probe import PRESETS
+    mix = PRESETS[spec] if spec in PRESETS else _json.loads(spec)
+    if abs(sum(mix.values()) - 1.0) > 1e-6:
+        raise SystemExit(f"레시피 믹스 합이 1 이 아닙니다: {sum(mix.values()):.4f}")
+    return mix
+
+
+def _parse_scramble(items):
+    """["beam_projector:0.64:1.42"] -> {"beam_projector": (0.64, 1.42)}"""
+    if not items:
+        return None
+    out = {}
+    for it in items:
+        parts = it.split(":")
+        if len(parts) != 3:
+            raise SystemExit(f"--level-scramble 형식은 APP:LO:HI 입니다: {it}")
+        out[parts[0]] = (float(parts[1]), float(parts[2]))
+    return out
+
+
+def _parse_state_mix(s: str):
+    """`--state-mix` 를 {가전: {상태id: 확률}} 로. 빈 문자열이면 None (13.35)."""
+    if not s:
+        return None
+    import json as _json
+    from src.synthesis.augmentor import STATE_MIX_PRESETS
+    d = STATE_MIX_PRESETS[s] if s in STATE_MIX_PRESETS else _json.loads(s)
+    return {k: {int(x): float(v) for x, v in m.items()} for k, m in d.items()}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="고정 합성 홀드아웃 평가 셋 생성")
     ap.add_argument("--out", default=str(DEFAULT_DIR))
@@ -59,6 +94,54 @@ def main() -> int:
     ap.add_argument("--holdout-frac", type=float, default=0.2)
     ap.add_argument("--seed", type=int, default=DEFAULT_SEED)
     ap.add_argument("--inspect", action="store_true")
+    ap.add_argument("--ablate-pedestal", nargs="*", default=None, metavar="APP",
+                    help="이 가전들의 활성화 끝 기착 구간을 잘라낸 반사실 평가 셋을 만든다 "
+                         "(12.63절). 예: --ablate-pedestal beam_projector")
+    ap.add_argument("--smps-focus-off-p", type=float, default=0.0, metavar="P",
+                    help="smps_overlap 에서 미니PC 를 끄고 형제 SMPS 만 켤 확률 (13.83). "
+                         "**학습 캐시와 같은 값을 줘라** — 다르면 홀드아웃이 다른 동시성을 잰다")
+    ap.add_argument("--recipe-mix", default="", metavar="NAME|JSON",
+                    help="레시피 믹스. 프리셋 이름(half/full) 또는 JSON (12.67절). "
+                         "학습 믹스를 바꿨으면 평가 셋도 같은 믹스로 만들어야 "
+                         "합성 F1 이 분포 어긋남과 교락되지 않는다")
+    ap.add_argument("--sp-curves", action="store_true",
+                    help="증강 전력스케일을 s(p) 로 (12.166). **학습 캐시와 같아야 한다**")
+    ap.add_argument("--vtail", action="store_true",
+                    help="전압 꼬리(h17~h31)를 텍스처에 얹는다 (13.73/13.78). processed_data/vtail.npz 가 필요하다. 절대 경로(모델 단독)는 확실히 좋아지지만 델타 경로는 나빠진 전례가 있다 — A/B 로 판정하라")
+    ap.add_argument("--steady-crop", default="",
+                    help="정상 구간 자르기 (13.83.26). 프리셋 'smps_steady' 또는 JSON. 학습 캐시와 같이")
+    ap.add_argument("--standby-jitter-cap", type=float, default=0.0,
+                    help="대기 잔차 상한 백분위 (13.83.26). 학습 캐시와 같이")
+    ap.add_argument("--sibling-rotate", default="",
+                    help="형제 전용 차수 비례 회전 (13.84.8 ②). 프리셋 'smps_rot10' 또는 JSON. 학습 캐시와 같이")
+    ap.add_argument("--float-fill", default="",
+                    help="상태 채움 + 전력 축소 (13.83.23). 프리셋 'charger_float' 또는 JSON. "
+                         "학습 캐시와 같이 켜야 그 부류의 F1 을 잴 수 있다")
+    ap.add_argument("--sp-per-texture", action="store_true",
+                    help="s(p) 를 **그 녹화의 텍스처**에서 만든 곡선으로 (13.74). 옛 곡선은 "
+                         "깨끗한 정현파에서 만들어 자리 차이가 원리적으로 없었다 — 실측 채점에서 "
+                         "크기 오차 중앙값 0.123 -> 0.031 (자리 D 는 0.211 -> 0.049). "
+                         "--sp-curves 와 같이 써야 하고 processed_data/sp_curves_tex.npz 가 필요하다")
+    ap.add_argument("--background", action="store_true",
+                    help="상시 배경 부하를 넣는다 (12.166). **학습 캐시와 같아야 한다** — "
+                         "배경 없이 만든 홀드아웃으로 배경 있는 모델을 재면 최소 부하만 "
+                         "무너진다 (12.168.4: 미니PC −0.119, 선풍기 −0.093)")
+    ap.add_argument("--level-scramble", nargs="*", default=None, metavar="APP:LO:HI",
+                    help="그 가전의 전력 배율을 균등분포 [LO,HI] 로 흔든 반사실 평가 셋 "
+                         "(12.64절). 예: --level-scramble beam_projector:0.64:1.42")
+    ap.add_argument("--couple-ext", action="store_true",
+                    help="결합 델타의 Σ 에 **비SMPS 전류**를 넣는다 (13.45). 지금은 SMPS 3종만 "
+                         "더해서 오븐 5.2A·에어컨 h3 1.44A 가 빠져 있고, D 에서 그 강하가 "
+                         "V_h3 자체보다 크다")
+    ap.add_argument("--carrier-on", nargs="*", default=None, metavar="APP",
+                    help="캐리어 상태를 **세션으로** 본다 (13.40). 인자 없이 주면 오븐. "
+                         "**학습 캐시와 반드시 같이 줘야 한다** — 한쪽만 주면 오븐 라벨의 "
+                         "뜻이 달라져 홀드아웃 지표가 비교 불가능해진다")
+    ap.add_argument("--state-mix", default="",
+                    help="창을 자를 때 **상태**를 먼저 뽑는다 (13.35). 프리셋 이름 또는 "
+                         "JSON {가전:{상태id:확률}}. **판을 견줄 때는 비워 두고 같은 "
+                         "홀드아웃을 그대로 쓴다** — 홀드아웃은 자르는 시간 구간이 달라 "
+                         "미니PC IDLE 이 자연히 47.8%% 라 그 자체로 고른 잣대다.")
     a = ap.parse_args()
 
     if a.inspect:
@@ -70,8 +153,45 @@ def main() -> int:
     print("\n" + "=" * 74)
     print("[NILM AI] 고정 합성 홀드아웃 평가 셋 생성")
     print("=" * 74)
+    ffl = None
+    if a.float_fill:
+        import json as _json
+        from src.synthesis.augmentor import FLOAT_FILL_PRESETS
+        ffl = (FLOAT_FILL_PRESETS[a.float_fill]
+               if a.float_fill in FLOAT_FILL_PRESETS else _json.loads(a.float_fill))
+        ffl = {k: {"p": float(d["p"]), "state": int(d["state"]),
+                   "scale": [float(d["scale"][0]), float(d["scale"][1])]} for k, d in ffl.items()}
+        print(f"  ** 상태 채움 + 전력 축소 '{a.float_fill}' (13.83.23) **")
+    scr = None
+    if a.steady_crop:
+        import json as _json2
+        from src.synthesis.augmentor import STEADY_CROP_PRESETS
+        scr = (STEADY_CROP_PRESETS[a.steady_crop]
+               if a.steady_crop in STEADY_CROP_PRESETS else _json2.loads(a.steady_crop))
+        scr = {k: {"p": float(d["p"]), "max_range_frac": float(d["max_range_frac"])} for k, d in scr.items()}
+        print(f"  ** 정상 구간 자르기 '{a.steady_crop}' (13.83.26) **")
+    srot = None
+    if a.sibling_rotate:
+        import json as _json3
+        from src.synthesis.augmentor import SIBLING_ROTATE_PRESETS
+        srot = (SIBLING_ROTATE_PRESETS[a.sibling_rotate]
+                if a.sibling_rotate in SIBLING_ROTATE_PRESETS else _json3.loads(a.sibling_rotate))
+        # ⚠ 키를 깎지 않는다 — 13.84.16 의 뒤섞기·기울기 항이 여기서 조용히 사라진다.
+        srot = {k: dict(d) for k, d in srot.items()}
+        print(f"  ** 형제 전용 편차 '{a.sibling_rotate}' (13.84.8 ② · 13.84.16) **")
     build_holdout(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
-                  holdout_frac=a.holdout_frac, seed=a.seed)
+                  holdout_frac=a.holdout_frac, seed=a.seed, float_fill=ffl,
+                  steady_crop=scr, standby_jitter_cap=a.standby_jitter_cap,
+                  sibling_rotate=srot,
+                  ablate_pedestal_apps=a.ablate_pedestal,
+                  sp_curves=a.sp_curves, sp_per_texture=a.sp_per_texture, vtail=a.vtail, background=a.background,
+                  level_scramble=_parse_scramble(a.level_scramble),
+                  state_mix=_parse_state_mix(a.state_mix),
+                  carrier_apps=(None if a.carrier_on is None
+                                else (tuple(a.carrier_on) or ("oven",))),
+                  couple_ext=a.couple_ext,
+                  recipe_mix=_parse_mix(a.recipe_mix),
+                  smps_focus_off_p=a.smps_focus_off_p)
     return inspect(a.out)
 
 

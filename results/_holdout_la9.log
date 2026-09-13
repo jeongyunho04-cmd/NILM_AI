@@ -1,0 +1,45 @@
+
+==========================================================================
+[NILM AI] 고정 합성 홀드아웃 평가 셋 생성
+==========================================================================
+[holdout] 뒤 20% 구간에서 8,000창 생성 | 타깃 시점 3059/3600
+   1,000/8,000
+   2,000/8,000
+   3,000/8,000
+   4,000/8,000
+   5,000/8,000
+   6,000/8,000
+   7,000/8,000
+   8,000/8,000
+[holdout] 저장 완료 C:\Users\yunho\Documents\NILM_train\NILM_AI-main\processed_data\holdout60_la9 | 3.80 GB | sha 92db1dfee4dabbdd
+
+==========================================================================
+[홀드아웃] C:\Users\yunho\Documents\NILM_train\NILM_AI-main\processed_data\holdout60_la9
+==========================================================================
+  창 8,000개 x 60초 | 타깃 시점 3059 | seed 20260821 | sha 92db1dfee4dabbdd
+  원본의 뒤 20% 구간만 사용
+
+  가전                       홀드아웃 분량        양성 라벨률
+  air_conditioner           12.1분          3.7%
+  beam_projector             4.3분         16.1%
+  electiric_kettle           1.6분         10.5%
+  fan                        9.0분         17.4%
+  hair_dryer                 0.8분          8.8%
+  hotplate                   1.3분          6.0%
+  laptop_charger             9.9분         19.1%
+  minipc                    14.4분         19.8%
+  oven                      10.0분         13.8%
+
+  레시피 구성:
+    low_load_among_standby      1,625  ( 20.3%)
+    standby_only                1,244  ( 15.6%)
+    random_realistic            1,242  ( 15.5%)
+    high_low_mixed              1,173  ( 14.7%)
+    random_uniform              1,106  ( 13.8%)
+    high_power_resistive          799  ( 10.0%)
+    unplugged_baseline            408  (  5.1%)
+    resistive_overlap             403  (  5.0%)
+
+  형태: X (8000, 33, 3600) float32 | y_power (8000, 9) | 3.80 GB
+==========================================================================
+

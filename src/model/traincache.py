@@ -14,7 +14,7 @@
     2M 창 학습에 61분이 걸리는데 그중 57분이 CPU 합성 대기다.
 
 [변환 후를 저장한다 — 용량이 10배 작다]
-    원시 (33, 3600) float32            475 KB/창
+    원시 (45, 3600) float32            648 KB/창   (33 -> 45: 전압 고조파 12채널, 13.26)
     변환 후 (36,600)+(12,120) float16   45 KB/창
 
     창 수     용량      생성(1회)   2M 학습 시 재사용
@@ -34,13 +34,14 @@
 광역 갈래 유무는 wide 입력을 0 으로 만들면 된다.
 """
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Sequence
 import json
 import time
 
 import numpy as np
 
-from src.model.inputs import FINE_CHANNELS, FINE_CYCLES, WIDE_CHANNELS, build_inputs
+from src.model.inputs import (ZERO_EVEN_HARMONICS, FINE_CHANNELS, FINE_CYCLES, FINE_LAYOUT,
+                             RAW_CHANNELS, WIDE_CHANNELS, build_inputs)
 
 # (이름, dtype, 창당 모양)
 _SPEC = {
@@ -54,36 +55,105 @@ _SPEC = {
     "obs_harm":   (np.float16, (15, 2)),
     "p_noise":    (np.float32, ()),
     "p_observed": (np.float32, ()),
+    # 13.55 — 이 창의 **선로 임피던스** [r_grid, x_grid] Ω. 모델 입력이 아니라
+    # 보조 감독 목표다. 13.54 가 잰 것: 입력에서 log Z 를 R² 0.935 로 뽑을 수
+    # 있는데 몸통 z 에서는 0.661 로 흐려진다 — 아무도 보존하라고 안 해서다.
+    "z_grid":     (np.float32, (2,)),
 }
 
+#: 옛 캐시에는 없는 배열. 없으면 NaN 으로 채워 내보낸다 (배치 길이는 항상 같다).
+_OPTIONAL = ("z_grid",)
+
 _GEN = None
+_SEED_BASE = 0
 
 
-def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int) -> None:
-    global _GEN
-    import os
+def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
+          exclude_files_json: str = "", dither_amp: float = 0.0,
+          dither_phase_deg: float = 0.0, recipe_mix_json: str = "",
+          dither_even_amp: float = 0.0, dither_even_phase_deg: float = 0.0,
+          power_scale_std_json: str = "",
+          sp_curves: bool = False,
+          sp_per_texture: bool = False, vtail: bool = False,
+          background: bool = False,
+          level_scramble: Optional[Dict[str, tuple]] = None,
+          state_mix_json: str = "",
+          carrier_apps: Optional[Sequence[str]] = None,
+          dither_min_order: int = 2,
+          couple_ext: bool = False,
+          smps_focus_off_p: Optional[float] = None,
+          float_fill_json: str = "",
+          steady_crop_json: str = "",
+          standby_jitter_cap: float = 0.0,
+          sibling_rotate_json: str = "") -> None:
+    global _GEN, _SEED_BASE
+    from src.synthesis.augmentor import DataAugmentor
     from src.synthesis.dataset import NILMBatchGenerator
     from src.synthesis.segment_pool import SegmentPool
     from src.synthesis.synthesizer import LoadSynthesizer
-    np.random.seed((seed * 7919 + os.getpid()) % (2 ** 31))
-    pool = SegmentPool(npz_dir=npz_dir, time_split=time_split)
+    # 시드는 여기서 걸지 않는다. 워커 번호로 걸면 어느 워커가 어느 청크를 집어 가느냐에
+    # 따라 결과가 달라진다 (`chunk_seed` 주석). 청크마다 `_chunk` 안에서 건다.
+    _SEED_BASE = int(seed)
+    # 녹화 단위 홀드아웃 (설계 문서 12.18절). JSON 문자열로 넘기는 이유는
+    # `spawn` 워커에 dict 를 그대로 보내면 피클 경계에서 다루기 번거로워서다.
+    excl = json.loads(exclude_files_json) if exclude_files_json else None
+    # 레시피 믹스 (12.67절). 빈 문자열이면 `DEFAULT_RECIPE_MIX` 다.
+    mix = json.loads(recipe_mix_json) if recipe_mix_json else None
+    pool = SegmentPool(npz_dir=npz_dir, time_split=time_split,
+                       exclude_activation_files=excl,
+                       carrier_apps=carrier_apps,
+                       # 13.83.26 대기 잔차 상한. 0 이면 옛 경로.
+                       standby_jitter_cap_pct=(float(standby_jitter_cap) if standby_jitter_cap else None))
+    # 차수별 지터 (12.62절). 0 이면 `DataAugmentor` 기본과 같다.
+    # 기기별 전력 증강 폭 (12.118). 빈 문자열이면 일괄 `power_scale_std` 다.
+    pss = json.loads(power_scale_std_json) if power_scale_std_json else None
+    # 상태 계층 표집 (13.35). JSON 키는 문자열이므로 int 로 되돌린다.
+    smx = ({a: {int(s): float(v) for s, v in m.items()}
+            for a, m in json.loads(state_mix_json).items()} if state_mix_json else None)
+    aug = DataAugmentor(harmonic_dither_amp=float(dither_amp),
+                        harmonic_dither_phase_deg=float(dither_phase_deg),
+                        harmonic_dither_even_amp=float(dither_even_amp),
+                        harmonic_dither_even_phase_deg=float(dither_even_phase_deg),
+                        harmonic_dither_min_order=int(dither_min_order),
+                        power_scale_std_map=pss,
+                        level_scramble=level_scramble or None,
+                        state_mix=smx,
+                        sp_curves=bool(sp_curves),
+                        sp_per_texture=bool(sp_per_texture),
+                        # 13.83.23 상태 채움 + 전력 축소. 빈 문자열이면 옛 경로 그대로다.
+                        float_fill=(json.loads(float_fill_json) if float_fill_json else None),
+                        # 13.83.26 정상 구간 자르기. 빈 문자열이면 옛 경로.
+                        steady_crop=(json.loads(steady_crop_json) if steady_crop_json else None),
+                        # 13.84.8 ② 형제 전용 차수 비례 회전. 빈 문자열이면 옛 경로.
+                        sibling_rotate=(json.loads(sibling_rotate_json) if sibling_rotate_json else None))
+    # 13.78: 전압 꼬리(h17~h31)를 켠다. 기본은 꺼짐이라 안 부르면 옛 거동 그대로다.
+    from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
+    set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
-        synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False),
-        compute_gt_harmonics=False)
+        synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
+                                    augmentor=aug, background=bool(background),
+                                    couple_ext=bool(couple_ext)),
+        recipe_mix=mix, compute_gt_harmonics=False,
+        smps_focus_off_p=smps_focus_off_p)
 
 
-def _chunk(n: int) -> Dict[str, np.ndarray]:
+def _chunk(task: Tuple[int, int]) -> Dict[str, np.ndarray]:
+    """청크 하나를 만든다. 시드는 **청크 번호**로 건다 (`chunk_seed` 주석)."""
+    from src.synthesis.dataset import chunk_seed
+    index, n = task
+    np.random.seed(chunk_seed(_SEED_BASE, index))
     g = _GEN
     w = g.window_size
     k = len(g.appliance_list)
     ti = g.target_index
-    xs = np.empty((n, 33, w), np.float32)
+    xs = np.empty((n, RAW_CHANNELS, w), np.float32)
     out = {
         "y_power": np.empty((n, k), np.float32), "y_on": np.empty((n, k), np.int8),
         "y_plugged": np.empty((n, k), np.int8), "y_standby": np.empty((n, k), np.float16),
         "y_state": np.empty((n, k), np.int8), "obs_harm": np.empty((n, 15, 2), np.float16),
         "p_noise": np.empty(n, np.float32), "p_observed": np.empty(n, np.float32),
+        "z_grid": np.empty((n, 2), np.float32),
     }
     for j in range(n):
         smp, _ = g._synthesize_window()
@@ -95,6 +165,10 @@ def _chunk(n: int) -> Dict[str, np.ndarray]:
         out["obs_harm"][j] = smp.harmonics_ri[ti]
         out["p_noise"][j] = smp.p_noise_w[ti]
         out["p_observed"][j] = smp.power_features[ti, 0]
+        # 한 창은 배전 환경 하나 위에 놓인다 (`sample_environment`). metadata 가
+        # 이미 담고 있으므로 새로 계산하지 않는다 — 소수 4자리는 0.3~2.0Ω 에서 무해하다.
+        out["z_grid"][j] = (smp.metadata.get("r_grid_ohm", np.nan),
+                            smp.metadata.get("x_grid_ohm", np.nan))
     f, wd = build_inputs(xs)
     out["fine"] = f.astype(np.float16)
     out["wide"] = wd.astype(np.float16)
@@ -110,12 +184,43 @@ def build_cache(
     seed: int = 0,
     n_workers: int = 11,
     chunk: int = 250,
+    exclude_activation_files: Optional[Dict[str, List[str]]] = None,
+    dither_amp: float = 0.0,
+    dither_phase_deg: float = 0.0,
+    recipe_mix: Optional[Dict[str, float]] = None,
+    dither_even_amp: float = 0.0,
+    dither_even_phase_deg: float = 0.0,
+    power_scale_std_map: Optional[Dict[str, float]] = None,
+    level_scramble: Optional[Dict[str, tuple]] = None,
+    state_mix: Optional[Dict[str, Dict[int, float]]] = None,
+    carrier_apps: Optional[Sequence[str]] = None,
+    sp_curves: bool = False,
+    sp_per_texture: bool = False,
+    vtail: bool = False,
+    background: bool = False,
+    dither_min_order: int = 2,
+    couple_ext: bool = False,
+    smps_focus_off_p: Optional[float] = None,
+    float_fill: Optional[Dict[str, dict]] = None,
+    steady_crop: Optional[Dict[str, dict]] = None,
+    standby_jitter_cap: float = 0.0,
+    sibling_rotate: Optional[Dict[str, dict]] = None,
 ) -> dict:
-    """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다."""
+    """독립 창 `n_windows` 개를 만들어 memmap 으로 저장한다.
+
+    `smps_focus_off_p`: `smps_overlap` 에서 미니PC 를 끄고 형제 SMPS 만 켤 확률
+    (13.83). None/0.0 이면 옛 경로 그대로다. **`recipe_mix` 재조정과 같이** 써야
+    동시성 phi 가 0 에 간다 — 어느 한쪽만으로는 +0.16 / +0.14 에서 멈춘다.
+    """
     import multiprocessing as mp
 
     from src.synthesis.segment_pool import SegmentPool
-    apps = SegmentPool(npz_dir=npz_dir, time_split=time_split).get_appliance_types()
+    excl_json = json.dumps(exclude_activation_files) if exclude_activation_files else ""
+    mix_json = json.dumps(recipe_mix) if recipe_mix else ""
+    pss_json = json.dumps(power_scale_std_map) if power_scale_std_map else ""
+    smx_json = json.dumps(state_mix) if state_mix else ""
+    apps = SegmentPool(npz_dir=npz_dir, time_split=time_split,
+                       exclude_activation_files=exclude_activation_files).get_appliance_types()
     k = len(apps)
     n_wide = window_cycles // 30
 
@@ -126,6 +231,7 @@ def build_cache(
         "y_power": (n_windows, k), "y_on": (n_windows, k), "y_plugged": (n_windows, k),
         "y_standby": (n_windows, k), "y_state": (n_windows, k),
         "obs_harm": (n_windows, 15, 2), "p_noise": (n_windows,), "p_observed": (n_windows,),
+        "z_grid": (n_windows, 2),
     }
     mm = {name: np.lib.format.open_memmap(out / f"{name}.npy", mode="w+",
                                           dtype=_SPEC[name][0], shape=shapes[name])
@@ -135,14 +241,28 @@ def build_cache(
     print(f"[traincache] 독립 창 {n_windows:,}개 x {window_cycles/60:.0f}초 "
           f"| 예상 {total/1e9:.2f} GB | 창당 {total/n_windows/1024:.0f} KB")
 
-    tasks = [chunk] * (n_windows // chunk)
+    sizes = [chunk] * (n_windows // chunk)
     if n_windows % chunk:
-        tasks.append(n_windows % chunk)
+        sizes.append(n_windows % chunk)
+    tasks = list(enumerate(sizes))
     t0 = time.time(); pos = 0
     ctx = mp.get_context("spawn")
     with ctx.Pool(n_workers, initializer=_init,
-                  initargs=(npz_dir, window_cycles, time_split, seed)) as pool:
-        for i, r in enumerate(pool.imap_unordered(_chunk, tasks), 1):
+                  initargs=(npz_dir, window_cycles, time_split, seed, excl_json,
+                            dither_amp, dither_phase_deg, mix_json,
+                            dither_even_amp, dither_even_phase_deg, pss_json,
+                            bool(sp_curves), bool(sp_per_texture), bool(vtail),
+                            bool(background), level_scramble,
+                            smx_json, tuple(carrier_apps or ()),
+                            int(dither_min_order), bool(couple_ext),
+                            smps_focus_off_p,
+                            json.dumps(float_fill) if float_fill else "",
+                            json.dumps(steady_crop) if steady_crop else "",
+                            float(standby_jitter_cap or 0.0),
+                            json.dumps(sibling_rotate) if sibling_rotate else "")) as pool:
+        # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
+        # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
+        for i, r in enumerate(pool.imap(_chunk, tasks), 1):
             m = len(r["y_power"])
             for name in shapes:
                 mm[name][pos:pos + m] = r[name]
@@ -154,9 +274,38 @@ def build_cache(
     for m_ in mm.values():
         m_.flush()
 
-    meta = {"n_windows": int(pos), "window_cycles": window_cycles, "appliances": apps,
+    meta = {"float_fill": float_fill,          # 13.83.23 상태 채움 + 전력 축소 (None 이면 옛 경로)
+            "steady_crop": steady_crop,        # 13.83.26 정상 구간 자르기 (None 이면 옛 경로)
+            "standby_jitter_cap": float(standby_jitter_cap or 0.0),   # 13.83.26 대기 잔차 상한 백분위 (0 = 옛 경로)
+            "sibling_rotate": sibling_rotate,  # 13.84.8 ② 형제 전용 차수 비례 회전 (None 이면 옛 경로)
+            "n_windows": int(pos), "window_cycles": window_cycles, "appliances": apps,
             "time_split": time_split, "seed": seed, "n_wide": n_wide,
+            "exclude_activation_files": exclude_activation_files,
+            "dither_amp": float(dither_amp), "dither_phase_deg": float(dither_phase_deg),
+            "dither_min_order": int(dither_min_order),
+            "recipe_mix": recipe_mix,
+            "dither_even_amp": float(dither_even_amp),
+            "dither_even_phase_deg": float(dither_even_phase_deg),
+            "power_scale_std_map": power_scale_std_map,
+            "level_scramble": level_scramble,
+            "state_mix": state_mix,
+            # 13.83: smps_overlap 에서 미니PC 를 끄고 형제 SMPS 만 켠 비율.
+            # None/0.0 이면 옛 경로다. 동시성 phi 를 읽으려면 recipe_mix 와 함께 봐야 한다.
+            "smps_focus_off_p": (None if smps_focus_off_p is None
+                                 else float(smps_focus_off_p)),
+            "carrier_apps": list(carrier_apps or []),
+            # 13.45: 결합 델타의 Σ 에 비SMPS 전류를 넣었는가. 홀드아웃과 짝이 맞아야 한다.
+            "couple_ext": bool(couple_ext),
+            # 부하 의존 서명 / 상시 배경 (12.166). 학습·손실 쪽이
+            # 이 값을 읽어 짝을 맞춘다.
+            "sp_curves": bool(sp_curves),
+            "sp_per_texture": bool(sp_per_texture),
+            "vtail": bool(vtail),
+            "background": bool(background),
             "fine_shape": [FINE_CHANNELS, FINE_CYCLES], "bytes": int(total),
+            "zero_even_harmonics": bool(ZERO_EVEN_HARMONICS),
+            # 세밀 채널 **배치**. 채널 수가 같아도 뜻이 다를 수 있다 (13.12).
+            "fine_layout": str(FINE_LAYOUT),
             "build_seconds": round(time.time() - t0, 1),
             "positive_rate": {a: float((mm["y_on"][:pos, j] > 0).mean())
                               for j, a in enumerate(apps)}}
@@ -178,9 +327,26 @@ class CachedWindows:
                 f"학습 캐시가 없습니다: {d.resolve()}\n"
                 f"  python -m src.run_build_traincache 를 먼저 실행하십시오.")
         self.meta = json.loads(mp_.read_text(encoding="utf-8"))
+        # 캐시는 build_fine 의 산출물을 그대로 담는다. 채널 수가 바뀌면
+        # (12.34: 38 -> 44) 옛 캐시는 못 쓴다. memmap 은 모양을 안 검사하므로
+        # 여기서 막지 않으면 엉뚱한 축으로 reshape 되어 조용히 틀린다.
+        want = [FINE_CHANNELS, FINE_CYCLES]
+        got = list(self.meta.get("fine_shape", want))
+        if got != want:
+            raise ValueError(
+                "학습 캐시의 세밀 채널이 다릅니다: "
+                f"캐시 {got} vs 현재 코드 {want}  ({d.resolve()}).  "
+                "python -m src.run_build_traincache 로 다시 만드십시오.")
         self.n = self.meta["n_windows"]
         self.appliances = self.meta["appliances"]
-        self.arr = {name: np.load(d / f"{name}.npy", mmap_mode="r") for name in _SPEC}
+        self.arr = {name: np.load(d / f"{name}.npy", mmap_mode="r")
+                    for name in _SPEC if name not in _OPTIONAL}
+        # 옛 캐시(v22 이전)에는 `z_grid.npy` 가 없다. 배치 길이를 바꾸지 않으려고
+        # NaN 을 내보낸다 — 손실 쪽이 유한값만 골라 쓴다.
+        for name in _OPTIONAL:
+            p = d / f"{name}.npy"
+            self.arr[name] = np.load(p, mmap_mode="r") if p.exists() else None
+        self.has_z = self.arr["z_grid"] is not None
 
     def __len__(self) -> int:
         return self.n
@@ -222,4 +388,6 @@ class CachedWindows:
             np.asarray(a["y_plugged"][i], np.float32), np.asarray(a["y_standby"][i], np.float32),
             np.asarray(a["y_state"][i], np.int64), np.asarray(a["obs_harm"][i], np.float32),
             np.asarray(a["p_noise"][i], np.float32), np.asarray(a["p_observed"][i], np.float32),
+            (np.asarray(a["z_grid"][i], np.float32) if a["z_grid"] is not None
+             else np.full((len(i), 2), np.nan, np.float32)),
         )

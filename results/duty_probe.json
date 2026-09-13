@@ -1,0 +1,180 @@
+{
+  "populations": {
+    "저항만/A": {
+      "n": 900,
+      "p_median": 1588.9796752929688,
+      "transitions_median": 10.0
+    },
+    "저항만/B": {
+      "n": 900,
+      "p_median": 1327.4094848632812,
+      "transitions_median": 0.0
+    },
+    "저항+SMPS/A": {
+      "n": 900,
+      "p_median": 1656.259033203125,
+      "transitions_median": 10.0
+    },
+    "저항+SMPS/B": {
+      "n": 900,
+      "p_median": 1404.5970458984375,
+      "transitions_median": 0.0
+    }
+  },
+  "cnn_v15": {
+    "저항만": {
+      "band_w": [
+        1384.7809631347657,
+        1613.4199890136717
+      ],
+      "n_a": 443,
+      "n_b": 300,
+      "p_a": 1510.5927734375,
+      "p_b": 1496.68505859375,
+      "A_hotplate_on": 1.0,
+      "A_oven_on": 1.0,
+      "A_kettle_on": 0.0,
+      "B_kettle_on": 1.0,
+      "B_hotplate_on": 0.0,
+      "B_oven_on": 0.0,
+      "kettle_gate_separation": 0.9998677372932434,
+      "hotplate_gate_separation": 0.999701738357544,
+      "by_transitions": [
+        {
+          "transitions": "0",
+          "n": 71,
+          "hotplate_on": 1.0,
+          "kettle_on": 0.0
+        },
+        {
+          "transitions": "1-2",
+          "n": 11,
+          "hotplate_on": 1.0,
+          "kettle_on": 0.0
+        },
+        {
+          "transitions": "5-99",
+          "n": 360,
+          "hotplate_on": 1.0,
+          "kettle_on": 0.0
+        }
+      ]
+    },
+    "저항+SMPS": {
+      "band_w": [
+        1464.5952941894532,
+        1689.378576660156
+      ],
+      "n_a": 461,
+      "n_b": 298,
+      "p_a": 1578.1015625,
+      "p_b": 1577.34912109375,
+      "A_hotplate_on": 0.9956616052060737,
+      "A_oven_on": 0.9934924078091106,
+      "A_kettle_on": 0.006507592190889371,
+      "B_kettle_on": 1.0,
+      "B_hotplate_on": 0.0,
+      "B_oven_on": 0.013422818791946308,
+      "kettle_gate_separation": 0.9997658729553223,
+      "hotplate_gate_separation": 0.9985109567642212,
+      "by_transitions": [
+        {
+          "transitions": "0",
+          "n": 71,
+          "hotplate_on": 1.0,
+          "kettle_on": 0.014084507042253521
+        },
+        {
+          "transitions": "1-2",
+          "n": 15,
+          "hotplate_on": 1.0,
+          "kettle_on": 0.0
+        },
+        {
+          "transitions": "5-99",
+          "n": 368,
+          "hotplate_on": 0.9945652173913043,
+          "kettle_on": 0.002717391304347826
+        }
+      ]
+    }
+  },
+  "hedge_0.2": {
+    "저항만": {
+      "band_w": [
+        1384.7809631347657,
+        1613.4199890136717
+      ],
+      "n_a": 443,
+      "n_b": 300,
+      "p_a": 1510.5927734375,
+      "p_b": 1496.68505859375,
+      "A_hotplate_on": 1.0,
+      "A_oven_on": 0.9977426636568849,
+      "A_kettle_on": 0.0,
+      "B_kettle_on": 1.0,
+      "B_hotplate_on": 0.0,
+      "B_oven_on": 0.0,
+      "kettle_gate_separation": 0.9998694062232971,
+      "hotplate_gate_separation": 0.999213695526123,
+      "by_transitions": [
+        {
+          "transitions": "0",
+          "n": 71,
+          "hotplate_on": 1.0,
+          "kettle_on": 0.0
+        },
+        {
+          "transitions": "1-2",
+          "n": 11,
+          "hotplate_on": 1.0,
+          "kettle_on": 0.0
+        },
+        {
+          "transitions": "5-99",
+          "n": 360,
+          "hotplate_on": 1.0,
+          "kettle_on": 0.0
+        }
+      ]
+    },
+    "저항+SMPS": {
+      "band_w": [
+        1464.5952941894532,
+        1689.378576660156
+      ],
+      "n_a": 461,
+      "n_b": 298,
+      "p_a": 1578.1015625,
+      "p_b": 1577.34912109375,
+      "A_hotplate_on": 1.0,
+      "A_oven_on": 0.9674620390455532,
+      "A_kettle_on": 0.0021691973969631237,
+      "B_kettle_on": 1.0,
+      "B_hotplate_on": 0.003355704697986577,
+      "B_oven_on": 0.010067114093959731,
+      "kettle_gate_separation": 0.9998248815536499,
+      "hotplate_gate_separation": 0.9970845580101013,
+      "by_transitions": [
+        {
+          "transitions": "0",
+          "n": 71,
+          "hotplate_on": 1.0,
+          "kettle_on": 0.014084507042253521
+        },
+        {
+          "transitions": "1-2",
+          "n": 15,
+          "hotplate_on": 1.0,
+          "kettle_on": 0.0
+        },
+        {
+          "transitions": "5-99",
+          "n": 368,
+          "hotplate_on": 1.0,
+          "kettle_on": 0.0
+        }
+      ]
+    }
+  }
+}

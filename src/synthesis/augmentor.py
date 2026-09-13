@@ -19,12 +19,280 @@
    부수 효과로 오븐처럼 활성화 구간이 2개뿐인 기기도, 32.9분짜리 원본에서
    매번 다른 위상을 잘라 쓰게 되어 실질적인 다양성이 크게 늘어난다.
 """
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 import numpy as np
 
 from .segment_pool import ApplianceActivation
 
 MIN_AUGMENTED_CYCLES = 30
+
+# ── 기기별 전력 증강 폭 (2026-08-27, 12.118절) ────────────────────────────────
+# 일괄 `power_scale_std=0.05` 는 **실측과 거꾸로** 걸려 있었다.
+#
+# 등가저항 `R = V^2/P` 의 산포를 60초 창 규모와 녹화 간으로 갈라 재면:
+#
+#   기기/상태          CV 60초창   CV 녹화간      현행 σ
+#   포트                 0.27%      0.13%        5%   <- 17배 과하다
+#   핫플                 0.35%      0.09%        5%
+#   오븐                 0.65%      0.67%        5%
+#   프로젝터              0.60%      0.36%        5%
+#   드라이기 강            0.58%      0.63%        5%
+#   충전기 고속           11.42%      8.36%        5%   <- 오히려 모자란다
+#   미니PC 작업            4.44%     14.31%        5%
+#
+# **크기가 판별자인 기기에는 크기를 흔들고, 못 믿을 기기에는 덜 흔들고 있었다.**
+# 12.112 가 등가저항으로 저항 3종을 갈랐는데(포트 35.8 / 오븐 40.6 / 드라이기
+# 54.3 / 핫플 101.8Ω), 그 판별자가 학습 분포에서 뭉개진다 — 캐시에서 재면
+# 포트↔오븐 d' 가 **2.50** 이고 실측 산포로 계산하면 **18.3** 이다.
+#
+# 12.110.1 이 *"증강은 폭의 1/3 만 만든다, 나머지는 전압"* 이라 한 것은 **전력**
+# 이야기다. 등가저항에서는 `V^2` 이 정의상 소거되므로 **폭이 거의 전부 증강**이다
+# (학습 CV 5.2% vs 증강 5.0%).
+#
+# ⚠ **이것은 기기 종류가 아니라 이 개체를 외우게 하는 선택이다.** 녹화 간 CV 는
+# 같은 실물을 다른 날 잰 값이고 기기당 실물이 하나뿐이다. 3.3절이 닫힌 세계
+# (멀티탭 9종 한정)를 명시하므로 이 프로젝트에서는 정당하나, **기기를 교체하면
+# 재학습이 필요하다.**
+POWER_SCALE_STD_MEASURED: Dict[str, float] = {
+    "electiric_kettle": 0.005,
+    "hotplate":         0.005,
+    "oven":             0.010,
+    "hair_dryer":       0.010,
+    "beam_projector":   0.010,
+    "fan":              0.030,
+    "minipc":           0.120,
+    "laptop_charger":   0.150,
+    "air_conditioner":  0.060,
+}
+
+#: 저항 4종 + 프로젝터만 좁힌 판 (12.118 의 대조군 ⑤). SMPS 는 현행 0.05 그대로다.
+#: 저항과 SMPS 를 동시에 바꾸면 좋아져도 어느 쪽 덕인지 모른다 (부록 규칙 4).
+POWER_SCALE_STD_RESISTIVE: Dict[str, float] = {
+    k: v for k, v in POWER_SCALE_STD_MEASURED.items()
+    if k in ("electiric_kettle", "hotplate", "oven", "hair_dryer", "beam_projector")
+}
+
+POWER_SCALE_STD_PRESETS: Dict[str, Dict[str, float]] = {
+    "measured": POWER_SCALE_STD_MEASURED,
+    "resistive": POWER_SCALE_STD_RESISTIVE,
+}
+
+
+# ── 증강이 **녹화 밖으로 나가지 않게** (2026-09-07, 13.31) ────────────────────
+# 사용자: "녹화 전력(p5~p95)에 맞추도록 하는게 나을거 같은데".  맞다 — 녹화된 적 없는
+# 전력을 만드는 것은 증거 없는 값을 지어내는 것이다. 복합과 단독의 동작점 격차
+# (13.29)는 **새 녹화**로 메워야지 증강으로 메울 것이 아니다.
+#
+# 실제로 지금 증강은 밖으로 나간다:
+#   충전기 σ=0.150(measured) -> 3σ 클립 뒤 p95 가 **78.1W**. 녹화 최대는 65.8W 다.
+#   모델이 D2 에서 내는 정격 69~70W 가 여기서 왔을 수 있다 (복합 참값은 47~57W).
+#
+# 그래서 지터는 남기되(하루하루 변동은 실재한다) **활성화의 중앙 전력이 녹화 범위를
+# 벗어나지 않도록 배율을 자른다.** 범위는 단독 녹화 ON 구간의 p1~p99 다.
+POWER_RANGE_W: Dict[str, Tuple[float, float]] = {
+    "air_conditioner": (13.4, 635.0),
+    "beam_projector": (4.4, 46.4),
+    "electiric_kettle": (1450.8, 1479.3),
+    "fan": (21.3, 37.7),
+    "hair_dryer": (482.1, 971.3),
+    "hotplate": (119.2, 459.3),
+    "laptop_charger": (16.1, 65.8),
+    "minipc": (8.8, 27.4),
+    "oven": (1058.0, 1121.9),
+}
+
+
+# ── 창을 자를 때 **상태**로 계층화한다 (2026-09-07, 13.35) ────────────────────
+# 사용자: "단독녹화에도 IDLE상태가 충분히 있을건데 그거 찾아서 IDLE상태 비율 늘려".
+# 맞다. 있는데 안 뽑히고 있었다.
+#
+# `_stratified_start`(12.34.6)는 **전력 범위에서 균등**하게 뽑는다. 그때의 문제는
+# 반대 방향이었다 — 미니PC 의 고부하 구간이 6.7% 뿐이라 합성 창의 최대가 27.9W 에
+# 그쳤다. 전력 균등이 그것을 고쳤다. 그런데 같은 규칙이 **좁은 상태를 과소 노출한다**:
+#
+#   미니PC IDLE    8.8~12.0W  (폭  3.2W)   -> 와트 균등에서 약 18%
+#   미니PC ACTIVE 11.5~26.7W  (폭 15.2W)   -> 약 82%
+#
+# 실제로 캐시의 `y_state` 가 IDLE 17.2% (18,465 / 107,268) 다. 녹화 자체는 IDLE 이
+# 596초(23%) 있는데도 그렇다.
+#
+# **그런데 실측 복합은 미니PC 를 IDLE 로만 돌린다.** 구성 변화 짝(같은 동반 기기,
+# 미니PC 하나만 다른 이웃 구간)으로 재면 기여가 5.8~11.8W 이고, 이것은 대기(1.3~2.9W)
+# 대비 계단이므로 절대값 9.7W 인 IDLE 과 맞는다.
+#
+# 노출이 모자란 만큼 못 배운다 — 합성 홀드아웃에서도 IDLE 미니PC 는 관문 중앙 0.833 ·
+# 0.5 통과 58.0% 인데 ACTIVE 는 0.9999 · 86.4% 다.
+#
+# 그래서 **상태를 먼저 뽑고** 그 상태가 많은 후보를 고른다. 파형은 실측 그대로다 —
+# 지어내는 것이 없고, 있는 것을 더 자주 보여줄 뿐이다.
+#
+# ⚠ 비율을 실측 복합에 맞추지 않고 **반반**으로 둔다. 복합 5파일은 채점 대상이라
+# 거기에 맞추면 시험지를 보고 생성기를 고르는 것이 된다. 두 상태를 고르게 덮는 것은
+# 그 자체로 정당하다.
+STATE_MIX_PRESETS: Dict[str, Dict[str, Dict[int, float]]] = {
+    #: 미니PC 만. IDLE(1) 과 ACTIVE_LOAD(2) 를 반반.
+    "minipc_balanced": {"minipc": {1: 0.5, 2: 0.5}},
+    #: SMPS 3종. 충전기 상태1(20.3W)·프로젝터 상태1(예열 4.6W)도 합성에서 약하다
+    #: (F1 0.805 / 0.518). 다만 실측 복합의 프로젝터는 42~47W(상태2)로만 돌아
+    #: 근거가 미니PC 만큼 강하지 않다 — 그래서 별도 프리셋으로 둔다.
+    "smps_balanced": {"minipc": {1: 0.5, 2: 0.5},
+                      "laptop_charger": {1: 0.35, 2: 0.65}},
+}
+
+# ── 상태 채움 + 전력 축소 (2026-09-10, 13.83.22/23) ────────────────────────────
+# 실측 test_1 의 충전기는 만충 뒤 **~14W 부동(float)** 으로 5분 넘게 머무는데, 풀의 충전기
+# 녹화 다섯 개는 8~20W 연속 구간이 최장 1초라 합성기가 충전기를 28W 아래로 못 놓는다.
+# 학습에서 그 전력대의 정상상태 SMPS 는 미니PC 뿐이라 모델이 부동 충전기를 미니PC 로 읽는다
+# (v25·26·28·29 전부, 합성 충전기를 22W 아래로 줄이면 미니PC 1.000).
+#
+# 처방 B(녹화 전 임시): 충전기 활성화에서 **상태 1(만충·테이퍼, 10~35W)** 사이클을
+# `_state_fill` 로 이어 붙여 창을 채우고, 그 덩어리를 `scale` 배로 **선형** 축소한다
+# (27~35W -> 11~24W). 모양은 보존한다 — 실측 부동 지문(|I_h|/|I3| .90 .78 .72 .59 .47 .31)은
+# charger_5 만충 구간(.91 .80 .65 .51 .37 .25)과 같은 계열이고, 모델은 이어붙임과 실측을
+# 못 가른다 (`run_diag_float.py ③`). s(p) 곡선과 녹화 범위 클립은 **일부러** 건너뛴다 —
+# 녹화 범위 아래로 내리는 것이 목적이고 s(p) 는 그 아래를 모른다.
+#
+# ⚠ 목록에 없는 기기는 난수를 한 칸도 안 쓴다 — 비어 있으면 옛 캐시와 비트 단위로 같다.
+#   목록에 있으면 `p` 만큼의 활성화가 이 경로로 가고 나머지는 옛 경로다.
+FLOAT_FILL_PRESETS: Dict[str, Dict[str, dict]] = {
+    #: 충전기 활성화의 25% 를 상태 1 로 채워 0.40~0.70 배 (13.83.23). 창 양성률 0.54 이므로
+    #: 전체 창의 ~13% 에 축소 충전기가 든다 — minipc_balanced 의 IDLE 몫과 같은 규모다.
+    "charger_float": {"laptop_charger": {"p": 0.25, "state": 1, "scale": (0.40, 0.70)}},
+}
+
+# ── 정상 구간 자르기 (2026-09-11, 13.83.26) ────────────────────────────────────
+# 자리 E 충전기 활성화는 70~141초짜리라 60초 창 대부분에 벌크->테이퍼 무릎이나 켜짐 램프가 걸린다:
+# 증강기가 내보내는 55~70W 창의 전력 범위 중앙 **52W**, 55~70W 안에 든 사이클 71%, σ|I3| 63mA.
+# 범위가 8W 안인 안정 창만 보면 σ|I3| 5.8 로 풀 원본(5.6)과 같다 — 지터를 만드는 것이 아니라
+# **전이가 든 창을 고르는 것**이 문제다 (13.83.19 ③의 ON/OFF 판과 같은 구조가 기기 내부 상태에서).
+# 실측 배포는 벌크·부동이 분 단위로 이어지므로 정상 창이 대부분이다 (test_2 충전기 7분 60W).
+# 그래서 SMPS 활성화를 자를 때 `p` 의 확률로 **전력이 평탄한 60초 구간**을 고른다 — 후보 32개의
+# 창 안 전력 p5~p95 폭이 중앙의 `max_range_frac` 안이면 그중 무작위, 없으면 가장 평탄한 것.
+# 켜짐·꺼짐 순간을 포함하는 갈래(p_on/p_off)는 그대로 둔다 — 전이 창도 실재한다.
+# ⚠ 목록에 없는 기기는 난수를 한 칸도 안 쓴다 (항등).
+STEADY_CROP_PRESETS: Dict[str, Dict[str, dict]] = {
+    "smps_steady": {"laptop_charger": {"p": 0.90, "max_range_frac": 0.15},
+                    "beam_projector": {"p": 0.90, "max_range_frac": 0.15}},
+}
+
+# ── 형제 전용 구조 회전 (2026-09-11, 13.84.8 ②) ─────────────────────────────────
+# 1단계 몸통은 "형제 틀이 설명 못 하는 SMPS 전류" 를 미니PC 로 부호화한다 (13.84.5: 실측 충전기+프로젝터
+# 창의 z 이웃 95% 가 합성 +미니PC 창). 합성에서 형제는 언제나 풀 녹화 그대로라 그 특징이 완벽한 판별자이고,
+# 제자리 형제가 풀과 다르면(프로젝터 φ3/5/7 풀 −27/−45/−60° 대 현장 −5/−7/−6°, 즉 차수 비례 +7.4°/h)
+# 그 차이가 그대로 미니PC 로 읽힌다. 그래서 **형제 활성화의 고조파만** 기본파에 대해 차수 비례로 돌린다:
+#     θ_h <- θ_h + c·h  (h >= 2, h1 은 그대로)   c ~ U(−c_max, +c_max) [°/h], 활성화당 1회
+# 순수 시간 이동(모든 차수 h·θ)은 φ_h = θ_h − h·θ_1 을 정확히 불변으로 남기므로(12.62) h1 을 두어야
+# φ_h 가 c·h 만큼 움직인다. 크기는 안 건드린다 — 짝수차는 크기만 쓰므로 영향이 없고, 전력 라벨(P 는 기본파)도 정확히 남는다.
+# 옛 차수별 독립 지터(`_apply_harmonic_dither`)와 다른 점: (i) 차수마다 독립 잡음이 아니라 **한 c 로 차수 비례**
+# (실측 편차의 모양), (ii) **목록의 기기만**(형제) — 목표 기기 자기 지문은 안 흔든다.
+# ⚠ 목록에 없는 기기는 난수를 한 칸도 안 쓴다 (항등).
+# ── 형제 편차 한꺼번에 (2026-09-11, 13.84.16) ───────────────────────────────────
+# 회전만 건 v33 은 합성 회전에는 불변이 됐지만 실측 실패 ② 를 못 움직였다. 모델은 단서를 하나 지울
+# 때마다 다음 단서로 옮겨 갔다(회전 -> 전압 짝 -> 고차 위상 -> 기본파·P·Q). 그래서 "형제 잔차" 라는
+# **축 전체**를 한 번에 못 쓰게 만든다. 회전에 더해:
+#     ② h >= `scramble_from` 위상 뒤섞기   θ_h += U(−180°, +180°)   (차수마다 독립)
+#     ③ 매끄러운 크기 기울기               |I_h| *= t^((h−1)/(H−1)),  t ~ U(tilt_lo, tilt_hi)
+#     ④ 고차 크기 흔들기                   h >= `dither_from` 에 독립 배율 U(dith_lo, dith_hi)
+# h1 은 크기·위상 모두 **정확히** 그대로 둔다 — P 라벨과 φ_h 기준이 기본파다.
+# ⚠ 폭은 그럴듯함이 아니라 **미니PC 자기 기여와 견줘** 정한다 (`run_diag_sibgap.py`,
+#   [[augmentation-can-erase-the-discriminant]]). 형제의 h 차 크기가 미니PC 의 r 배면 배율 폭 (1±x) 는
+#   총전류를 |I_h^sib|·x 만큼 흔들고, x > 1/r 이면 미니PC 를 통째로 묻는다.
+# `run_diag_sibgap.py` 측정 (자리 D, 충전기 29W + 프로젝터 45W + 미니PC 14W, 총 70~110W, 창 80개):
+#     차수     1     3     5     7     9    11    13    15
+#     미니PC/형제 0.202 0.202 0.219 0.260 0.311 0.483 0.333 0.277
+# 형제 크기를 (1±a) 로 흔들면 총전류가 |I_h^sib|·a 만큼 흔들리므로 **3σ <= r** 를 폭의 상한으로 삼는다.
+# 아래 값은 h3 에서 3σ/r = 0.20, h9 0.60, h15 1.27 이다 — 고차에서만 미니PC 기여와 같은 크기다
+# (그 차수는 v35 가 이미 가려 쓰고 있었다). 위상은 h>=9 에서 **통째로** 뒤섞는다 — 그 축을 없애는 것이 목적이다.
+#: 표류 기저 기본 경로 — `run_build_drift.py` 가 형제 녹화로만 만든다 (13.84.52)
+DRIFT_BASIS = "results/drift_basis.npz"
+
+SIBLING_ROTATE_PRESETS: Dict[str, Dict[str, dict]] = {
+    "smps_rot10": {"laptop_charger": {"p": 1.0, "c_max": 10.0},
+                   "beam_projector": {"p": 1.0, "c_max": 10.0}},
+    "smps_dev1": {a: {"p": 1.0, "c_max": 10.0, "scramble_from": 9,
+                      "tilt_lo": 0.85, "tilt_hi": 1.18,
+                      "dither_from": 9, "dith_lo": 0.88, "dith_hi": 1.12}
+                  for a in ("laptop_charger", "beam_projector")},
+    # ── 13.84.49 — 폭을 **실측에 맞춘다**. `smps_dev1` 의 반성이다 ────────────
+    # 13.84.48 이 격리 녹화에서 잰 충전기 **녹화 간** 상대위상 표준편차 (도):
+    #     h5 2.4 · h9 4.1 · h11 5.3 · h13 7.5 · h15 13.6
+    # 이것은 차수 비례 회전 θ_h += c·h 의 모양 그대로이고 c ≈ 0.5°/h 다 —
+    # 13.84.8 이 고른 **모형은 맞았고 폭만 12~42배 넓었다** (`run_gate_phase.py`).
+    # 그리고 h>=9 뒤섞기는 그 축을 통째로 지웠는데, 13.84.48 이 보인 대로 그 축은
+    # 합성이 못 만드는 잡음이 아니라 **충전기와 미니PC 를 LORO AUC 1.000 으로 가르는 신호**다.
+    #   ① 회전 c_max 10.0 -> **0.9** (관문이 실측의 0.7~1.2배로 확인)
+    #   ② `scramble_from` **제거**
+    #   ③ 크기 항(tilt·dither)은 그대로 — 크기는 실측 녹화 간 CV 가 실제로 24~35% 다
+    # ⚠ 이 프리셋으로 구운 캐시에서만 `--no-mask` 가 뜻을 갖는다 (13.84.37 은 위상이
+    #   뒤섞인 캐시에서 가림만 풀어 아무 일도 안 일어났다).
+    "smps_dev2": {a: {"p": 1.0, "c_max": 0.9,
+                      "tilt_lo": 0.85, "tilt_hi": 1.18,
+                      "dither_from": 9, "dith_lo": 0.88, "dith_hi": 1.12}
+                  for a in ("laptop_charger", "beam_projector")},
+    # ── 13.84.61 — 모수를 버리고 **실측 표류 자체**를 넣는다 ──────────────────
+    # 위의 세 프리셋은 형제 지문 변동을 **임의로 모수화**한다 (차수 비례 회전 + 크기
+    # 기울기 + 고차 흔들기). 모양은 13.84.8 이 눈으로 고른 것이고 폭은 13.84.49 가
+    # 뒤늦게 맞췄다. 그런데 13.84.52·56·57 이 그 변동의 **실체**를 쟀다:
+    #   · 3차원이다 (94%). 회전 1개 + 기울기 1개 + 흔들기 7개 = 9자유도가 아니다
+    #   · 정체는 **동작점 응답**이다 — PC1 부하전력·PC2 계통 3차전압·PC3 계통전압크기
+    #   · 회로 야코비 span 안에 주각 0°/3°/13° 로 들어간다 (13.84.57)
+    # 그러면 모수를 지어낼 이유가 없다. `results/drift_basis.npz` 의 3차원 안에서
+    # **측정된 표준편차**로 뽑아 **더한다** (곱이 아니라 덧셈 — 표류는 암페어 단위 편차다).
+    #
+    # ⚠ 왜 손실이 아니라 생성기인가: 13.84.60 이 같은 부분공간을 `L_harm` 에서
+    #   **사영으로 지워** 봤고 졌다 — 표류 PC1 이 미니PC-형제 판별축과 24~25° 라
+    #   표류와 함께 판별력이 간다. 지울 수 없으면 **가르치는** 수밖에 없다.
+    # ⚠ 폭 상한 ([[augmentation-can-erase-the-discriminant]]): 표류 3σ 71.6mA 대
+    #   미니PC 신호 82.2mA = 0.87 인데 **차수별로는** h9 1.16 · h11 1.39 · h13 1.65 ·
+    #   h15 2.13 으로 1 을 넘는다. `smps_dev1` 이 빠진 바로 그 함정이다. 그래서
+    #   `drift_scale` 을 둔다 — 1.0 이 실측이고, **h15 까지 안전하려면 0.47** 이다.
+    #   실측 그대로가 정직하지만 모델이 미니PC 를 포기할 수 있다. 관문이 비를 찍는다.
+    # ⚠ h1 은 건드리지 않는다 (P 라벨·φ_h 기준). 기저의 h1 성분은 **잘라내고** 넣는다.
+    "smps_drift": {a: {"p": 1.0, "drift_k": 3, "drift_scale": 1.0,
+                       "tilt_lo": 0.85, "tilt_hi": 1.18,
+                       "dither_from": 9, "dith_lo": 0.88, "dith_hi": 1.12}
+                   for a in ("laptop_charger", "beam_projector")},
+    #: **순수판** — 곱셈 항(tilt·dither)을 빼고 표류만. 13.84.61 의 관문이 잰 대로
+    #: tilt·dither 가 실측 표류 부분공간 **밖**으로 13.6% 를 내보내고 으뜸축을 미니PC 쪽으로
+    #: 17° 당긴다 (실측 89° -> 72°). 다만 그 둘이 모형하던 **녹화 간** 크기 산포(CV 24~35%)
+    #: 는 여기서 사라진다 — 표류(녹화 **안**)와 다른 양이다. 둘 다 실재하므로 A/B 로 가른다.
+    "smps_driftp": {a: {"p": 1.0, "drift_k": 3, "drift_scale": 1.0}
+                    for a in ("laptop_charger", "beam_projector")},
+    #: 폭을 차수별 상한 아래로 낮춘 판 (h15 에서 3σ/미니PC = 1.0)
+    "smps_drift47": {a: {"p": 1.0, "drift_k": 3, "drift_scale": 0.47,
+                         "tilt_lo": 0.85, "tilt_hi": 1.18,
+                         "dither_from": 9, "dith_lo": 0.88, "dith_hi": 1.12}
+                     for a in ("laptop_charger", "beam_projector")},
+}
+
+#: 표류 기저 캐시 — 한 번만 읽는다. (V(k,2Ho) 를 h1 뺀 nh차 복소 기저로 편 것, 성분 표준편차)
+_DRIFT_CACHE: Dict[str, tuple] = {}
+
+
+def _drift_dirs(path: str, k: int, nh: int):
+    """`run_build_drift.py` 기저 -> (k, nh) complex 방향과 (k,) 성분 표준편차.
+
+    ⚠ **h1 성분은 0 으로 잘라낸다.** 기본파를 건드리면 전력 라벨과 φ_h 기준이 움직인다
+      (이 모듈의 다른 항이 전부 h1 을 정확히 불변으로 두는 것과 같은 이유다).
+    ⚠ 표준편차는 기저를 만든 그 표류 표본에서 잰 값이고 `drift_basis.npz` 에 같이 들어 있다.
+      없으면 13.84.61 이 잰 값(PC1 17.4 · PC2 14.5 · PC3 7.5 mA)을 쓴다.
+    """
+    key = "%s|%d|%d" % (path, k, nh)
+    if key in _DRIFT_CACHE:
+        return _DRIFT_CACHE[key]
+    B = np.load(path, allow_pickle=True)
+    V = np.asarray(B["V"], np.float64)[:k]
+    ordr = [int(x) for x in B["orders"]]
+    ho = len(ordr)
+    sd = (np.asarray(B["comp_sd"], np.float64)[:k] if "comp_sd" in B.files
+          else np.array([0.0174, 0.0145, 0.0075])[:k])
+    out = np.zeros((k, nh), np.complex128)
+    for i, o in enumerate(ordr):
+        if o == 1 or o > nh:                       # h1 은 잘라낸다
+            continue
+        out[:, o - 1] = V[:, i] + 1j * V[:, i + ho]
+    _DRIFT_CACHE[key] = (out, sd)
+    return out, sd
 
 
 class DataAugmentor:
@@ -37,15 +305,112 @@ class DataAugmentor:
         phase_jitter_max_deg: float = 4.0,
         switching_inrush_jitter: bool = True,
         max_stretch: float = 3.0,
+        duty_on_scale_range: Tuple[float, float] = (0.5, 2.0),
+        duty_off_scale_range: Tuple[float, float] = (0.5, 2.0),
+        randomize_duty: bool = True,
+        load_stratified: bool = True,
+        load_strata_candidates: int = 16,
+        harmonic_dither_amp: float = 0.0,
+        harmonic_dither_phase_deg: float = 0.0,
+        harmonic_dither_ref_order: int = 9,
+        harmonic_dither_even_amp: float = 0.0,
+        harmonic_dither_even_phase_deg: float = 0.0,
+        harmonic_dither_min_order: int = 2,
+        level_scramble: Optional[dict] = None,
+        state_mix: Optional[Dict[str, Dict[int, float]]] = None,
+        clip_to_recorded_range: bool = True,
+        power_scale_std_map: Optional[Dict[str, float]] = None,
+        sp_curves: bool = False,
+        sp_per_texture: bool = False,
+        float_fill: Optional[Dict[str, dict]] = None,
+        steady_crop: Optional[Dict[str, dict]] = None,
+        sibling_rotate: Optional[Dict[str, dict]] = None,
     ):
         self.duration_scale_range = duration_scale_range
         self.power_scale_std = power_scale_std
+        # 부하 의존 서명 곡선 (12.166). 없으면 기존 선형 스케일로 간다.
+        self._sp = {}
+        #: **그 녹화의 텍스처**에서 만든 곡선 (13.74). 키는 `<기기>@<stem>`.
+        #: 옛 곡선은 `rel[0]=1` 인 깨끗한 정현파에서 만들어 자리 차이가 원리적으로 없었다 —
+        #: 실측 채점에서 크기 오차 중앙값이 0.123 대 **0.031** 로 4배 갈린다 (자리 D 는 4.3배).
+        #: 부기: `rescale_to_power` 가 옮기는 것은 **녹화 전류**이므로 그 녹화의 전압이 기준이다.
+        #: 자리로 옮기는 일은 그 다음 `apply_voltage_texture` 의 몫이다.
+        self._sp_tex = {}
+        if sp_curves:
+            from .sp_curves import load_curves, BACKGROUND
+            self._sp = {k: v for k, v in load_curves().items() if k != BACKGROUND}
+            if sp_per_texture:
+                from src.run_build_sp_curves import TEX_CURVES
+                self._sp_tex = load_curves(TEX_CURVES)
+                if not self._sp_tex:
+                    raise FileNotFoundError(
+                        f"{TEX_CURVES} 가 없다 — `python -X utf8 -m src.run_build_sp_curves "
+                        f"--per-texture` 로 만들어라 (13.74)")
+        #: 기기별 폭 (12.118). 없는 기기는 `power_scale_std` 를 쓴다.
+        self.power_scale_std_map = dict(power_scale_std_map or {})
         self.phase_jitter_max_deg = phase_jitter_max_deg
         self.switching_inrush_jitter = switching_inrush_jitter
+        # 주기 부하의 통전/휴지 **길이** 를 흔든다 (`_retime_duty` 주석).
+        self.duty_on_scale_range = duty_on_scale_range
+        self.duty_off_scale_range = duty_off_scale_range
+        self.randomize_duty = bool(randomize_duty)
+        # 긴 활성화에서 창을 자를 때 **자르는 지점을 전력으로 계층화**한다
+        # (`_crop_window` 주석). 12.34.6 의 미니PC 문제 대응이다.
+        self.load_stratified = bool(load_stratified)
+        self.load_strata_candidates = max(2, int(load_strata_candidates))
         # 원본보다 이 배율 이상으로는 늘이지 않는다. 0.5초짜리 동작을 30초로 늘이면
         # 60배 느려진 파형이 되어 실제로는 존재할 수 없는 기기가 만들어진다.
         # 한도를 넘으면 늘이는 대신 그 길이에서 동작이 끝난 것으로 처리한다.
         self.max_stretch = max(1.0, float(max_stretch))
+        # {가전: (lo, hi)} — 그 가전의 전력 배율을 균등분포로 크게 흔든다 (12.64절).
+        # 기본 경로(±5%, 클립 ±15%)를 **대체**한다. 라벨(target_power_w)도 함께
+        # 움직이므로 예측이 틀려지는 것이 아니라 **절대 준위라는 단서만 사라진다.**
+        # 반사실 절제이지 현실 반영이 아니다 — 실측 프로젝터 ON 은 폭 1.7W 로 일정하다.
+        self.level_scramble = dict(level_scramble or {})
+        #: {가전: {state_id: 확률}} — 창을 자를 때 **상태**를 먼저 뽑는다 (13.35).
+        #: `STATE_MIX_PRESETS` 주석에 근거가 있다. 비면 기존 전력 계층화 그대로다.
+        self.state_mix: Dict[str, Dict[int, float]] = {
+            a: {int(s): float(p) for s, p in m.items() if float(p) > 0}
+            for a, m in (state_mix or {}).items()
+        }
+        #: {가전: {"p", "state", "scale"}} — 상태 채움 + 전력 축소 (`FLOAT_FILL_PRESETS`, 13.83.23).
+        #: 비면 어떤 경로도 안 바뀐다 (항등).
+        self.float_fill: Dict[str, dict] = {
+            a: {"p": float(d["p"]), "state": int(d["state"]),
+                "scale": (float(d["scale"][0]), float(d["scale"][1]))}
+            for a, d in (float_fill or {}).items() if float(d.get("p", 0.0)) > 0
+        }
+        #: {가전: {"p", "max_range_frac"}} — 정상 구간 자르기 (`STEADY_CROP_PRESETS`, 13.83.26). 비면 항등.
+        self.steady_crop: Dict[str, dict] = {
+            a: {"p": float(d["p"]), "max_range_frac": float(d["max_range_frac"])}
+            for a, d in (steady_crop or {}).items() if float(d.get("p", 0.0)) > 0
+        }
+        #: {가전: cfg} — 형제 전용 편차 (`SIBLING_ROTATE_PRESETS`, 13.84.8 ② · 13.84.16). 비면 항등.
+        #: cfg 는 `p`(적용 확률) 와 회전 `c_max`, 위상 뒤섞기 `scramble_from`,
+        #: 크기 기울기 `tilt_lo`/`tilt_hi`, 고차 크기 흔들기 `dither_from`/`dith_lo`/`dith_hi` 를 갖는다.
+        #: 어느 하나만 있어도 되고 **키를 통째로 넘긴다** — 여기서 깎으면 새 항이 조용히 사라진다.
+        self.sibling_rotate: Dict[str, dict] = {
+            a: dict(d) for a, d in (sibling_rotate or {}).items()
+            if float(d.get("p", 0.0)) > 0
+        }
+        #: 증강 뒤 전력이 `POWER_RANGE_W` 밖으로 나가지 않게 배율을 자른다 (13.31).
+        self.clip_to_recorded_range = bool(clip_to_recorded_range)
+        # 차수별 독립 지터 (12.62절). **0 이면 꺼진다 - 기본은 꺼짐이다.**
+        # `_apply_harmonic_dither` 주석에 측정 근거가 있다.
+        self.harmonic_dither_amp = max(0.0, float(harmonic_dither_amp))
+        self.harmonic_dither_phase_deg = max(0.0, float(harmonic_dither_phase_deg))
+        self.harmonic_dither_ref_order = max(2, int(harmonic_dither_ref_order))
+        # 짝수차 전용 진폭 (12.69절). 0 이면 위의 차수 비례 법칙을 그대로 따른다.
+        # **12.62.2 가 짝수차를 '계측 바닥' 이라며 크기 결정에서 뺐는데 그것이
+        # 오류였다** — 12.65.3 이 프로젝터↔충전기를 가르는 유일한 비율이
+        # |I2|/|I1| (0.008 vs 0.033, 4.1배, 겹침 0) 임을 절제로 확정했다.
+        # 짝수차는 반주기 비대칭에서 나오므로 한 무리로 묶어 흔드는 것이 옳다.
+        self.harmonic_dither_even_amp = max(0.0, float(harmonic_dither_even_amp))
+        self.harmonic_dither_even_phase_deg = max(0.0, float(harmonic_dither_even_phase_deg))
+        # 차수 비례 지터를 **이 차수부터** 건다 (12.182). 장소 B 의 위상 회전은 h7 이상에
+        # 있는데(12.179.3) 60° 지터는 h3 에도 20° 를 줘서 φ3 판별자(12.34)를 지운다 —
+        # cnn_ph 홀드아웃 미니PC 0.950 -> 0.872. 기본 2 는 예전 동작 그대로다.
+        self.harmonic_dither_min_order = max(2, int(harmonic_dither_min_order))
 
     def augment_activation(
         self,
@@ -74,21 +439,39 @@ class DataAugmentor:
 
         # 2. 시간 신축 - 부하 종류와 방향에 따라 방식이 갈린다
         includes_onset = True
-        if new_len == orig_len:
+        # 13.83.23 — 상태 채움 + 전력 축소 (`FLOAT_FILL_PRESETS`). 목록에 없는 기기는 난수를
+        # 한 칸도 안 쓴다 (항등 검정). 원본이 창보다 길 때만 — 이어 붙일 재료가 있어야 한다.
+        float_scale = None
+        ff = self.float_fill.get(act.appliance_type) if self.float_fill else None
+        if ff is not None and new_len < orig_len and np.random.rand() < ff["p"]:
+            sel = self._state_fill(act.state_id, act.is_on, new_len, ff["state"])
+            if sel is not None:
+                float_scale = float(np.random.uniform(*ff["scale"]))
+                aug_c = act.net_harmonics_complex[sel].copy()
+                aug_pow = act.net_power_features[sel].copy()
+                aug_state = act.state_id[sel].copy()
+                aug_target_p = act.target_power_w[sel].copy()
+                aug_on = act.is_on[sel].copy()
+                includes_onset = False
+        if float_scale is not None:
+            pass                                    # 위에서 이미 채웠다
+        elif new_len == orig_len:
             aug_c = act.net_harmonics_complex.copy()
             aug_pow = act.net_power_features.copy()
             aug_state = act.state_id.copy()
             aug_target_p = act.target_power_w.copy()
             aug_on = act.is_on.copy()
         elif act.periodic_duty:
-            # 서모스탯 주기를 보존해야 한다 - 늘이면 순환 이어붙이기, 줄이면 잘라내기
-            aug_c, aug_pow, aug_state, aug_target_p, aug_on = self._tile_or_crop(
+            # 파형은 그대로 두고 통전/휴지 **길이** 만 흔든 뒤, 길이를 맞춘다.
+            src = self._retime_duty(
                 act.net_harmonics_complex,
                 act.net_power_features,
                 act.state_id,
                 act.target_power_w,
                 act.is_on,
-                target_len=new_len,
+            )
+            aug_c, aug_pow, aug_state, aug_target_p, aug_on = self._tile_or_crop(
+                *src, target_len=new_len,
             )
             includes_onset = False
         elif new_len < orig_len:
@@ -105,6 +488,7 @@ class DataAugmentor:
                 act.target_power_w,
                 act.is_on,
                 target_len=new_len,
+                appliance_type=act.appliance_type,
             )
         else:
             aug_c, aug_pow, aug_state, aug_target_p, aug_on = self._warp_time_series(
@@ -118,12 +502,50 @@ class DataAugmentor:
             )
 
         # 3. 전력 / 진폭 스케일링
-        if power_scale is None:
-            p_scale = float(np.clip(1.0 + np.random.normal(0, self.power_scale_std), 0.85, 1.15))
-        else:
+        if float_scale is not None:
+            p_scale = float_scale               # 13.83.23: 녹화 범위 **아래로** 내리는 것이 목적이다
+        elif power_scale is not None:
             p_scale = float(power_scale)
+        elif act.appliance_type in self.level_scramble:
+            lo, hi = self.level_scramble[act.appliance_type]
+            p_scale = float(np.random.uniform(lo, hi))
+        else:
+            sd = self.power_scale_std_map.get(act.appliance_type, self.power_scale_std)
+            # 클립은 3σ 로 둔다. 일괄 ±15% 로 두면 σ=0.15 인 충전기가 잘리고
+            # σ=0.005 인 포트는 클립이 아무 일도 안 한다 (12.118).
+            p_scale = float(np.clip(1.0 + np.random.normal(0, sd), 1.0 - 3 * sd, 1.0 + 3 * sd))
 
-        aug_c = aug_c * p_scale
+        # **녹화 범위 밖으로는 안 나간다** (13.31). 증강이 만들어 낸 전력이 그 기기가
+        # 관측된 적 없는 값이면 증거 없는 것을 지어내는 것이다 — 충전기 σ=0.15 는
+        # 78W 를 만드는데 녹화 최대는 65.8W 다.
+        # ⚠ **경계를 넘는 것만 막는다. 이미 밖에 있는 것을 안으로 밀지 않는다.**
+        #   처음에 `clip(p_scale, lo/med, hi/med)` 로 썼더니, 활성화 중앙이 녹화 하한보다
+        #   낮은 경우(듀티 부하의 저출력 구간 등) 배율을 1 위로 올려 **전력을 키웠다** —
+        #   전력 상한 검사 5개가 깨졌다.
+        if self.clip_to_recorded_range and float_scale is None:
+            rng_w = POWER_RANGE_W.get(act.appliance_type)
+            on = aug_pow[:, 0] > 0.5
+            if rng_w is not None and np.any(on):
+                med = float(np.median(aug_pow[on, 0]))
+                lo_b = rng_w[0] / med if med > rng_w[0] else 0.0        # 이미 아래면 안 건드린다
+                hi_b = rng_w[1] / med if med < rng_w[1] else np.inf     # 이미 위면 안 건드린다
+                p_scale = float(np.clip(p_scale, lo_b, hi_b))
+
+        # 고정 서명이면 `I <- I·a` 로 끝이지만, 캡 입력 SMPS 는 부하가 바뀌면
+        # **모양도 바뀐다** (12.166). 곡선이 있는 기기는 `s(p)` 를 따라 옮긴다.
+        # 13.74: **그 녹화의** 곡선을 먼저 찾는다. 없으면 정현파 곡선으로 폴백한다
+        # (증강 대상이 텍스처를 모르는 녹화일 수 있다 — 모르는 것은 안 건드린다).
+        cv = None
+        if self._sp_tex:
+            cv = self._sp_tex.get(f"{act.appliance_type}@{act.source_file}")
+        if cv is None and self._sp:
+            cv = self._sp.get(act.appliance_type)
+        if cv is not None and float_scale is None:
+            from .sp_curves import rescale_to_power
+            aug_c = rescale_to_power(aug_c, aug_pow[:, 0], p_scale, cv)
+        else:
+            # 축소 경로(13.83.23)는 **선형**이다 — s(p) 는 녹화 하한(16W) 아래를 모른다.
+            aug_c = aug_c * p_scale
         aug_pow = aug_pow.copy()
         aug_pow[:, 0] *= p_scale  # P
         aug_pow[:, 1] *= p_scale  # Q
@@ -150,7 +572,12 @@ class DataAugmentor:
             aug_c[0] *= np.exp(1j * contact_angle_rad)
             aug_c[1] *= np.exp(1j * contact_angle_rad * 0.5)
 
-        # 6. Real / Imag 2채널 배열 재구성
+        # 6. 차수별 독립 지터 (12.62절) - 켜져 있을 때만
+        aug_c = self._apply_harmonic_dither(aug_c)
+        # 6b. 형제 전용 차수 비례 회전 (13.84.8 ②) - 목록의 기기만, 비면 항등
+        aug_c = self._apply_sibling_rotate(act.appliance_type, aug_c)
+
+        # 7. Real / Imag 2채널 배열 재구성
         actual_len = len(aug_c)
         aug_ri = np.zeros((actual_len, aug_c.shape[1], 2), dtype=np.float32)
         aug_ri[:, :, 0] = np.real(aug_c)
@@ -175,7 +602,202 @@ class DataAugmentor:
             periodic_duty=act.periodic_duty,
         )
 
+    def _apply_sibling_rotate(self, appliance_type: str, aug_c: np.ndarray) -> np.ndarray:
+        """형제 전용 편차. **활성화당 1회** 뽑아 그 활성화 전체에 건다 (13.84.8 ② · 13.84.16).
+
+        네 항을 순서대로 곱하고, 다섯째는 **더한다** — 회전 θ_h += c·h,
+        h>=`scramble_from` 위상 뒤섞기, 매끄러운 크기 기울기 t^((h−1)/(H−1)),
+        h>=`dither_from` 독립 크기 배율, 그리고 `drift_scale`>0 이면 **실측 표류**(13.84.61).
+        **h1 은 크기·위상 모두 정확히 불변**이다 (P 라벨과 φ_h 기준).
+        `SIBLING_ROTATE_PRESETS` 주석에 근거가 있다. 목록에 없는 기기는 난수를 안 쓴다 (항등).
+        """
+        cfg = self.sibling_rotate.get(appliance_type) if self.sibling_rotate else None
+        if cfg is None or aug_c.shape[1] < 2:
+            return aug_c
+        if float(cfg.get("p", 1.0)) < 1.0 and np.random.uniform() >= float(cfg["p"]):
+            return aug_c
+        nh = aug_c.shape[1]
+        h = np.arange(1, nh + 1, dtype=np.float64)
+        phase = np.zeros(nh)
+        gain = np.ones(nh)
+
+        c_max = float(cfg.get("c_max", 0.0))
+        if c_max > 0:                                   # ① 차수 비례 회전 (13.84.8 ②)
+            phase += np.radians(np.random.uniform(-c_max, c_max)) * h
+
+        sf = int(cfg.get("scramble_from", 0))
+        if sf >= 2:                                     # ② 고차 위상 뒤섞기
+            k = h >= sf
+            phase[k] += np.random.uniform(-np.pi, np.pi, size=int(k.sum()))
+
+        t_lo, t_hi = float(cfg.get("tilt_lo", 1.0)), float(cfg.get("tilt_hi", 1.0))
+        if t_lo != 1.0 or t_hi != 1.0:                  # ③ 매끄러운 크기 기울기
+            t = float(np.random.uniform(t_lo, t_hi))
+            gain *= np.power(max(t, 1e-6), (h - 1.0) / max(nh - 1.0, 1.0))
+
+        df = int(cfg.get("dither_from", 0))
+        d_lo, d_hi = float(cfg.get("dith_lo", 1.0)), float(cfg.get("dith_hi", 1.0))
+        if df >= 2 and (d_lo != 1.0 or d_hi != 1.0):    # ④ 고차 크기 독립 흔들기
+            k = h >= df
+            gain[k] *= np.random.uniform(d_lo, d_hi, size=int(k.sum()))
+
+        phase[0] = 0.0                                  # 기본파는 크기·위상 모두 그대로
+        gain[0] = 1.0
+        fac = (gain * np.exp(1j * phase)).astype(np.complex64)
+        out = (aug_c * fac[np.newaxis, :]).astype(aug_c.dtype)
+
+        # ⑤ 실측 표류 주입 (13.84.61) — 곱이 아니라 **덧셈**이다
+        ds = float(cfg.get("drift_scale", 0.0))
+        if ds > 0:
+            V, sd = _drift_dirs(str(cfg.get("drift_basis", DRIFT_BASIS)),
+                                int(cfg.get("drift_k", 3)), nh)
+            # 2σ 에서 자른다 — 꼬리가 미니PC 를 묻는 쪽이라 재표집이 아니라 자르기다
+            a = np.clip(np.random.standard_normal(len(sd)), -2.0, 2.0) * sd * ds
+            out = (out + (a @ V).astype(np.complex64)[np.newaxis, :]).astype(aug_c.dtype)
+        return out
+
+    def _apply_harmonic_dither(self, aug_c: np.ndarray) -> np.ndarray:
+        """차수별 독립 지터. **활성화당 1회** 뽑아 그 활성화 전체에 건다.
+
+        [무엇을 고치는가 - 12.62절]
+        이 클래스의 다른 증강 네 가지는 **지문을 하나도 바꾸지 못한다.**
+
+            공통 전력 배율   ->  |I_k|/|I_1| 을 **정확히** 불변으로 남긴다
+            k차 위상 회전    ->  ∠I_k − k·∠I_1 을 **정확히** 불변으로 남긴다
+                                (k·θ − k·θ = 0. 순수한 시간 이동이니 당연하다)
+            시간 신축·듀티    ->  길이만 바꾼다
+            돌입 접점각       ->  첫 2주기만
+
+        그래서 합성 창에 들어가는 **정규화된 15차 복소 지문은 원본 녹화의 바이트
+        그대로의 복사본**이다. 그것은 판별이 아니라 **조회**다. 12.58 이 "합성은
+        어떤 조건에서도 프로젝터↔충전기를 푼다(F1 0.985~1.000)" 를 발견한 것과
+        12.3 이 "충전기 녹화 2개, 프로젝터 2개뿐" 이라 적은 것이 여기서 만난다.
+
+        [크기를 어떻게 정했나 - `run_fingerprint_spread_probe` 의 실측]
+        증강이 불변으로 남기는 그 두 양의 산포를 세 층으로 쟀다
+        (홀수 차수 3~15 중앙값. 짝수는 |I_k|/|I_1| 이 0.4~8.9% 인 계측 바닥이라
+        상대산포가 74% 로 뜨므로 크기 결정에서 뺐다):
+
+            A 녹화 내부    g 21.4%   ψ 10.3°   <- 모델이 **이미 보는** 변동
+            B 녹화 간      g  6.6%   ψ  1.7°   <- 이중 하한 (n=2, 중심 대 중심)
+            C 실측 복합    g 53.3%   ψ 15.1°   <- 실제로 건너야 하는 격차
+
+        **A 를 넘지 않으면 새 압력이 0 이다** - 창마다 활성화의 다른 구간을 뽑아
+        쓰므로 A 는 이미 학습에 들어 있다. 그래서 C 수준으로 잡는다.
+        가장 극적인 수치: 프로젝터의 `|I3|/|I1|` 이 서로 다른 두 녹화에서
+        **0.4% / 0.4° 로 재현된다.** 그 정밀도가 외울 수 있는 키다.
+
+        [차수 비례]
+        산포가 차수와 함께 자란다 (k=3 에서 0.4~6.4%, k=13 에서 2.5~70.8%).
+        그래서 `σ_k = amp · k / ref` 로 재진 모양을 따르고, 지정한 값이
+        **홀수 차수의 중앙값**이 되도록 `ref = 9` 로 정규화한다
+        (3,5,7,9,11,13,15 의 중앙값이 9 다).
+
+        [기본파와 P·Q 는 건드리지 않는다]
+        k=1 을 두면 전력 라벨이 **정확히** 유효하게 남는다 (P 는 기본파가 지배한다).
+        그리고 위 두 불변량이 1차를 기준으로 정의되므로, k>=2 만 흔들면 σ_k 가
+        측정한 산포에 **1:1 로** 대응한다 - 재진 값을 그대로 인수로 쓸 수 있다.
+
+        [로그정규를 쓴다]
+        산포를 로그에서 쟀으므로(`rel_spread`) 뽑는 것도 로그에서 뽑아야 한다.
+        `1 + N(0, σ)` 는 σ 가 0.8 쯤 되면 음수가 나와 위상이 180° 뒤집힌다.
+        """
+        amp, ph = self.harmonic_dither_amp, self.harmonic_dither_phase_deg
+        e_amp, e_ph = self.harmonic_dither_even_amp, self.harmonic_dither_even_phase_deg
+        if amp <= 0.0 and ph <= 0.0 and e_amp <= 0.0 and e_ph <= 0.0:
+            return aug_c
+        n_h = aug_c.shape[1]
+        if n_h < 2:
+            return aug_c
+        k = np.arange(2, n_h + 1, dtype=np.float64)          # 2..15
+        rel = k / float(self.harmonic_dither_ref_order)
+        sig_g = amp * rel
+        sig_p = np.radians(ph) * rel
+        # 최소 차수 아래는 안 흔든다 (짝수차 전용 지터는 아래 분기가 따로 정한다).
+        low = k < float(self.harmonic_dither_min_order)
+        sig_g = np.where(low, 0.0, sig_g)
+        sig_p = np.where(low, 0.0, sig_p)
+        # 짝수차는 차수 비례를 쓰지 않는다 — 판별을 지는 것이 2차 하나라 (12.65.3)
+        # 차수로 키우면 정작 2차가 가장 약하게 흔들린다. 무리 전체에 같은 σ 를 건다.
+        if e_amp > 0.0 or e_ph > 0.0:
+            even = (k % 2 == 0)
+            sig_g = np.where(even, e_amp, sig_g)
+            sig_p = np.where(even, np.radians(e_ph), sig_p)
+        g = np.random.normal(0.0, np.maximum(sig_g, 1e-12))
+        psi = np.random.normal(0.0, np.maximum(sig_p, 1e-12))
+        f = (np.exp(g) * np.exp(1j * psi)).astype(np.complex64)
+        out = aug_c.copy()
+        out[:, 1:] = out[:, 1:] * f[np.newaxis, :]
+        return out
+
     # ── 주기 부하: 잘라내기 / 순환 이어붙이기 ───────────────────────────────
+    def _retime_duty(
+        self,
+        c_series: np.ndarray,
+        pow_series: np.ndarray,
+        state_series: np.ndarray,
+        target_p: np.ndarray,
+        on_series: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """통전/휴지 **구간 길이**를 흔든다. 파형은 리샘플링하지 않는다.
+
+        [왜 이것이 필요한가 - 설계 문서 12.16절]
+        학습 풀의 핫플 활성화는 3개, 포트는 13개(녹화 1개)뿐이고 합성기는 그것을
+        그대로 재생한다. 그래서 합성 창에는 풀 파형의 글자 그대로의 복사본이 들어가고,
+        모델은 *"이 파형이 있는가"* 만 맞추면 된다 - **듀티를 볼 이유가 없다.**
+        실제로 60초 내내 연속 통전한 창에서도 검출이 1.000 이었다 (12.16.2절 ①).
+        그런데 실측에서는 그 복사본이 없으므로 듀티라도 써야 하는데, 학습에서 쓸 일이
+        없었으니 안 배웠다.
+
+        [왜 리샘플링이 아니라 구간 길이인가]
+        이 모듈 서두가 주기 부하를 리샘플링하지 말라고 못박은 이유는 *파형* 왜곡이다 -
+        10초 히터 펄스를 2.2배로 늘이면 22초짜리, 실재하지 않는 기기가 된다.
+        **여기서는 파형을 늘이지 않는다.** 통전 구간 안에서 사이클을 순환 반복해
+        릴레이가 더 오래/짧게 닫혀 있게만 한다. 서모스탯 부하에서 통전 길이와 주기는
+        **기기의 성질이 아니라 설정·주위 온도·부하의 함수**다. 실측이 그것을 보여 준다:
+
+            핫플 통전율   51.3% / 57.8% / 35.8%   (활성화 3개, 12.13.1절)
+            오븐 듀티     22 / 28 / 39 / 46 / 81%  (활성화 5개, 12.11절)
+
+        같은 기기가 실제로 이만큼 흔들린다. 기본 배율 (0.5, 2.0) 은 그 범위를 덮는다.
+
+        [한계]
+        통전 구간 안에서 사이클을 반복하므로 승온에 따른 저항 드리프트가 평평해진다.
+        저항 부하의 정상상태에서는 작고, `_tile_or_crop` 이 구간 사이에서 이미 하고
+        있는 가정과 같은 종류다.
+        """
+        state = np.asarray(state_series)
+        tp = np.asarray(target_p, dtype=np.float64)
+        if not self.randomize_duty or state.size < 2:
+            return c_series, pow_series, state_series, target_p, on_series
+
+        # **구간은 `state_id` 로 나눈다.** `is_on` 으로 나누면 오븐이 빠진다 -
+        # 오븐의 `is_on` 은 활성화 단위라 내내 1 이고, 히터 펄스는 state 에만 있다
+        # (state 2=히터 / 1=팬·조명, 듀티 0.206~0.808 로 12.11절의 22~81% 와 맞는다).
+        # 핫플은 state 0/1 이 릴레이와 같이 간다.
+        edges = np.flatnonzero(np.diff(state)) + 1
+        if edges.size == 0:
+            return c_series, pow_series, state_series, target_p, on_series
+        starts = np.concatenate(([0], edges))
+        stops = np.concatenate((edges, [state.size]))
+
+        # 어느 구간이 "통전" 인지는 상태 번호가 아니라 **전력** 으로 정한다.
+        # 기기마다 상태 번호의 의미가 다르기 때문이다.
+        hot = tp > 0.5 * np.percentile(tp, 99)
+        on_scale = float(np.random.uniform(*self.duty_on_scale_range))
+        off_scale = float(np.random.uniform(*self.duty_off_scale_range))
+
+        idx = []
+        for a, b in zip(starts, stops):
+            run = b - a
+            scale = on_scale if hot[a:b].mean() >= 0.5 else off_scale
+            new_run = max(1, int(round(run * scale)))
+            # 구간 **안에서** 순환한다. 구간을 넘어가지 않으므로 통전/휴지가 안 섞인다.
+            idx.append(a + (np.arange(new_run) % run))
+        idx = np.concatenate(idx)
+        return (c_series[idx].copy(), pow_series[idx].copy(), state_series[idx].copy(),
+                target_p[idx].copy(), np.asarray(on_series)[idx].copy())
+
     def _tile_or_crop(
         self,
         c_series: np.ndarray,
@@ -216,34 +838,201 @@ class DataAugmentor:
         target_p: np.ndarray,
         on_series: np.ndarray,
         target_len: int,
+        appliance_type: str = "",
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]:
         """긴 동작 구간에서 목표 길이만큼 연속 구간을 잘라낸다 (시간 압축 없음).
 
         어디를 자르느냐에 따라 보이는 과도현상이 달라지므로 세 위치를 섞는다.
         한쪽만 쓰면 그 기기의 특정 전이만 학습하게 된다.
 
+        [정상 운전 구간은 전력으로 계층화해 뽑는다] (12.34.6)
+        시간 균등으로 뽑으면 **그 기기가 그 상태로 오래 있었던 만큼** 뽑힌다.
+        미니PC 가 그 예다 - 33.9분짜리 활성화 안에서 CPU 부하가 걸린 구간이
+        6.7% 뿐이라, 풀 전체에서 20W 이상인 사이클이 13.9% 밖에 안 된다.
+        실측 미니PC 단독은 30.3W 인데 합성 60초 창의 최대가 27.9W 였다.
+
+        노출 현실성과 동작 범위 커버리지는 다른 요구다. 학습에는 후자가 필요하다.
+        후보를 여러 개 뽑아 각자의 통전 전력을 재고, **전력 범위에서 균등하게**
+        목표를 정해 가장 가까운 후보를 고른다. 전력이 평평한 활성화(프로젝터)에서는
+        저절로 무작위 추출과 같아진다.
+
+        듀티 부하(오븐·핫플)는 여기 오지 않는다 - `augment_activation` 이 앞에서
+        `_tile_or_crop` 으로 보낸다. 그쪽은 통전/휴지 비율이 물리라 건드리면 안 된다.
+
         Returns:
             잘라낸 배열 4개와, 그 구간이 '켜지는 순간'을 포함하는지 여부
         """
         orig_len = len(c_series)
         span = orig_len - target_len
+        mix = self.state_mix.get(appliance_type)
+        sc = self.steady_crop.get(appliance_type) if self.steady_crop else None
+        # 상태 계층화를 쓸 때는 돌입/종료 몫을 25%+25% -> 15%+15% 로 줄인다 (13.35).
+        # 그 두 갈래는 활성화의 처음·끝 상태로 고정되므로 상태를 못 고른다.
+        # 정상 구간 자르기(13.83.26)를 쓰는 기기도 같다 — 실측 test_2 에서 충전기 창 중 자기 켜짐/꺼짐이
+        # 든 창은 ~30% 다. 나머지 70% 의 대부분을 정상 창으로 가려면 가장자리 몫이 50% 여서는 안 된다.
+        p_on, p_off = (0.15, 0.30) if (mix or sc) else (0.25, 0.50)
         r = np.random.rand()
-        if r < 0.25:
+        start, sel = None, None
+        if r < p_on:
             start = 0                                   # 켜지는 순간(돌입 전류) 포함
-        elif r < 0.50:
+        elif r < p_off:
             start = span                                # 꺼지는 순간 포함
-        else:
-            start = int(np.random.randint(0, span + 1))  # 정상 운전 중간
+        elif mix:
+            want = self._draw_state(mix)
+            # 절반은 **그 상태로 가득 찬 창**(이어 붙여 채운다), 절반은 이어진
+            # 실측 구간 그대로다. 뒤쪽을 남기는 이유는 IDLE↔ACTIVE 전이가
+            # 실재하는 신호라 통째로 없애면 안 되기 때문이다.
+            if np.random.rand() < 0.5:
+                sel = self._state_fill(state_series, on_series, target_len, want)
+            if sel is None:
+                start = self._state_start(state_series, on_series, target_len,
+                                          span, want)
+        # 정상 구간 자르기 (13.83.26). 켜짐/꺼짐 갈래와 상태 채움 뒤, 전력 계층화 대신.
+        if sel is None and start is None and sc is not None and np.random.rand() < sc["p"]:
+            start = self._steady_start(target_p, on_series, target_len, span, sc["max_range_frac"])
+        if sel is None and start is None:               # 그 상태가 이 활성화에 없다
+            start = self._stratified_start(target_p, on_series, target_len, span)
+        if sel is None:
+            sel = np.arange(start, start + target_len)
 
-        sl = slice(start, start + target_len)
         return (
-            c_series[sl].copy(),
-            pow_series[sl].copy(),
-            state_series[sl].copy(),
-            target_p[sl].copy(),
-            on_series[sl].copy(),
-            start == 0,
+            c_series[sel].copy(),
+            pow_series[sel].copy(),
+            state_series[sel].copy(),
+            target_p[sel].copy(),
+            on_series[sel].copy(),
+            bool(sel[0] == 0 and sel[-1] == target_len - 1),
         )
+
+    @staticmethod
+    def _draw_state(mix: Dict[int, float]) -> int:
+        """{상태: 확률} 에서 목표 상태 하나를 뽑는다 (13.35)."""
+        states = list(mix)
+        p = np.asarray([mix[s] for s in states], dtype=np.float64)
+        return int(states[int(np.random.choice(len(states), p=p / p.sum()))])
+
+    def _state_start(
+        self, state_series: np.ndarray, on_series: np.ndarray,
+        target_len: int, span: int, want: int,
+    ) -> Optional[int]:
+        """목표 **상태**를 먼저 뽑고, 그 상태가 실제로 있는 자리를 잘라낸다 (13.35).
+
+        후보 몇 개를 무작위로 던져 고르는 방식(`_stratified_start` 처럼)은 여기서
+        약하다 - 상태가 한 덩어리로 몰려 있으면 후보가 전부 빗나가서, 미니PC 처럼
+        IDLE 이 앞쪽 20% 에 뭉친 활성화에서 15% 는 아예 못 찾는다. 그래서 그 상태의
+        위치를 **직접 찾아** 그 중 하나를 창 안에 넣는다.
+
+        창 안 어디에 넣을지는 무작위다 - 늘 가운데 두면 그 상태의 전이가 항상
+        같은 자리에 오는, 합성에만 있는 단서가 된다.
+
+        그 상태가 이 활성화에 아예 없으면 `None` 을 돌려주고 호출부가 전력 계층화로
+        떨어진다. **뽑기 실패를 다른 상태로 메우지 않는다** - 그러면 IDLE 이 없는
+        활성화가 ACTIVE 를 두 번 내게 되어 요청한 비율이 조용히 어긋난다.
+        """
+        if span < 1:
+            return None
+        where = np.flatnonzero((state_series == want) & on_series.astype(bool))
+        if where.size == 0:
+            return None
+        anchor = int(where[int(np.random.randint(0, where.size))])
+        # 고른 지점을 창 안의 임의 위치에 놓는다.
+        start = anchor - int(np.random.randint(0, target_len))
+        return int(np.clip(start, 0, span))
+
+    def _state_fill(
+        self, state_series: np.ndarray, on_series: np.ndarray,
+        target_len: int, want: int,
+    ) -> Optional[np.ndarray]:
+        """그 상태의 구간들을 이어 붙여 창을 **가득** 채운다 (13.35).
+
+        `_state_start` 로는 부족하다. 미니PC 의 IDLE 은 풀 전체 최장이 **51.8초**라
+        60초 창을 혼자 채울 수 없다 (60초 이상 구간이 44개 중 0개, 중앙 4.0초).
+        그래서 캐시에서 IDLE 이 80% 이상인 창이 **0.4%** 뿐이다.
+
+        그런데 **실측 복합은 분 단위로 IDLE 로 돈다** — 구성 변화 짝으로 재면
+        미니PC 기여가 24~120초 구간에서 5.8~11.8W 로 일정하다. 즉 모델이 채점에서
+        만나는 창을 합성이 **만들어 낸 적이 없다.**
+
+        정상상태를 이어 붙이는 것은 대기 지문이 이미 쓰는 방법이다
+        (`sample_standby_series` 주석). 사이클 경계에서 잇고 **길이로 가중**해
+        긴 구간부터 쓰므로 이음매가 적다. 이음매의 페이저 단차는 같은 상태 안의
+        차이라 IDLE↔ACTIVE 전이보다 훨씬 작다.
+
+        Returns: 원본에 걸 인덱스 배열 (target_len,) 또는 None
+        """
+        idx = np.flatnonzero((state_series == want) & on_series.astype(bool))
+        if idx.size < target_len // 8:
+            return None
+        runs = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
+        # 1초 미만은 전이의 잔재다 - 이으면 이음매만 늘린다.
+        runs = [r for r in runs if len(r) >= 60]
+        if not runs:
+            return None
+        w = np.asarray([len(r) for r in runs], dtype=np.float64)
+        take, total, guard = [], 0, 0
+        while total < target_len and guard < 64:
+            r = runs[int(np.random.choice(len(runs), p=w / w.sum()))]
+            take.append(r); total += len(r); guard += 1
+        sel = np.concatenate(take)
+        if len(sel) < target_len:
+            return None
+        return sel[:target_len]
+
+    def _steady_start(
+        self, target_p: np.ndarray, on_series: np.ndarray, target_len: int, span: int,
+        max_range_frac: float, n_cand: int = 48,
+    ) -> Optional[int]:
+        """**전력이 평탄한** 창의 시작점을 고른다 (13.83.26, `STEADY_CROP_PRESETS`).
+
+        후보 `n_cand` 개를 무작위로 던져 각 창의 통전 전력 p5~p95 폭을 중앙값으로 나눈 값을 재고,
+        `max_range_frac` 안인 후보 중 하나를 무작위로 고른다. 하나도 없으면 가장 평탄한 후보다.
+        p5~p95 인 이유: 한두 주기 스파이크(릴레이·계측)가 60초 창을 '전이 창' 으로 만들면 안 된다.
+        """
+        if span < 1:
+            return None
+        starts = np.random.randint(0, span + 1, size=n_cand)
+        off = np.linspace(0, target_len - 1, 48).astype(np.int64)
+        idx = starts[:, None] + off[None, :]
+        m = on_series[idx].astype(bool)
+        p = np.where(m, target_p[idx], np.nan)
+        with np.errstate(all="ignore"):
+            lo = np.nanpercentile(p, 5, axis=1); hi = np.nanpercentile(p, 95, axis=1)
+            med = np.nanmedian(p, axis=1)
+        frac = np.where(np.isfinite(med) & (med > 1.0), (hi - lo) / np.maximum(med, 1.0), np.inf)
+        # 2단 문턱: 벌크(폭 ≤15%)가 없으면 테이퍼·부동(천천히 내려오며 버스트, 폭 ≤30%)도 정상으로 친다.
+        # charger_5/6 은 15% 문턱에 시작점의 0~1% 만 걸리지만 30~35% 에는 30% 가 걸린다 (13.83.26).
+        for th in (max_range_frac, 2.0 * max_range_frac):
+            ok = np.flatnonzero(frac <= th)
+            if ok.size:
+                return int(starts[ok[int(np.random.randint(0, ok.size))]])
+        if np.isfinite(frac).any():
+            return int(starts[int(np.argmin(frac))])
+        return None
+
+    def _stratified_start(
+        self, target_p: np.ndarray, on_series: np.ndarray, target_len: int, span: int
+    ) -> int:
+        """정상 운전 구간의 자를 지점을 전력 계층으로 고른다 (`_crop_window` 주석).
+
+        후보마다 창 전체의 중앙값을 내면 300,000창 x 후보수 만큼 들어 비싸다.
+        창 안에서 균등 간격으로 24점만 찍어 통전 평균을 낸다 - 순위를 매기는 데는
+        충분하고 비용은 후보당 24회 조회다.
+        """
+        n = self.load_strata_candidates
+        if not self.load_stratified or span < target_len // 4 or n < 2:
+            return int(np.random.randint(0, span + 1))
+        starts = np.random.randint(0, span + 1, size=n)
+        off = np.linspace(0, target_len - 1, 24).astype(np.int64)
+        idx = starts[:, None] + off[None, :]
+        m = on_series[idx].astype(bool)
+        lvl = np.where(m.any(1),
+                       (target_p[idx] * m).sum(1) / np.maximum(m.sum(1), 1),
+                       0.0)
+        lo, hi = float(lvl.min()), float(lvl.max())
+        if hi - lo < 1e-6:                 # 전력이 평평하다 - 계층이 의미 없다
+            return int(starts[np.random.randint(0, n)])
+        want = lo + np.random.rand() * (hi - lo)
+        return int(starts[int(np.argmin(np.abs(lvl - want)))])
 
     # ── 일반 부하: 돌입 구간 보존 리샘플링 ──────────────────────────────────
     def _warp_time_series(

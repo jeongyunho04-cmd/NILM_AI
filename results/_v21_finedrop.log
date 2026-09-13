@@ -1,0 +1,789 @@
+### [fd0.2] 1단계 Sat Aug 22 20:40:22     2026
+====================================================================================
+[Phase 3] 2갈래 CNN — 세밀 10초@60Hz + 광역 60초@2Hz, 타깃 끝-1초
+====================================================================================
+평가: 홀드아웃 8,000창 (뒤 20%) | sha a2f4974fe456dc3b | 타깃 3239/3600
+모델 0.61M 파라미터 | 배치 512 | 300 epoch x 50,000창 = 29,100 step | 장치 cuda
+손실 가중치: power 1.0 / state .3 / on .3 / plugged .1 / standby .1 / harm 0.1 / cons 0.0 / over 0.0
+학습 데이터: 캐시 cache/train60_v17 — 독립 창 300,000개 (14.6GB) | epoch 당 50,000창 -> 전체 50.0회 재사용
+  ep  1  loss 0.5515 (pw 0.0100 harm 2.1352)  [6s, 8,499 win/s]
+  ep  2  loss 0.3771 (pw 0.0081 harm 2.0629)  [6s, 7,707 win/s]
+  ep  3  loss 0.3362 (pw 0.0068 harm 1.9880)  [5s, 9,108 win/s]
+  ep  4  loss 0.3156 (pw 0.0063 harm 1.9444)  [6s, 8,976 win/s]
+  ep  5  loss 0.2984 (pw 0.0059 harm 1.8474)  [5s, 9,099 win/s]
+  ep  6  loss 0.2768 (pw 0.0051 harm 1.6897)  [5s, 9,106 win/s]
+  ep  7  loss 0.2646 (pw 0.0047 harm 1.6186)  [6s, 9,074 win/s]
+  ep  8  loss 0.2547 (pw 0.0042 harm 1.5915)  [6s, 9,068 win/s]
+  ep  9  loss 0.2535 (pw 0.0040 harm 1.6053)  [6s, 9,085 win/s]
+  ep 10  loss 0.2443 (pw 0.0037 harm 1.5644)  [6s, 9,068 win/s]
+  ep 11  loss 0.2401 (pw 0.0035 harm 1.5604)  [6s, 9,066 win/s]
+  ep 12  loss 0.2330 (pw 0.0034 harm 1.5204)  [6s, 9,060 win/s]
+  ep 13  loss 0.2316 (pw 0.0032 harm 1.5316)  [6s, 9,060 win/s]
+  ep 14  loss 0.2265 (pw 0.0031 harm 1.5093)  [6s, 9,054 win/s]
+  ep 15  loss 0.2295 (pw 0.0031 harm 1.5430)  [6s, 9,051 win/s]
+  ep 16  loss 0.2218 (pw 0.0029 harm 1.5005)  [6s, 9,045 win/s]
+  ep 17  loss 0.2249 (pw 0.0030 harm 1.5323)  [6s, 9,075 win/s]
+  ep 18  loss 0.2186 (pw 0.0029 harm 1.4989)  [5s, 9,110 win/s]
+  ep 19  loss 0.2185 (pw 0.0028 harm 1.5096)  [5s, 9,183 win/s]
+  ep 20  loss 0.2188 (pw 0.0028 harm 1.5163)  [6s, 7,856 win/s]
+  ep 21  loss 0.2166 (pw 0.0027 harm 1.5032)  [6s, 9,024 win/s]
+  ep 22  loss 0.2121 (pw 0.0027 harm 1.4739)  [5s, 9,245 win/s]
+  ep 23  loss 0.2132 (pw 0.0026 harm 1.4945)  [5s, 9,816 win/s]
+  ep 24  loss 0.2102 (pw 0.0026 harm 1.4817)  [5s, 9,800 win/s]
+  ep 25  loss 0.2083 (pw 0.0026 harm 1.4669)  [5s, 9,527 win/s]
+  ep 26  loss 0.2066 (pw 0.0025 harm 1.4592)  [5s, 9,488 win/s]
+  ep 27  loss 0.2090 (pw 0.0025 harm 1.4974)  [5s, 9,469 win/s]
+  ep 28  loss 0.2064 (pw 0.0024 harm 1.4761)  [5s, 9,501 win/s]
+  ep 29  loss 0.2050 (pw 0.0024 harm 1.4662)  [5s, 9,502 win/s]
+  ep 30  loss 0.2045 (pw 0.0024 harm 1.4726)  [5s, 9,632 win/s]
+  ep 31  loss 0.2059 (pw 0.0024 harm 1.4813)  [5s, 9,798 win/s]
+  ep 32  loss 0.2024 (pw 0.0024 harm 1.4647)  [5s, 9,799 win/s]
+  ep 33  loss 0.2030 (pw 0.0023 harm 1.4718)  [5s, 9,802 win/s]
+  ep 34  loss 0.2025 (pw 0.0023 harm 1.4734)  [5s, 9,803 win/s]
+  ep 35  loss 0.2010 (pw 0.0023 harm 1.4650)  [5s, 9,819 win/s]
+  ep 36  loss 0.2006 (pw 0.0023 harm 1.4641)  [5s, 9,786 win/s]
+  ep 37  loss 0.1997 (pw 0.0023 harm 1.4559)  [5s, 9,804 win/s]
+  ep 38  loss 0.2005 (pw 0.0023 harm 1.4583)  [5s, 9,807 win/s]
+  ep 39  loss 0.1998 (pw 0.0022 harm 1.4693)  [5s, 9,813 win/s]
+  ep 40  loss 0.1971 (pw 0.0022 harm 1.4525)  [5s, 9,800 win/s]
+  ep 41  loss 0.2019 (pw 0.0022 harm 1.4859)  [5s, 9,781 win/s]
+  ep 42  loss 0.1977 (pw 0.0022 harm 1.4587)  [5s, 9,807 win/s]
+  ep 43  loss 0.2015 (pw 0.0022 harm 1.4882)  [5s, 9,819 win/s]
+  ep 44  loss 0.1994 (pw 0.0021 harm 1.4749)  [5s, 9,792 win/s]
+  ep 45  loss 0.1966 (pw 0.0021 harm 1.4501)  [5s, 9,805 win/s]
+  ep 46  loss 0.1978 (pw 0.0022 harm 1.4665)  [5s, 9,827 win/s]
+  ep 47  loss 0.1944 (pw 0.0021 harm 1.4475)  [5s, 9,819 win/s]
+  ep 48  loss 0.1956 (pw 0.0021 harm 1.4582)  [5s, 9,816 win/s]
+  ep 49  loss 0.1982 (pw 0.0021 harm 1.4795)  [5s, 9,847 win/s]
+  ep 50  loss 0.1968 (pw 0.0021 harm 1.4750)  |  MAE 3.983W  F1 0.9600  저항3종 1.000  잔차 27.8W  [5s 학습 / 0s 평가, 9,853 win/s]
+  ep 51  loss 0.1952 (pw 0.0020 harm 1.4605)  [5s, 9,815 win/s]
+  ep 52  loss 0.1987 (pw 0.0021 harm 1.4941)  [5s, 9,823 win/s]
+  ep 53  loss 0.1948 (pw 0.0021 harm 1.4620)  [5s, 9,847 win/s]
+  ep 54  loss 0.1944 (pw 0.0021 harm 1.4617)  [5s, 9,840 win/s]
+  ep 55  loss 0.1926 (pw 0.0020 harm 1.4513)  [5s, 9,822 win/s]
+  ep 56  loss 0.1965 (pw 0.0021 harm 1.4886)  [5s, 9,815 win/s]
+  ep 57  loss 0.1927 (pw 0.0020 harm 1.4491)  [5s, 9,850 win/s]
+  ep 58  loss 0.1930 (pw 0.0020 harm 1.4697)  [5s, 9,835 win/s]
+  ep 59  loss 0.1926 (pw 0.0020 harm 1.4493)  [5s, 9,790 win/s]
+  ep 60  loss 0.1912 (pw 0.0020 harm 1.4468)  [5s, 9,790 win/s]
+  ep 61  loss 0.1906 (pw 0.0020 harm 1.4403)  [5s, 9,801 win/s]
+  ep 62  loss 0.1914 (pw 0.0020 harm 1.4469)  [5s, 9,829 win/s]
+  ep 63  loss 0.1927 (pw 0.0020 harm 1.4665)  [5s, 9,784 win/s]
+  ep 64  loss 0.1884 (pw 0.0019 harm 1.4334)  [5s, 9,811 win/s]
+  ep 65  loss 0.1911 (pw 0.0019 harm 1.4505)  [5s, 9,687 win/s]
+  ep 66  loss 0.1881 (pw 0.0019 harm 1.4371)  [5s, 9,676 win/s]
+  ep 67  loss 0.1883 (pw 0.0019 harm 1.4312)  [5s, 9,492 win/s]
+  ep 68  loss 0.1920 (pw 0.0019 harm 1.4685)  [5s, 9,674 win/s]
+  ep 69  loss 0.1923 (pw 0.0020 harm 1.4685)  [5s, 9,746 win/s]
+  ep 70  loss 0.1899 (pw 0.0019 harm 1.4552)  [5s, 9,613 win/s]
+  ep 71  loss 0.1914 (pw 0.0018 harm 1.4738)  [5s, 9,795 win/s]
+  ep 72  loss 0.1905 (pw 0.0020 harm 1.4581)  [5s, 9,802 win/s]
+  ep 73  loss 0.1869 (pw 0.0018 harm 1.4422)  [5s, 9,789 win/s]
+  ep 74  loss 0.1918 (pw 0.0019 harm 1.4756)  [5s, 9,800 win/s]
+  ep 75  loss 0.1927 (pw 0.0019 harm 1.4918)  [5s, 9,795 win/s]
+  ep 76  loss 0.1885 (pw 0.0019 harm 1.4499)  [5s, 9,794 win/s]
+  ep 77  loss 0.1907 (pw 0.0019 harm 1.4721)  [5s, 9,817 win/s]
+  ep 78  loss 0.1869 (pw 0.0019 harm 1.4351)  [5s, 9,803 win/s]
+  ep 79  loss 0.1889 (pw 0.0018 harm 1.4646)  [5s, 9,802 win/s]
+  ep 80  loss 0.1903 (pw 0.0019 harm 1.4668)  [5s, 9,794 win/s]
+  ep 81  loss 0.1871 (pw 0.0019 harm 1.4411)  [5s, 9,805 win/s]
+  ep 82  loss 0.1868 (pw 0.0019 harm 1.4405)  [5s, 9,789 win/s]
+  ep 83  loss 0.1902 (pw 0.0019 harm 1.4788)  [5s, 9,807 win/s]
+  ep 84  loss 0.1885 (pw 0.0018 harm 1.4679)  [5s, 9,781 win/s]
+  ep 85  loss 0.1880 (pw 0.0018 harm 1.4640)  [5s, 9,807 win/s]
+  ep 86  loss 0.1872 (pw 0.0018 harm 1.4552)  [5s, 9,783 win/s]
+  ep 87  loss 0.1878 (pw 0.0019 harm 1.4555)  [5s, 9,801 win/s]
+  ep 88  loss 0.1885 (pw 0.0019 harm 1.4676)  [5s, 9,810 win/s]
+  ep 89  loss 0.1852 (pw 0.0018 harm 1.4357)  [5s, 9,820 win/s]
+  ep 90  loss 0.1848 (pw 0.0018 harm 1.4417)  [5s, 9,792 win/s]
+  ep 91  loss 0.1872 (pw 0.0018 harm 1.4695)  [5s, 9,772 win/s]
+  ep 92  loss 0.1867 (pw 0.0018 harm 1.4629)  [5s, 9,802 win/s]
+  ep 93  loss 0.1880 (pw 0.0018 harm 1.4703)  [5s, 9,797 win/s]
+  ep 94  loss 0.1869 (pw 0.0017 harm 1.4672)  [5s, 9,788 win/s]
+  ep 95  loss 0.1836 (pw 0.0018 harm 1.4337)  [5s, 9,774 win/s]
+  ep 96  loss 0.1873 (pw 0.0018 harm 1.4743)  [5s, 9,782 win/s]
+  ep 97  loss 0.1845 (pw 0.0018 harm 1.4538)  [5s, 9,599 win/s]
+  ep 98  loss 0.1883 (pw 0.0017 harm 1.4732)  [5s, 9,812 win/s]
+  ep 99  loss 0.1843 (pw 0.0017 harm 1.4484)  [5s, 9,770 win/s]
+  ep100  loss 0.1860 (pw 0.0017 harm 1.4654)  |  MAE 3.487W  F1 0.9705  저항3종 1.000  잔차 26.9W  [5s 학습 / 0s 평가, 9,727 win/s]
+  ep101  loss 0.1860 (pw 0.0017 harm 1.4614)  [5s, 9,581 win/s]
+  ep102  loss 0.1871 (pw 0.0017 harm 1.4815)  [6s, 9,069 win/s]
+  ep103  loss 0.1838 (pw 0.0017 harm 1.4591)  [5s, 9,593 win/s]
+  ep104  loss 0.1850 (pw 0.0017 harm 1.4623)  [5s, 9,540 win/s]
+  ep105  loss 0.1850 (pw 0.0017 harm 1.4571)  [5s, 9,650 win/s]
+  ep106  loss 0.1838 (pw 0.0017 harm 1.4419)  [5s, 9,551 win/s]
+  ep107  loss 0.1863 (pw 0.0017 harm 1.4769)  [5s, 9,270 win/s]
+  ep108  loss 0.1849 (pw 0.0016 harm 1.4704)  [5s, 9,111 win/s]
+  ep109  loss 0.1812 (pw 0.0016 harm 1.4427)  [5s, 9,196 win/s]
+  ep110  loss 0.1872 (pw 0.0017 harm 1.4845)  [5s, 9,205 win/s]
+  ep111  loss 0.1836 (pw 0.0017 harm 1.4541)  [5s, 9,200 win/s]
+  ep112  loss 0.1842 (pw 0.0017 harm 1.4546)  [5s, 9,111 win/s]
+  ep113  loss 0.1825 (pw 0.0017 harm 1.4430)  [5s, 9,250 win/s]
+  ep114  loss 0.1809 (pw 0.0016 harm 1.4322)  [5s, 9,232 win/s]
+  ep115  loss 0.1843 (pw 0.0017 harm 1.4659)  [5s, 9,250 win/s]
+  ep116  loss 0.1827 (pw 0.0016 harm 1.4527)  [5s, 9,185 win/s]
+  ep117  loss 0.1816 (pw 0.0017 harm 1.4383)  [5s, 9,524 win/s]
+  ep118  loss 0.1806 (pw 0.0016 harm 1.4323)  [5s, 9,517 win/s]
+  ep119  loss 0.1845 (pw 0.0016 harm 1.4760)  [5s, 9,484 win/s]
+  ep120  loss 0.1836 (pw 0.0017 harm 1.4621)  [5s, 9,400 win/s]
+  ep121  loss 0.1803 (pw 0.0016 harm 1.4322)  [5s, 9,530 win/s]
+  ep122  loss 0.1813 (pw 0.0017 harm 1.4326)  [5s, 9,542 win/s]
+  ep123  loss 0.1806 (pw 0.0016 harm 1.4361)  [5s, 9,488 win/s]
+  ep124  loss 0.1822 (pw 0.0017 harm 1.4539)  [5s, 9,331 win/s]
+  ep125  loss 0.1821 (pw 0.0016 harm 1.4605)  [5s, 9,225 win/s]
+  ep126  loss 0.1813 (pw 0.0016 harm 1.4517)  [5s, 9,280 win/s]
+  ep127  loss 0.1827 (pw 0.0016 harm 1.4560)  [5s, 9,278 win/s]
+  ep128  loss 0.1827 (pw 0.0016 harm 1.4668)  [5s, 9,280 win/s]
+  ep129  loss 0.1836 (pw 0.0016 harm 1.4738)  [5s, 9,287 win/s]
+  ep130  loss 0.1833 (pw 0.0016 harm 1.4721)  [5s, 9,133 win/s]
+  ep131  loss 0.1796 (pw 0.0015 harm 1.4446)  [5s, 9,235 win/s]
+  ep132  loss 0.1823 (pw 0.0016 harm 1.4586)  [5s, 9,241 win/s]
+  ep133  loss 0.1787 (pw 0.0016 harm 1.4310)  [5s, 9,253 win/s]
+  ep134  loss 0.1811 (pw 0.0016 harm 1.4666)  [5s, 9,237 win/s]
+  ep135  loss 0.1811 (pw 0.0016 harm 1.4483)  [5s, 9,243 win/s]
+  ep136  loss 0.1799 (pw 0.0017 harm 1.4347)  [5s, 9,241 win/s]
+  ep137  loss 0.1802 (pw 0.0016 harm 1.4445)  [5s, 9,243 win/s]
+  ep138  loss 0.1817 (pw 0.0016 harm 1.4672)  [5s, 9,221 win/s]
+  ep139  loss 0.1841 (pw 0.0016 harm 1.4961)  [5s, 9,250 win/s]
+  ep140  loss 0.1808 (pw 0.0015 harm 1.4664)  [5s, 9,138 win/s]
+  ep141  loss 0.1805 (pw 0.0016 harm 1.4514)  [5s, 9,250 win/s]
+  ep142  loss 0.1800 (pw 0.0015 harm 1.4546)  [5s, 9,385 win/s]
+  ep143  loss 0.1800 (pw 0.0016 harm 1.4458)  [5s, 9,512 win/s]
+  ep144  loss 0.1784 (pw 0.0015 harm 1.4444)  [5s, 9,528 win/s]
+  ep145  loss 0.1801 (pw 0.0016 harm 1.4556)  [5s, 9,520 win/s]
+  ep146  loss 0.1810 (pw 0.0015 harm 1.4687)  [5s, 9,540 win/s]
+  ep147  loss 0.1800 (pw 0.0015 harm 1.4612)  [5s, 9,545 win/s]
+  ep148  loss 0.1795 (pw 0.0015 harm 1.4606)  [5s, 9,502 win/s]
+  ep149  loss 0.1789 (pw 0.0015 harm 1.4549)  [5s, 9,532 win/s]
+  ep150  loss 0.1771 (pw 0.0015 harm 1.4337)  |  MAE 3.502W  F1 0.9702  저항3종 1.000  잔차 27.3W  [5s 학습 / 0s 평가, 9,545 win/s]
+  ep151  loss 0.1796 (pw 0.0016 harm 1.4488)  [5s, 9,293 win/s]
+  ep152  loss 0.1789 (pw 0.0015 harm 1.4549)  [5s, 9,536 win/s]
+  ep153  loss 0.1757 (pw 0.0015 harm 1.4202)  [5s, 9,421 win/s]
+  ep154  loss 0.1753 (pw 0.0015 harm 1.4233)  [5s, 9,547 win/s]
+  ep155  loss 0.1799 (pw 0.0015 harm 1.4630)  [5s, 9,542 win/s]
+  ep156  loss 0.1784 (pw 0.0016 harm 1.4341)  [5s, 9,539 win/s]
+  ep157  loss 0.1789 (pw 0.0015 harm 1.4537)  [5s, 9,533 win/s]
+  ep158  loss 0.1795 (pw 0.0016 harm 1.4431)  [5s, 9,373 win/s]
+  ep159  loss 0.1771 (pw 0.0015 harm 1.4344)  [5s, 9,496 win/s]
+  ep160  loss 0.1828 (pw 0.0015 harm 1.4902)  [5s, 9,491 win/s]
+  ep161  loss 0.1782 (pw 0.0015 harm 1.4484)  [5s, 9,393 win/s]
+  ep162  loss 0.1788 (pw 0.0015 harm 1.4598)  [5s, 9,469 win/s]
+  ep163  loss 0.1780 (pw 0.0015 harm 1.4435)  [5s, 9,479 win/s]
+  ep164  loss 0.1790 (pw 0.0016 harm 1.4508)  [5s, 9,492 win/s]
+  ep165  loss 0.1790 (pw 0.0015 harm 1.4601)  [5s, 9,464 win/s]
+  ep166  loss 0.1746 (pw 0.0015 harm 1.4232)  [5s, 9,515 win/s]
+  ep167  loss 0.1772 (pw 0.0015 harm 1.4397)  [5s, 9,483 win/s]
+  ep168  loss 0.1785 (pw 0.0015 harm 1.4583)  [5s, 9,313 win/s]
+  ep169  loss 0.1778 (pw 0.0015 harm 1.4477)  [5s, 9,146 win/s]
+  ep170  loss 0.1794 (pw 0.0015 harm 1.4651)  [5s, 9,130 win/s]
+  ep171  loss 0.1749 (pw 0.0015 harm 1.4223)  [5s, 9,229 win/s]
+  ep172  loss 0.1767 (pw 0.0015 harm 1.4455)  [5s, 9,232 win/s]
+  ep173  loss 0.1784 (pw 0.0014 harm 1.4691)  [5s, 9,236 win/s]
+  ep174  loss 0.1756 (pw 0.0015 harm 1.4293)  [5s, 9,251 win/s]
+  ep175  loss 0.1769 (pw 0.0015 harm 1.4476)  [5s, 9,286 win/s]
+  ep176  loss 0.1796 (pw 0.0015 harm 1.4742)  [5s, 9,520 win/s]
+  ep177  loss 0.1774 (pw 0.0015 harm 1.4476)  [5s, 9,501 win/s]
+  ep178  loss 0.1766 (pw 0.0015 harm 1.4449)  [5s, 9,507 win/s]
+  ep179  loss 0.1781 (pw 0.0015 harm 1.4575)  [5s, 9,506 win/s]
+  ep180  loss 0.1780 (pw 0.0015 harm 1.4610)  [5s, 9,379 win/s]
+  ep181  loss 0.1760 (pw 0.0015 harm 1.4341)  [5s, 9,484 win/s]
+  ep182  loss 0.1761 (pw 0.0014 harm 1.4455)  [5s, 9,490 win/s]
+  ep183  loss 0.1759 (pw 0.0015 harm 1.4358)  [5s, 9,494 win/s]
+  ep184  loss 0.1761 (pw 0.0015 harm 1.4327)  [5s, 9,414 win/s]
+  ep185  loss 0.1763 (pw 0.0014 harm 1.4485)  [5s, 9,183 win/s]
+  ep186  loss 0.1768 (pw 0.0014 harm 1.4557)  [5s, 9,222 win/s]
+  ep187  loss 0.1757 (pw 0.0015 harm 1.4401)  [5s, 9,199 win/s]
+  ep188  loss 0.1767 (pw 0.0015 harm 1.4533)  [5s, 9,321 win/s]
+  ep189  loss 0.1745 (pw 0.0014 harm 1.4272)  [5s, 9,485 win/s]
+  ep190  loss 0.1742 (pw 0.0014 harm 1.4296)  [5s, 9,496 win/s]
+  ep191  loss 0.1746 (pw 0.0014 harm 1.4372)  [5s, 9,492 win/s]
+  ep192  loss 0.1772 (pw 0.0015 harm 1.4556)  [5s, 9,477 win/s]
+  ep193  loss 0.1774 (pw 0.0014 harm 1.4574)  [5s, 9,488 win/s]
+  ep194  loss 0.1746 (pw 0.0014 harm 1.4331)  [5s, 9,494 win/s]
+  ep195  loss 0.1768 (pw 0.0015 harm 1.4554)  [5s, 9,484 win/s]
+  ep196  loss 0.1759 (pw 0.0014 harm 1.4538)  [5s, 9,480 win/s]
+  ep197  loss 0.1767 (pw 0.0014 harm 1.4597)  [5s, 9,295 win/s]
+  ep198  loss 0.1747 (pw 0.0014 harm 1.4298)  [5s, 9,449 win/s]
+  ep199  loss 0.1749 (pw 0.0014 harm 1.4403)  [5s, 9,484 win/s]
+  ep200  loss 0.1767 (pw 0.0014 harm 1.4578)  |  MAE 3.254W  F1 0.9789  저항3종 1.000  잔차 26.3W  [5s 학습 / 0s 평가, 9,484 win/s]
+  ep201  loss 0.1744 (pw 0.0014 harm 1.4345)  [5s, 9,372 win/s]
+  ep202  loss 0.1750 (pw 0.0014 harm 1.4386)  [5s, 9,393 win/s]
+  ep203  loss 0.1723 (pw 0.0014 harm 1.4237)  [5s, 9,274 win/s]
+  ep204  loss 0.1754 (pw 0.0014 harm 1.4449)  [5s, 9,294 win/s]
+  ep205  loss 0.1774 (pw 0.0014 harm 1.4687)  [5s, 9,335 win/s]
+  ep206  loss 0.1743 (pw 0.0014 harm 1.4407)  [5s, 9,332 win/s]
+  ep207  loss 0.1761 (pw 0.0014 harm 1.4547)  [5s, 9,323 win/s]
+  ep208  loss 0.1760 (pw 0.0014 harm 1.4539)  [5s, 9,323 win/s]
+  ep209  loss 0.1758 (pw 0.0014 harm 1.4556)  [5s, 9,322 win/s]
+  ep210  loss 0.1735 (pw 0.0014 harm 1.4316)  [5s, 9,316 win/s]
+  ep211  loss 0.1771 (pw 0.0014 harm 1.4690)  [5s, 9,323 win/s]
+  ep212  loss 0.1754 (pw 0.0014 harm 1.4545)  [5s, 9,322 win/s]
+  ep213  loss 0.1749 (pw 0.0014 harm 1.4494)  [5s, 9,325 win/s]
+  ep214  loss 0.1767 (pw 0.0014 harm 1.4709)  [5s, 9,299 win/s]
+  ep215  loss 0.1752 (pw 0.0014 harm 1.4503)  [5s, 9,430 win/s]
+  ep216  loss 0.1740 (pw 0.0014 harm 1.4356)  [5s, 9,515 win/s]
+  ep217  loss 0.1761 (pw 0.0014 harm 1.4680)  [5s, 9,351 win/s]
+  ep218  loss 0.1718 (pw 0.0014 harm 1.4181)  [5s, 9,166 win/s]
+  ep219  loss 0.1734 (pw 0.0014 harm 1.4367)  [5s, 9,191 win/s]
+  ep220  loss 0.1744 (pw 0.0014 harm 1.4461)  [5s, 9,207 win/s]
+  ep221  loss 0.1738 (pw 0.0014 harm 1.4364)  [5s, 9,208 win/s]
+  ep222  loss 0.1728 (pw 0.0014 harm 1.4325)  [5s, 9,199 win/s]
+  ep223  loss 0.1765 (pw 0.0014 harm 1.4632)  [5s, 9,293 win/s]
+  ep224  loss 0.1757 (pw 0.0013 harm 1.4640)  [5s, 9,324 win/s]
+  ep225  loss 0.1745 (pw 0.0014 harm 1.4520)  [5s, 9,126 win/s]
+  ep226  loss 0.1730 (pw 0.0013 harm 1.4373)  [5s, 9,151 win/s]
+  ep227  loss 0.1757 (pw 0.0014 harm 1.4588)  [5s, 9,401 win/s]
+  ep228  loss 0.1727 (pw 0.0014 harm 1.4350)  [5s, 9,426 win/s]
+  ep229  loss 0.1743 (pw 0.0014 harm 1.4445)  [5s, 9,430 win/s]
+  ep230  loss 0.1733 (pw 0.0014 harm 1.4309)  [5s, 9,422 win/s]
+  ep231  loss 0.1731 (pw 0.0014 harm 1.4365)  [5s, 9,256 win/s]
+  ep232  loss 0.1722 (pw 0.0014 harm 1.4346)  [5s, 9,315 win/s]
+  ep233  loss 0.1747 (pw 0.0013 harm 1.4501)  [5s, 9,420 win/s]
+  ep234  loss 0.1727 (pw 0.0014 harm 1.4310)  [5s, 9,420 win/s]
+  ep235  loss 0.1704 (pw 0.0013 harm 1.4158)  [5s, 9,383 win/s]
+  ep236  loss 0.1726 (pw 0.0014 harm 1.4335)  [5s, 9,499 win/s]
+  ep237  loss 0.1721 (pw 0.0013 harm 1.4350)  [5s, 9,494 win/s]
+  ep238  loss 0.1730 (pw 0.0014 harm 1.4326)  [5s, 9,493 win/s]
+  ep239  loss 0.1756 (pw 0.0014 harm 1.4696)  [5s, 9,516 win/s]
+  ep240  loss 0.1726 (pw 0.0014 harm 1.4269)  [5s, 9,354 win/s]
+  ep241  loss 0.1717 (pw 0.0014 harm 1.4260)  [5s, 9,365 win/s]
+  ep242  loss 0.1720 (pw 0.0014 harm 1.4299)  [5s, 9,504 win/s]
+  ep243  loss 0.1743 (pw 0.0014 harm 1.4520)  [5s, 9,491 win/s]
+  ep244  loss 0.1737 (pw 0.0013 harm 1.4541)  [5s, 9,503 win/s]
+  ep245  loss 0.1743 (pw 0.0013 harm 1.4589)  [5s, 9,512 win/s]
+  ep246  loss 0.1736 (pw 0.0014 harm 1.4464)  [5s, 9,363 win/s]
+  ep247  loss 0.1735 (pw 0.0014 harm 1.4474)  [5s, 9,470 win/s]
+  ep248  loss 0.1697 (pw 0.0013 harm 1.4128)  [5s, 9,487 win/s]
+  ep249  loss 0.1725 (pw 0.0013 harm 1.4412)  [5s, 9,484 win/s]
+  ep250  loss 0.1739 (pw 0.0014 harm 1.4509)  |  MAE 3.220W  F1 0.9779  저항3종 1.000  잔차 26.0W  [5s 학습 / 0s 평가, 9,485 win/s]
+  ep251  loss 0.1745 (pw 0.0014 harm 1.4562)  [5s, 9,489 win/s]
+  ep252  loss 0.1747 (pw 0.0014 harm 1.4591)  [5s, 9,491 win/s]
+  ep253  loss 0.1717 (pw 0.0013 harm 1.4328)  [5s, 9,485 win/s]
+  ep254  loss 0.1715 (pw 0.0013 harm 1.4262)  [5s, 9,487 win/s]
+  ep255  loss 0.1733 (pw 0.0013 harm 1.4441)  [5s, 9,488 win/s]
+  ep256  loss 0.1730 (pw 0.0013 harm 1.4485)  [5s, 9,491 win/s]
+  ep257  loss 0.1732 (pw 0.0013 harm 1.4432)  [5s, 9,202 win/s]
+  ep258  loss 0.1743 (pw 0.0013 harm 1.4593)  [5s, 9,152 win/s]
+  ep259  loss 0.1734 (pw 0.0014 harm 1.4492)  [5s, 9,211 win/s]
+  ep260  loss 0.1716 (pw 0.0013 harm 1.4334)  [5s, 9,141 win/s]
+  ep261  loss 0.1740 (pw 0.0013 harm 1.4575)  [5s, 9,549 win/s]
+  ep262  loss 0.1716 (pw 0.0013 harm 1.4297)  [5s, 9,525 win/s]
+  ep263  loss 0.1718 (pw 0.0014 harm 1.4318)  [5s, 9,392 win/s]
+  ep264  loss 0.1699 (pw 0.0013 harm 1.4163)  [5s, 9,468 win/s]
+  ep265  loss 0.1717 (pw 0.0013 harm 1.4355)  [5s, 9,796 win/s]
+  ep266  loss 0.1725 (pw 0.0014 harm 1.4376)  [5s, 9,529 win/s]
+  ep267  loss 0.1723 (pw 0.0013 harm 1.4361)  [5s, 9,482 win/s]
+  ep268  loss 0.1746 (pw 0.0014 harm 1.4589)  [5s, 9,115 win/s]
+  ep269  loss 0.1733 (pw 0.0013 harm 1.4496)  [5s, 9,699 win/s]
+  ep270  loss 0.1709 (pw 0.0013 harm 1.4260)  [5s, 9,678 win/s]
+  ep271  loss 0.1715 (pw 0.0014 harm 1.4310)  [5s, 9,689 win/s]
+  ep272  loss 0.1738 (pw 0.0013 harm 1.4519)  [5s, 9,700 win/s]
+  ep273  loss 0.1715 (pw 0.0014 harm 1.4278)  [5s, 9,700 win/s]
+  ep274  loss 0.1742 (pw 0.0013 harm 1.4600)  [5s, 9,689 win/s]
+  ep275  loss 0.1695 (pw 0.0013 harm 1.4173)  [5s, 9,696 win/s]
+  ep276  loss 0.1706 (pw 0.0013 harm 1.4221)  [5s, 9,696 win/s]
+  ep277  loss 0.1720 (pw 0.0013 harm 1.4352)  [5s, 9,696 win/s]
+  ep278  loss 0.1714 (pw 0.0013 harm 1.4293)  [5s, 9,709 win/s]
+  ep279  loss 0.1711 (pw 0.0014 harm 1.4288)  [5s, 9,711 win/s]
+  ep280  loss 0.1729 (pw 0.0013 harm 1.4471)  [5s, 9,707 win/s]
+  ep281  loss 0.1699 (pw 0.0013 harm 1.4198)  [5s, 9,704 win/s]
+  ep282  loss 0.1714 (pw 0.0013 harm 1.4339)  [5s, 9,711 win/s]
+  ep283  loss 0.1737 (pw 0.0014 harm 1.4561)  [5s, 9,708 win/s]
+  ep284  loss 0.1717 (pw 0.0013 harm 1.4352)  [5s, 9,704 win/s]
+  ep285  loss 0.1739 (pw 0.0013 harm 1.4583)  [5s, 9,706 win/s]
+  ep286  loss 0.1715 (pw 0.0013 harm 1.4378)  [5s, 9,718 win/s]
+  ep287  loss 0.1723 (pw 0.0013 harm 1.4430)  [5s, 9,703 win/s]
+  ep288  loss 0.1750 (pw 0.0014 harm 1.4607)  [5s, 9,698 win/s]
+  ep289  loss 0.1719 (pw 0.0013 harm 1.4399)  [5s, 9,707 win/s]
+  ep290  loss 0.1750 (pw 0.0013 harm 1.4734)  [5s, 9,728 win/s]
+  ep291  loss 0.1714 (pw 0.0013 harm 1.4300)  [5s, 9,716 win/s]
+  ep292  loss 0.1731 (pw 0.0013 harm 1.4498)  [5s, 9,725 win/s]
+  ep293  loss 0.1729 (pw 0.0013 harm 1.4466)  [5s, 9,700 win/s]
+  ep294  loss 0.1728 (pw 0.0014 harm 1.4421)  [5s, 9,713 win/s]
+  ep295  loss 0.1723 (pw 0.0013 harm 1.4425)  [5s, 9,718 win/s]
+  ep296  loss 0.1711 (pw 0.0014 harm 1.4279)  [5s, 9,719 win/s]
+  ep297  loss 0.1711 (pw 0.0013 harm 1.4305)  [5s, 9,721 win/s]
+  ep298  loss 0.1720 (pw 0.0013 harm 1.4393)  [5s, 9,714 win/s]
+  ep299  loss 0.1709 (pw 0.0014 harm 1.4248)  [5s, 9,690 win/s]
+  ep300  loss 0.1731 (pw 0.0013 harm 1.4494)  |  MAE 3.253W  F1 0.9778  저항3종 1.000  잔차 26.3W  [5s 학습 / 0s 평가, 9,714 win/s]
+  [참고] 최고 F1 은 ep200 (0.9789, MAE 3.25W) 였다. 저장한 것은 마지막 ep300 이다.
+
+가전                     양성      MAE   MAE(on)    nMAE    RE중앙    편향(on)      FA     FA(고부하)      전가     F1
+---------------------------------------------------------------------------------------------------------
+air_conditioner       295     0.81     21.47   0.028   0.048     -9.67    0.02        0.10   +0.10  0.972
+beam_projector       1266     0.55      3.47   0.069   0.065     -2.55    0.00        0.01   +0.00  0.986
+electiric_kettle      983    11.03     89.03   0.058   0.060    -60.42    0.11        0.91   +0.91  1.000
+fan                  1386     0.71      3.36   0.088   0.053     -1.85    0.15        0.67   +0.65  0.968
+hair_dryer            785     5.06     51.11   0.053   0.059    +21.05    0.05        0.27   +0.26  0.999
+hotplate              373     5.50     36.30   0.066   0.064    -12.35    4.00       14.36  +12.88  0.933
+laptop_charger       1505     1.04      5.47   0.083   0.113     -2.20    0.02        0.07   +0.07  0.999
+minipc               1531     0.55      2.58   0.119   0.151     -0.29    0.07        0.10   +0.04  0.974
+oven                  920     4.02     34.06   0.028   0.059    -20.42    0.12        0.38   +0.31  0.970
+
+  기기 평균 MAE 3.25W | F1 평균 0.978 | 최악 F1 0.933 (hotplate)
+  저항3종 혼동 정확도 1.000 | 오븐→포트 0/188 (0.0%)
+  저부하 FA_rel(고부하 동시) < 0.15 : 4/4
+  총전력 잔차 절대 평균 26.26W
+
+                            Phase1 GBM    Phase3 CNN
+  기기 평균 MAE (W)                  1.760         3.253   패
+  F1 평균                          0.956         0.978   승
+  저항3종 정확도                       0.993         1.000   승
+  총전력 잔차 (W)                    14.244        26.257   패
+
+완료 1586s | results\cnn_v21_fd0.2.json
+====================================================================================
+
+### [fd0.2] 1단계 exit=0  Sat Aug 22 21:07:01     2026
+====================================================================================
+[Phase 5] 2단계 실측 준지도 적응 — 기기별 라벨 없이 (4.2절)
+====================================================================================
+실측 창 2,478개 (창 3600, 타깃 3239)
+  test.2      813창
+  test3       621창
+  test_4    1,044창
+합성 replay: cache/train60_v17 | λ=0.5 | w_cons=0.1 w_harm=4.0
+1단계 체크포인트: results/cnn_v21_fd0.2.pt (ep300, width 1.0)
+
+  [적응 전] 합성 홀드아웃  MAE 3.253W  F1 0.9778  저항3종 1.000  잔차 26.3W
+          실측          잔차 평균 -6.53W  절대 37.14W  on/off F1 0.765  이벤트 |상대오차| 0.405
+          **오귀속**    없는 기기 합계 47.5W (예측 총합의 8.0%)  최악 FA_rel 0.251
+
+  step   250/1000  loss 9.3489 (실측 cons 42.76 harm 1.240 hedge 0.058 / 합성 0.2018)  [17s]
+
+  [step 250] 합성 홀드아웃  MAE 7.053W  F1 0.9381  저항3종 0.972  잔차 40.1W
+              실측          잔차 평균 +4.81W  절대 9.04W  on/off F1 0.813  이벤트 |상대오차| 0.362
+              **오귀속**    없는 기기 합계 2.7W (예측 총합의 0.5%)  최악 FA_rel 0.122
+
+  step   500/1000  loss 8.3414 (실측 cons 33.71 harm 1.214 hedge 0.050 / 합성 0.2122)  [36s]
+
+  [step 500] 합성 홀드아웃  MAE 6.225W  F1 0.9421  저항3종 0.988  잔차 41.4W
+              실측          잔차 평균 -6.84W  절대 9.43W  on/off F1 0.811  이벤트 |상대오차| 0.346
+              **오귀속**    없는 기기 합계 3.4W (예측 총합의 0.6%)  최악 FA_rel 0.113
+
+  step   750/1000  loss 8.0697 (실측 cons 31.66 harm 1.197 hedge 0.051 / 합성 0.2140)  [55s]
+
+  [step 750] 합성 홀드아웃  MAE 6.169W  F1 0.9466  저항3종 0.987  잔차 42.3W
+              실측          잔차 평균 +0.65W  절대 5.94W  on/off F1 0.810  이벤트 |상대오차| 0.360
+              **오귀속**    없는 기기 합계 3.3W (예측 총합의 0.6%)  최악 FA_rel 0.097
+
+  step  1000/1000  loss 7.8321 (실측 cons 29.33 harm 1.195 hedge 0.049 / 합성 0.2145)  [74s]
+
+  [step 1000] 합성 홀드아웃  MAE 5.941W  F1 0.9505  저항3종 0.992  잔차 41.3W
+               실측          잔차 평균 -5.60W  절대 8.25W  on/off F1 0.809  이벤트 |상대오차| 0.366
+               **오귀속**    없는 기기 합계 3.7W (예측 총합의 0.7%)  최악 FA_rel 0.095
+
+====================================================================================
+적응 전 -> 후
+====================================================================================
+                                       전           후
+  **실측 오귀속 합계 (W)**              47.4934      3.7013
+  **오귀속 비중**                      0.0795      0.0068
+  **최악 FA_rel**                   0.2508      0.0949
+  실측 잔차 평균 (W)                   -6.5260     -5.5965
+  실측 잔차 절대 (W)                   37.1419      8.2529
+  실측 on/off F1                    0.7653      0.8089
+  실측 이벤트 |상대오차|                   0.4050      0.3655
+  합성 MAE (W)                      3.2534      5.9409
+  합성 F1                           0.9778      0.9505
+  합성 저항3종                         1.0000      0.9923
+  합성 잔차 (W)                      26.2572     41.3334
+
+완료 76s | results\adapt_v21_fd0.2.json
+====================================================================================
+
+### [fd0.2] 2단계 exit=0  Sat Aug 22 21:08:34     2026
+### [fd0.4] 1단계 Sat Aug 22 21:08:34     2026
+====================================================================================
+[Phase 3] 2갈래 CNN — 세밀 10초@60Hz + 광역 60초@2Hz, 타깃 끝-1초
+====================================================================================
+평가: 홀드아웃 8,000창 (뒤 20%) | sha a2f4974fe456dc3b | 타깃 3239/3600
+모델 0.61M 파라미터 | 배치 512 | 300 epoch x 50,000창 = 29,100 step | 장치 cuda
+손실 가중치: power 1.0 / state .3 / on .3 / plugged .1 / standby .1 / harm 0.1 / cons 0.0 / over 0.0
+학습 데이터: 캐시 cache/train60_v17 — 독립 창 300,000개 (14.6GB) | epoch 당 50,000창 -> 전체 50.0회 재사용
+  ep  1  loss 0.5901 (pw 0.0102 harm 2.1474)  [6s, 9,051 win/s]
+  ep  2  loss 0.4183 (pw 0.0090 harm 2.1055)  [5s, 9,693 win/s]
+  ep  3  loss 0.3738 (pw 0.0078 harm 2.0263)  [5s, 9,692 win/s]
+  ep  4  loss 0.3495 (pw 0.0073 harm 1.9850)  [5s, 9,699 win/s]
+  ep  5  loss 0.3321 (pw 0.0069 harm 1.9272)  [5s, 9,694 win/s]
+  ep  6  loss 0.3126 (pw 0.0063 harm 1.8443)  [5s, 9,643 win/s]
+  ep  7  loss 0.2978 (pw 0.0058 harm 1.7580)  [5s, 9,723 win/s]
+  ep  8  loss 0.2857 (pw 0.0053 harm 1.7088)  [5s, 9,728 win/s]
+  ep  9  loss 0.2819 (pw 0.0052 harm 1.7052)  [5s, 9,728 win/s]
+  ep 10  loss 0.2709 (pw 0.0049 harm 1.6442)  [5s, 9,718 win/s]
+  ep 11  loss 0.2655 (pw 0.0047 harm 1.6290)  [5s, 9,724 win/s]
+  ep 12  loss 0.2567 (pw 0.0045 harm 1.5720)  [5s, 9,715 win/s]
+  ep 13  loss 0.2535 (pw 0.0043 harm 1.5703)  [5s, 9,720 win/s]
+  ep 14  loss 0.2489 (pw 0.0044 harm 1.5412)  [5s, 9,728 win/s]
+  ep 15  loss 0.2508 (pw 0.0044 harm 1.5707)  [5s, 9,725 win/s]
+  ep 16  loss 0.2413 (pw 0.0040 harm 1.5239)  [5s, 9,710 win/s]
+  ep 17  loss 0.2437 (pw 0.0041 harm 1.5521)  [5s, 9,714 win/s]
+  ep 18  loss 0.2383 (pw 0.0040 harm 1.5221)  [5s, 9,723 win/s]
+  ep 19  loss 0.2377 (pw 0.0038 harm 1.5335)  [5s, 9,711 win/s]
+  ep 20  loss 0.2363 (pw 0.0038 harm 1.5380)  [5s, 9,720 win/s]
+  ep 21  loss 0.2343 (pw 0.0037 harm 1.5262)  [5s, 9,728 win/s]
+  ep 22  loss 0.2302 (pw 0.0036 harm 1.4958)  [5s, 9,722 win/s]
+  ep 23  loss 0.2312 (pw 0.0036 harm 1.5175)  [5s, 9,640 win/s]
+  ep 24  loss 0.2288 (pw 0.0035 harm 1.5047)  [5s, 9,720 win/s]
+  ep 25  loss 0.2265 (pw 0.0034 harm 1.4897)  [5s, 9,731 win/s]
+  ep 26  loss 0.2245 (pw 0.0034 harm 1.4803)  [5s, 9,735 win/s]
+  ep 27  loss 0.2270 (pw 0.0034 harm 1.5196)  [5s, 9,729 win/s]
+  ep 28  loss 0.2239 (pw 0.0033 harm 1.4970)  [5s, 9,733 win/s]
+  ep 29  loss 0.2225 (pw 0.0033 harm 1.4874)  [5s, 9,725 win/s]
+  ep 30  loss 0.2221 (pw 0.0032 harm 1.4924)  [5s, 9,734 win/s]
+  ep 31  loss 0.2228 (pw 0.0033 harm 1.5029)  [5s, 9,736 win/s]
+  ep 32  loss 0.2193 (pw 0.0032 harm 1.4851)  [5s, 9,538 win/s]
+  ep 33  loss 0.2202 (pw 0.0032 harm 1.4934)  [5s, 9,151 win/s]
+  ep 34  loss 0.2198 (pw 0.0031 harm 1.4941)  [5s, 9,503 win/s]
+  ep 35  loss 0.2177 (pw 0.0031 harm 1.4839)  [5s, 9,527 win/s]
+  ep 36  loss 0.2175 (pw 0.0031 harm 1.4845)  [5s, 9,524 win/s]
+  ep 37  loss 0.2164 (pw 0.0031 harm 1.4760)  [5s, 9,520 win/s]
+  ep 38  loss 0.2161 (pw 0.0030 harm 1.4778)  [5s, 9,523 win/s]
+  ep 39  loss 0.2160 (pw 0.0030 harm 1.4888)  [5s, 9,535 win/s]
+  ep 40  loss 0.2134 (pw 0.0030 harm 1.4721)  [5s, 9,527 win/s]
+  ep 41  loss 0.2178 (pw 0.0030 harm 1.5061)  [5s, 9,530 win/s]
+  ep 42  loss 0.2128 (pw 0.0029 harm 1.4760)  [5s, 9,517 win/s]
+  ep 43  loss 0.2165 (pw 0.0030 harm 1.5067)  [5s, 9,531 win/s]
+  ep 44  loss 0.2152 (pw 0.0029 harm 1.4930)  [5s, 9,524 win/s]
+  ep 45  loss 0.2117 (pw 0.0028 harm 1.4676)  [5s, 9,521 win/s]
+  ep 46  loss 0.2131 (pw 0.0029 harm 1.4841)  [5s, 9,532 win/s]
+  ep 47  loss 0.2102 (pw 0.0028 harm 1.4673)  [5s, 9,521 win/s]
+  ep 48  loss 0.2110 (pw 0.0028 harm 1.4765)  [5s, 9,526 win/s]
+  ep 49  loss 0.2129 (pw 0.0028 harm 1.4962)  [5s, 9,523 win/s]
+  ep 50  loss 0.2123 (pw 0.0028 harm 1.4937)  |  MAE 4.009W  F1 0.9670  저항3종 1.000  잔차 26.6W  [5s 학습 / 0s 평가, 9,521 win/s]
+  ep 51  loss 0.2102 (pw 0.0027 harm 1.4788)  [5s, 9,522 win/s]
+  ep 52  loss 0.2134 (pw 0.0028 harm 1.5114)  [5s, 9,521 win/s]
+  ep 53  loss 0.2101 (pw 0.0027 harm 1.4804)  [5s, 9,528 win/s]
+  ep 54  loss 0.2092 (pw 0.0027 harm 1.4802)  [5s, 9,528 win/s]
+  ep 55  loss 0.2075 (pw 0.0026 harm 1.4685)  [5s, 9,530 win/s]
+  ep 56  loss 0.2108 (pw 0.0027 harm 1.5058)  [5s, 9,524 win/s]
+  ep 57  loss 0.2072 (pw 0.0027 harm 1.4651)  [5s, 9,525 win/s]
+  ep 58  loss 0.2087 (pw 0.0026 harm 1.4870)  [5s, 9,522 win/s]
+  ep 59  loss 0.2066 (pw 0.0026 harm 1.4655)  [5s, 9,531 win/s]
+  ep 60  loss 0.2055 (pw 0.0026 harm 1.4638)  [5s, 9,526 win/s]
+  ep 61  loss 0.2058 (pw 0.0026 harm 1.4566)  [5s, 9,528 win/s]
+  ep 62  loss 0.2057 (pw 0.0027 harm 1.4644)  [5s, 9,525 win/s]
+  ep 63  loss 0.2073 (pw 0.0026 harm 1.4840)  [5s, 9,526 win/s]
+  ep 64  loss 0.2031 (pw 0.0025 harm 1.4503)  [5s, 9,528 win/s]
+  ep 65  loss 0.2054 (pw 0.0026 harm 1.4667)  [5s, 9,527 win/s]
+  ep 66  loss 0.2029 (pw 0.0025 harm 1.4535)  [5s, 9,531 win/s]
+  ep 67  loss 0.2021 (pw 0.0025 harm 1.4468)  [5s, 9,524 win/s]
+  ep 68  loss 0.2060 (pw 0.0025 harm 1.4837)  [5s, 9,531 win/s]
+  ep 69  loss 0.2064 (pw 0.0026 harm 1.4845)  [5s, 9,529 win/s]
+  ep 70  loss 0.2040 (pw 0.0024 harm 1.4709)  [5s, 9,526 win/s]
+  ep 71  loss 0.2060 (pw 0.0024 harm 1.4888)  [5s, 9,520 win/s]
+  ep 72  loss 0.2047 (pw 0.0025 harm 1.4736)  [5s, 9,514 win/s]
+  ep 73  loss 0.2020 (pw 0.0024 harm 1.4585)  [5s, 9,365 win/s]
+  ep 74  loss 0.2056 (pw 0.0024 harm 1.4906)  [5s, 9,127 win/s]
+  ep 75  loss 0.2069 (pw 0.0024 harm 1.5074)  [5s, 9,575 win/s]
+  ep 76  loss 0.2026 (pw 0.0024 harm 1.4659)  [5s, 9,618 win/s]
+  ep 77  loss 0.2044 (pw 0.0024 harm 1.4867)  [5s, 9,620 win/s]
+  ep 78  loss 0.2001 (pw 0.0024 harm 1.4494)  [5s, 9,625 win/s]
+  ep 79  loss 0.2033 (pw 0.0024 harm 1.4805)  [5s, 9,626 win/s]
+  ep 80  loss 0.2045 (pw 0.0025 harm 1.4830)  [5s, 9,626 win/s]
+  ep 81  loss 0.2013 (pw 0.0024 harm 1.4579)  [5s, 9,620 win/s]
+  ep 82  loss 0.2003 (pw 0.0023 harm 1.4554)  [5s, 9,624 win/s]
+  ep 83  loss 0.2039 (pw 0.0024 harm 1.4939)  [5s, 9,618 win/s]
+  ep 84  loss 0.2028 (pw 0.0024 harm 1.4845)  [5s, 9,617 win/s]
+  ep 85  loss 0.2020 (pw 0.0024 harm 1.4796)  [5s, 9,619 win/s]
+  ep 86  loss 0.2008 (pw 0.0023 harm 1.4702)  [5s, 9,618 win/s]
+  ep 87  loss 0.2010 (pw 0.0024 harm 1.4696)  [5s, 9,611 win/s]
+  ep 88  loss 0.2024 (pw 0.0023 harm 1.4825)  [5s, 9,614 win/s]
+  ep 89  loss 0.1983 (pw 0.0022 harm 1.4507)  [5s, 9,616 win/s]
+  ep 90  loss 0.1987 (pw 0.0023 harm 1.4557)  [5s, 9,617 win/s]
+  ep 91  loss 0.2010 (pw 0.0022 harm 1.4849)  [5s, 9,619 win/s]
+  ep 92  loss 0.2008 (pw 0.0023 harm 1.4786)  [5s, 9,602 win/s]
+  ep 93  loss 0.2016 (pw 0.0023 harm 1.4850)  [5s, 9,617 win/s]
+  ep 94  loss 0.2009 (pw 0.0023 harm 1.4813)  [5s, 9,628 win/s]
+  ep 95  loss 0.1968 (pw 0.0022 harm 1.4480)  [5s, 9,602 win/s]
+  ep 96  loss 0.2012 (pw 0.0023 harm 1.4894)  [5s, 9,626 win/s]
+  ep 97  loss 0.1993 (pw 0.0023 harm 1.4683)  [5s, 9,618 win/s]
+  ep 98  loss 0.2014 (pw 0.0022 harm 1.4877)  [5s, 9,629 win/s]
+  ep 99  loss 0.1981 (pw 0.0022 harm 1.4624)  [5s, 9,628 win/s]
+  ep100  loss 0.2001 (pw 0.0023 harm 1.4808)  |  MAE 3.262W  F1 0.9784  저항3종 1.000  잔차 25.4W  [5s 학습 / 0s 평가, 9,637 win/s]
+  ep101  loss 0.1999 (pw 0.0023 harm 1.4757)  [5s, 9,627 win/s]
+  ep102  loss 0.2004 (pw 0.0022 harm 1.4958)  [5s, 9,637 win/s]
+  ep103  loss 0.1979 (pw 0.0022 harm 1.4737)  [5s, 9,634 win/s]
+  ep104  loss 0.1982 (pw 0.0022 harm 1.4772)  [5s, 9,638 win/s]
+  ep105  loss 0.1983 (pw 0.0022 harm 1.4710)  [5s, 9,634 win/s]
+  ep106  loss 0.1969 (pw 0.0022 harm 1.4569)  [5s, 9,627 win/s]
+  ep107  loss 0.2000 (pw 0.0022 harm 1.4916)  [5s, 9,635 win/s]
+  ep108  loss 0.1986 (pw 0.0022 harm 1.4851)  [5s, 9,627 win/s]
+  ep109  loss 0.1954 (pw 0.0022 harm 1.4575)  [5s, 9,626 win/s]
+  ep110  loss 0.2004 (pw 0.0022 harm 1.4979)  [5s, 9,622 win/s]
+  ep111  loss 0.1970 (pw 0.0021 harm 1.4672)  [5s, 9,628 win/s]
+  ep112  loss 0.1966 (pw 0.0021 harm 1.4679)  [5s, 9,622 win/s]
+  ep113  loss 0.1965 (pw 0.0022 harm 1.4584)  [5s, 9,621 win/s]
+  ep114  loss 0.1952 (pw 0.0022 harm 1.4475)  [5s, 9,624 win/s]
+  ep115  loss 0.1984 (pw 0.0022 harm 1.4805)  [5s, 9,632 win/s]
+  ep116  loss 0.1965 (pw 0.0021 harm 1.4674)  [5s, 9,626 win/s]
+  ep117  loss 0.1946 (pw 0.0021 harm 1.4516)  [5s, 9,629 win/s]
+  ep118  loss 0.1939 (pw 0.0021 harm 1.4471)  [5s, 9,616 win/s]
+  ep119  loss 0.1976 (pw 0.0021 harm 1.4903)  [5s, 9,628 win/s]
+  ep120  loss 0.1972 (pw 0.0021 harm 1.4769)  [5s, 9,628 win/s]
+  ep121  loss 0.1932 (pw 0.0021 harm 1.4456)  [5s, 9,630 win/s]
+  ep122  loss 0.1941 (pw 0.0021 harm 1.4467)  [5s, 9,615 win/s]
+  ep123  loss 0.1934 (pw 0.0021 harm 1.4492)  [5s, 9,625 win/s]
+  ep124  loss 0.1953 (pw 0.0021 harm 1.4678)  [5s, 9,625 win/s]
+  ep125  loss 0.1956 (pw 0.0021 harm 1.4734)  [5s, 9,629 win/s]
+  ep126  loss 0.1951 (pw 0.0021 harm 1.4669)  [5s, 9,595 win/s]
+  ep127  loss 0.1951 (pw 0.0021 harm 1.4684)  [5s, 9,626 win/s]
+  ep128  loss 0.1959 (pw 0.0021 harm 1.4808)  [5s, 9,555 win/s]
+  ep129  loss 0.1963 (pw 0.0020 harm 1.4864)  [5s, 9,183 win/s]
+  ep130  loss 0.1967 (pw 0.0021 harm 1.4867)  [5s, 9,625 win/s]
+  ep131  loss 0.1928 (pw 0.0020 harm 1.4580)  [5s, 9,633 win/s]
+  ep132  loss 0.1953 (pw 0.0021 harm 1.4730)  [5s, 9,621 win/s]
+  ep133  loss 0.1918 (pw 0.0020 harm 1.4447)  [5s, 9,623 win/s]
+  ep134  loss 0.1950 (pw 0.0021 harm 1.4803)  [5s, 9,551 win/s]
+  ep135  loss 0.1944 (pw 0.0020 harm 1.4626)  [5s, 9,622 win/s]
+  ep136  loss 0.1925 (pw 0.0021 harm 1.4482)  [5s, 9,621 win/s]
+  ep137  loss 0.1935 (pw 0.0021 harm 1.4590)  [5s, 9,617 win/s]
+  ep138  loss 0.1955 (pw 0.0020 harm 1.4824)  [5s, 9,626 win/s]
+  ep139  loss 0.1979 (pw 0.0021 harm 1.5101)  [5s, 9,628 win/s]
+  ep140  loss 0.1946 (pw 0.0020 harm 1.4810)  [5s, 9,641 win/s]
+  ep141  loss 0.1935 (pw 0.0020 harm 1.4659)  [5s, 9,624 win/s]
+  ep142  loss 0.1937 (pw 0.0020 harm 1.4701)  [5s, 9,632 win/s]
+  ep143  loss 0.1928 (pw 0.0020 harm 1.4593)  [5s, 9,627 win/s]
+  ep144  loss 0.1918 (pw 0.0019 harm 1.4584)  [5s, 9,628 win/s]
+  ep145  loss 0.1934 (pw 0.0020 harm 1.4699)  [5s, 9,641 win/s]
+  ep146  loss 0.1953 (pw 0.0020 harm 1.4848)  [5s, 9,627 win/s]
+  ep147  loss 0.1937 (pw 0.0020 harm 1.4749)  [5s, 9,616 win/s]
+  ep148  loss 0.1936 (pw 0.0020 harm 1.4755)  [5s, 9,636 win/s]
+  ep149  loss 0.1932 (pw 0.0019 harm 1.4697)  [5s, 9,639 win/s]
+  ep150  loss 0.1911 (pw 0.0020 harm 1.4488)  |  MAE 3.329W  F1 0.9683  저항3종 1.000  잔차 26.0W  [5s 학습 / 0s 평가, 9,637 win/s]
+  ep151  loss 0.1926 (pw 0.0020 harm 1.4634)  [5s, 9,637 win/s]
+  ep152  loss 0.1924 (pw 0.0019 harm 1.4703)  [5s, 9,628 win/s]
+  ep153  loss 0.1891 (pw 0.0019 harm 1.4347)  [5s, 9,627 win/s]
+  ep154  loss 0.1878 (pw 0.0019 harm 1.4354)  [5s, 9,629 win/s]
+  ep155  loss 0.1932 (pw 0.0020 harm 1.4771)  [5s, 9,485 win/s]
+  ep156  loss 0.1910 (pw 0.0020 harm 1.4482)  [5s, 9,257 win/s]
+  ep157  loss 0.1922 (pw 0.0020 harm 1.4674)  [5s, 9,582 win/s]
+  ep158  loss 0.1921 (pw 0.0020 harm 1.4566)  [5s, 9,722 win/s]
+  ep159  loss 0.1901 (pw 0.0019 harm 1.4485)  [5s, 9,751 win/s]
+  ep160  loss 0.1960 (pw 0.0020 harm 1.5041)  [5s, 9,817 win/s]
+  ep161  loss 0.1915 (pw 0.0019 harm 1.4624)  [5s, 9,786 win/s]
+  ep162  loss 0.1923 (pw 0.0019 harm 1.4728)  [5s, 9,748 win/s]
+  ep163  loss 0.1911 (pw 0.0020 harm 1.4565)  [5s, 9,752 win/s]
+  ep164  loss 0.1922 (pw 0.0020 harm 1.4643)  [6s, 8,771 win/s]
+  ep165  loss 0.1926 (pw 0.0019 harm 1.4733)  [6s, 8,925 win/s]
+  ep166  loss 0.1878 (pw 0.0019 harm 1.4364)  [6s, 9,025 win/s]
+  ep167  loss 0.1907 (pw 0.0019 harm 1.4535)  [6s, 9,010 win/s]
+  ep168  loss 0.1920 (pw 0.0020 harm 1.4721)  [6s, 9,019 win/s]
+  ep169  loss 0.1910 (pw 0.0019 harm 1.4609)  [6s, 8,995 win/s]
+  ep170  loss 0.1930 (pw 0.0019 harm 1.4785)  [6s, 8,959 win/s]
+  ep171  loss 0.1876 (pw 0.0019 harm 1.4359)  [6s, 8,881 win/s]
+  ep172  loss 0.1904 (pw 0.0019 harm 1.4597)  [6s, 8,959 win/s]
+  ep173  loss 0.1923 (pw 0.0019 harm 1.4831)  [6s, 9,014 win/s]
+  ep174  loss 0.1891 (pw 0.0019 harm 1.4429)  [6s, 8,986 win/s]
+  ep175  loss 0.1899 (pw 0.0019 harm 1.4608)  [6s, 8,979 win/s]
+  ep176  loss 0.1933 (pw 0.0019 harm 1.4886)  [6s, 9,000 win/s]
+  ep177  loss 0.1909 (pw 0.0019 harm 1.4620)  [5s, 9,583 win/s]
+  ep178  loss 0.1896 (pw 0.0018 harm 1.4587)  [5s, 9,640 win/s]
+  ep179  loss 0.1915 (pw 0.0019 harm 1.4716)  [5s, 9,631 win/s]
+  ep180  loss 0.1913 (pw 0.0018 harm 1.4741)  [5s, 9,632 win/s]
+  ep181  loss 0.1893 (pw 0.0019 harm 1.4489)  [5s, 9,617 win/s]
+  ep182  loss 0.1893 (pw 0.0019 harm 1.4596)  [5s, 9,635 win/s]
+  ep183  loss 0.1890 (pw 0.0019 harm 1.4489)  [5s, 9,635 win/s]
+  ep184  loss 0.1890 (pw 0.0020 harm 1.4459)  [5s, 9,628 win/s]
+  ep185  loss 0.1898 (pw 0.0019 harm 1.4619)  [5s, 9,533 win/s]
+  ep186  loss 0.1911 (pw 0.0019 harm 1.4703)  [5s, 9,566 win/s]
+  ep187  loss 0.1887 (pw 0.0019 harm 1.4536)  [5s, 9,431 win/s]
+  ep188  loss 0.1895 (pw 0.0019 harm 1.4654)  [5s, 9,249 win/s]
+  ep189  loss 0.1879 (pw 0.0019 harm 1.4408)  [5s, 9,610 win/s]
+  ep190  loss 0.1873 (pw 0.0018 harm 1.4431)  [5s, 9,621 win/s]
+  ep191  loss 0.1877 (pw 0.0018 harm 1.4516)  [5s, 9,644 win/s]
+  ep192  loss 0.1911 (pw 0.0020 harm 1.4698)  [5s, 9,614 win/s]
+  ep193  loss 0.1906 (pw 0.0019 harm 1.4712)  [5s, 9,646 win/s]
+  ep194  loss 0.1879 (pw 0.0019 harm 1.4466)  [5s, 9,646 win/s]
+  ep195  loss 0.1902 (pw 0.0019 harm 1.4689)  [5s, 9,631 win/s]
+  ep196  loss 0.1895 (pw 0.0018 harm 1.4669)  [5s, 9,622 win/s]
+  ep197  loss 0.1904 (pw 0.0019 harm 1.4733)  [5s, 9,627 win/s]
+  ep198  loss 0.1873 (pw 0.0018 harm 1.4437)  [5s, 9,628 win/s]
+  ep199  loss 0.1879 (pw 0.0018 harm 1.4526)  [5s, 9,621 win/s]
+  ep200  loss 0.1901 (pw 0.0019 harm 1.4719)  |  MAE 3.116W  F1 0.9760  저항3종 0.999  잔차 25.2W  [5s 학습 / 0s 평가, 9,613 win/s]
+  ep201  loss 0.1878 (pw 0.0019 harm 1.4485)  [5s, 9,617 win/s]
+  ep202  loss 0.1879 (pw 0.0018 harm 1.4516)  [5s, 9,616 win/s]
+  ep203  loss 0.1860 (pw 0.0019 harm 1.4370)  [5s, 9,618 win/s]
+  ep204  loss 0.1885 (pw 0.0019 harm 1.4577)  [5s, 9,615 win/s]
+  ep205  loss 0.1904 (pw 0.0018 harm 1.4807)  [5s, 9,615 win/s]
+  ep206  loss 0.1876 (pw 0.0018 harm 1.4544)  [5s, 9,617 win/s]
+  ep207  loss 0.1895 (pw 0.0018 harm 1.4682)  [5s, 9,611 win/s]
+  ep208  loss 0.1893 (pw 0.0018 harm 1.4675)  [5s, 9,619 win/s]
+  ep209  loss 0.1892 (pw 0.0018 harm 1.4688)  [5s, 9,616 win/s]
+  ep210  loss 0.1862 (pw 0.0018 harm 1.4442)  [5s, 9,620 win/s]
+  ep211  loss 0.1902 (pw 0.0018 harm 1.4823)  [5s, 9,620 win/s]
+  ep212  loss 0.1886 (pw 0.0018 harm 1.4687)  [5s, 9,334 win/s]
+  ep213  loss 0.1881 (pw 0.0018 harm 1.4619)  [5s, 9,442 win/s]
+  ep214  loss 0.1901 (pw 0.0018 harm 1.4840)  [5s, 9,484 win/s]
+  ep215  loss 0.1885 (pw 0.0018 harm 1.4630)  [5s, 9,520 win/s]
+  ep216  loss 0.1872 (pw 0.0018 harm 1.4487)  [5s, 9,528 win/s]
+  ep217  loss 0.1897 (pw 0.0017 harm 1.4815)  [5s, 9,466 win/s]
+  ep218  loss 0.1849 (pw 0.0018 harm 1.4312)  [5s, 9,517 win/s]
+  ep219  loss 0.1869 (pw 0.0018 harm 1.4502)  [5s, 9,536 win/s]
+  ep220  loss 0.1880 (pw 0.0018 harm 1.4595)  [5s, 9,592 win/s]
+  ep221  loss 0.1868 (pw 0.0019 harm 1.4496)  [5s, 9,599 win/s]
+  ep222  loss 0.1864 (pw 0.0018 harm 1.4461)  [5s, 9,609 win/s]
+  ep223  loss 0.1898 (pw 0.0019 harm 1.4766)  [5s, 9,604 win/s]
+  ep224  loss 0.1892 (pw 0.0018 harm 1.4777)  [5s, 9,606 win/s]
+  ep225  loss 0.1880 (pw 0.0018 harm 1.4655)  [5s, 9,620 win/s]
+  ep226  loss 0.1865 (pw 0.0018 harm 1.4511)  [5s, 9,596 win/s]
+  ep227  loss 0.1890 (pw 0.0018 harm 1.4722)  [5s, 9,594 win/s]
+  ep228  loss 0.1865 (pw 0.0018 harm 1.4490)  [5s, 9,588 win/s]
+  ep229  loss 0.1873 (pw 0.0017 harm 1.4577)  [5s, 9,601 win/s]
+  ep230  loss 0.1865 (pw 0.0018 harm 1.4448)  [5s, 9,607 win/s]
+  ep231  loss 0.1864 (pw 0.0018 harm 1.4501)  [5s, 9,594 win/s]
+  ep232  loss 0.1855 (pw 0.0018 harm 1.4480)  [5s, 9,616 win/s]
+  ep233  loss 0.1877 (pw 0.0018 harm 1.4639)  [5s, 9,610 win/s]
+  ep234  loss 0.1859 (pw 0.0018 harm 1.4437)  [5s, 9,617 win/s]
+  ep235  loss 0.1838 (pw 0.0017 harm 1.4297)  [5s, 9,565 win/s]
+  ep236  loss 0.1856 (pw 0.0018 harm 1.4461)  [5s, 9,602 win/s]
+  ep237  loss 0.1857 (pw 0.0018 harm 1.4485)  [5s, 9,556 win/s]
+  ep238  loss 0.1858 (pw 0.0018 harm 1.4457)  [5s, 9,137 win/s]
+  ep239  loss 0.1894 (pw 0.0018 harm 1.4837)  [5s, 9,596 win/s]
+  ep240  loss 0.1854 (pw 0.0018 harm 1.4399)  [5s, 9,543 win/s]
+  ep241  loss 0.1852 (pw 0.0017 harm 1.4396)  [5s, 9,607 win/s]
+  ep242  loss 0.1852 (pw 0.0018 harm 1.4427)  [5s, 9,582 win/s]
+  ep243  loss 0.1876 (pw 0.0018 harm 1.4650)  [5s, 9,517 win/s]
+  ep244  loss 0.1872 (pw 0.0017 harm 1.4674)  [5s, 9,611 win/s]
+  ep245  loss 0.1885 (pw 0.0018 harm 1.4738)  [5s, 9,621 win/s]
+  ep246  loss 0.1869 (pw 0.0017 harm 1.4596)  [5s, 9,603 win/s]
+  ep247  loss 0.1871 (pw 0.0018 harm 1.4607)  [5s, 9,613 win/s]
+  ep248  loss 0.1828 (pw 0.0017 harm 1.4252)  [5s, 9,616 win/s]
+  ep249  loss 0.1858 (pw 0.0017 harm 1.4543)  [5s, 9,618 win/s]
+  ep250  loss 0.1876 (pw 0.0018 harm 1.4641)  |  MAE 3.011W  F1 0.9785  저항3종 1.000  잔차 24.7W  [5s 학습 / 0s 평가, 9,600 win/s]
+  ep251  loss 0.1875 (pw 0.0017 harm 1.4686)  [5s, 9,615 win/s]
+  ep252  loss 0.1884 (pw 0.0018 harm 1.4726)  [5s, 9,606 win/s]
+  ep253  loss 0.1852 (pw 0.0018 harm 1.4461)  [5s, 9,595 win/s]
+  ep254  loss 0.1849 (pw 0.0018 harm 1.4391)  [5s, 9,591 win/s]
+  ep255  loss 0.1862 (pw 0.0018 harm 1.4576)  [5s, 9,619 win/s]
+  ep256  loss 0.1863 (pw 0.0017 harm 1.4619)  [5s, 9,601 win/s]
+  ep257  loss 0.1866 (pw 0.0017 harm 1.4563)  [5s, 9,589 win/s]
+  ep258  loss 0.1881 (pw 0.0018 harm 1.4728)  [5s, 9,609 win/s]
+  ep259  loss 0.1865 (pw 0.0017 harm 1.4616)  [5s, 9,606 win/s]
+  ep260  loss 0.1850 (pw 0.0017 harm 1.4467)  [5s, 9,584 win/s]
+  ep261  loss 0.1871 (pw 0.0017 harm 1.4701)  [5s, 9,585 win/s]
+  ep262  loss 0.1849 (pw 0.0017 harm 1.4433)  [5s, 9,581 win/s]
+  ep263  loss 0.1852 (pw 0.0017 harm 1.4454)  [5s, 9,586 win/s]
+  ep264  loss 0.1835 (pw 0.0017 harm 1.4302)  [5s, 9,597 win/s]
+  ep265  loss 0.1852 (pw 0.0017 harm 1.4493)  [5s, 9,573 win/s]
+  ep266  loss 0.1860 (pw 0.0017 harm 1.4508)  [5s, 9,611 win/s]
+  ep267  loss 0.1858 (pw 0.0017 harm 1.4497)  [5s, 9,339 win/s]
+  ep268  loss 0.1877 (pw 0.0018 harm 1.4717)  [5s, 9,614 win/s]
+  ep269  loss 0.1868 (pw 0.0017 harm 1.4628)  [5s, 9,611 win/s]
+  ep270  loss 0.1843 (pw 0.0017 harm 1.4391)  [5s, 9,595 win/s]
+  ep271  loss 0.1847 (pw 0.0018 harm 1.4441)  [5s, 9,616 win/s]
+  ep272  loss 0.1869 (pw 0.0017 harm 1.4648)  [5s, 9,614 win/s]
+  ep273  loss 0.1848 (pw 0.0018 harm 1.4417)  [5s, 9,583 win/s]
+  ep274  loss 0.1874 (pw 0.0017 harm 1.4726)  [5s, 9,577 win/s]
+  ep275  loss 0.1828 (pw 0.0018 harm 1.4300)  [5s, 9,601 win/s]
+  ep276  loss 0.1840 (pw 0.0018 harm 1.4350)  [5s, 9,548 win/s]
+  ep277  loss 0.1853 (pw 0.0017 harm 1.4482)  [6s, 9,078 win/s]
+  ep278  loss 0.1847 (pw 0.0017 harm 1.4427)  [5s, 9,521 win/s]
+  ep279  loss 0.1846 (pw 0.0018 harm 1.4419)  [5s, 9,521 win/s]
+  ep280  loss 0.1862 (pw 0.0017 harm 1.4605)  [5s, 9,507 win/s]
+  ep281  loss 0.1830 (pw 0.0016 harm 1.4332)  [5s, 9,513 win/s]
+  ep282  loss 0.1847 (pw 0.0017 harm 1.4471)  [5s, 9,517 win/s]
+  ep283  loss 0.1870 (pw 0.0017 harm 1.4693)  [5s, 9,534 win/s]
+  ep284  loss 0.1845 (pw 0.0017 harm 1.4478)  [5s, 9,493 win/s]
+  ep285  loss 0.1877 (pw 0.0018 harm 1.4718)  [5s, 9,529 win/s]
+  ep286  loss 0.1851 (pw 0.0017 harm 1.4509)  [5s, 9,525 win/s]
+  ep287  loss 0.1854 (pw 0.0017 harm 1.4556)  [5s, 9,538 win/s]
+  ep288  loss 0.1884 (pw 0.0018 harm 1.4744)  [5s, 9,530 win/s]
+  ep289  loss 0.1854 (pw 0.0017 harm 1.4536)  [5s, 9,533 win/s]
+  ep290  loss 0.1885 (pw 0.0017 harm 1.4865)  [5s, 9,529 win/s]
+  ep291  loss 0.1846 (pw 0.0017 harm 1.4439)  [5s, 9,505 win/s]
+  ep292  loss 0.1862 (pw 0.0017 harm 1.4626)  [5s, 9,521 win/s]
+  ep293  loss 0.1865 (pw 0.0017 harm 1.4603)  [5s, 9,540 win/s]
+  ep294  loss 0.1862 (pw 0.0018 harm 1.4550)  [5s, 9,517 win/s]
+  ep295  loss 0.1856 (pw 0.0017 harm 1.4564)  [5s, 9,490 win/s]
+  ep296  loss 0.1842 (pw 0.0018 harm 1.4407)  [5s, 9,521 win/s]
+  ep297  loss 0.1844 (pw 0.0017 harm 1.4436)  [5s, 9,541 win/s]
+  ep298  loss 0.1852 (pw 0.0018 harm 1.4522)  [5s, 9,531 win/s]
+  ep299  loss 0.1842 (pw 0.0018 harm 1.4380)  [5s, 9,520 win/s]
+  ep300  loss 0.1864 (pw 0.0018 harm 1.4619)  |  MAE 3.009W  F1 0.9786  저항3종 1.000  잔차 24.6W  [5s 학습 / 0s 평가, 9,530 win/s]
+
+가전                     양성      MAE   MAE(on)    nMAE    RE중앙    편향(on)      FA     FA(고부하)      전가     F1
+---------------------------------------------------------------------------------------------------------
+air_conditioner       295     0.80     21.44   0.028   0.049     -1.93    0.01        0.03   +0.02  0.978
+beam_projector       1266     0.62      3.89   0.077   0.066     -2.89    0.00        0.00   -0.00  0.987
+electiric_kettle      983    10.07     80.40   0.052   0.051    -41.48    0.22        1.94   +1.94  0.999
+fan                  1386     0.76      3.66   0.096   0.056     -2.24    0.15        0.60   +0.57  0.963
+hair_dryer            785     4.84     48.96   0.051   0.057    +21.73    0.04        0.27   +0.26  0.999
+hotplate              373     4.13     34.54   0.063   0.062     -6.45    2.65        9.78   +8.86  0.959
+laptop_charger       1505     1.10      5.54   0.084   0.120     -2.29    0.08        0.28   +0.26  0.997
+minipc               1531     0.54      2.57   0.118   0.156     -0.13    0.06        0.11   +0.06  0.978
+oven                  920     4.21     34.32   0.028   0.069    -20.97    0.29        0.62   +0.40  0.948
+
+  기기 평균 MAE 3.01W | F1 평균 0.979 | 최악 F1 0.948 (oven)
+  저항3종 혼동 정확도 1.000 | 오븐→포트 0/188 (0.0%)
+  저부하 FA_rel(고부하 동시) < 0.15 : 4/4
+  총전력 잔차 절대 평균 24.57W
+
+                            Phase1 GBM    Phase3 CNN
+  기기 평균 MAE (W)                  1.760         3.009   패
+  F1 평균                          0.956         0.979   승
+  저항3종 정확도                       0.993         1.000   승
+  총전력 잔차 (W)                    14.244        24.566   패
+
+완료 1572s | results\cnn_v21_fd0.4.json
+====================================================================================
+
+### [fd0.4] 1단계 exit=0  Sat Aug 22 21:34:58     2026
+====================================================================================
+[Phase 5] 2단계 실측 준지도 적응 — 기기별 라벨 없이 (4.2절)
+====================================================================================
+실측 창 2,478개 (창 3600, 타깃 3239)
+  test.2      813창
+  test3       621창
+  test_4    1,044창
+합성 replay: cache/train60_v17 | λ=0.5 | w_cons=0.1 w_harm=4.0
+1단계 체크포인트: results/cnn_v21_fd0.4.pt (ep300, width 1.0)
+
+  [적응 전] 합성 홀드아웃  MAE 3.009W  F1 0.9786  저항3종 1.000  잔차 24.6W
+          실측          잔차 평균 -22.63W  절대 53.51W  on/off F1 0.753  이벤트 |상대오차| 0.294
+          **오귀속**    없는 기기 합계 51.5W (예측 총합의 8.6%)  최악 FA_rel 0.178
+
+  step   250/1000  loss 10.8130 (실측 cons 55.84 harm 1.276 hedge 0.105 / 합성 0.2039)  [18s]
+
+  [step 250] 합성 홀드아웃  MAE 4.404W  F1 0.9537  저항3종 0.998  잔차 30.4W
+              실측          잔차 평균 -2.62W  절대 10.56W  on/off F1 0.720  이벤트 |상대오차| 0.394
+              **오귀속**    없는 기기 합계 26.6W (예측 총합의 5.1%)  최악 FA_rel 0.328
+
+  step   500/1000  loss 9.8000 (실측 cons 46.70 harm 1.252 hedge 0.093 / 합성 0.2092)  [37s]
+
+  [step 500] 합성 홀드아웃  MAE 4.461W  F1 0.9573  저항3종 0.999  잔차 31.4W
+              실측          잔차 평균 -4.07W  절대 9.69W  on/off F1 0.718  이벤트 |상대오차| 0.416
+              **오귀속**    없는 기기 합계 27.1W (예측 총합의 5.2%)  최악 FA_rel 0.328
+
+  step   750/1000  loss 9.5006 (실측 cons 44.45 harm 1.233 hedge 0.090 / 합성 0.2139)  [56s]
+
+  [step 750] 합성 홀드아웃  MAE 4.938W  F1 0.9517  저항3종 0.998  잔차 32.1W
+              실측          잔차 평균 -3.87W  절대 8.48W  on/off F1 0.720  이벤트 |상대오차| 0.409
+              **오귀속**    없는 기기 합계 26.7W (예측 총합의 5.1%)  최악 FA_rel 0.308
+
+  step  1000/1000  loss 9.2387 (실측 cons 41.91 harm 1.230 hedge 0.091 / 합성 0.2158)  [75s]
+
+  [step 1000] 합성 홀드아웃  MAE 5.458W  F1 0.9452  저항3종 0.997  잔차 33.4W
+               실측          잔차 평균 -8.56W  절대 11.40W  on/off F1 0.711  이벤트 |상대오차| 0.420
+               **오귀속**    없는 기기 합계 27.5W (예측 총합의 5.4%)  최악 FA_rel 0.335
+
+====================================================================================
+적응 전 -> 후
+====================================================================================
+                                       전           후
+  **실측 오귀속 합계 (W)**              51.4913     27.5347
+  **오귀속 비중**                      0.0855      0.0538
+  **최악 FA_rel**                   0.1781      0.3347
+  실측 잔차 평균 (W)                  -22.6299     -8.5573
+  실측 잔차 절대 (W)                   53.5053     11.3984
+  실측 on/off F1                    0.7529      0.7113
+  실측 이벤트 |상대오차|                   0.2945      0.4202
+  합성 MAE (W)                      3.0092      5.4578
+  합성 F1                           0.9786      0.9452
+  합성 저항3종                         1.0000      0.9969
+  합성 잔차 (W)                      24.5656     33.3594
+
+완료 77s | results\adapt_v21_fd0.4.json
+====================================================================================
+
+### [fd0.4] 2단계 exit=0  Sat Aug 22 21:36:31     2026

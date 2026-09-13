@@ -27,12 +27,14 @@
 """
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Sequence, Dict, List, Optional, Union
 import hashlib
 import json
 import numpy as np
 
+from src.model.inputs import RAW_CHANNELS
 from src.synthesis.dataset import DEFAULT_RECIPE_MIX, NILMBatchGenerator
+from src.synthesis.augmentor import DataAugmentor
 from src.synthesis.segment_pool import SegmentPool
 from src.synthesis.synthesizer import LoadSynthesizer
 
@@ -78,18 +80,59 @@ def build_holdout(
     holdout_frac: float = 0.2,
     recipe_mix: Optional[Dict[str, float]] = None,
     progress_every: int = 1000,
+    ablate_pedestal_apps: Optional[Sequence[str]] = None,
+    level_scramble: Optional[Dict[str, tuple]] = None,
+    state_mix: Optional[Dict[str, Dict[int, float]]] = None,
+    carrier_apps: Optional[Sequence[str]] = None,
+    sp_curves: bool = False,
+    sp_per_texture: bool = False,
+    vtail: bool = False,
+    background: bool = False,
+    couple_ext: bool = False,
+    smps_focus_off_p: Optional[float] = None,
+    float_fill: Optional[Dict[str, dict]] = None,
+    steady_crop: Optional[Dict[str, dict]] = None,
+    standby_jitter_cap: float = 0.0,
+    sibling_rotate: Optional[Dict[str, dict]] = None,
 ) -> dict:
-    """홀드아웃 구간에서만 평가 셋을 만들어 저장한다."""
+    """홀드아웃 구간에서만 평가 셋을 만들어 저장한다.
+
+    `smps_focus_off_p` (13.83.4): `smps_overlap` 에서 미니PC 를 끄고 형제 SMPS 만
+    켤 확률. **학습 캐시와 같은 값을 줘야 한다** — 다르면 홀드아웃이 학습과 다른
+    동시성 구조를 재게 된다. None/0.0 이면 옛 경로다.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     np.random.seed(seed)
 
-    pool = SegmentPool(npz_dir=npz_dir, time_split="holdout", holdout_frac=holdout_frac)
-    syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False)
+    pool = SegmentPool(npz_dir=npz_dir, time_split="holdout", holdout_frac=holdout_frac,
+                       ablate_pedestal_apps=ablate_pedestal_apps,
+                       carrier_apps=carrier_apps,
+                       standby_jitter_cap_pct=(float(standby_jitter_cap) if standby_jitter_cap else None))
+    # `sp_curves`/`background` 는 **학습 캐시와 반드시 같아야 한다** (12.168.4).
+    # 배경 없이 만든 홀드아웃으로 배경 있는 모델을 재면, 모델이 기대하는 5.5W 를
+    # 없는 데서 차감해 **최소 부하만** 무너진다 (미니PC −0.119, 선풍기 −0.093).
+    # `state_mix`(13.35) 는 **일부러 학습 캐시와 다르게 둘 수 있다** — 홀드아웃은
+    # 자를 시간 구간이 달라 미니PC IDLE 이 자연히 47.8% 라, 손대지 않으면 그 자체로
+    # 상태가 고른 잣대가 된다. 판을 견줄 때는 **같은 홀드아웃을 그대로 쓴다.**
+    aug = DataAugmentor(level_scramble=level_scramble or None,
+                        state_mix=state_mix,
+                        sp_curves=bool(sp_curves),
+                        sp_per_texture=bool(sp_per_texture),
+                        # 13.83.23 상태 채움 + 전력 축소. None 이면 옛 경로 그대로다.
+                        float_fill=float_fill,
+                        steady_crop=steady_crop,
+                        # 13.84.8 ② 형제 전용 차수 비례 회전. None 이면 옛 경로.
+                        sibling_rotate=sibling_rotate)
+    from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
+    set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
+    syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
+                          augmentor=aug, background=bool(background),
+                          couple_ext=bool(couple_ext))
     gen = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         recipe_mix=recipe_mix or DEFAULT_RECIPE_MIX, synthesizer=syn,
-        compute_gt_harmonics=False,
+        compute_gt_harmonics=False, smps_focus_off_p=smps_focus_off_p,
     )
     apps = gen.appliance_list
     k, tgt = len(apps), gen.target_index
@@ -97,7 +140,7 @@ def build_holdout(
     # 60초 창이면 X 가 3.8GB 라 메모리에 다 못 올린다. 디스크에 바로 쓴다.
     out.mkdir(parents=True, exist_ok=True)
     X = np.lib.format.open_memmap(out / "X.npy", mode="w+", dtype=np.float32,
-                                  shape=(n_windows, 33, window_cycles))
+                                  shape=(n_windows, RAW_CHANNELS, window_cycles))
     yp = np.empty((n_windows, k), np.float32)
     ys = np.empty((n_windows, k), np.float32)
     yo = np.empty((n_windows, k), np.int8)
@@ -137,6 +180,23 @@ def build_holdout(
         "n_windows": n_windows, "window_cycles": window_cycles,
         "target_index": tgt, "seed": seed,
         "time_split": "holdout", "holdout_frac": holdout_frac,
+        "ablate_pedestal_apps": list(ablate_pedestal_apps or []),
+        "recipe_mix": recipe_mix,
+        "level_scramble": {k: list(v) for k, v in (level_scramble or {}).items()},
+        "state_mix": state_mix,
+        "carrier_apps": list(carrier_apps or []),
+        # 13.45: 학습 캐시의 `couple_ext` 와 반드시 같아야 한다.
+        "couple_ext": bool(couple_ext),
+        "smps_focus_off_p": (None if smps_focus_off_p is None else float(smps_focus_off_p)),
+        "float_fill": float_fill,          # 13.83.23 (None 이면 옛 경로)
+        "steady_crop": steady_crop,        # 13.83.26
+        "standby_jitter_cap": float(standby_jitter_cap or 0.0),   # 13.83.26
+        "sibling_rotate": sibling_rotate,  # 13.84.8 ②
+        # 학습 캐시와 짝이 맞아야 하는 설정 (12.168.4)
+        "sp_curves": bool(sp_curves),
+        "sp_per_texture": bool(sp_per_texture),
+        "vtail": bool(vtail),
+        "background": bool(background),
         "appliances": apps,
         "channel_layout": "0:15 harmonic Real, 15:30 harmonic Imag, 30 P, 31 Q, 32 V",
         "recipe_counts": {r: rec.count(r) for r in sorted(set(rec))},

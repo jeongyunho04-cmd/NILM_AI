@@ -47,3 +47,46 @@ cache/
 #   GBM  : python -m src.run_baseline      (5분, 47MB)
 #   CNN  : python -m src.run_train_cnn     (20분)
 results/*.pkl
+
+results/live_log.jsonl
+
+# 1단계 학습 중간 스냅샷 (ep0050~0250). 최종 체크포인트만 있으면 재현되고,
+# 이미 추적 중인 것만 307MB 다. 새 실험의 스냅샷은 더 쌓지 않는다.
+# (되살리려면 이 줄을 지우고 git add -f)
+results/snapshots/
+
+# 외부에서 받은 원본 자료 (12.166). 우리 구조로 흡수했으므로 추적하지 않는다.
+files (1)/
+files (3)/
+
+# ── 2026-09-06 (13.11) ────────────────────────────────────────────────
+# 미니PC 고차 부족 진단의 중간 배열 (54MB). run_* 탐침으로 재생성된다.
+results/_minipc_gap_pairs*.npz
+
+# 100 epoch 탐침 체크포인트. **수치는 같은 이름의 JSON 에 남는다** — 13.11.5 의
+# 음성 대조(A/B/A+B)와 절제 판이 그것이다. 바이너리까지 둘 값어치는 없다.
+results/*_probe.pt
+
+# gate1 HPC 접속 꾸러미 — **개인키가 평문으로 들어 있다.** 커밋 금지 (gate1-access/README.md)
+gate1-access/
+gate1-access-setup.md
+*.pem
+*_ed25519
+
+# ── 2026-09-13 — 체크포인트 선별 추적 ────────────────────────────────────
+# `results/` 에 `.pt` 가 390개 983MB 쌓였다. git 이력은 한 번 들어가면 못 지우고,
+# GitHub 권장 저장소 크기는 1GB 다. **지금 논증이 쓰는 것만** 추적한다.
+# 나머지는 로컬에 남아 있고 재학습으로 재생성된다 (patches/seq_proj.sbatch).
+#
+# ⚠ 이미 추적 중인 옛 판(cnn.pt, cnn_v2.pt ... 21개)은 이 규칙이 안 건드린다 —
+#   .gitignore 는 **추적되지 않은** 파일에만 듣는다.
+results/*.pt
+!results/cnn_v36.pt
+!results/cnn_v37.pt
+# 13.96~13.99 의 증거. `seq_fix_*` 는 사슬이 안 배운 판이고 `seq_chain_*` 은
+# 13.99 를 고친 뒤 첫 판이다. 둘이 나란히 있어야 그 절들을 재현할 수 있다.
+!results/seq_fix_*.pt
+!results/seq_chain_*.pt
+# 위 두 줄이 에포크 스냅샷까지 다시 끌어들이므로 여기서 도로 뺀다 (마지막 규칙이 이긴다).
+results/*_ep[0-9].pt
+results/*_ep[0-9][0-9].pt

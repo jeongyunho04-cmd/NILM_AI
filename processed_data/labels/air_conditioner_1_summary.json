@@ -1,0 +1,87 @@
+{
+  "raw_rows": 100170,
+  "cleaned_rows": 100140,
+  "duration_s": 1669.0,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 0,
+  "invalid_samples_dropped": 0,
+  "invalid_samples_interpolated": 0,
+  "interpolated_cycles": 0,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "startup_frames_dropped": 30,
+  "noise_floor_registry_w": 1.6,
+  "noise_floor_applied_w": 1.4243,
+  "noise_floor_source": "trailing_unplugged",
+  "trailing_noise": {
+    "n_cycles": 1291,
+    "start_t_rel_s": 1647.4833333333333,
+    "p_w": 1.4243,
+    "i1_ma": 6.36,
+    "i1_deg": 11.956193340872733,
+    "vrms": 229.607
+  },
+  "source_file": "air_conditioner_1.csv",
+  "file_role": "device",
+  "appliance_type": "air_conditioner",
+  "load_class": "motor",
+  "classification_reason": "등록된 단일 가전 'air_conditioner'",
+  "output_file": null,
+  "feature_columns_count": 140,
+  "v_ref_v": 228.16,
+  "p_mean": 319.64,
+  "p_max": 645.26,
+  "irms_mean": 1.7413,
+  "korean_name": "에어컨",
+  "total_samples": 100140,
+  "on_percentage": 90.64,
+  "state_distribution": {
+    "OFF_STANDBY": {
+      "state_id": 0,
+      "description": "대기 상태 또는 전원 꺼짐",
+      "count": 9377,
+      "percentage": 9.36,
+      "duration_min": 2.6
+    },
+    "FAN_ONLY": {
+      "state_id": 1,
+      "description": "송풍/팬 단독 동작 모드",
+      "count": 13149,
+      "percentage": 13.13,
+      "duration_min": 3.65
+    },
+    "COOLING_LOW": {
+      "state_id": 2,
+      "description": "인버터 컴프레서 저부하 냉방",
+      "count": 29842,
+      "percentage": 29.8,
+      "duration_min": 8.29
+    },
+    "COOLING_MID": {
+      "state_id": 3,
+      "description": "인버터 컴프레서 중부하 냉방",
+      "count": 32140,
+      "percentage": 32.1,
+      "duration_min": 8.93
+    },
+    "COOLING_HIGH": {
+      "state_id": 4,
+      "description": "인버터 컴프레서 고부하/터보 냉방",
+      "count": 15632,
+      "percentage": 15.61,
+      "duration_min": 4.34
+    }
+  },
+  "events_summary": {
+    "total_events": 17,
+    "on_events": 3,
+    "off_events": 3,
+    "mode_change_events": 11,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\air_conditioner_1_annotated.csv",
+  "npz_file": "processed_data\\npz\\air_conditioner_1.npz",
+  "events_json": "processed_data\\labels\\air_conditioner_1_events.json"
+}

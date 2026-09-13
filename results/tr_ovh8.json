@@ -1,0 +1,370 @@
+{
+  "adapt_ovh": {
+    "total": {
+      "n": 18,
+      "n_correct": 13,
+      "n_wrong": 4,
+      "n_undetected": 1,
+      "n_swap": 4
+    },
+    "test_8": {
+      "n": 18,
+      "n_correct": 13,
+      "n_wrong": 4,
+      "n_undetected": 1,
+      "n_swap": 4,
+      "accuracy": 0.7222222222222222,
+      "n_skipped": 0,
+      "skipped": [],
+      "apps": [
+        "beam_projector",
+        "laptop_charger",
+        "minipc"
+      ],
+      "rows": [
+        {
+          "t_s": 91.0,
+          "t_snapped_s": 96.73333333333333,
+          "snap_s": 5.733333333333334,
+          "true_app": "minipc",
+          "sign": 1,
+          "delta_w": {
+            "beam_projector": 0.0,
+            "laptop_charger": -8.025820059005461,
+            "minipc": -0.10526987828355061
+          },
+          "picked": "laptop_charger",
+          "picked_delta_w": -8.025820059005461,
+          "correct": false,
+          "verdict": "오귀속",
+          "obs_delta_w": -7.5229034423828125,
+          "obs_delta_i3_ma": -33.19097900390625,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 157.0,
+          "t_snapped_s": 159.48333333333332,
+          "snap_s": 2.48333333333332,
+          "true_app": "beam_projector",
+          "sign": -1,
+          "delta_w": {
+            "beam_projector": -17.249462127685547,
+            "laptop_charger": -9.91530094977304,
+            "minipc": -10.139699935913086
+          },
+          "picked": "beam_projector",
+          "picked_delta_w": -17.249462127685547,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": -43.00640106201172,
+          "obs_delta_i3_ma": -175.00698852539062,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 176.5,
+          "t_snapped_s": 174.48333333333332,
+          "snap_s": -2.01666666666668,
+          "true_app": "beam_projector",
+          "sign": 1,
+          "delta_w": {
+            "beam_projector": 10.686126708984375,
+            "laptop_charger": 20.171683788175358,
+            "minipc": 6.546655654907227
+          },
+          "picked": "laptop_charger",
+          "picked_delta_w": 20.171683788175358,
+          "correct": false,
+          "verdict": "오귀속",
+          "obs_delta_w": 42.29059600830078,
+          "obs_delta_i3_ma": 173.4849853515625,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 188.5,
+          "t_snapped_s": 188.73333333333332,
+          "snap_s": 0.23333333333332007,
+          "true_app": "laptop_charger",
+          "sign": -1,
+          "delta_w": {
+            "beam_projector": 0.0,
+            "laptop_charger": -36.964200333592814,
+            "minipc": -4.8453589549534115
+          },
+          "picked": "laptop_charger",
+          "picked_delta_w": -36.964200333592814,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": -44.361000061035156,
+          "obs_delta_i3_ma": -183.86395263671875,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 203.0,
+          "t_snapped_s": 200.98333333333332,
+          "snap_s": -2.01666666666668,
+          "true_app": "laptop_charger",
+          "sign": 1,
+          "delta_w": {
+            "beam_projector": 0.0,
+            "laptop_charger": 32.40689660779552,
+            "minipc": 7.93546466335205
+          },
+          "picked": "laptop_charger",
+          "picked_delta_w": 32.40689660779552,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": 45.26549530029297,
+          "obs_delta_i3_ma": 188.51498413085938,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 245.0,
+          "t_snapped_s": 245.48333333333332,
+          "snap_s": 0.48333333333332007,
+          "true_app": "minipc",
+          "sign": -1,
+          "delta_w": {
+            "beam_projector": 0.0,
+            "laptop_charger": -3.633780522357604,
+            "minipc": -4.992763678495187
+          },
+          "picked": "minipc",
+          "picked_delta_w": -4.992763678495187,
+          "correct": false,
+          "verdict": "미검출",
+          "obs_delta_w": -11.81689453125,
+          "obs_delta_i3_ma": -47.751983642578125,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 274.0,
+          "t_snapped_s": 275.48333333333335,
+          "snap_s": 1.4833333333333485,
+          "true_app": "minipc",
+          "sign": 1,
+          "delta_w": {
+            "beam_projector": 0.0,
+            "laptop_charger": 1.9727110768834635,
+            "minipc": 5.543512004053767
+          },
+          "picked": "minipc",
+          "picked_delta_w": 5.543512004053767,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": 13.241600036621094,
+          "obs_delta_i3_ma": 51.07696533203125,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 358.0,
+          "t_snapped_s": 357.48333333333335,
+          "snap_s": -0.5166666666666515,
+          "true_app": "laptop_charger",
+          "sign": -1,
+          "delta_w": {
+            "beam_projector": 0.0,
+            "laptop_charger": -39.02501341994457,
+            "minipc": -3.9021368391743536
+          },
+          "picked": "laptop_charger",
+          "picked_delta_w": -39.02501341994457,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": -43.49579620361328,
+          "obs_delta_i3_ma": -181.70501708984375,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 373.5,
+          "t_snapped_s": 379.48333333333335,
+          "snap_s": 5.9833333333333485,
+          "true_app": "laptop_charger",
+          "sign": 1,
+          "delta_w": {
+            "beam_projector": 0.0,
+            "laptop_charger": 20.763292708051285,
+            "minipc": 2.7766089212412624
+          },
+          "picked": "laptop_charger",
+          "picked_delta_w": 20.763292708051285,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": 27.6654052734375,
+          "obs_delta_i3_ma": 116.02703857421875,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 426.5,
+          "t_snapped_s": 427.98333333333335,
+          "snap_s": 1.4833333333333485,
+          "true_app": "beam_projector",
+          "sign": -1,
+          "delta_w": {
+            "beam_projector": -20.38058853149414,
+            "laptop_charger": -2.016156882004978,
+            "minipc": -4.954353705097077
+          },
+          "picked": "beam_projector",
+          "picked_delta_w": -20.38058853149414,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": -43.060699462890625,
+          "obs_delta_i3_ma": -176.239990234375,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 440.5,
+          "t_snapped_s": 439.73333333333335,
+          "snap_s": -0.7666666666666515,
+          "true_app": "beam_projector",
+          "sign": 1,
+          "delta_w": {
+            "beam_projector": 10.541091918945312,
+            "laptop_charger": 18.764304637688696,
+            "minipc": 3.8990488054570562
+          },
+          "picked": "laptop_charger",
+          "picked_delta_w": 18.764304637688696,
+          "correct": false,
+          "verdict": "오귀속",
+          "obs_delta_w": 42.36509704589844,
+          "obs_delta_i3_ma": 172.88796997070312,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 504.5,
+          "t_snapped_s": 505.98333333333335,
+          "snap_s": 1.4833333333333485,
+          "true_app": "beam_projector",
+          "sign": -1,
+          "delta_w": {
+            "beam_projector": -52.987218379974365,
+            "laptop_charger": 15.526886933948582,
+            "minipc": -6.1380883730628994
+          },
+          "picked": "beam_projector",
+          "picked_delta_w": -52.987218379974365,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": -47.832698822021484,
+          "obs_delta_i3_ma": -193.3689727783203,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 516.0,
+          "t_snapped_s": 516.7333333333333,
+          "snap_s": 0.7333333333333485,
+          "true_app": "laptop_charger",
+          "sign": -1,
+          "delta_w": {
+            "beam_projector": -6.262477107346058,
+            "laptop_charger": -30.19404326796439,
+            "minipc": -8.96420669555664
+          },
+          "picked": "laptop_charger",
+          "picked_delta_w": -30.19404326796439,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": -42.65060043334961,
+          "obs_delta_i3_ma": -180.54100036621094,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 537.5,
+          "t_snapped_s": 536.4833333333333,
+          "snap_s": -1.0166666666666515,
+          "true_app": "beam_projector",
+          "sign": 1,
+          "delta_w": {
+            "beam_projector": 45.496357187628746,
+            "laptop_charger": 0.005089593567390693,
+            "minipc": -1.0687975883483887
+          },
+          "picked": "beam_projector",
+          "picked_delta_w": 45.496357187628746,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": 44.788299560546875,
+          "obs_delta_i3_ma": 182.75999450683594,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 560.0,
+          "t_snapped_s": 559.7333333333333,
+          "snap_s": -0.2666666666666515,
+          "true_app": "laptop_charger",
+          "sign": 1,
+          "delta_w": {
+            "beam_projector": 0.5312576293945312,
+            "laptop_charger": 1.4103648547898047,
+            "minipc": 17.085652828216553
+          },
+          "picked": "minipc",
+          "picked_delta_w": 17.085652828216553,
+          "correct": false,
+          "verdict": "오귀속",
+          "obs_delta_w": 21.870895385742188,
+          "obs_delta_i3_ma": 89.10397338867188,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 593.5,
+          "t_snapped_s": 595.9833333333333,
+          "snap_s": 2.4833333333333485,
+          "true_app": "minipc",
+          "sign": -1,
+          "delta_w": {
+            "beam_projector": 0.0,
+            "laptop_charger": -4.672281974676967,
+            "minipc": -7.922061157809981
+          },
+          "picked": "minipc",
+          "picked_delta_w": -7.922061157809981,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": -18.757102966308594,
+          "obs_delta_i3_ma": -74.25100708007812,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 604.5,
+          "t_snapped_s": 601.7333333333333,
+          "snap_s": -2.7666666666666515,
+          "true_app": "laptop_charger",
+          "sign": -1,
+          "delta_w": {
+            "beam_projector": -4.396568298339844,
+            "laptop_charger": -23.18791689497705,
+            "minipc": -15.329907501254002
+          },
+          "picked": "laptop_charger",
+          "picked_delta_w": -23.18791689497705,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": -51.00740051269531,
+          "obs_delta_i3_ma": -212.22499084472656,
+          "snapped_on": "i3"
+        },
+        {
+          "t_s": 619.0,
+          "t_snapped_s": 620.4833333333333,
+          "snap_s": 1.4833333333333485,
+          "true_app": "beam_projector",
+          "sign": -1,
+          "delta_w": {
+            "beam_projector": -46.280608370900154,
+            "laptop_charger": -0.00010516279053263133,
+            "minipc": -0.006014042744936887
+          },
+          "picked": "beam_projector",
+          "picked_delta_w": -46.280608370900154,
+          "correct": true,
+          "verdict": "정확",
+          "obs_delta_w": -45.78310012817383,
+          "obs_delta_i3_ma": -189.697998046875,
+          "snapped_on": "i3"
+        }
+      ]
+    }
+  }
+}

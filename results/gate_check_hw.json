@@ -1,0 +1,3224 @@
+{
+  "adapt_hw+pp+rm0.02": {
+    "test.2": {
+      "soft": {
+        "absent_sum_w": 21.9502601719941,
+        "absent_fa_rel_max": 0.24656447073700152,
+        "residual_abs_w": 4.257216464408233,
+        "on_off_f1_mean": 0.8416184515452079,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.49534159531085037,
+            "p95_w": 1.4579769372940063,
+            "max_w": 17.43577003479004,
+            "on_rate": 0.0,
+            "fa_rel": 0.0006391504455623876
+          },
+          "electiric_kettle": {
+            "mean_w": 1.5207489144781925,
+            "p95_w": 7.818811893463135,
+            "max_w": 41.734100341796875,
+            "on_rate": 0.0,
+            "fa_rel": 0.000992008424317151
+          },
+          "fan": {
+            "mean_w": 3.4726621991386595,
+            "p95_w": 17.32746696472168,
+            "max_w": 17.78152847290039,
+            "on_rate": 0.2026594434868259,
+            "fa_rel": 0.0906700313091034
+          },
+          "hair_dryer": {
+            "mean_w": 0.11185099365876935,
+            "p95_w": 0.4438268840312958,
+            "max_w": 14.056323051452637,
+            "on_rate": 0.0,
+            "fa_rel": 0.00011566803894391866
+          },
+          "hotplate": {
+            "mean_w": 0.05174495369182705,
+            "p95_w": 0.034306515008211136,
+            "max_w": 42.46281051635742,
+            "on_rate": 0.0,
+            "fa_rel": 9.442509797778659e-05
+          },
+          "laptop_charger": {
+            "mean_w": 16.2979115157158,
+            "p95_w": 71.99879455566406,
+            "max_w": 74.99999237060547,
+            "on_rate": 0.23023885742427974,
+            "fa_rel": 0.24656447073700152
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 27960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.7544757033248083,
+            "precision": 0.9768211920529801,
+            "recall": 0.6145833333333334,
+            "n_scored": 27960,
+            "n_true_on": 14400,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 27960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 27960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 27960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 27960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 27960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": 0.7868925216362158,
+            "precision": 0.8878317476214321,
+            "recall": 0.7065621679064825,
+            "n_scored": 26640,
+            "n_true_on": 22584,
+            "ignored_uncertain": 1320
+          },
+          "oven": {
+            "f1": 0.9834871296745994,
+            "precision": 0.9744947064485082,
+            "recall": 0.9926470588235294,
+            "n_scored": 16500,
+            "n_true_on": 6120,
+            "ignored_uncertain": 11460
+          }
+        }
+      },
+      "hard": {
+        "absent_sum_w": 19.67254663077234,
+        "absent_fa_rel_max": 0.24490509526995782,
+        "residual_abs_w": 5.114828581298199,
+        "on_off_f1_mean": 0.8416184515452079,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "electiric_kettle": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "fan": {
+            "mean_w": 3.48431983342813,
+            "p95_w": 17.361927032470703,
+            "max_w": 17.78359031677246,
+            "on_rate": 0.2026594434868259,
+            "fa_rel": 0.0909744081835021
+          },
+          "hair_dryer": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "hotplate": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "laptop_charger": {
+            "mean_w": 16.18822679734421,
+            "p95_w": 71.99999237060547,
+            "max_w": 75.0,
+            "on_rate": 0.23023885742427974,
+            "fa_rel": 0.24490509526995782
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 27960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.7544757033248083,
+            "precision": 0.9768211920529801,
+            "recall": 0.6145833333333334,
+            "n_scored": 27960,
+            "n_true_on": 14400,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 27960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 27960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 27960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 27960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 27960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": 0.7868925216362158,
+            "precision": 0.8878317476214321,
+            "recall": 0.7065621679064825,
+            "n_scored": 26640,
+            "n_true_on": 22584,
+            "ignored_uncertain": 1320
+          },
+          "oven": {
+            "f1": 0.9834871296745994,
+            "precision": 0.9744947064485082,
+            "recall": 0.9926470588235294,
+            "n_scored": 16500,
+            "n_true_on": 6120,
+            "ignored_uncertain": 11460
+          }
+        }
+      },
+      "hedge": {
+        "hedged_window_share": 0.3021423294754986,
+        "hedged_power_share": 0.008189694955945015,
+        "per_appliance": {
+          "beam_projector": {
+            "n": 197,
+            "share_of_windows": 0.0485102191578429,
+            "mean_gate": 0.47384193539619446,
+            "mean_emitted_w": 21.64011001586914,
+            "mean_rated_w": 41.52752685546875
+          },
+          "fan": {
+            "n": 71,
+            "share_of_windows": 0.01748337847820734,
+            "mean_gate": 0.49677813053131104,
+            "mean_emitted_w": 8.488006591796875,
+            "mean_rated_w": 16.95745849609375
+          },
+          "hotplate": {
+            "n": 3,
+            "share_of_windows": 0.0007387343018960847,
+            "mean_gate": 0.08161690086126328,
+            "mean_emitted_w": 32.70207595825195,
+            "mean_rated_w": 401.3333435058594
+          },
+          "laptop_charger": {
+            "n": 179,
+            "share_of_windows": 0.04407781334646639,
+            "mean_gate": 0.4021630883216858,
+            "mean_emitted_w": 21.467451095581055,
+            "mean_rated_w": 47.15541458129883
+          },
+          "minipc": {
+            "n": 1028,
+            "share_of_windows": 0.25313962078305835,
+            "mean_gate": 0.3495643734931946,
+            "mean_emitted_w": 0.8693109154701233,
+            "mean_rated_w": 1.6908975839614868
+          },
+          "oven": {
+            "n": 3,
+            "share_of_windows": 0.0007387343018960847,
+            "mean_gate": 0.5228955149650574,
+            "mean_emitted_w": 550.0066528320312,
+            "mean_rated_w": 972.6051635742188
+          }
+        }
+      }
+    },
+    "test3": {
+      "soft": {
+        "absent_sum_w": 14.948479338893026,
+        "absent_fa_rel_max": 0.05116859035533878,
+        "residual_abs_w": 5.589221816774851,
+        "on_off_f1_mean": 0.7346212251855317,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.5678547703357804,
+            "p95_w": 1.6010358929634094,
+            "max_w": 4.2994704246521,
+            "on_rate": 0.0,
+            "fa_rel": 0.0007327158326913295
+          },
+          "electiric_kettle": {
+            "mean_w": 9.903050348975805,
+            "p95_w": 14.954988479614258,
+            "max_w": 578.1752319335938,
+            "on_rate": 0.0,
+            "fa_rel": 0.006459915426598698
+          },
+          "fan": {
+            "mean_w": 0.4104579804726378,
+            "p95_w": 0.22514276951551437,
+            "max_w": 17.56159782409668,
+            "on_rate": 0.02152364769187199,
+            "fa_rel": 0.010716918550199421
+          },
+          "hair_dryer": {
+            "mean_w": 0.6606556346565604,
+            "p95_w": 1.8653183579444885,
+            "max_w": 72.46699523925781,
+            "on_rate": 0.0,
+            "fa_rel": 0.000683201276790652
+          },
+          "hotplate": {
+            "mean_w": 0.02421678196435222,
+            "p95_w": 0.02881577145308256,
+            "max_w": 15.538403511047363,
+            "on_rate": 0.0,
+            "fa_rel": 4.419120796414638e-05
+          },
+          "laptop_charger": {
+            "mean_w": 3.382243822487893,
+            "p95_w": 11.782287092940226,
+            "max_w": 74.4999771118164,
+            "on_rate": 0.03285188331917304,
+            "fa_rel": 0.05116859035533878
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 24780,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.9720059632267682,
+            "precision": 1.0,
+            "recall": 0.9455365775056397,
+            "n_scored": 24780,
+            "n_true_on": 18618,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 24780,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 24780,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 24780,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 24780,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 24780,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": 0.2501313715186547,
+            "precision": 1.0,
+            "recall": 0.14294294294294294,
+            "n_scored": 23760,
+            "n_true_on": 19980,
+            "ignored_uncertain": 1020
+          },
+          "oven": {
+            "f1": 0.9817263408111723,
+            "precision": 0.9954805664356734,
+            "recall": 0.9683470105509965,
+            "n_scored": 15120,
+            "n_true_on": 10236,
+            "ignored_uncertain": 9660
+          }
+        }
+      },
+      "hard": {
+        "absent_sum_w": 3.8082422482791607,
+        "absent_fa_rel_max": 0.0519694466975753,
+        "residual_abs_w": 6.278335962897149,
+        "on_off_f1_mean": 0.7346212251855317,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "electiric_kettle": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "fan": {
+            "mean_w": 0.37306182156943357,
+            "p95_w": 0.0,
+            "max_w": 17.750370025634766,
+            "on_rate": 0.02152364769187199,
+            "fa_rel": 0.009740517534449964
+          },
+          "hair_dryer": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "hotplate": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "laptop_charger": {
+            "mean_w": 3.435180426709727,
+            "p95_w": 12.183577956597714,
+            "max_w": 74.5,
+            "on_rate": 0.03285188331917304,
+            "fa_rel": 0.0519694466975753
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 24780,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.9720059632267682,
+            "precision": 1.0,
+            "recall": 0.9455365775056397,
+            "n_scored": 24780,
+            "n_true_on": 18618,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 24780,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 24780,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 24780,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 24780,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 24780,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": 0.2501313715186547,
+            "precision": 1.0,
+            "recall": 0.14294294294294294,
+            "n_scored": 23760,
+            "n_true_on": 19980,
+            "ignored_uncertain": 1020
+          },
+          "oven": {
+            "f1": 0.9817263408111723,
+            "precision": 0.9954805664356734,
+            "recall": 0.9683470105509965,
+            "n_scored": 15120,
+            "n_true_on": 10236,
+            "ignored_uncertain": 9660
+          }
+        }
+      },
+      "hedge": {
+        "hedged_window_share": 0.18776550552251486,
+        "hedged_power_share": 0.05826358497142792,
+        "per_appliance": {
+          "beam_projector": {
+            "n": 54,
+            "share_of_windows": 0.015293118096856415,
+            "mean_gate": 0.7007205486297607,
+            "mean_emitted_w": 44.003658294677734,
+            "mean_rated_w": 61.163394927978516
+          },
+          "electiric_kettle": {
+            "n": 114,
+            "share_of_windows": 0.03228547153780799,
+            "mean_gate": 0.18241295218467712,
+            "mean_emitted_w": 227.842529296875,
+            "mean_rated_w": 1249.3333740234375
+          },
+          "fan": {
+            "n": 23,
+            "share_of_windows": 0.006513735485698103,
+            "mean_gate": 0.16486486792564392,
+            "mean_emitted_w": 2.978675127029419,
+            "mean_rated_w": 18.94649314880371
+          },
+          "hair_dryer": {
+            "n": 9,
+            "share_of_windows": 0.002548853016142736,
+            "mean_gate": 0.06891350448131561,
+            "mean_emitted_w": 56.377559661865234,
+            "mean_rated_w": 818.5665283203125
+          },
+          "laptop_charger": {
+            "n": 52,
+            "share_of_windows": 0.014726706315491363,
+            "mean_gate": 0.3248272240161896,
+            "mean_emitted_w": 18.798938751220703,
+            "mean_rated_w": 53.683128356933594
+          },
+          "minipc": {
+            "n": 473,
+            "share_of_windows": 0.13395638629283488,
+            "mean_gate": 0.3847406506538391,
+            "mean_emitted_w": 1.3118793964385986,
+            "mean_rated_w": 2.841632843017578
+          },
+          "oven": {
+            "n": 99,
+            "share_of_windows": 0.028037383177570093,
+            "mean_gate": 0.8208271265029907,
+            "mean_emitted_w": 950.0413208007812,
+            "mean_rated_w": 1157.05029296875
+          }
+        }
+      }
+    },
+    "test_11": {
+      "soft": {
+        "absent_sum_w": 1.2170955123484697,
+        "absent_fa_rel_max": 0.012430850706267472,
+        "residual_abs_w": 14.213822539915434,
+        "on_off_f1_mean": 0.7671846082765864,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.1717030134644368,
+            "p95_w": 0.5293380469083786,
+            "max_w": 11.678257942199707,
+            "on_rate": 0.0,
+            "fa_rel": 0.000221552275437983
+          },
+          "beam_projector": {
+            "mean_w": 0.324942706522291,
+            "p95_w": 1.7594167590141296,
+            "max_w": 24.820669174194336,
+            "on_rate": 0.000779423226812159,
+            "fa_rel": 0.006421792619017609
+          },
+          "fan": {
+            "mean_w": 0.47610158205004416,
+            "p95_w": 3.6713141798973083,
+            "max_w": 16.094221115112305,
+            "on_rate": 0.009742790335151987,
+            "fa_rel": 0.012430850706267472
+          },
+          "laptop_charger": {
+            "mean_w": 0.2427446367518523,
+            "p95_w": 0.43708548694849014,
+            "max_w": 24.448251724243164,
+            "on_rate": 0.00779423226812159,
+            "fa_rel": 0.0036723848222670547
+          },
+          "minipc": {
+            "mean_w": 0.001603573559845432,
+            "p95_w": 0.002441453281790018,
+            "max_w": 0.2709754407405853,
+            "on_rate": 0.0,
+            "fa_rel": 7.389739907121806e-05
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 18960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 18960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": 0.942281879194631,
+            "precision": 0.9845722300140253,
+            "recall": 0.9034749034749034,
+            "n_scored": 18960,
+            "n_true_on": 4662,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 18960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": 0.9005842655917388,
+            "precision": 0.8341303800654417,
+            "recall": 0.9785433070866142,
+            "n_scored": 18960,
+            "n_true_on": 10160,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": 0.6567735758736238,
+            "precision": 0.9675599435825106,
+            "recall": 0.4971014492753623,
+            "n_scored": 18960,
+            "n_true_on": 8280,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 18960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 18960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": 0.5690987124463519,
+            "precision": 0.8983739837398373,
+            "recall": 0.4164572864321608,
+            "n_scored": 18960,
+            "n_true_on": 4776,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hard": {
+        "absent_sum_w": 0.3869937226257562,
+        "absent_fa_rel_max": 0.004813221459304416,
+        "residual_abs_w": 19.0024378554264,
+        "on_off_f1_mean": 0.7649679298766574,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "beam_projector": {
+            "mean_w": 0.033579615996577085,
+            "p95_w": 0.0,
+            "max_w": 43.501853942871094,
+            "on_rate": 0.000779423226812159,
+            "fa_rel": 0.0006636287746359107
+          },
+          "fan": {
+            "mean_w": 0.18434638189135913,
+            "p95_w": 0.0,
+            "max_w": 25.02482032775879,
+            "on_rate": 0.009742790335151987,
+            "fa_rel": 0.004813221459304416
+          },
+          "laptop_charger": {
+            "mean_w": 0.16906772473782,
+            "p95_w": 0.0,
+            "max_w": 25.893720626831055,
+            "on_rate": 0.00779423226812159,
+            "fa_rel": 0.002557756803900454
+          },
+          "minipc": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 18960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 18960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": 0.9401479488903833,
+            "precision": 0.9845070422535211,
+            "recall": 0.8996138996138996,
+            "n_scored": 18960,
+            "n_true_on": 4662,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 18960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": 0.8976442285869909,
+            "precision": 0.8329542582764721,
+            "recall": 0.9732283464566929,
+            "n_scored": 18960,
+            "n_true_on": 10160,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": 0.6539561487130601,
+            "precision": 0.9554317548746518,
+            "recall": 0.4971014492753623,
+            "n_scored": 18960,
+            "n_true_on": 8280,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 18960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 18960,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": 0.5681233933161954,
+            "precision": 0.8935309973045822,
+            "recall": 0.4164572864321608,
+            "n_scored": 18960,
+            "n_true_on": 4776,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hedge": {
+        "hedged_window_share": 0.230319563522993,
+        "hedged_power_share": 0.021775567904114723,
+        "per_appliance": {
+          "beam_projector": {
+            "n": 125,
+            "share_of_windows": 0.04871395167575994,
+            "mean_gate": 0.12031883001327515,
+            "mean_emitted_w": 4.639458179473877,
+            "mean_rated_w": 37.482933044433594
+          },
+          "electiric_kettle": {
+            "n": 60,
+            "share_of_windows": 0.02338269680436477,
+            "mean_gate": 0.14407497644424438,
+            "mean_emitted_w": 180.77166748046875,
+            "mean_rated_w": 1253.3333740234375
+          },
+          "fan": {
+            "n": 257,
+            "share_of_windows": 0.10015588464536243,
+            "mean_gate": 0.20504704117774963,
+            "mean_emitted_w": 4.277784824371338,
+            "mean_rated_w": 21.828731536865234
+          },
+          "hair_dryer": {
+            "n": 30,
+            "share_of_windows": 0.011691348402182385,
+            "mean_gate": 0.18108409643173218,
+            "mean_emitted_w": 143.0843963623047,
+            "mean_rated_w": 837.9984130859375
+          },
+          "hotplate": {
+            "n": 134,
+            "share_of_windows": 0.05222135619641465,
+            "mean_gate": 0.31360337138175964,
+            "mean_emitted_w": 129.80699157714844,
+            "mean_rated_w": 407.0447692871094
+          },
+          "laptop_charger": {
+            "n": 86,
+            "share_of_windows": 0.03351519875292284,
+            "mean_gate": 0.30041739344596863,
+            "mean_emitted_w": 6.276493549346924,
+            "mean_rated_w": 19.73883628845215
+          },
+          "oven": {
+            "n": 35,
+            "share_of_windows": 0.013639906469212782,
+            "mean_gate": 0.5859631896018982,
+            "mean_emitted_w": 684.0767822265625,
+            "mean_rated_w": 1143.58984375
+          }
+        }
+      }
+    },
+    "test_12": {
+      "soft": {
+        "absent_sum_w": 0.9122345049342421,
+        "absent_fa_rel_max": 0.010341716262185052,
+        "residual_abs_w": 17.328076051296804,
+        "on_off_f1_mean": 0.813405659482696,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.27630778619851726,
+            "p95_w": 1.0353716909885406,
+            "max_w": 2.6146860122680664,
+            "on_rate": 0.0,
+            "fa_rel": 0.0003565261757400223
+          },
+          "beam_projector": {
+            "mean_w": 0.006930371499377078,
+            "p95_w": 0.031544409692287445,
+            "max_w": 0.39950475096702576,
+            "on_rate": 0.0,
+            "fa_rel": 0.00013696386362405292
+          },
+          "fan": {
+            "mean_w": 0.39608773284168747,
+            "p95_w": 1.182822197675705,
+            "max_w": 16.85850715637207,
+            "on_rate": 0.016254876462938883,
+            "fa_rel": 0.010341716262185052
+          },
+          "laptop_charger": {
+            "mean_w": 0.23260598453901415,
+            "p95_w": 0.6853023618459702,
+            "max_w": 43.436561584472656,
+            "on_rate": 0.001625487646293888,
+            "fa_rel": 0.0035190012789563414
+          },
+          "minipc": {
+            "mean_w": 0.0003026298556460752,
+            "p95_w": 9.753863741934765e-05,
+            "max_w": 0.2748112380504608,
+            "on_rate": 0.0,
+            "fa_rel": 1.3946076297054158e-05
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 22050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 22050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": 0.859619873291097,
+            "precision": 0.9178732494659387,
+            "recall": 0.808319397993311,
+            "n_scored": 22050,
+            "n_true_on": 14352,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 22050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": 0.8177177177177178,
+            "precision": 0.9422145328719723,
+            "recall": 0.7222811671087533,
+            "n_scored": 22050,
+            "n_true_on": 11310,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": 0.9331532748143146,
+            "precision": 0.9650837988826816,
+            "recall": 0.9032679738562092,
+            "n_scored": 22050,
+            "n_true_on": 4590,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 22050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 22050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": 0.6431317721076547,
+            "precision": 0.6779661016949152,
+            "recall": 0.6117021276595744,
+            "n_scored": 22050,
+            "n_true_on": 13536,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hard": {
+        "absent_sum_w": 0.333061164005215,
+        "absent_fa_rel_max": 0.006983482798861644,
+        "residual_abs_w": 19.306364701518195,
+        "on_off_f1_mean": 0.8127246800836543,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "beam_projector": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "fan": {
+            "mean_w": 0.26746739119640095,
+            "p95_w": 0.0,
+            "max_w": 20.801820755004883,
+            "on_rate": 0.016254876462938883,
+            "fa_rel": 0.006983482798861644
+          },
+          "laptop_charger": {
+            "mean_w": 0.06559377280881408,
+            "p95_w": 0.0,
+            "max_w": 82.56343078613281,
+            "on_rate": 0.001625487646293888,
+            "fa_rel": 0.000992341494838337
+          },
+          "minipc": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 22050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 22050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": 0.8611388611388612,
+            "precision": 0.9181065088757396,
+            "recall": 0.8108277591973244,
+            "n_scored": 22050,
+            "n_true_on": 14352,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 22050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": 0.8159398496240602,
+            "precision": 0.9420138888888889,
+            "recall": 0.7196286472148541,
+            "n_scored": 22050,
+            "n_true_on": 11310,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": 0.9309878213802436,
+            "precision": 0.9649368863955119,
+            "recall": 0.8993464052287582,
+            "n_scored": 22050,
+            "n_true_on": 4590,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 22050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 22050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": 0.6428321881914522,
+            "precision": 0.6773006134969325,
+            "recall": 0.6117021276595744,
+            "n_scored": 22050,
+            "n_true_on": 13536,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hedge": {
+        "hedged_window_share": 0.16319895968790638,
+        "hedged_power_share": 0.009179383516311646,
+        "per_appliance": {
+          "electiric_kettle": {
+            "n": 12,
+            "share_of_windows": 0.0039011703511053317,
+            "mean_gate": 0.1728668063879013,
+            "mean_emitted_w": 203.8853759765625,
+            "mean_rated_w": 1195.3333740234375
+          },
+          "fan": {
+            "n": 144,
+            "share_of_windows": 0.04681404421326398,
+            "mean_gate": 0.256111741065979,
+            "mean_emitted_w": 4.769539833068848,
+            "mean_rated_w": 19.373769760131836
+          },
+          "hair_dryer": {
+            "n": 37,
+            "share_of_windows": 0.012028608582574773,
+            "mean_gate": 0.36867108941078186,
+            "mean_emitted_w": 322.50054931640625,
+            "mean_rated_w": 878.4102783203125
+          },
+          "hotplate": {
+            "n": 268,
+            "share_of_windows": 0.08712613784135241,
+            "mean_gate": 0.26033782958984375,
+            "mean_emitted_w": 106.5880355834961,
+            "mean_rated_w": 408.47015380859375
+          },
+          "laptop_charger": {
+            "n": 89,
+            "share_of_windows": 0.02893368010403121,
+            "mean_gate": 0.21349969506263733,
+            "mean_emitted_w": 6.086141109466553,
+            "mean_rated_w": 26.9357852935791
+          },
+          "oven": {
+            "n": 4,
+            "share_of_windows": 0.0013003901170351106,
+            "mean_gate": 0.11972755193710327,
+            "mean_emitted_w": 122.86631774902344,
+            "mean_rated_w": 1006.1300048828125
+          }
+        }
+      }
+    },
+    "test_13": {
+      "soft": {
+        "absent_sum_w": 0.23673002239416585,
+        "absent_fa_rel_max": 0.0003036371034269045,
+        "residual_abs_w": 2.715933178781366,
+        "on_off_f1_mean": 0.923657792027258,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.235318755155851,
+            "p95_w": 0.850176990032196,
+            "max_w": 5.528130054473877,
+            "on_rate": 0.0,
+            "fa_rel": 0.0003036371034269045
+          },
+          "electiric_kettle": {
+            "mean_w": 6.857791403966868e-06,
+            "p95_w": 2.2803733372711577e-05,
+            "max_w": 0.00019499518384691328,
+            "on_rate": 0.0,
+            "fa_rel": 4.47344514283553e-09
+          },
+          "fan": {
+            "mean_w": 3.7464974709187626e-06,
+            "p95_w": 2.097399192280136e-05,
+            "max_w": 0.00012910041550640017,
+            "on_rate": 0.0,
+            "fa_rel": 9.781977730858389e-08
+          },
+          "hair_dryer": {
+            "mean_w": 0.0002856431732099583,
+            "p95_w": 0.00045285673695616424,
+            "max_w": 0.12342969328165054,
+            "on_rate": 0.0,
+            "fa_rel": 2.953910788107118e-07
+          },
+          "hotplate": {
+            "mean_w": 0.0007102933363405482,
+            "p95_w": 0.0025096440222114325,
+            "max_w": 0.08915607631206512,
+            "on_rate": 0.0,
+            "fa_rel": 1.2961557232491755e-06
+          },
+          "oven": {
+            "mean_w": 0.00040472643988947234,
+            "p95_w": 0.00010542903328314424,
+            "max_w": 0.47858926653862,
+            "on_rate": 0.0,
+            "fa_rel": 3.347613233163543e-07
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 49050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.974655249492761,
+            "precision": 0.9569180903504626,
+            "recall": 0.993062368605466,
+            "n_scored": 49050,
+            "n_true_on": 42810,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 49050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 49050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 49050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 49050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.9445081305990743,
+            "precision": 0.8997007198899943,
+            "recall": 0.9940125111706881,
+            "n_scored": 49050,
+            "n_true_on": 33570,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": 0.8518099959899383,
+            "precision": 0.7850950876957193,
+            "recall": 0.9309163346613546,
+            "n_scored": 49050,
+            "n_true_on": 37650,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 49050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hard": {
+        "absent_sum_w": 0.0,
+        "absent_fa_rel_max": 0.0,
+        "residual_abs_w": 3.0033897315545723,
+        "on_off_f1_mean": 0.923657792027258,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "electiric_kettle": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "fan": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "hair_dryer": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "hotplate": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "oven": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 49050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.974655249492761,
+            "precision": 0.9569180903504626,
+            "recall": 0.993062368605466,
+            "n_scored": 49050,
+            "n_true_on": 42810,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 49050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 49050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 49050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 49050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.9445081305990743,
+            "precision": 0.8997007198899943,
+            "recall": 0.9940125111706881,
+            "n_scored": 49050,
+            "n_true_on": 33570,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": 0.8518099959899383,
+            "precision": 0.7850950876957193,
+            "recall": 0.9309163346613546,
+            "n_scored": 49050,
+            "n_true_on": 37650,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 49050,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hedge": {
+        "hedged_window_share": 0.16686452974541618,
+        "hedged_power_share": 0.007929564453661442,
+        "per_appliance": {
+          "beam_projector": {
+            "n": 144,
+            "share_of_windows": 0.018994855559952513,
+            "mean_gate": 0.5477282404899597,
+            "mean_emitted_w": 10.042994499206543,
+            "mean_rated_w": 18.448026657104492
+          },
+          "laptop_charger": {
+            "n": 640,
+            "share_of_windows": 0.08442158026645562,
+            "mean_gate": 0.1758364886045456,
+            "mean_emitted_w": 4.046899318695068,
+            "mean_rated_w": 23.72397232055664
+          },
+          "minipc": {
+            "n": 491,
+            "share_of_windows": 0.06476718111067141,
+            "mean_gate": 0.45761796832084656,
+            "mean_emitted_w": 2.471169948577881,
+            "mean_rated_w": 5.5312089920043945
+          }
+        }
+      }
+    },
+    "test_4": {
+      "soft": {
+        "absent_sum_w": 39.684885412076156,
+        "absent_fa_rel_max": 0.2558805716103178,
+        "residual_abs_w": 17.019794540240817,
+        "on_off_f1_mean": 0.7012676820032913,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.6863205458274868,
+            "p95_w": 3.520681917667389,
+            "max_w": 409.1217346191406,
+            "on_rate": 0.00015586034912718204,
+            "fa_rel": 0.0008855748978419184
+          },
+          "electiric_kettle": {
+            "mean_w": 31.30613007636614,
+            "p95_w": 23.527766227722168,
+            "max_w": 1511.1639404296875,
+            "on_rate": 0.01807980049875312,
+            "fa_rel": 0.02042148080650107
+          },
+          "fan": {
+            "mean_w": 1.0735256436210818,
+            "p95_w": 5.519795656204224,
+            "max_w": 37.5499382019043,
+            "on_rate": 0.045355361596009974,
+            "fa_rel": 0.028029390172874202
+          },
+          "hair_dryer": {
+            "mean_w": 1.0663007423175495,
+            "p95_w": 0.4652444049715996,
+            "max_w": 847.8140018762066,
+            "on_rate": 0.0009351620947630922,
+            "fa_rel": 0.0011026894956748185
+          },
+          "minipc": {
+            "mean_w": 5.552608403943895,
+            "p95_w": 17.27307429922016,
+            "max_w": 25.286639040287188,
+            "on_rate": 0.3456982543640898,
+            "fa_rel": 0.2558805716103178
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 42090,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 9960,
+            "n_true_on": 0,
+            "ignored_uncertain": 32130
+          },
+          "electiric_kettle": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 42090,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 42090,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 42090,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": 0.9320240808930973,
+            "precision": 0.9266620176662018,
+            "recall": 0.9374485596707819,
+            "n_scored": 42090,
+            "n_true_on": 17010,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 9960,
+            "n_true_on": 0,
+            "ignored_uncertain": 32130
+          },
+          "minipc": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 42090,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": 0.4705112831134853,
+            "precision": 0.8103642508449117,
+            "recall": 0.3314900153609831,
+            "n_scored": 42090,
+            "n_true_on": 39060,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hard": {
+        "absent_sum_w": 33.97345293692612,
+        "absent_fa_rel_max": 0.25767076067985295,
+        "residual_abs_w": 17.37387814410928,
+        "on_off_f1_mean": 0.7009340602960414,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.0958293429633923,
+            "p95_w": 0.0,
+            "max_w": 614.841064453125,
+            "on_rate": 0.00015586034912718204,
+            "fa_rel": 0.00012365076511405457
+          },
+          "electiric_kettle": {
+            "mean_w": 26.467145325991602,
+            "p95_w": 0.0,
+            "max_w": 1512.0,
+            "on_rate": 0.018703241895261846,
+            "fa_rel": 0.017264934981077364
+          },
+          "fan": {
+            "mean_w": 1.0386616925051682,
+            "p95_w": 0.0,
+            "max_w": 41.25347900390625,
+            "on_rate": 0.045355361596009974,
+            "fa_rel": 0.027119104242954783
+          },
+          "hair_dryer": {
+            "mean_w": 0.780361068713147,
+            "p95_w": 0.0,
+            "max_w": 847.8140018762066,
+            "on_rate": 0.0009351620947630922,
+            "fa_rel": 0.0008069917980487559
+          },
+          "minipc": {
+            "mean_w": 5.5914555067528084,
+            "p95_w": 17.281255102352553,
+            "max_w": 25.287499731357745,
+            "on_rate": 0.3456982543640898,
+            "fa_rel": 0.25767076067985295
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 42090,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 9960,
+            "n_true_on": 0,
+            "ignored_uncertain": 32130
+          },
+          "electiric_kettle": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 42090,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 42090,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 42090,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": 0.9320240808930973,
+            "precision": 0.9266620176662018,
+            "recall": 0.9374485596707819,
+            "n_scored": 42090,
+            "n_true_on": 17010,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 9960,
+            "n_true_on": 0,
+            "ignored_uncertain": 32130
+          },
+          "minipc": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 42090,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": 0.4698440396989857,
+            "precision": 0.8100789770590447,
+            "recall": 0.33087557603686635,
+            "n_scored": 42090,
+            "n_true_on": 39060,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hedge": {
+        "hedged_window_share": 0.2925498753117207,
+        "hedged_power_share": 0.04111640155315399,
+        "per_appliance": {
+          "air_conditioner": {
+            "n": 6,
+            "share_of_windows": 0.0009351620947630922,
+            "mean_gate": 0.16767095029354095,
+            "mean_emitted_w": 74.86772155761719,
+            "mean_rated_w": 202.39503479003906
+          },
+          "beam_projector": {
+            "n": 193,
+            "share_of_windows": 0.030081047381546135,
+            "mean_gate": 0.5973159670829773,
+            "mean_emitted_w": 22.22275733947754,
+            "mean_rated_w": 32.96638870239258
+          },
+          "electiric_kettle": {
+            "n": 141,
+            "share_of_windows": 0.02197630922693267,
+            "mean_gate": 0.3246346712112427,
+            "mean_emitted_w": 416.4082336425781,
+            "mean_rated_w": 1245.3333740234375
+          },
+          "fan": {
+            "n": 208,
+            "share_of_windows": 0.032418952618453865,
+            "mean_gate": 0.3578896224498749,
+            "mean_emitted_w": 10.23038387298584,
+            "mean_rated_w": 26.74620246887207
+          },
+          "hair_dryer": {
+            "n": 6,
+            "share_of_windows": 0.0009351620947630922,
+            "mean_gate": 0.12388431280851364,
+            "mean_emitted_w": 112.0013198852539,
+            "mean_rated_w": 910.803955078125
+          },
+          "hotplate": {
+            "n": 249,
+            "share_of_windows": 0.03880922693266833,
+            "mean_gate": 0.44906213879585266,
+            "mean_emitted_w": 178.58448791503906,
+            "mean_rated_w": 394.955810546875
+          },
+          "laptop_charger": {
+            "n": 589,
+            "share_of_windows": 0.09180174563591023,
+            "mean_gate": 0.5716744065284729,
+            "mean_emitted_w": 11.064115524291992,
+            "mean_rated_w": 20.425613403320312
+          },
+          "minipc": {
+            "n": 1121,
+            "share_of_windows": 0.17471945137157108,
+            "mean_gate": 0.5620102882385254,
+            "mean_emitted_w": 1.3352885246276855,
+            "mean_rated_w": 2.485745429992676
+          },
+          "oven": {
+            "n": 87,
+            "share_of_windows": 0.013559850374064838,
+            "mean_gate": 0.5321738123893738,
+            "mean_emitted_w": 617.2321166992188,
+            "mean_rated_w": 1152.6197509765625
+          }
+        }
+      },
+      "oven_on": {
+        "오븐ON+핫플통전": {
+          "n": 845,
+          "hotplate_gate": 0.9987550973892212,
+          "hotplate_soft_w": 407.578857421875,
+          "hotplate_hard_w": 410.0,
+          "hotplate_recall": 0.8461538461538461,
+          "kettle_gate": 0.005728682037442923,
+          "kettle_soft_w": 6.828906536102295,
+          "kettle_hard_w": 0.0,
+          "kettle_fa": 0.13964497041420118,
+          "oven_gate": 0.9997546076774597,
+          "oven_soft_w": 1127.2711181640625,
+          "p_observed": 1606.76318359375,
+          "pred_total_w": 1597.854736328125
+        },
+        "오븐ON+핫플휴지": {
+          "n": 1338,
+          "hotplate_gate": 0.0002611903182696551,
+          "hotplate_soft_w": 0.09846875071525574,
+          "hotplate_hard_w": 0.0,
+          "hotplate_recall": 0.04110612855007474,
+          "kettle_gate": 0.00145109707955271,
+          "kettle_soft_w": 1.7433594465255737,
+          "kettle_hard_w": 0.0,
+          "kettle_fa": 0.00523168908819133,
+          "oven_gate": 0.999868631362915,
+          "oven_soft_w": 1127.9892578125,
+          "p_observed": 1200.46630859375,
+          "pred_total_w": 1195.28759765625
+        },
+        "오븐OFF+핫플통전": {
+          "n": 1991,
+          "hotplate_gate": 0.9999988079071045,
+          "hotplate_soft_w": 464.0,
+          "hotplate_hard_w": 464.0,
+          "hotplate_recall": 0.9959819186338523,
+          "kettle_gate": 0.0008555842214263976,
+          "kettle_soft_w": 1.0682705640792847,
+          "kettle_hard_w": 0.0,
+          "kettle_fa": 0.0,
+          "oven_gate": 3.0894946121406974e-06,
+          "oven_soft_w": 1.0412177289254032e-05,
+          "p_observed": 536.3850708007812,
+          "pred_total_w": 517.8171997070312
+        }
+      }
+    },
+    "test_5": {
+      "soft": {
+        "absent_sum_w": 4.905343581185951,
+        "absent_fa_rel_max": 0.019399724059891425,
+        "residual_abs_w": 11.750548625249339,
+        "on_off_f1_mean": 0.8235169307072494,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.2276326682272249,
+            "p95_w": 1.0746984779834747,
+            "max_w": 13.195039749145508,
+            "on_rate": 0.0,
+            "fa_rel": 0.00029371957190609666
+          },
+          "electiric_kettle": {
+            "mean_w": 3.7632639910146315,
+            "p95_w": 6.099661231040955,
+            "max_w": 1251.0524794964092,
+            "on_rate": 0.0017660910518053376,
+            "fa_rel": 0.0024548362628927798
+          },
+          "fan": {
+            "mean_w": 0.7430094314938416,
+            "p95_w": 4.593854308128357,
+            "max_w": 29.200428009033203,
+            "on_rate": 0.02217425431711146,
+            "fa_rel": 0.019399724059891425
+          },
+          "hair_dryer": {
+            "mean_w": 0.17143749045025294,
+            "p95_w": 0.9055508673191071,
+            "max_w": 21.180992126464844,
+            "on_rate": 0.0,
+            "fa_rel": 0.00017728799426086137
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 34170,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.8298159442975117,
+            "precision": 0.7106406582231672,
+            "recall": 0.9970168612191959,
+            "n_scored": 34170,
+            "n_true_on": 23130,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 34170,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 34170,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 34170,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": 0.976464365992331,
+            "precision": 0.9737605485232067,
+            "recall": 0.979183240519756,
+            "n_scored": 34170,
+            "n_true_on": 15084,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.8743738729713484,
+            "precision": 0.9943794622512532,
+            "recall": 0.7802145411203814,
+            "n_scored": 34170,
+            "n_true_on": 25170,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": 0.8050144410987525,
+            "precision": 0.746608913712527,
+            "recall": 0.8733333333333333,
+            "n_scored": 34170,
+            "n_true_on": 22500,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": 0.6319160291763032,
+            "precision": 1.0,
+            "recall": 0.4618985695708713,
+            "n_scored": 34170,
+            "n_true_on": 23070,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hard": {
+        "absent_sum_w": 2.859736984042848,
+        "absent_fa_rel_max": 0.011923521342164695,
+        "residual_abs_w": 13.727992188773799,
+        "on_off_f1_mean": 0.8233808153184418,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "electiric_kettle": {
+            "mean_w": 2.40306611663794,
+            "p95_w": 0.0,
+            "max_w": 1251.0524794964092,
+            "on_rate": 0.0019623233908948193,
+            "fa_rel": 0.0015675578060260536
+          },
+          "fan": {
+            "mean_w": 0.4566708674049078,
+            "p95_w": 0.0,
+            "max_w": 32.45378112792969,
+            "on_rate": 0.02217425431711146,
+            "fa_rel": 0.011923521342164695
+          },
+          "hair_dryer": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 34170,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.8298159442975117,
+            "precision": 0.7106406582231672,
+            "recall": 0.9970168612191959,
+            "n_scored": 34170,
+            "n_true_on": 23130,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 34170,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 34170,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 34170,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": 0.9762707383171393,
+            "precision": 0.9733755107420587,
+            "recall": 0.979183240519756,
+            "n_scored": 34170,
+            "n_true_on": 15084,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.8743738729713484,
+            "precision": 0.9943794622512532,
+            "recall": 0.7802145411203814,
+            "n_scored": 34170,
+            "n_true_on": 25170,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": 0.8050144410987525,
+            "precision": 0.746608913712527,
+            "recall": 0.8733333333333333,
+            "n_scored": 34170,
+            "n_true_on": 22500,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": 0.6314290799074568,
+            "precision": 1.0,
+            "recall": 0.46137841352405723,
+            "n_scored": 34170,
+            "n_true_on": 23070,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hedge": {
+        "hedged_window_share": 0.3602825745682888,
+        "hedged_power_share": 0.013867862522602081,
+        "per_appliance": {
+          "beam_projector": {
+            "n": 37,
+            "share_of_windows": 0.007260596546310832,
+            "mean_gate": 0.5726152062416077,
+            "mean_emitted_w": 2.996613025665283,
+            "mean_rated_w": 5.199456691741943
+          },
+          "electiric_kettle": {
+            "n": 22,
+            "share_of_windows": 0.0043171114599686025,
+            "mean_gate": 0.24878863990306854,
+            "mean_emitted_w": 295.9061279296875,
+            "mean_rated_w": 1170.54541015625
+          },
+          "fan": {
+            "n": 515,
+            "share_of_windows": 0.1010596546310832,
+            "mean_gate": 0.3032485246658325,
+            "mean_emitted_w": 6.585855007171631,
+            "mean_rated_w": 23.002708435058594
+          },
+          "hotplate": {
+            "n": 159,
+            "share_of_windows": 0.03120094191522763,
+            "mean_gate": 0.4134194254875183,
+            "mean_emitted_w": 167.22055053710938,
+            "mean_rated_w": 401.9245300292969
+          },
+          "laptop_charger": {
+            "n": 877,
+            "share_of_windows": 0.17209576138147567,
+            "mean_gate": 0.5087276101112366,
+            "mean_emitted_w": 5.861141204833984,
+            "mean_rated_w": 12.438190460205078
+          },
+          "minipc": {
+            "n": 697,
+            "share_of_windows": 0.1367739403453689,
+            "mean_gate": 0.6026633381843567,
+            "mean_emitted_w": 0.4042929410934448,
+            "mean_rated_w": 0.9781830310821533
+          },
+          "oven": {
+            "n": 12,
+            "share_of_windows": 0.002354788069073783,
+            "mean_gate": 0.534846842288971,
+            "mean_emitted_w": 579.3488159179688,
+            "mean_rated_w": 1065.8734130859375
+          }
+        }
+      }
+    },
+    "test_6": {
+      "soft": {
+        "absent_sum_w": 4.228626676626543,
+        "absent_fa_rel_max": 0.0020792861044106555,
+        "residual_abs_w": 8.141581913989004,
+        "on_off_f1_mean": 0.8583904088575313,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.3951023911021302,
+            "p95_w": 2.2189682126045227,
+            "max_w": 11.375276565551758,
+            "on_rate": 0.0,
+            "fa_rel": 0.0005098095369059744
+          },
+          "electiric_kettle": {
+            "mean_w": 1.910974576317396,
+            "p95_w": 4.4618518352508545,
+            "max_w": 1253.4181528418799,
+            "on_rate": 0.0005474952094169176,
+            "fa_rel": 0.0012465587581979099
+          },
+          "fan": {
+            "mean_w": 0.0796366577989281,
+            "p95_w": 0.21700125932693481,
+            "max_w": 21.259140014648438,
+            "on_rate": 0.0009581166164796058,
+            "fa_rel": 0.0020792861044106555
+          },
+          "hair_dryer": {
+            "mean_w": 1.8429130514080883,
+            "p95_w": 5.205888271331787,
+            "max_w": 838.6030374702176,
+            "on_rate": 0.0001368738023542294,
+            "fa_rel": 0.001905804603317568
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 47310,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.8658010436783499,
+            "precision": 0.7633590551751621,
+            "recall": 1.0,
+            "n_scored": 46710,
+            "n_true_on": 21071,
+            "ignored_uncertain": 600
+          },
+          "electiric_kettle": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 47310,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 47310,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 47310,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": 0.9798782828005922,
+            "precision": 0.9795023566809163,
+            "recall": 0.9802544975866608,
+            "n_scored": 46665,
+            "n_true_on": 9116,
+            "ignored_uncertain": 645
+          },
+          "laptop_charger": {
+            "f1": 0.9148213239601641,
+            "precision": 0.9866060146575689,
+            "recall": 0.8527741371778069,
+            "n_scored": 46710,
+            "n_true_on": 27468,
+            "ignored_uncertain": 600
+          },
+          "minipc": {
+            "f1": 0.8903030684896981,
+            "precision": 0.8287390029325513,
+            "recall": 0.9617478900081677,
+            "n_scored": 46710,
+            "n_true_on": 22038,
+            "ignored_uncertain": 600
+          },
+          "oven": {
+            "f1": 0.6411483253588516,
+            "precision": 1.0,
+            "recall": 0.47183098591549294,
+            "n_scored": 46110,
+            "n_true_on": 27690,
+            "ignored_uncertain": 1200
+          }
+        }
+      },
+      "hard": {
+        "absent_sum_w": 0.8247251707247303,
+        "absent_fa_rel_max": 0.0006445495054293543,
+        "residual_abs_w": 8.77900134323987,
+        "on_off_f1_mean": 0.8583904088575313,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "electiric_kettle": {
+            "mean_w": 0.685256138262431,
+            "p95_w": 0.0,
+            "max_w": 1253.4181528418799,
+            "on_rate": 0.0005474952094169176,
+            "fa_rel": 0.00044700335176936143
+          },
+          "fan": {
+            "mean_w": 0.02468624605794427,
+            "p95_w": 0.0,
+            "max_w": 34.20148849487305,
+            "on_rate": 0.0009581166164796058,
+            "fa_rel": 0.0006445495054293543
+          },
+          "hair_dryer": {
+            "mean_w": 0.11478278640435499,
+            "p95_w": 0.0,
+            "max_w": 838.6030374702176,
+            "on_rate": 0.0001368738023542294,
+            "fa_rel": 0.00011869988252777145
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 47310,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.8658010436783499,
+            "precision": 0.7633590551751621,
+            "recall": 1.0,
+            "n_scored": 46710,
+            "n_true_on": 21071,
+            "ignored_uncertain": 600
+          },
+          "electiric_kettle": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 47310,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 47310,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 47310,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": 0.9798782828005922,
+            "precision": 0.9795023566809163,
+            "recall": 0.9802544975866608,
+            "n_scored": 46665,
+            "n_true_on": 9116,
+            "ignored_uncertain": 645
+          },
+          "laptop_charger": {
+            "f1": 0.9148213239601641,
+            "precision": 0.9866060146575689,
+            "recall": 0.8527741371778069,
+            "n_scored": 46710,
+            "n_true_on": 27468,
+            "ignored_uncertain": 600
+          },
+          "minipc": {
+            "f1": 0.8903030684896981,
+            "precision": 0.8287390029325513,
+            "recall": 0.9617478900081677,
+            "n_scored": 46710,
+            "n_true_on": 22038,
+            "ignored_uncertain": 600
+          },
+          "oven": {
+            "f1": 0.6411483253588516,
+            "precision": 1.0,
+            "recall": 0.47183098591549294,
+            "n_scored": 46110,
+            "n_true_on": 27690,
+            "ignored_uncertain": 1200
+          }
+        }
+      },
+      "hedge": {
+        "hedged_window_share": 0.24883657267998904,
+        "hedged_power_share": 0.01017494685947895,
+        "per_appliance": {
+          "beam_projector": {
+            "n": 516,
+            "share_of_windows": 0.07062688201478237,
+            "mean_gate": 0.45614346861839294,
+            "mean_emitted_w": 16.694028854370117,
+            "mean_rated_w": 30.146299362182617
+          },
+          "electiric_kettle": {
+            "n": 6,
+            "share_of_windows": 0.0008212428141253764,
+            "mean_gate": 0.10470988601446152,
+            "mean_emitted_w": 118.26235961914062,
+            "mean_rated_w": 1133.3333740234375
+          },
+          "fan": {
+            "n": 80,
+            "share_of_windows": 0.010949904188338352,
+            "mean_gate": 0.19172020256519318,
+            "mean_emitted_w": 4.766656398773193,
+            "mean_rated_w": 24.9699764251709
+          },
+          "hair_dryer": {
+            "n": 87,
+            "share_of_windows": 0.011908020804817957,
+            "mean_gate": 0.08843208849430084,
+            "mean_emitted_w": 71.86640167236328,
+            "mean_rated_w": 813.0941772460938
+          },
+          "hotplate": {
+            "n": 83,
+            "share_of_windows": 0.01136052559540104,
+            "mean_gate": 0.28982770442962646,
+            "mean_emitted_w": 114.07536315917969,
+            "mean_rated_w": 389.4939880371094
+          },
+          "laptop_charger": {
+            "n": 442,
+            "share_of_windows": 0.060498220640569395,
+            "mean_gate": 0.45426419377326965,
+            "mean_emitted_w": 10.046977043151855,
+            "mean_rated_w": 22.696443557739258
+          },
+          "minipc": {
+            "n": 1028,
+            "share_of_windows": 0.14070626882014783,
+            "mean_gate": 0.6372506618499756,
+            "mean_emitted_w": 3.268066883087158,
+            "mean_rated_w": 5.189149856567383
+          },
+          "oven": {
+            "n": 9,
+            "share_of_windows": 0.0012318642211880647,
+            "mean_gate": 0.30058199167251587,
+            "mean_emitted_w": 312.0323486328125,
+            "mean_rated_w": 996.7183227539062
+          }
+        }
+      }
+    },
+    "test_7": {
+      "soft": {
+        "absent_sum_w": 0.13210700135067008,
+        "absent_fa_rel_max": 0.00016886540537893713,
+        "residual_abs_w": 2.473714299438583,
+        "on_off_f1_mean": 0.8769021877187582,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.13087068916867628,
+            "p95_w": 0.6386017054319382,
+            "max_w": 1.7746304273605347,
+            "on_rate": 0.0,
+            "fa_rel": 0.00016886540537893713
+          },
+          "electiric_kettle": {
+            "mean_w": 1.96786901338418e-05,
+            "p95_w": 1.047124669639743e-05,
+            "max_w": 0.012092539109289646,
+            "on_rate": 0.0,
+            "fa_rel": 1.2836718939231442e-08
+          },
+          "fan": {
+            "mean_w": 3.348503411922962e-06,
+            "p95_w": 1.5660489680158207e-05,
+            "max_w": 0.00011866648128489032,
+            "on_rate": 0.0,
+            "fa_rel": 8.742828751757082e-08
+          },
+          "hair_dryer": {
+            "mean_w": 0.00031298427229376277,
+            "p95_w": 0.0005385834665503353,
+            "max_w": 0.08052200078964233,
+            "on_rate": 0.0,
+            "fa_rel": 3.2366522470916523e-07
+          },
+          "hotplate": {
+            "mean_w": 0.0006803457569079736,
+            "p95_w": 0.0022277282550930977,
+            "max_w": 0.24378618597984314,
+            "on_rate": 0.0,
+            "fa_rel": 1.2415068556714848e-06
+          },
+          "oven": {
+            "mean_w": 0.0002199549592463195,
+            "p95_w": 0.0004245951713528484,
+            "max_w": 0.05960385501384735,
+            "on_rate": 0.0,
+            "fa_rel": 1.8193131451308477e-07
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 40200,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.8659235873977192,
+            "precision": 0.7635495966367458,
+            "recall": 1.0,
+            "n_scored": 40200,
+            "n_true_on": 20160,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 40200,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 40200,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 40200,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 40200,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.973531248498823,
+            "precision": 0.9796964130329692,
+            "recall": 0.9674431926675577,
+            "n_scored": 40200,
+            "n_true_on": 31422,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": 0.7912517272597323,
+            "precision": 0.6730161303396287,
+            "recall": 0.9598843930635839,
+            "n_scored": 40200,
+            "n_true_on": 25950,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 40200,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hard": {
+        "absent_sum_w": 0.0,
+        "absent_fa_rel_max": 0.0,
+        "residual_abs_w": 2.620851792692956,
+        "on_off_f1_mean": 0.8769021877187582,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "electiric_kettle": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "fan": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "hair_dryer": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "hotplate": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "oven": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 40200,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.8659235873977192,
+            "precision": 0.7635495966367458,
+            "recall": 1.0,
+            "n_scored": 40200,
+            "n_true_on": 20160,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 40200,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 40200,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 40200,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 40200,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.973531248498823,
+            "precision": 0.9796964130329692,
+            "recall": 0.9674431926675577,
+            "n_scored": 40200,
+            "n_true_on": 31422,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": 0.7912517272597323,
+            "precision": 0.6730161303396287,
+            "recall": 0.9598843930635839,
+            "n_scored": 40200,
+            "n_true_on": 25950,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 40200,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hedge": {
+        "hedged_window_share": 0.07342430149447693,
+        "hedged_power_share": 0.006960476748645306,
+        "per_appliance": {
+          "beam_projector": {
+            "n": 4,
+            "share_of_windows": 0.000649772579597141,
+            "mean_gate": 0.5746979713439941,
+            "mean_emitted_w": 16.32756996154785,
+            "mean_rated_w": 30.903728485107422
+          },
+          "laptop_charger": {
+            "n": 234,
+            "share_of_windows": 0.038011695906432746,
+            "mean_gate": 0.6374193429946899,
+            "mean_emitted_w": 11.60630989074707,
+            "mean_rated_w": 17.86920738220215
+          },
+          "minipc": {
+            "n": 214,
+            "share_of_windows": 0.03476283300844704,
+            "mean_gate": 0.4408658444881439,
+            "mean_emitted_w": 2.221160888671875,
+            "mean_rated_w": 4.508098125457764
+          }
+        }
+      }
+    },
+    "test_8": {
+      "soft": {
+        "absent_sum_w": 0.14283778209737522,
+        "absent_fa_rel_max": 0.0001820469136710328,
+        "residual_abs_w": 2.5518315485258585,
+        "on_off_f1_mean": 0.9227872817605145,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.1410863580950504,
+            "p95_w": 0.6157707422971725,
+            "max_w": 3.340336799621582,
+            "on_rate": 0.0,
+            "fa_rel": 0.0001820469136710328
+          },
+          "electiric_kettle": {
+            "mean_w": 4.8619826826055e-06,
+            "p95_w": 1.4368357824423583e-05,
+            "max_w": 9.414869418833405e-05,
+            "on_rate": 0.0,
+            "fa_rel": 3.171547738164057e-09
+          },
+          "fan": {
+            "mean_w": 1.6643891077229596e-06,
+            "p95_w": 9.05250385585532e-06,
+            "max_w": 0.00015941822493914515,
+            "on_rate": 0.0,
+            "fa_rel": 4.345663466639582e-08
+          },
+          "hair_dryer": {
+            "mean_w": 0.00017832679937202674,
+            "p95_w": 0.0005481997650349513,
+            "max_w": 0.018055634573101997,
+            "on_rate": 0.0,
+            "fa_rel": 1.8441240886455713e-07
+          },
+          "hotplate": {
+            "mean_w": 0.0014958580697031246,
+            "p95_w": 0.004289790405891836,
+            "max_w": 1.589796781539917,
+            "on_rate": 0.0,
+            "fa_rel": 2.7296680104071616e-06
+          },
+          "oven": {
+            "mean_w": 7.07127614593443e-05,
+            "p95_w": 8.841842645779252e-05,
+            "max_w": 0.02525888942182064,
+            "on_rate": 0.0,
+            "fa_rel": 5.848863644279926e-08
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 38730,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.9129386064715788,
+            "precision": 0.8398224901616009,
+            "recall": 1.0,
+            "n_scored": 38730,
+            "n_true_on": 30090,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 38730,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 38730,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 38730,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 38730,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.9770706148151709,
+            "precision": 0.955797987397724,
+            "recall": 0.9993117010816126,
+            "n_scored": 38730,
+            "n_true_on": 30510,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": 0.8783526239947939,
+            "precision": 0.7845221290376152,
+            "recall": 0.9976768743400212,
+            "n_scored": 38730,
+            "n_true_on": 28410,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 38730,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hard": {
+        "absent_sum_w": 0.0,
+        "absent_fa_rel_max": 0.0,
+        "residual_abs_w": 2.634376547336759,
+        "on_off_f1_mean": 0.9227872817605145,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "electiric_kettle": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "fan": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "hair_dryer": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "hotplate": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "oven": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 38730,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": 0.9129386064715788,
+            "precision": 0.8398224901616009,
+            "recall": 1.0,
+            "n_scored": 38730,
+            "n_true_on": 30090,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 38730,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 38730,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 38730,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 38730,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": 0.9770706148151709,
+            "precision": 0.955797987397724,
+            "recall": 0.9993117010816126,
+            "n_scored": 38730,
+            "n_true_on": 30510,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": 0.8783526239947939,
+            "precision": 0.7845221290376152,
+            "recall": 0.9976768743400212,
+            "n_scored": 38730,
+            "n_true_on": 28410,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 38730,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hedge": {
+        "hedged_window_share": 0.08726092896174864,
+        "hedged_power_share": 0.007516890298575163,
+        "per_appliance": {
+          "beam_projector": {
+            "n": 202,
+            "share_of_windows": 0.03449453551912568,
+            "mean_gate": 0.5788283348083496,
+            "mean_emitted_w": 11.068580627441406,
+            "mean_rated_w": 15.15942668914795
+          },
+          "laptop_charger": {
+            "n": 100,
+            "share_of_windows": 0.01707650273224044,
+            "mean_gate": 0.3591027557849884,
+            "mean_emitted_w": 8.679498672485352,
+            "mean_rated_w": 21.03180694580078
+          },
+          "minipc": {
+            "n": 234,
+            "share_of_windows": 0.039959016393442626,
+            "mean_gate": 0.7417015433311462,
+            "mean_emitted_w": 4.142873287200928,
+            "mean_rated_w": 5.553332805633545
+          }
+        }
+      }
+    },
+    "test_9": {
+      "soft": {
+        "absent_sum_w": 4.032574713359676,
+        "absent_fa_rel_max": 0.0034023792674424016,
+        "residual_abs_w": 17.68728872379019,
+        "on_off_f1_mean": 0.8771064088654965,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.8508950778907394,
+            "p95_w": 5.1561126708984375,
+            "max_w": 32.49420166015625,
+            "on_rate": 0.0,
+            "fa_rel": 0.0010979291327622444
+          },
+          "beam_projector": {
+            "mean_w": 0.024416423992923066,
+            "p95_w": 0.11988971009850502,
+            "max_w": 2.7170794010162354,
+            "on_rate": 0.0,
+            "fa_rel": 0.00048253802357555467
+          },
+          "fan": {
+            "mean_w": 0.13031112594304398,
+            "p95_w": 0.4827614724636078,
+            "max_w": 18.320415496826172,
+            "on_rate": 0.0021652832912306026,
+            "fa_rel": 0.0034023792674424016
+          },
+          "hair_dryer": {
+            "mean_w": 3.022332335196876,
+            "p95_w": 0.2820378839969635,
+            "max_w": 864.7407632769158,
+            "on_rate": 0.003608805485384338,
+            "fa_rel": 0.0031254729422925294
+          },
+          "laptop_charger": {
+            "mean_w": 0.003937186081235292,
+            "p95_w": 0.02061507385224104,
+            "max_w": 0.26463955640792847,
+            "on_rate": 0.0,
+            "fa_rel": 5.95640859490967e-05
+          },
+          "minipc": {
+            "mean_w": 0.0006825642548581715,
+            "p95_w": 0.0038049161667004228,
+            "max_w": 0.07071424275636673,
+            "on_rate": 0.0,
+            "fa_rel": 3.1454573956597765e-05
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 20220,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 20220,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": 0.8493647912885662,
+            "precision": 0.7434471803018269,
+            "recall": 0.9904761904761905,
+            "n_scored": 20220,
+            "n_true_on": 8505,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 20220,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 20220,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": 0.9006138555977784,
+            "precision": 0.8494623655913979,
+            "recall": 0.9583203732503888,
+            "n_scored": 20220,
+            "n_true_on": 9645,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 20220,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 20220,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": 0.8813405797101448,
+            "precision": 0.9948875255623721,
+            "recall": 0.7910569105691057,
+            "n_scored": 20220,
+            "n_true_on": 7380,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hard": {
+        "absent_sum_w": 2.9880012808943626,
+        "absent_fa_rel_max": 0.0030525124062862627,
+        "residual_abs_w": 17.86908388740484,
+        "on_off_f1_mean": 0.8771064088654965,
+        "absent": {
+          "air_conditioner": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "beam_projector": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "fan": {
+            "mean_w": 0.036221784015546765,
+            "p95_w": 0.0,
+            "max_w": 18.87364387512207,
+            "on_rate": 0.0021652832912306026,
+            "fa_rel": 0.0009457384860456075
+          },
+          "hair_dryer": {
+            "mean_w": 2.951779496878816,
+            "p95_w": 0.0,
+            "max_w": 864.7407632769158,
+            "on_rate": 0.003608805485384338,
+            "fa_rel": 0.0030525124062862627
+          },
+          "laptop_charger": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          },
+          "minipc": {
+            "mean_w": 0.0,
+            "p95_w": 0.0,
+            "max_w": 0.0,
+            "on_rate": 0.0,
+            "fa_rel": 0.0
+          }
+        },
+        "per_app_f1": {
+          "air_conditioner": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 20220,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "beam_projector": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 20220,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "electiric_kettle": {
+            "f1": 0.8493647912885662,
+            "precision": 0.7434471803018269,
+            "recall": 0.9904761904761905,
+            "n_scored": 20220,
+            "n_true_on": 8505,
+            "ignored_uncertain": 0
+          },
+          "fan": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 20220,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hair_dryer": {
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": NaN,
+            "n_scored": 20220,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "hotplate": {
+            "f1": 0.9006138555977784,
+            "precision": 0.8494623655913979,
+            "recall": 0.9583203732503888,
+            "n_scored": 20220,
+            "n_true_on": 9645,
+            "ignored_uncertain": 0
+          },
+          "laptop_charger": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 20220,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "minipc": {
+            "f1": NaN,
+            "precision": NaN,
+            "recall": NaN,
+            "n_scored": 20220,
+            "n_true_on": 0,
+            "ignored_uncertain": 0
+          },
+          "oven": {
+            "f1": 0.8813405797101448,
+            "precision": 0.9948875255623721,
+            "recall": 0.7910569105691057,
+            "n_scored": 20220,
+            "n_true_on": 7380,
+            "ignored_uncertain": 0
+          }
+        }
+      },
+      "hedge": {
+        "hedged_window_share": 0.12269938650306748,
+        "hedged_power_share": 0.01350361481308937,
+        "per_appliance": {
+          "air_conditioner": {
+            "n": 1,
+            "share_of_windows": 0.00036088054853843375,
+            "mean_gate": 0.05582314357161522,
+            "mean_emitted_w": 32.49420166015625,
+            "mean_rated_w": 582.0919189453125
+          },
+          "beam_projector": {
+            "n": 3,
+            "share_of_windows": 0.0010826416456153013,
+            "mean_gate": 0.0761927142739296,
+            "mean_emitted_w": 1.2437766790390015,
+            "mean_rated_w": 14.873785972595215
+          },
+          "electiric_kettle": {
+            "n": 26,
+            "share_of_windows": 0.009382894261999277,
+            "mean_gate": 0.5653566122055054,
+            "mean_emitted_w": 728.2352905273438,
+            "mean_rated_w": 1264.6153564453125
+          },
+          "fan": {
+            "n": 30,
+            "share_of_windows": 0.010826416456153013,
+            "mean_gate": 0.23377060890197754,
+            "mean_emitted_w": 4.334047317504883,
+            "mean_rated_w": 20.77490997314453
+          },
+          "hotplate": {
+            "n": 284,
+            "share_of_windows": 0.10249007578491519,
+            "mean_gate": 0.20472249388694763,
+            "mean_emitted_w": 78.24180603027344,
+            "mean_rated_w": 377.6971740722656
+          },
+          "oven": {
+            "n": 18,
+            "share_of_windows": 0.006495849873691808,
+            "mean_gate": 0.19404557347297668,
+            "mean_emitted_w": 222.1171417236328,
+            "mean_rated_w": 1161.9815673828125
+          }
+        }
+      }
+    }
+  }
+}

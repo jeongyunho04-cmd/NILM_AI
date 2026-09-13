@@ -24,21 +24,42 @@ NILM 모델이 가장 자주 저지르는 오답이 "여러 기기의 대기전�
 그 결과 선풍기/전기포트처럼 기계식 스위치를 쓰는 기기는 대기전력 0W 로,
 에어컨처럼 대기 회로가 있는 기기는 약 4.7W 로 물리적으로 맞게 잡힌다.
 """
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 
 from src.preprocessing.numpy_exporter import load_nilm_npz
 from src.preprocessing.file_registry import FileRole, get_load_class, is_periodic_duty
+
+def _has_run(mask: np.ndarray, min_len: int) -> bool:
+    """불 배열에 길이 `min_len` 이상의 연속 True 가 있는가."""
+    if mask.size < min_len or not mask.any():
+        return False
+    idx = np.flatnonzero(mask)
+    runs = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
+    return max(len(r) for r in runs) >= min_len
+
 
 # 활성화로 인정할 최소 길이 (0.5초)
 MIN_ACTIVATION_CYCLES = 30
 # 주기 부하의 통전 펄스를 하나의 '세션'으로 묶을 때 허용하는 최대 공백.
 # 측정 주기(duty_period)의 이 배수까지는 릴레이/서모스탯이 끊은 것으로 보고 이어 붙인다.
 PERIODIC_MERGE_GAP_FACTOR = 2.0
-# 배수 규칙이 폭주하지 않도록 둔 절대 상한 (10초). 이보다 긴 공백은 세션이 끊긴 것이다.
-PERIODIC_MERGE_GAP_CAP_CYCLES = 600
+# 배수 규칙이 폭주하지 않도록 둔 절대 상한. 이보다 긴 공백은 세션이 끊긴 것이다.
+#
+# **10초(600) 였는데 90초(5400)로 올렸다 (2026-08-27, 12.111).** 오븐의 ON 을
+# '히터 통전' 으로 바꾸자 서모스탯 공백이 처음으로 드러났는데, 그 공백이
+# 핫플레이트 릴레이보다 20배 길다:
+#
+#     핫플 펄스 0.7~0.8초 / 공백 1.1~1.3초 (최대 1.5초)
+#     오븐 펄스 9~13초   / 공백 25~31초   (p90 35초, 최대 78초)
+#
+# 10초 상한이면 오븐 세션 3개가 펄스 70개로 쪼개져 주기 구조를 잃는다.
+# 90초면 오븐 공백은 잇고(최대 78초) 핫플은 영향이 없다 —
+# 핫플은 `2 x duty_period`(약 250사이클) 가 먼저 걸린다.
+PERIODIC_MERGE_GAP_CAP_CYCLES = 5400
 # 대기 지문을 신뢰하려면 최소 이만큼의 OFF 샘플이 필요하다 (1초)
 MIN_STANDBY_SAMPLES = 60
 # 대기 지터 풀로 보관할 최대 샘플 수 (메모리 상한)
@@ -132,9 +153,27 @@ class SegmentPool:
         strict_role_check: bool = True,
         time_split: str = "all",
         holdout_frac: float = 0.2,
+        exclude_activation_files: Optional[Dict[str, Sequence[str]]] = None,
+        only_activation_files: Optional[Dict[str, Sequence[str]]] = None,
+        ablate_pedestal_apps: Optional[Sequence[str]] = None,
+        carrier_apps: Optional[Sequence[str]] = None,
+        standby_jitter_cap_pct: Optional[float] = None,
+        standby_per_record: bool = False,
     ):
         """
         Args:
+            standby_per_record: 대기 지문을 기기당 하나로 평균하지 않고 **녹화별로** 남겨 두었다가
+                기록마다 하나를 뽑는다 (13.84.40). 실측에서 전부-OFF 배경의 파일 간 편차 중
+                꽂힌 기기 대기로 설명되는 몫을 빼고 남는 것이 h9~h15 에서 4.7~7.0mA 인데
+                지금 합성은 1.3~1.5mA 밖에 안 준다. 녹화별로 바꾸면 2.2~3.6mA 가 되어
+                `--bg-head` 가 맡을 **미모형 세션 배경**이 처음으로 생긴다.
+                ⚠ 꺼져 있으면 난수를 한 번도 안 건드린다 — 옛 캐시와 비트 동일이어야 한다.
+            standby_jitter_cap_pct: 대기 잔차 풀의 차수별 크기 상한 백분위 (13.83.26). None 이면 옛 경로.
+                대기 잔차 풀은 중앙값은 0~2mA 로 조용한데 p99 가 충전기 16·미니PC 18·에어컨 23mA 로
+                뾰족하다(OFF 구간 가장자리 과도). 꽂힌 기기 5~6개의 풀을 이어 붙이면 합성 배경층의
+                창 안 σ|I3| 가 11~17mA 가 되어 실측 창 **전체**의 σ(6mA)보다 크고, 합성 미니PC 자체의
+                σ(15)와 같은 크기라 "흔들리면 미니PC" 라는 합성 전용 단서의 절반을 배경이 보탰다.
+                이 백분위를 넘는 잔차는 그 크기로 자른다(위상 유지).
             time_split: 원본 녹화의 어느 구간을 쓸지.
                 "all"     - 전체 (기본. 기존 동작과 같다)
                 "train"   - 앞 (1-holdout_frac)
@@ -150,6 +189,21 @@ class SegmentPool:
 
         그래서 시간축으로 나눈다. 각 녹화의 뒤 20% 는 학습에 쓰지 않고,
         테스트 셋은 그 구간으로만 만든다. 9종 전부에 대해 안 본 파형이 생긴다.
+
+        [녹화 단위 홀드아웃 - 12.16 이후 추가]
+        위 논리에 구멍이 있다. **시간축 분할은 파형 암기를 탐지하지 못한다.** 홀드아웃이
+        같은 녹화의 뒤 20% 라 같은 기기·같은 세션·같은 파형이기 때문이다. 실제로 저항
+        3종 정확도 1.000 과 실측 실패가 공존했다 (12.16.3절).
+
+        전역 파일 분할은 여전히 불가능하지만(원본 1개짜리 기기가 있다), **기기 하나를
+        골라 그 녹화만 빼는 것**은 된다. 핫플은 녹화가 2개라 가능하다.
+
+            학습:  SegmentPool(time_split="train",
+                               exclude_activation_files={"hotplate": ["hotplate_2"]})
+            평가:  SegmentPool(only_activation_files={"hotplate": ["hotplate_2"]})
+
+        `exclude_activation_files` / `only_activation_files` 는 {가전: [녹화 stem]} 이고,
+        표에 없는 가전은 건드리지 않는다.
         """
         if time_split not in ("all", "train", "holdout"):
             raise ValueError(f"time_split 은 all/train/holdout 중 하나여야 합니다: {time_split!r}")
@@ -161,8 +215,22 @@ class SegmentPool:
         self.time_split = time_split
         self.holdout_frac = float(holdout_frac)
 
+        #: 캐리어 상태를 **세션의 일부로 보는** 기기 (13.40). 오븐의 FAN_LIGHT 가
+        #: 그것이다 — 사용자: "오븐은 무조건 fan_light상태를 거치고 켜지고 ... 꺼질때도".
+        #: 이 목록에 든 기기는 활성화가 세션 앞뒤의 캐리어 구간까지 포함하고,
+        #: 합성기가 그 구간의 게이트를 1 로, 전력을 그 순간 실제값으로 놓는다.
+        #: **핫플은 넣지 않는다** — ARMED_IDLE 이 0.55W 로 계측 바닥(1.5W)보다 작아
+        #: 검출할 것이 없고, MIN_ON_W 428.8W 의 물리 프라이어와도 부딪힌다.
+        self.carrier_apps = set(carrier_apps or ())
+        self.standby_jitter_cap_pct = (None if standby_jitter_cap_pct is None or float(standby_jitter_cap_pct) <= 0
+                                       else float(standby_jitter_cap_pct))
+        self.standby_per_record = bool(standby_per_record)
         self.appliance_activations: Dict[str, List[ApplianceActivation]] = {}
         self.standby_profiles: Dict[str, StandbyProfile] = {}
+        #: 녹화별 대기 지문 (13.84.40). `standby_per_record` 가 켜져야 쓰인다.
+        self.standby_profiles_all: Dict[str, List[StandbyProfile]] = {}
+        #: 이번 기록에서 고른 녹화 색인. `new_record()` 가 비운다.
+        self._standby_pick: Dict[str, int] = {}
         self.noise_references: Dict[str, NoiseReference] = {}
         self.rejected_files: List[Tuple[str, str]] = []  # (파일명, 거부 사유)
         # 주기 부하의 통전 반복 주기 (시작-시작 간격, 사이클). 조리 세션 재구성에 쓴다.
@@ -175,6 +243,88 @@ class SegmentPool:
         self.noise_power: Optional[np.ndarray] = None
 
         self.load_all_npz_files()
+        self._filter_activation_files(exclude_activation_files, only_activation_files)
+        self._ablate_pedestal(ablate_pedestal_apps)
+
+    def _filter_activation_files(
+        self,
+        exclude: Optional[Dict[str, Sequence[str]]],
+        only: Optional[Dict[str, Sequence[str]]],
+    ) -> None:
+        """녹화 단위로 활성화를 걸러 낸다 (`__init__` 주석 참조)."""
+        if not exclude and not only:
+            return
+        for app, files in (only or {}).items():
+            keep = set(files)
+            acts = self.appliance_activations.get(app, [])
+            self.appliance_activations[app] = [a for a in acts if a.source_file in keep]
+        for app, files in (exclude or {}).items():
+            drop = set(files)
+            acts = self.appliance_activations.get(app, [])
+            self.appliance_activations[app] = [a for a in acts if a.source_file not in drop]
+        for app in set((exclude or {})) | set((only or {})):
+            if not self.appliance_activations.get(app):
+                raise ValueError(
+                    f"'{app}' 의 활성화가 전부 걸러졌습니다. "
+                    f"exclude={(exclude or {}).get(app)} only={(only or {}).get(app)}"
+                )
+
+    # ── 기착(pedestal) 절제 ────────────────────────────────────────────────
+
+    #: 기착으로 인정할 최대 전력 (정상 구간 대비 비율). 프로젝터 실측이 8.0~8.7% 다.
+    PEDESTAL_MAX_FRAC = 0.25
+    #: 기착으로 인정할 최소 길이 (사이클). 0.5초. 이보다 짧은 꼬리는 스위칭
+    #: 마지막 샘플이지 기착이 아니다 — 충전기·미니PC 의 꼬리가 전부 1샘플(0.02초)이다.
+    PEDESTAL_MIN_CYCLES = 30
+
+    def _ablate_pedestal(self, apps: Optional[Sequence[str]]) -> None:
+        """활성화 끝의 저전력 기착 구간을 잘라낸다 (12.63절).
+
+        [무엇을 재고 만든 규칙인가]
+        프로젝터 활성화 8개 중 6개가 램프 소등 뒤 **3.88~3.90초 동안 3.8~4.15W**
+        (정상 47W 의 8.0~8.7%) 를 유지한다. 팬 기착이다. `is_on` 라벨이 그 구간
+        내내 1 이므로 세그먼트 풀의 활성화에 그대로 들어간다 (12.60.1).
+        충전기는 같은 규칙으로 재면 꼬리가 **0.02초(샘플 1개)** 뿐이다 — 기착이 없다.
+        그래서 "기착의 유무" 가 두 기기를 가른다 (12.59.2 의 30배·겹침 0).
+
+        [왜 0 으로 덮지 않고 잘라내는가]
+        기착 구간을 0 으로 덮으면 `is_on=1` 인데 전력이 0 인 창이 생겨 라벨이
+        모순된다. **잘라내면 그 활성화는 충전기처럼 계단 하나로 끝난다** — 그것이
+        검증하려는 반사실이다.
+        """
+        if not apps:
+            return
+        self.ablated_pedestal_apps = list(apps)
+        for app in apps:
+            acts = self.appliance_activations.get(app, [])
+            if not acts:
+                raise ValueError(f"'{app}' 의 활성화가 없습니다 — 기착 절제 대상이 잘못됐습니다")
+            cut = []
+            for a in acts:
+                tp = np.asarray(a.target_power_w, np.float64)
+                if len(tp) == 0 or tp.max() <= 0:
+                    cut.append(a); continue
+                pk = np.median(tp[tp > 0.5 * tp.max()])
+                thr = self.PEDESTAL_MAX_FRAC * pk
+                j = len(tp)
+                while j > 0 and 0.0 < tp[j - 1] < thr:
+                    j -= 1
+                n_tail = len(tp) - j
+                if n_tail < self.PEDESTAL_MIN_CYCLES or j < self.PEDESTAL_MIN_CYCLES:
+                    cut.append(a); continue
+                cut.append(dataclasses.replace(
+                    a,
+                    duration_cycles=int(j),
+                    duration_s=round(j / 60.0, 2),
+                    net_harmonics_ri=a.net_harmonics_ri[:j],
+                    net_harmonics_complex=a.net_harmonics_complex[:j],
+                    net_power_features=a.net_power_features[:j],
+                    is_on=a.is_on[:j],
+                    state_id=a.state_id[:j],
+                    target_power_w=a.target_power_w[:j],
+                    inrush_cycles=min(a.inrush_cycles, max(1, j // 3)),
+                ))
+            self.appliance_activations[app] = cut
 
     # ── 적재 ────────────────────────────────────────────────────────────────
     def load_all_npz_files(self):
@@ -217,11 +367,22 @@ class SegmentPool:
 
         # 2차: 기기별 활성화 구간과 대기 지문 추출
         raw_standby: Dict[str, List[StandbyProfile]] = {}
+        self.file_noise_references: Dict[str, NoiseReference] = {}
+        self.noise_source: Dict[str, str] = {}
         for stem, data, meta in device_entries:
             appliance_type = meta.get("appliance_type", stem)
             korean_name = meta.get("korean_name", stem)
             v_ref = float(meta.get("v_ref_v", 220.0))
-            noise_ref = self._pick_noise_reference(float(meta.get("noise_floor_w", 1.4)))
+            # 규칙 2: 그 파일의 '플러그 뽑은 꼬리' 가 있으면 그것이 이 파일의 계측계 기준이다.
+            # 없으면(꼬리를 빼먹은 녹화) 바닥이 같은 전역 노이즈 파일로 대체한다 — 대비책.
+            own = self._noise_reference_from_tail(stem, data)
+            if own is not None:
+                noise_ref = own
+                self.file_noise_references[stem] = own
+                self.noise_source[stem] = "trailing_unplugged"
+            else:
+                noise_ref = self._pick_noise_reference(float(meta.get("noise_floor_w", 1.4)))
+                self.noise_source[stem] = f"global:{noise_ref.name}"
 
             profile = self._extract_standby_profile(appliance_type, data, noise_ref, v_ref)
             if profile is not None:
@@ -232,8 +393,10 @@ class SegmentPool:
             )
 
         # 같은 가전 종류의 여러 파일에서 나온 대기 지문을 합친다.
+        # ⚠ 합친 것이 **기본**이다. 녹화별 원본은 따로 남겨 `standby_per_record` 만 쓴다 (13.84.40).
         for app, profiles in raw_standby.items():
             self.standby_profiles[app] = self._merge_standby_profiles(app, profiles)
+            self.standby_profiles_all[app] = list(profiles)
 
         self._build_legacy_noise_view()
 
@@ -283,6 +446,29 @@ class SegmentPool:
             residual_variance=residual_var,
         )
 
+    def _noise_reference_from_tail(self, stem: str, data: dict) -> Optional[NoiseReference]:
+        """npz 의 `is_unplugged==1` 구간(계측계만 남은 꼬리)으로 그 파일 전용 기준을 만든다. 없으면 None."""
+        if "is_unplugged" not in data:
+            return None
+        m = np.asarray(data["is_unplugged"]) == 1
+        if "is_valid" in data:
+            m = m & (np.asarray(data["is_valid"]) == 1)
+        if int(m.sum()) < MIN_STANDBY_SAMPLES:
+            return None
+        hc = data["harmonics_complex"][m]
+        median_phasor = (np.median(np.real(hc), axis=0) + 1j * np.median(np.imag(hc), axis=0)).astype(np.complex64)
+        residual_var = float(np.mean(np.abs(hc - median_phasor) ** 2))
+        pf = data["power_features"][m]
+        return NoiseReference(
+            name=f"{stem}:tail",
+            noise_floor_w=float(np.median(pf[:, 0])),
+            median_phasor=median_phasor,
+            harmonics_ri=data["harmonics_ri"][m],
+            harmonics_complex=hc,
+            power_features=pf,
+            residual_variance=residual_var,
+        )
+
     def _pick_noise_reference(self, noise_floor_w: float) -> NoiseReference:
         """이 기기 측정에 적용된 바닥 전력과 가장 가까운 노이즈 기준을 고른다.
 
@@ -300,10 +486,21 @@ class SegmentPool:
     ) -> Optional[StandbyProfile]:
         """OFF 구간에서 기기 자신의 대기 전기 지문을 뽑는다."""
         is_on = data["is_on"]
-        idle_mask = is_on == 0
+        # **진짜 OFF(state 0)에서만 뽑는다.** `is_on == 0` 을 쓰면 오븐이 틀어진다 —
+        # 12.111 이 오븐의 ON 을 '히터 통전'으로 바꾸면서 팬/조명 상태(16.5W)가
+        # `is_on == 0` 에 들어왔고, 그대로 두면 오븐을 **꽂아만 둬도** 17W 의
+        # 유령 대기전력이 붙는다 (대기 총합 21.9W, 상한 15W 초과).
+        # 대기 지문의 정의는 "꽂혀만 있을 때" 이므로 상태 0 이 맞다.
+        if "state_id" in data:
+            idle_mask = np.asarray(data["state_id"]) == 0
+        else:
+            idle_mask = is_on == 0
         # 품질 게이팅에 걸린 샘플은 제외한다.
         if "is_valid" in data:
             idle_mask = idle_mask & (data["is_valid"] == 1)
+        # 플러그를 뽑은 꼬리는 기기의 대기가 아니라 계측계다 (규칙 2). 대기 지문에서 뺀다.
+        if "is_unplugged" in data:
+            idle_mask = idle_mask & (np.asarray(data["is_unplugged"]) == 0)
 
         n_idle = int(idle_mask.sum())
         if n_idle < MIN_STANDBY_SAMPLES:
@@ -331,6 +528,14 @@ class SegmentPool:
 
         # 대기 상태의 미세 변동(잔차). 계측계 잡음 몫을 뺀 나머지가 기기 자신의 흔들림이다.
         residual = (hc_idle - measured_phasor).astype(np.complex64)
+        # 13.83.26: 잔차의 뾰족한 꼬리(OFF 구간 가장자리 과도)를 차수별 백분위로 자른다. 위상은 둔다.
+        cap = getattr(self, "standby_jitter_cap_pct", None)
+        if cap is not None and len(residual) > 10:
+            amp = np.abs(residual)
+            lim = np.percentile(amp, cap, axis=0)[None, :]
+            over = amp > lim
+            if over.any():
+                residual = np.where(over, residual * (lim / np.maximum(amp, 1e-12)), residual).astype(np.complex64)
         total_var = float(np.mean(np.abs(residual) ** 2))
         own_var = max(0.0, total_var - noise_ref.residual_variance)
         jitter_scale = float(np.sqrt(own_var / total_var)) if total_var > 1e-18 else 0.0
@@ -424,6 +629,14 @@ class SegmentPool:
         bucket = self.appliance_activations.setdefault(appliance_type, [])
         periodic = is_periodic_duty(appliance_type)
 
+        # 캐리어 상태(오븐 FAN_LIGHT)를 세션에 포함할 기기인가 (13.40).
+        # `carrier_apps` 로 명시한 기기에만 건다 — 핫플의 ARMED_IDLE 은 0.55W 로
+        # 계측 바닥(1.5W)보다 작아 검출할 것이 없다.
+        from src.labeling.state_definitions import get_appliance_config
+        carrier_min = (get_appliance_config(appliance_type).on_state_min_id
+                       if (appliance_type in self.carrier_apps and "state_id" in data)
+                       else None)
+
         # 서모스탯/릴레이 부하는 통전 펄스 하나하나가 별개 활성화로 잘린다.
         # 실제로는 한 번의 조리 세션 안에서 일정 주기로 반복되는 것이므로,
         # 그 주기를 기록해 두어야 긴 타임라인에서 세션 형태로 다시 묶을 수 있다.
@@ -444,12 +657,38 @@ class SegmentPool:
         # 오븐은 히터가 꺼져도 팬/조명이 남아 is_on 이 1로 유지되므로 애초에
         # 세션 하나가 통째로 잡히고(블록 2개 < 3), 여기서 손대지 않는다.
         if duty_period:
-            blocks = self._merge_duty_blocks(blocks, duty_period, valid)
+            # 오븐처럼 '켜졌지만 통전은 아닌' 상태(팬·조명, state 1)가 있는 기기는 펄스 사이에 state 0(플러그만)이
+            # 끼면 사용자가 껐다 켠 것이다 — 공백이 짧아도 잇지 않는다. 핫플은 그런 상태가 없어 릴레이 공백도 state 0 이라
+            # 공백 길이로만 가른다. (2026-09-06: oven_1 의 세 세션(12초·25초 꺼짐)이 하나로 묶여 있었다.)
+            from src.labeling.state_definitions import get_appliance_config
+            carrier = get_appliance_config(appliance_type).on_state_min_id is not None
+            state = np.asarray(data["state_id"]) if (carrier and "state_id" in data) else None
+            blocks = self._merge_duty_blocks(blocks, duty_period, valid, state)
+
+        # ── 세션 앞뒤의 캐리어 상태를 활성화에 넣는다 (2026-09-07, 13.40) ──────
+        # 블록은 `is_on == 1` 로 잘리는데 오븐의 FAN_LIGHT 는 `is_on = 0` 이다
+        # (`on_state_min_id = 2`). 듀티 **사이**의 FAN_LIGHT 는 `_merge_duty_blocks`
+        # 가 앞뒤 통전 펄스를 이어 붙이며 딸려 오지만, **세션의 맨 앞과 맨 뒤는 이어
+        # 붙일 상대가 없어 잘린다** — 활성화 6개가 전부 상태 2 로 시작해 상태 2 로 끝났다.
+        #
+        # 사용자: *"오븐은 무조건 fan_light상태를 거치고 켜지고 ... 꺼질때도 fan_light
+        # 상태를 거치고"*. 맞다. 그래서 합성 오븐은 0W -> 1100W 로 곧장 켜지는데
+        # 실측은 0 -> 14.6W -> 1100W 다. **그 전이 모양이 합성에 한 번도 없었다**
+        # (녹화에 켜질때앞 26초 · 꺼질때뒤 59초).
+        if carrier_min is not None:
+            live = np.asarray(data["state_id"]) >= 1        # 0 = OFF_STANDBY 규약
+        else:
+            live = None
 
         for block in blocks:
             if len(block) < MIN_ACTIVATION_CYCLES:
                 continue
             start_i, end_i = block[0], block[-1] + 1
+            if live is not None:
+                while start_i > 0 and live[start_i - 1] and valid[start_i - 1]:
+                    start_i -= 1
+                while end_i < len(live) and live[end_i] and valid[end_i]:
+                    end_i += 1
 
             raw_c = data["harmonics_complex"][start_i:end_i]
             raw_pow = data["power_features"][start_i:end_i]
@@ -488,7 +727,8 @@ class SegmentPool:
 
     @staticmethod
     def _merge_duty_blocks(
-        blocks: List[np.ndarray], duty_period: int, valid: np.ndarray
+        blocks: List[np.ndarray], duty_period: int, valid: np.ndarray,
+        state_id: Optional[np.ndarray] = None,
     ) -> List[np.ndarray]:
         """주기 부하의 통전 펄스들을 하나의 동작 세션으로 이어 붙인다.
 
@@ -500,6 +740,8 @@ class SegmentPool:
             핫플레이트1  공백 최대  89사이클(1.5초)   주기 약 125사이클
             핫플레이트2  공백 대부분 78사이클, 세션 단절 1건 620사이클(10.3초)
         주기의 2배(약 250사이클)면 릴레이 공백은 전부 잇고 세션 단절은 남긴다.
+        `state_id` 를 주면 공백 안에 state 0(플러그만 꽂힌 상태)이 하나라도 있으면 잇지 않는다 — 팬·조명 같은
+        운반 상태가 있는 기기(오븐)에서 사용자의 끔/켬 을 가르는 물리적 경계다.
         """
         limit = int(min(PERIODIC_MERGE_GAP_FACTOR * duty_period, PERIODIC_MERGE_GAP_CAP_CYCLES))
         merged: List[np.ndarray] = []
@@ -511,7 +753,8 @@ class SegmentPool:
             gap = b0 - end - 1
             # 공백이 짧고 그 안이 전부 유효 계측일 때만 잇는다.
             # 품질 게이팅에 걸린 구간을 가로질러 이으면 보간값이 세션에 들어온다.
-            if 0 <= gap <= limit and bool(valid[end + 1:b0].all()):
+            truly_off = state_id is not None and _has_run(state_id[end + 1:b0] == 0, 60)
+            if 0 <= gap <= limit and bool(valid[end + 1:b0].all()) and not truly_off:
                 end = b1
                 continue
             merged.append(np.arange(start, end + 1, dtype=np.int64))
@@ -598,8 +841,33 @@ class SegmentPool:
             return acts[int(np.random.randint(0, len(acts)))]
         return acts[int(np.random.choice(len(acts), p=w / total))]
 
+    def new_record(self) -> None:
+        """기록(=세션) 하나가 시작된다 — 대기 지문을 다시 뽑는다 (13.84.40).
+
+        ⚠ `standby_per_record` 가 꺼져 있으면 **아무것도 하지 않는다**. 난수도 안 건드린다.
+        추첨은 `get_standby_profile` 이 처음 불릴 때 게으르게 한다 — 그래야 그 기록에
+        실제로 꽂힌 기기만 난수를 먹고, 기기 수가 달라도 흐름이 어긋나지 않는다.
+        """
+        if self.standby_per_record:
+            self._standby_pick = {}
+
     def get_standby_profile(self, appliance_type: str) -> StandbyProfile:
-        """가전의 대기 전기 지문을 반환한다 (없으면 0 대기전력)."""
+        """가전의 대기 전기 지문을 반환한다 (없으면 0 대기전력).
+
+        `standby_per_record` 면 이 기록에서 뽑은 **녹화 하나**의 지문을 준다. 같은 기록 안에서는
+        `sample_standby_series` 까지 같은 것을 보도록 고른 색인을 기억한다.
+        """
+        if self.standby_per_record:
+            alts = self.standby_profiles_all.get(appliance_type)
+            if alts:
+                j = self._standby_pick.get(appliance_type)
+                if j is None:
+                    # 표본 수 가중 — 합친 지문과 **같은 기댓값**이라 평균은 안 옮긴다.
+                    w = np.array([p.sample_count for p in alts], dtype=np.float64)
+                    j = (0 if len(alts) == 1 else
+                         int(np.random.choice(len(alts), p=w / w.sum())))
+                    self._standby_pick[appliance_type] = j
+                return alts[j]
         if appliance_type in self.standby_profiles:
             return self.standby_profiles[appliance_type]
         return StandbyProfile(

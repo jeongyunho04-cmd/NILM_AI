@@ -1,0 +1,39 @@
+{
+ "variants": {
+  "현행 격리 중앙값": {
+   "free": 0.07309707443398106,
+   "true": 0.13232029910162704,
+   "signal": 0.059223224667645985,
+   "ratio": 2.234263666731988
+  },
+  "in-situ r0.1": {
+   "free": 0.06262329940252935,
+   "true": 0.11205508237020205,
+   "signal": 0.0494317829676727,
+   "ratio": 2.266863051318291
+  },
+  "상태별 (문턱 유지)": {
+   "free": 0.07239712822031427,
+   "true": 0.13103610528472362,
+   "signal": 0.05863897706440935,
+   "ratio": 2.2346246787489643
+  },
+  "상태별 (문턱 해제)": {
+   "free": 0.07104794433306395,
+   "true": 0.13058627600844236,
+   "signal": 0.059538331675378406,
+   "ratio": 2.193314329337267
+  }
+ },
+ "n_windows": 55,
+ "_config": {
+  "argv": [
+   "C:\\Users\\yunho\\Documents\\NILM_train\\NILM_AI-main\\src\\run_state_sig_probe.py"
+  ],
+  "args": {
+   "ckpt": "results/cnn_ovh.pt",
+   "sig_insitu": "results/sig_insitu.npz",
+   "out": "results/state_sig_probe.json"
+  }
+ }
+}

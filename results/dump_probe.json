@@ -1,0 +1,77 @@
+{
+ "n_windows": 11301,
+ "stems": [
+  "test_11",
+  "test_12",
+  "test_13",
+  "test_5",
+  "test_6",
+  "test_7",
+  "test_8"
+ ],
+ "gap1_abs_p50": 6.483917236328125,
+ "per_app": {
+  "air_conditioner": {
+   "dp_median": 0.6071326732635498,
+   "corr_gap1": 0.07389644914032385,
+   "slope": 0.0022902785434943287
+  },
+  "beam_projector": {
+   "dp_median": 10.500019073486328,
+   "corr_gap1": 0.013373348637598854,
+   "slope": 0.00126796359084721
+  },
+  "electiric_kettle": {
+   "dp_median": 3.534652570635899e-09,
+   "corr_gap1": 0.33082434848728715,
+   "slope": 0.5575368545320137
+  },
+  "fan": {
+   "dp_median": -7.064672900014557e-07,
+   "corr_gap1": -0.010862118190682165,
+   "slope": -0.00019313399744089887
+  },
+  "hair_dryer": {
+   "dp_median": -0.0003116856387350708,
+   "corr_gap1": 0.4677387385010794,
+   "slope": 0.35921821416990096
+  },
+  "hotplate": {
+   "dp_median": -9.311886969953775e-06,
+   "corr_gap1": 0.3577053712141724,
+   "slope": 0.14805376631980208
+  },
+  "laptop_charger": {
+   "dp_median": -8.62508487701416,
+   "corr_gap1": 0.04239709937545412,
+   "slope": 0.004010070037753451
+  },
+  "minipc": {
+   "dp_median": -0.0014822895172983408,
+   "corr_gap1": -0.021260970702513055,
+   "slope": -0.0006321883466040925
+  },
+  "oven": {
+   "dp_median": 5.0949374497122335e-08,
+   "corr_gap1": -0.03582425602192823,
+   "slope": -0.062137838570149984
+  }
+ },
+ "_config": {
+  "argv": [
+   "C:\\Users\\yunho\\Documents\\NILM_train\\NILM_AI-main\\src\\run_dump_probe.py",
+   "--out",
+   "results/dump_probe.json"
+  ],
+  "args": {
+   "stage1": "results/cnn_ovh.pt",
+   "stage2": [
+    "results/adapt_ovh.pt",
+    "results/adapt_ovh_s1.pt",
+    "results/adapt_ovh_s2.pt"
+   ],
+   "stride": 60,
+   "out": "results/dump_probe.json"
+  }
+ }
+}

@@ -70,7 +70,7 @@ import time
 
 # ── 프로토콜 상수 (펌웨어 nilm_link.h 와 반드시 일치) ────────────────────────
 MAGIC = b"\xa5\x5a"
-PROTO_VER = 5
+PROTO_VER = 6
 ACK_BYTE = b"\x06"     # ACK 첫 바이트. 뒤에 그 프레임의 seq(u32 LE)가 붙는다
 
 
@@ -142,7 +142,10 @@ CYCLE_HZ = 60.0        # 주기별 데이터의 시간 해상도
 
 # NILM_WireSlow: seq, freq, vrms, thd_v, vh[15], vh_cdeg[15],
 #                over_range, clip_volt, range, flags, over_map
-SLOW_FMT = "<I3f15f15hHHBBI"
+# v6: 뒤에 고차 전압 고조파(17,19,...,31 홀수 8개) rms/위상 + 갱신 카운터.
+# 이것만 60초 창이라 60초마다 한 번 바뀌고 그 사이 프레임엔 같은 값이 온다.
+HARM_HI = (17, 19, 21, 23, 25, 27, 29, 31)
+SLOW_FMT = "<I3f15f15hHHBBI8f8hH"
 SLOW_SIZE = struct.calcsize(SLOW_FMT)            # = 116
 
 # NILM_WireCycle: irms, p_w, phase_cdeg, range, over_count,
@@ -156,7 +159,7 @@ CYC_SIZE = struct.calcsize(CYC_FMT)              # = 104
 PAYLOAD_SIZE = SLOW_SIZE + CYCLES * CYC_SIZE     # = 3236
 FRAME_SIZE = 5 + PAYLOAD_SIZE + 2                # = 3243
 
-assert SLOW_SIZE == 116, f"SLOW_SIZE={SLOW_SIZE}, 펌웨어와 어긋남"
+assert SLOW_SIZE == 166, f"SLOW_SIZE={SLOW_SIZE}, 펌웨어와 어긋남"
 assert CYC_SIZE == 104, f"CYC_SIZE={CYC_SIZE}, 펌웨어와 어긋남"
 
 # 이 시간 동안 무수신이면 죽은 연결로 보고 끊는다.
@@ -231,6 +234,12 @@ def parse_payload(payload: bytes) -> dict:
         "range": s[6 + 2 * HARMONICS],
         "flags": s[7 + 2 * HARMONICS],
         "over_map": s[8 + 2 * HARMONICS],
+        # --- v6: 고차 전압 고조파 (60초 창) ---
+        "vh_hi_rms": s[9 + 2 * HARMONICS:9 + 2 * HARMONICS + len(HARM_HI)],
+        "vh_hi_deg": [x / 100.0 for x in
+                      s[9 + 2 * HARMONICS + len(HARM_HI):
+                        9 + 2 * HARMONICS + 2 * len(HARM_HI)]],
+        "vh_hi_seq": s[9 + 2 * HARMONICS + 2 * len(HARM_HI)],
     }
     d["pll_locked"] = bool(d["flags"] & 0x01)
     d["cal_applied"] = bool(d["flags"] & 0x02)
@@ -445,6 +454,10 @@ CSV_HEADER = (
     # 그 뒤 65~79열이고, 예전 CSV에는 그 열이 없을 뿐이다.
     + ["off_low"]
     + [f"vhdeg{h}" for h in range(1, HARMONICS + 1)]
+    # v6 에서 붙인 열. 앞의 79열은 글자 하나까지 그대로다.
+    + [f"vhhi{h}" for h in HARM_HI]
+    + [f"vhhideg{h}" for h in HARM_HI]
+    + ["vhhi_seq"]
 )
 
 
@@ -493,6 +506,8 @@ def write_frame(writer, d: dict, t_recv: float, t0_dev):
     # 창 공통 값이라 30행이 같다 - 루프 밖에서 한 번만 포맷한다.
     vh = [f"{x:.4f}" for x in d["vh_rms"]]
     vhdeg = [f"{x:.2f}" for x in d["vh_deg"]]
+    vhhi = ([f"{x:.6f}" for x in d["vh_hi_rms"]] +
+            [f"{x:.2f}" for x in d["vh_hi_deg"]] + [str(d["vh_hi_seq"])])
 
     for i, c in enumerate(d["cycles"]):
         writer.writerow(
@@ -506,7 +521,8 @@ def write_frame(writer, d: dict, t_recv: float, t0_dev):
             + [f"{x:.2f}" for x in c["ih_deg"]]
             + vh
             + [f"{c['off_low']:.4f}"]
-            + vhdeg)
+            + vhdeg
+            + vhhi)
 
 
 # ── 콘솔 요약 ───────────────────────────────────────────────────────────────

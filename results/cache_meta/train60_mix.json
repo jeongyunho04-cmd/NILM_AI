@@ -1,0 +1,48 @@
+{
+  "n_windows": 300000,
+  "window_cycles": 3600,
+  "appliances": [
+    "air_conditioner",
+    "beam_projector",
+    "electiric_kettle",
+    "fan",
+    "hair_dryer",
+    "hotplate",
+    "laptop_charger",
+    "minipc",
+    "oven"
+  ],
+  "time_split": "train",
+  "seed": 0,
+  "n_wide": 120,
+  "exclude_activation_files": null,
+  "dither_amp": 0.0,
+  "dither_phase_deg": 0.0,
+  "recipe_mix": {
+    "random_realistic": 0.23,
+    "random_uniform": 0.14,
+    "standby_only": 0.08,
+    "low_load_among_standby": 0.16,
+    "high_power_resistive": 0.1,
+    "high_low_mixed": 0.21,
+    "resistive_overlap": 0.05,
+    "unplugged_baseline": 0.03
+  },
+  "fine_shape": [
+    50,
+    600
+  ],
+  "bytes": 18908700000,
+  "build_seconds": 885.8,
+  "positive_rate": {
+    "air_conditioner": 0.04627,
+    "beam_projector": 0.19026666666666667,
+    "electiric_kettle": 0.12102333333333333,
+    "fan": 0.21776333333333334,
+    "hair_dryer": 0.12214333333333334,
+    "hotplate": 0.09978666666666666,
+    "laptop_charger": 0.24017,
+    "minipc": 0.24735333333333334,
+    "oven": 0.15663666666666667
+  }
+}

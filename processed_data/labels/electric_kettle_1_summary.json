@@ -1,0 +1,66 @@
+{
+  "raw_rows": 27720,
+  "cleaned_rows": 27720,
+  "duration_s": 462.0,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 0,
+  "invalid_samples_dropped": 0,
+  "invalid_samples_interpolated": 0,
+  "interpolated_cycles": 0,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "startup_frames_dropped": 0,
+  "noise_floor_registry_w": 1.6,
+  "noise_floor_applied_w": 1.484626,
+  "noise_floor_source": "trailing_unplugged",
+  "trailing_noise": {
+    "n_cycles": 1860,
+    "start_t_rel_s": 431.0,
+    "p_w": 1.484626,
+    "i1_ma": 6.445,
+    "i1_deg": 0.2857011054035595,
+    "vrms": 230.7705
+  },
+  "source_file": "electric_kettle_1.cal2.csv",
+  "file_role": "device",
+  "appliance_type": "electiric_kettle",
+  "load_class": "resistive",
+  "classification_reason": "등록된 단일 가전 'electiric_kettle'",
+  "output_file": null,
+  "feature_columns_count": 140,
+  "v_ref_v": 228.03,
+  "p_mean": 895.34,
+  "p_max": 1486.41,
+  "irms_mean": 3.9309,
+  "korean_name": "전기포트",
+  "total_samples": 27720,
+  "on_percentage": 61.36,
+  "state_distribution": {
+    "OFF": {
+      "state_id": 0,
+      "description": "전원 꺼짐 / 대기 상태",
+      "count": 10710,
+      "percentage": 38.64,
+      "duration_min": 2.98
+    },
+    "BOILING_HEATING": {
+      "state_id": 1,
+      "description": "히터 발열 및 물 끓임 동작",
+      "count": 17010,
+      "percentage": 61.36,
+      "duration_min": 4.72
+    }
+  },
+  "events_summary": {
+    "total_events": 22,
+    "on_events": 11,
+    "off_events": 11,
+    "mode_change_events": 0,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\electric_kettle_1_annotated.csv",
+  "npz_file": "processed_data\\npz\\electric_kettle_1.npz",
+  "events_json": "processed_data\\labels\\electric_kettle_1_events.json"
+}

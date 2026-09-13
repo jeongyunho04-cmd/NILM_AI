@@ -27,7 +27,8 @@
 
 [저장 구조]
     <cache_dir>/
-        inputs.npy     (n_scenarios, 33, L) float32   15 Re + 15 Im + P, Q, V
+        inputs.npy     (n_scenarios, 45, L) float32   15 Re + 15 Im + P, Q, V
+                                                     + 전압 고조파 Re/Im 12 (13.26)
         y_power.npy    (n_scenarios, 9, L)  float32   활성 전력
         y_standby.npy  (n_scenarios, 9, L)  float16   대기 전력
         y_state.npy    (n_scenarios, 9, L)  int8
@@ -41,6 +42,7 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 import json
 import numpy as np
 
+from src.model.inputs import RAW_CHANNELS
 from .dataset import DEFAULT_RECIPE_MIX, NILMBatchGenerator
 from .segment_pool import SegmentPool
 from .synthesizer import (
@@ -49,8 +51,9 @@ from .synthesizer import (
     window_target_index,
 )
 
-# 캐시가 담는 채널 수: 15 Real + 15 Imag + P + Q + V
-INPUT_CHANNELS = 33
+# 캐시가 담는 채널 수: 15 Real + 15 Imag + P + Q + V + 전압 고조파 Re/Im 12 (13.26).
+# `dataset._format_inputs` 가 내는 것과 반드시 같아야 한다.
+INPUT_CHANNELS = RAW_CHANNELS
 # 모델 입력에 쓰는 36채널 중 나머지 3개(고조파 비율)는 학습 쪽에서 만든다.
 # 원본에서 바로 계산되므로 디스크에 중복 저장하지 않는다.
 
@@ -312,7 +315,7 @@ class WindowCache:
         return rng.choice(len(self.index), size=n, replace=True, p=p / p.sum())
 
     def get(self, i: int) -> Dict[str, np.ndarray]:
-        """창 하나. 입력은 (33, W), 라벨은 타깃 시점(창 끝쪽)의 (9,) 값."""
+        """창 하나. 입력은 (45, W), 라벨은 타깃 시점(창 끝쪽)의 (9,) 값."""
         s, off = int(self.index[i, 0]), int(self.index[i, 1])
         sl = slice(off, off + self.window_cycles)
         mid = off + self.target_offset

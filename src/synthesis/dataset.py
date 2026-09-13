@@ -22,6 +22,7 @@ generate_batch_dict() 는 활성 라벨과 별도로 '콘센트 연결 여부(y_
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 
+from src.model.inputs import VOLT_ORDERS
 from .segment_pool import SegmentPool
 from .synthesizer import (
     DEFAULT_TARGET_LOOKAHEAD_CYCLES,
@@ -32,6 +33,24 @@ from .synthesizer import (
     window_target_index,
 )
 
+
+def chunk_seed(seed_base: int, index: int) -> int:
+    """작업 단위 번호로 시드를 만든다. **워커 번호로 시드하면 안 된다.**
+
+    설계 문서 12.11절이 남긴 숙제다. 워커 번호로 시드하면 `imap_unordered` 가
+    노는 워커에 청크를 던지는 순간 (a) 어느 RNG 스트림이 어느 청크를 만드는지가
+    실행마다 달라진다. 워커 수를 바꿔도 결과가 달라진다. `--seed` 를 줘도
+    재현되지 않던 원인이고, 그 앞 단계(PID 를 섞던 것)는 이미 고쳤다.
+
+    작업 **번호**로 시드하면 어느 워커가 집어 가든 같은 청크가 나온다. 남은
+    (b) 이어붙이는 순서는 호출부가 `imap`(순서 보장)을 쓰면 닫힌다.
+
+    `SeedSequence` 를 쓰는 이유는 `seed_base * k + index` 같은 선형 조합이
+    이웃한 index 끼리 상관된 스트림을 줄 수 있어서다.
+    """
+    return int(np.random.SeedSequence([int(seed_base), int(index)]).generate_state(1)[0])
+
+
 # 윈도우 종류별 기본 혼합 비율
 #
 # random_realistic 과 random_uniform 을 나눈 이유가 있다.
@@ -40,14 +59,92 @@ from .synthesizer import (
 # 반대로 균등하게만 뽑으면 사전확률이 틀려 실제 집에서 오탐이 늘어난다.
 # 둘을 섞어 커버리지와 보정을 동시에 잡는다.
 DEFAULT_RECIPE_MIX: Dict[str, float] = {
-    "random_realistic": 0.18,        # 기기별 사용률대로 각자 독립적으로 켜짐
-    "random_uniform": 0.15,          # 균등 추첨 - 희귀 기기 학습 표본 확보
+    "random_realistic": 0.16,        # 기기별 사용률대로 각자 독립적으로 켜짐
+    "random_uniform": 0.14,          # 균등 추첨 - 희귀 기기 학습 표본 확보
     "standby_only": 0.16,            # 대기전력만 - 저부하 오탐 방지
     "low_load_among_standby": 0.20,  # 대기전력 속 저부하 1대
-    "high_power_resistive": 0.12,    # 고전력 저항 부하 1~2대 - 아래 설명 참조
+    "high_power_resistive": 0.10,    # 고전력 저항 부하 1~2대 - 아래 설명 참조
     "high_low_mixed": 0.14,          # 고부하 + 저부하 동시 - 오차 전가 방지, 아래 참조
+    "resistive_overlap": 0.05,       # 저항 2종이 타깃 시점에 **동시 통전** - 아래 참조
     "unplugged_baseline": 0.05,
+    # SMPS 2~3종이 타깃 시점에 동시 ON (12.88.4 의 1번). **기본값은 0 이다** -
+    # 켜면 기존 캐시와 다른 분포가 되므로, 후보 믹스는 run_recipe_mix_probe 의
+    # PRESETS("smps") 로 두고 --recipe-mix 로 명시할 때만 들어간다.
+    # 0 지분은 추첨 경계를 바꾸지 않아 기존 시드 재현성도 유지된다.
+    "smps_overlap": 0.0,
 }
+
+# resistive_overlap 안에서 **어느 쌍을 뽑을지** (2026-08-24, 12.38)
+# 무작위로 뽑으면 저항 4종의 6쌍 중 오븐+핫플이 1/6 이라, 레시피 5% 중 0.83%
+# 밖에 안 된다. 측정하면 학습 전체의 1.001% 다.
+#
+# 그런데 **실측 test_4/5/6 의 >1300W 구간은 전부 이 구성**이다 (포트 없음 +
+# 오븐·핫플 동시 통전). 즉 실측이 던지는 상황이 학습 신호의 1% 다.
+# 그 결과 손실은 멀쩡히 수렴하는데(합성 F1 폭 ±0.007~0.017) 실측 유령만
+# 에폭·실행마다 33~87W 를 헤맨다 - **손실이 거의 안 건드리는 방향**이라
+# 미결정으로 남기 때문이다.
+#
+# 총량을 올리면 저항 4종의 사전확률이 같이 오른다 (그래서 0.05 로 묶여 있었다).
+# 대신 **쌍 선택만 기울인다.** 총량은 그대로고 목표 구성만 늘어난다.
+# 포트는 그 창의 활성 후보에서 빼서 사전확률이 오히려 내려가게 한다.
+RESISTIVE_OVERLAP_PREFER = ("oven", "hotplate")
+RESISTIVE_OVERLAP_PREFER_P = 0.6
+#: 저항 겹침에서 **3대**를 켤 확률 (13.48). SMPS 쪽 `SMPS_OVERLAP_TRIO_P` 의
+#: 저항 판이다. 실측 test_5 는 넷이 동시라 3대도 모자라지만, 4kW 한도와
+#: 통전율(오븐 25%·핫플 45%) 때문에 3대부터 시작한다.
+RESISTIVE_OVERLAP_TRIO_P = 0.4
+#: 저항 창에 **함께 켤 SMPS 대수**(0/1/2/3)의 확률 (13.48).
+#: `smps_overlap` 이 `p_resistive` 로 저항 배경을 켜는 것의 반대다. 지금까지
+#: 저항 레시피 창에는 SMPS 가 **0%** 였는데, 실측은 SMPS1+ 86.5% · 2+ 58.5% ·
+#: 3+ 26.2% 다. 아래 값은 각각 85% / 55% / 20% 를 준다.
+RESISTIVE_SMPS_BACKGROUND = (0.15, 0.30, 0.35, 0.20)
+#: 저항 겹침 창에서 **활성 후보에서 뺄** 기기.
+#: 13.48: 비었다. 옛 값 `("electiric_kettle",)` 의 근거는 "실측 6파일 전부
+#: 전기포트가 없으므로" 였는데, 그것은 **옛 계측기 자료** 이야기다. 새 자료는
+#: test_2(158창)·test_5(188창) 둘 다 포트가 있고, test_5 에서는 포트가
+#: 오븐·핫플·드라이기와 **동시에** 켜져 3241W 까지 간다. 그 조합을 학습에서
+#: 빼 놓고 실측에서 맞기를 바랄 수 없다.
+RESISTIVE_OVERLAP_EXCLUDE: tuple = ()
+
+# smps_overlap 에서 2대가 아니라 **3대**를 켤 확률 (2026-08-25, 12.88.4 의 1번).
+# 실측(test_5/7/8)은 SMPS≥2 가 시간의 79%, 3종 동시가 37% 다 - 겹치는 시간의
+# 절반쯤이 3종이다. 그런데 지금 학습 분포는 타깃 시점 기준 12.2% / 2.0% 라
+# 3종 쪽이 특히 비어 있다. 레시피 지분을 더 키우는 대신 이 값을 올리는 편이
+# 싸다 - 지분을 키우면 high_low_mixed·resistive_overlap 을 깎아야 하는데
+# 그것들도 각각 실측 실패를 보고 넣은 것이다 (12.38).
+SMPS_OVERLAP_TRIO_P = 0.6
+
+# smps_overlap 에서 **미니PC 를 끄고 형제 SMPS 만** 켤 확률 (2026-09-10, 13.83).
+# 0.0 이면 옛 경로 그대로다. 근거는 `synthesize_smps_overlap_window` 독스트링에
+# 있다 — 실측 미니PC 게이트가 형제 SMPS 유무로 AUC 0.998 대 **0.452** 로 갈리고,
+# 그 원인이 합성의 동시성 부호(phi +0.333, 실측 -0.13)다.
+# ⚠ 이 값만 올려서는 phi 가 +0.14 에서 멈춘다. `--recipe-mix decorr` 와 **같이**
+#   써야 0 에 간다 (13.83 의 [A+B]). 0.4 가 그 조합의 값이다.
+SMPS_OVERLAP_FOCUS_OFF_P = 0.0
+SMPS_OVERLAP_FOCUS_APP = "minipc"
+
+# steady_loaded — 부하가 실린 채 창 내내 정상상태인 창 (2026-09-10, 13.83.19).
+# 실측은 부하 있는 창 2063개 중 **242개(11.7%)** 가 전이 0개인데 합성은 133개 중
+# **1개**였다. 그 결핍이 "창 안에 큰 계단이 있으면 충전기, 잠잠하면 미니PC" 라는
+# 지름길을 만들었고, 실측 배포는 충전기가 몇 분씩 잠잠하므로 통째로 뒤집힌다.
+#: 켤 기기 수 범위. 실측 배경의 활성 기기 수 중앙이 3~4 다.
+STEADY_LOADED_N_RANGE = (2, 4)
+#: SMPS 를 최소 2대 넣을 확률. 실측 배경의 형제 SMPS ON 이 77.2% 이고
+#: 모델이 무너지는 칸이 바로 그 칸이라 그쪽으로 기울인다.
+STEADY_LOADED_SMPS_PAIR_P = 0.6
+
+# resistive_overlap 를 따로 둔 이유 (2026-08-22)
+# 0.2절이 "저항성끼리 겹칠 때가 진짜 시험대" 라고 했는데 그 시험을 칠 데이터가 없었다.
+# 홀드아웃 8,000창에서 오븐+핫플 동시 발열이 6창(0.07%) 뿐이다.
+# high_power_resistive 가 40% 확률로 2대를 켜는데도 그렇다 - 오븐 통전율 25%,
+# 핫플 45% 라 둘 다 켜 두어도 타깃 시점 동시 통전은 11% 이기 때문이다.
+# 그래서 이 레시피는 타깃 시점의 발열을 확인하고 아니면 다시 뽑는다.
+# 실측 test_4 의 전기포트 환각(창의 4.5%, 최대 1,550W)이 이 공백에서 나온다.
+#
+# 비중을 0.05 로 낮춘 이유: 이 레시피는 창마다 저항 2종을 강제로 켜므로 저항 4종의
+# 사전확률을 함께 밀어 올린다. 0.10 이면 각각 +5%p 라 포트가 10.2 -> 15.2% 가 되어
+# 환각을 오히려 키운다 (cnn_v13). 0.05 면 +2.5%p 이고, 오븐+핫플 겹침은
+# 0.05 x 1/6 x 75%(기각률) ~ 0.6% 로 v13 이 실제로 얻은 0.75% 와 비슷하다.
 
 # high_low_mixed 를 따로 둔 이유
 # 고부하와 저부하가 같이 켜진 창에서 둘의 크기 차이가 31배다 (1139W vs 37W).
@@ -75,13 +172,14 @@ class NILMBatchGenerator:
         self,
         segment_pool: SegmentPool,
         window_size_cycles: int = 600,  # 기본 10초 윈도우
-        max_concurrent_appliances: int = 3,
+        max_concurrent_appliances: int = 4,
         include_power_channels: bool = True,
         target_mode: str = "seq2point",  # "seq2point"(중앙 시점) 또는 "seq2seq"(전 구간)
         recipe_mix: Optional[Dict[str, float]] = None,
         synthesizer: Optional[LoadSynthesizer] = None,
         compute_gt_harmonics: bool = False,
         target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
+        smps_focus_off_p: Optional[float] = None,
     ):
         self.synthesizer = synthesizer or LoadSynthesizer(segment_pool=segment_pool)
         # 학습 배치에는 가전별 고조파 정답이 나가지 않는다. 전력·상태 회귀만 한다면
@@ -95,6 +193,11 @@ class NILMBatchGenerator:
         # seq2point 타깃 시점. 창 중앙이 아니라 끝쪽이다.
         # 중앙을 쓰면 추론할 때 창 절반만큼의 미래가 필요해 실시간이 성립하지 않는다.
         self.target_lookahead_cycles = int(target_lookahead_cycles)
+        #: `smps_overlap` 에서 미니PC 를 끄고 형제만 켤 확률 (13.83).
+        #: None 이면 모듈 기본값(0.0 = 옛 경로).
+        self.smps_focus_off_p = float(
+            SMPS_OVERLAP_FOCUS_OFF_P if smps_focus_off_p is None else smps_focus_off_p
+        )
         self.target_index = window_target_index(window_size_cycles, target_lookahead_cycles)
         self.appliance_list = sorted(self.synthesizer.known_appliances)
         self.app_to_idx = {app: i for i, app in enumerate(self.appliance_list)}
@@ -130,11 +233,42 @@ class NILMBatchGenerator:
             sample = self.synthesizer.synthesize_high_power_window(
                 self.window_size, compute_gt_harmonics=gt_h,
                 target_lookahead_cycles=self.target_lookahead_cycles,
+                p_smps=RESISTIVE_SMPS_BACKGROUND,
+            )
+        elif recipe == "resistive_overlap":
+            # 쌍을 실측 구성 쪽으로 기울인다 (12.38). 총량(5%)은 그대로 두므로
+            # 저항 4종의 사전확률을 통째로 밀어 올리지 않는다.
+            use = (list(RESISTIVE_OVERLAP_PREFER)
+                   if np.random.rand() < RESISTIVE_OVERLAP_PREFER_P else None)
+            sample = self.synthesizer.synthesize_resistive_overlap_window(
+                self.window_size, compute_gt_harmonics=gt_h,
+                target_lookahead_cycles=self.target_lookahead_cycles,
+                pair=use, exclude_active=RESISTIVE_OVERLAP_EXCLUDE,
+                p_trio=RESISTIVE_OVERLAP_TRIO_P,
+                p_smps=RESISTIVE_SMPS_BACKGROUND,
+            )
+        elif recipe == "smps_overlap":
+            sample = self.synthesizer.synthesize_smps_overlap_window(
+                self.window_size, compute_gt_harmonics=gt_h,
+                target_lookahead_cycles=self.target_lookahead_cycles,
+                p_trio=SMPS_OVERLAP_TRIO_P,
+                p_focus_off=self.smps_focus_off_p,
+                focus_app=SMPS_OVERLAP_FOCUS_APP,
             )
         elif recipe == "high_low_mixed":
             sample = self.synthesizer.synthesize_high_low_mixed_window(
                 self.window_size, compute_gt_harmonics=gt_h,
                 target_lookahead_cycles=self.target_lookahead_cycles,
+            )
+        elif recipe == "steady_loaded":
+            # 부하가 실린 채 창 내내 정상상태인 창 (13.83.19). 합성이 이 종류를
+            # 0.8% 밖에 안 만들어(실측 11.7%) 모델이 "계단이 있으면 충전기,
+            # 잠잠하면 미니PC" 를 배웠다.
+            sample = self.synthesizer.synthesize_steady_loaded_window(
+                self.window_size, compute_gt_harmonics=gt_h,
+                target_lookahead_cycles=self.target_lookahead_cycles,
+                n_range=STEADY_LOADED_N_RANGE,
+                p_smps_pair=STEADY_LOADED_SMPS_PAIR_P,
             )
         elif recipe == "unplugged_baseline":
             sample = self.synthesizer.synthesize_scenario(
@@ -167,7 +301,13 @@ class NILMBatchGenerator:
         p_chan = sample.power_features[:, 0:1].T  # (1, W) 유효전력
         q_chan = sample.power_features[:, 1:2].T  # (1, W) 무효전력
         v_chan = sample.power_features[:, 4:5].T  # (1, W) 단자 전압 (계측 해상도 반영됨)
-        return np.concatenate([r_part, i_part, p_chan, q_chan, v_chan], axis=0).astype(np.float32)
+        # 33~44: **단자 전압 고조파** Re/Im, 홀수 h=1,3,5,7,9,11 (13.26).
+        # 선로 임피던스 Z 를 드러내는 유일한 관측량이다. 실측 로더(`realdata._to_raw`)와
+        # 같은 배치여야 한다.
+        vh = np.asarray(sample.voltage_harmonics_complex)[:, [h - 1 for h in VOLT_ORDERS]]
+        return np.concatenate(
+            [r_part, i_part, p_chan, q_chan, v_chan, vh.real.T, vh.imag.T],
+            axis=0).astype(np.float32)
 
     def _format_targets(self, sample: SyntheticLoadSample) -> Dict[str, np.ndarray]:
         """가전별 정답을 배열로 정리한다."""

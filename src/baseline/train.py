@@ -26,10 +26,14 @@ import time
 
 import numpy as np
 
+from src.synthesis.synthesizer import DEFAULT_TARGET_LOOKAHEAD_CYCLES
+
+from src.model.inputs import RAW_CHANNELS
 from src.baseline.features import extract, feature_names
 
 # 워커마다 한 번씩 만들어 재사용한다 (풀 적재가 2.5초라 매번 만들면 안 된다)
 _GEN = None
+_SEED_BASE = 0
 _DEGRADE = 0        # >0 이면 마지막 이 사이클만 60Hz 로 남기고 앞은 다운샘플
 
 
@@ -60,14 +64,18 @@ def degrade_to_multiscale(x: np.ndarray, fine_cycles: int, coarse_hz: float = 2.
 
 def _init_worker(npz_dir: str, window_cycles: int, time_split: str, seed_base: int,
                  target_lookahead_cycles: int, degrade_fine_cycles: int = 0) -> None:
-    global _GEN, _DEGRADE
+    global _GEN, _DEGRADE, _SEED_BASE
     _DEGRADE = int(degrade_fine_cycles)
-    import os
     from src.synthesis.dataset import NILMBatchGenerator
     from src.synthesis.segment_pool import SegmentPool
     from src.synthesis.synthesizer import LoadSynthesizer
 
-    np.random.seed((seed_base + os.getpid()) % (2 ** 31))
+    # 시드는 여기서 걸지 않는다. **워커 번호로 걸면 안 된다** - `imap_unordered` 가
+    # 노는 워커에 청크를 던지므로 어느 스트림이 어느 청크를 만드는지가 실행마다 바뀐다.
+    # 그 탓에 같은 명령을 두 번 돌린 GBM 이 MAE 0.02W / 오븐→포트 2.2%p 씩 흔들렸다
+    # (설계문서 12.7·12.11절). PID 를 섞던 그 앞 단계는 이미 고쳤다.
+    # 이제 **청크 번호**로 `_make_chunk` 안에서 건다 (`chunk_seed` 주석).
+    _SEED_BASE = int(seed_base)
     pool = SegmentPool(npz_dir=npz_dir, time_split=time_split)
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
@@ -77,10 +85,16 @@ def _init_worker(npz_dir: str, window_cycles: int, time_split: str, seed_base: i
     )
 
 
-def _make_chunk(n: int) -> Tuple[np.ndarray, ...]:
-    """창 n 개를 만들어 **특징만** 돌려준다. 원시 창을 반환하면 IPC 가 병목이 된다."""
+def _make_chunk(task: Tuple[int, int]) -> Tuple[np.ndarray, ...]:
+    """창 n 개를 만들어 **특징만** 돌려준다. 원시 창을 반환하면 IPC 가 병목이 된다.
+
+    시드는 **청크 번호**로 건다 — 어느 워커가 집어 가든 같은 창이 나온다.
+    """
+    from src.synthesis.dataset import chunk_seed
+    index, n = task
+    np.random.seed(chunk_seed(_SEED_BASE, index))
     g = _GEN
-    xs = np.empty((n, 33, g.window_size), np.float32)
+    xs = np.empty((n, RAW_CHANNELS, g.window_size), np.float32)
     k = len(g.appliance_list)
     yp = np.empty((n, k), np.float32)
     yo = np.empty((n, k), np.int8)
@@ -102,7 +116,7 @@ def build_training_set(
     seed: int = 0,
     n_workers: int = 11,
     chunk: int = 500,
-    target_lookahead_cycles: int = 60,
+    target_lookahead_cycles: int = DEFAULT_TARGET_LOOKAHEAD_CYCLES,
     degrade_fine_cycles: int = 0,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
     """학습용 (특징, 전력, on/off) 를 만든다."""
@@ -111,9 +125,10 @@ def build_training_set(
     from src.synthesis.segment_pool import SegmentPool
     apps = SegmentPool(npz_dir=npz_dir, time_split=time_split).get_appliance_types()
 
-    tasks = [chunk] * (n_windows // chunk)
+    sizes = [chunk] * (n_windows // chunk)
     if n_windows % chunk:
-        tasks.append(n_windows % chunk)
+        sizes.append(n_windows % chunk)
+    tasks = list(enumerate(sizes))
 
     t0 = time.time()
     args = (npz_dir, window_cycles, time_split, seed, target_lookahead_cycles,
@@ -122,7 +137,9 @@ def build_training_set(
         ctx = mp.get_context("spawn")
         with ctx.Pool(n_workers, initializer=_init_worker, initargs=args) as pool:
             parts = []
-            for i, r in enumerate(pool.imap_unordered(_make_chunk, tasks), 1):
+            # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다
+            # 달라져 같은 시드로도 다른 학습셋이 나왔다 (12.11절).
+            for i, r in enumerate(pool.imap(_make_chunk, tasks), 1):
                 parts.append(r)
                 if i % 50 == 0:
                     done = sum(len(p[0]) for p in parts)

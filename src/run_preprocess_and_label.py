@@ -71,6 +71,9 @@ def run_full_pipeline(
     print(f"[NILM AI]   - Baseline noise                 : {len(by_role[FileRole.NOISE])}")
     print(f"[NILM AI]   - Composite eval (POOL-EXCLUDED) : {len(eval_files)}"
           f"  -> {', '.join(c.stem for _, c in eval_files) if eval_files else '(none)'}")
+    if by_role[FileRole.RAW]:
+        print(f"[NILM AI]   - Raw snapshots (skipped)        : {len(by_role[FileRole.RAW])}"
+              f"  -> {', '.join(c.stem for _, c in by_role[FileRole.RAW])}")
     print("=" * 80 + "\n")
 
     global_report = {
@@ -116,6 +119,11 @@ def run_full_pipeline(
                 "load_class": clean_stats["load_class"],
                 "v_ref_v": clean_stats["v_ref_v"],
                 "noise_floor_w": clean_stats["noise_floor_applied_w"],
+                # 규칙 2·3: 꼬리(플러그 뽑은 구간)와 바닥의 출처, 버린 시작 프레임
+                "noise_floor_source": clean_stats.get("noise_floor_source", "registry"),
+                "noise_floor_registry_w": clean_stats.get("noise_floor_registry_w"),
+                "trailing_noise": clean_stats.get("trailing_noise"),
+                "startup_frames_dropped": clean_stats.get("startup_frames_dropped", 0),
             }
             npz_path_str = npz_exporter.export_to_npz(
                 df_annotated,
@@ -177,6 +185,9 @@ def run_full_pipeline(
             f" | GATED: {clean_stats['invalid_samples_dropped']}"
             if clean_stats["invalid_samples_dropped"] else ""
         )
+        tail = clean_stats.get("trailing_noise")
+        drop_note += (f" | 꼬리 {tail['n_cycles'] / 60:.0f}s {tail['p_w']:.2f}W/{tail['i1_ma']:.1f}mA"
+                      if tail else " | ⚠ 꼬리 없음(등록부 바닥)")
         print(f"DONE | Rows: {len(df_annotated):6d} ({len(df_annotated)/3600:5.1f}min) | "
               f"ON: {label_summary['on_percentage']:5.1f}% | V_ref: {clean_stats['v_ref_v']:6.1f}V{drop_note}")
 

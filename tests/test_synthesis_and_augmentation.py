@@ -2,6 +2,8 @@
 합성 / 증강 / 계통 시뮬레이터 / 대기전력 자동 검증 스위트
 """
 import numpy as np
+
+from src.model.inputs import RAW_CHANNELS
 import pytest
 
 from src.preprocessing.file_registry import (
@@ -568,17 +570,42 @@ def test_synthesized_periodic_duty_matches_measurement(synthesizer):
     )
 
 
-def test_target_index_is_causal_not_centered():
-    """seq2point 타깃은 창 중앙이 아니라 끝쪽이어야 한다.
+def test_lookahead_constants_agree_across_modules():
+    """`synthesizer` 와 `model.inputs` 의 lookahead 상수가 같아야 한다.
 
-    중앙이면 추론할 때 창 절반만큼의 미래가 필요해 실시간 스트리밍이 성립하지 않는다.
+    두 곳에 따로 선언돼 있는데 지금까지 일치를 강제하는 검사가 없었다.
+    어긋나면 **라벨을 읽는 시점과 입력을 자르는 시점이 달라져 조용히 틀린다**
+    (11.2절이 세 곳을 하나로 묶은 것과 같은 종류의 결함이다).
+    """
+    from src.model.inputs import (FINE_CYCLES, TARGET_LOOKAHEAD,
+                                  fine_target_index, target_index)
+
+    assert TARGET_LOOKAHEAD == DEFAULT_TARGET_LOOKAHEAD_CYCLES
+    assert target_index(3600) == window_target_index(3600)
+    # 세밀 갈래 안에서의 타깃도 같은 lookahead 를 따라야 한다.
+    # **길이를 하드코딩하지 않는다** — 12.45 에서 FINE_CYCLES 를 600 -> 780 으로
+    # 올렸고, 그때 이 줄이 룩어헤드와 무관한 이유로 깨졌다.
+    assert FINE_CYCLES - 1 - fine_target_index() == TARGET_LOOKAHEAD
+    # 세밀 갈래가 타깃 이후를 전부 덮어야 한다 (덮지 못하면 룩어헤드가 헛돈다)
+    assert fine_target_index() >= 0, "타깃이 세밀 갈래 밖으로 나갔습니다"
+
+
+def test_target_index_is_causal_not_centered():
+    """타깃은 선언된 lookahead 만큼만 미래를 요구해야 한다.
+
+    2026-08-22: 지연을 1초 -> 6초로 늘렸다 (12.9.12절). 오븐+핫플 동시 발열을
+    전기포트로 오인하는 실패를 고치려면 타깃 **이후**의 오븐 전이를 봐야 하는데,
+    앞 1초로는 5%, 6초면 약 50% 를 잡는다.
+
+    **그래도 중앙은 아니다.** 60초 창의 중앙 타깃이면 30초 지연이라 5.1절의
+    실시간 동선이 무너진다. 운영 창(3600)에서 타깃이 뒤 20% 안에 있는지 본다.
     """
     for w in (600, 3600, 7200):
         idx = window_target_index(w)
-        future = w - 1 - idx
-        assert future == DEFAULT_TARGET_LOOKAHEAD_CYCLES
-        assert future <= 60, f"창 {w}: 미래 {future} 사이클이 필요합니다"
-        assert idx > w * 0.8, f"창 {w}: 타깃 {idx} 가 창 중앙 쪽에 있습니다"
+        assert w - 1 - idx == DEFAULT_TARGET_LOOKAHEAD_CYCLES
+    assert DEFAULT_TARGET_LOOKAHEAD_CYCLES <= 600, "지연 10초를 넘으면 시연이 안 된다"
+    w = 3600
+    assert window_target_index(w) > w * 0.8, "60초 창 타깃이 중앙 쪽으로 밀렸다"
 
 
 def test_generator_and_cache_use_the_same_target_index(segment_pool, tmp_path):
@@ -631,7 +658,7 @@ def test_batch_generator_fast_throughput(segment_pool):
     )
 
     X, y_pow, y_state, y_on = batch_gen.generate_batch(batch_size=8)
-    assert X.shape == (8, 33, 600)
+    assert X.shape == (8, RAW_CHANNELS, 600)
     assert X.dtype == np.float32
 
     n_apps = len(batch_gen.appliance_list)
@@ -675,16 +702,22 @@ def test_high_power_resistive_windows_boost_rare_appliances(segment_pool):
     resistive = set(get_resistive_appliances())
     assert resistive, "저항 부하가 등록되어 있지 않습니다"
 
-    gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=300)
+    # **창 길이는 운영값(3600 = 60초)을 쓴다.** 300(5초)이면 오븐이 통전 없는
+    # 창을 만든다 — 12.111 이 오븐 ON 을 '히터 통전'으로 바꾸면서 서모스탯
+    # 공백(25~31초)이 라벨에 드러났고, 그것이 5초 창보다 훨씬 길다.
+    gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=3600)
     assert "high_power_resistive" in gen.describe_recipe_mix()
 
-    # 전용 레시피는 반드시 저항 부하를 켠다
+    # 전용 레시피는 저항 부하만 켠다. 다만 **듀티 부하는 창 안에서 통전이 없을 수
+    # 있으므로**(오븐 통전율 25~43%) 매 창이 아니라 대부분의 창을 본다.
+    n_active = 0
     for _ in range(20):
-        s = gen.synthesizer.synthesize_high_power_window(300)
+        s = gen.synthesizer.synthesize_high_power_window(3600)
         active = set(s.active_appliances)
-        assert active, "고전력 윈도우인데 켜진 기기가 없습니다"
+        n_active += bool(active)
         assert active <= resistive, f"저항 부하가 아닌 기기가 켜졌습니다: {active - resistive}"
         assert s.metadata["max_sustained_p_w"] <= gen.synthesizer.sustained_power_limit_w
+    assert n_active >= 18, f"20창 중 {n_active}창에서만 저항이 통전했습니다"
 
 
 def test_high_low_mixed_creates_the_error_bleed_case(segment_pool):
@@ -700,12 +733,16 @@ def test_high_low_mixed_creates_the_error_bleed_case(segment_pool):
     syn = LoadSynthesizer(segment_pool=segment_pool, compute_gt_harmonics=False)
     low_load = {a for a in syn.known_appliances if is_low_load(a)}
 
+    # 듀티 부하(오븐 통전율 25~43%)는 창 안에서 통전이 없을 수 있다 — 12.111.
+    # 그래서 매 창이 아니라 대부분의 창에서 고부하가 잡히는지 본다.
+    n_hi = 0
     for _ in range(20):
-        s = syn.synthesize_high_low_mixed_window(600)
+        s = syn.synthesize_high_low_mixed_window(3600)
         active = set(s.active_appliances)
-        assert active & resistive, f"고부하가 없습니다: {active}"
+        n_hi += bool(active & resistive)
         assert active & low_load, f"저부하가 없습니다: {active}"
         assert s.metadata["max_sustained_p_w"] <= syn.sustained_power_limit_w
+    assert n_hi >= 17, f"20창 중 {n_hi}창에서만 고부하가 통전했습니다"
 
 
 def test_recipe_mix_covers_high_low_cooccurrence(segment_pool):
@@ -722,6 +759,66 @@ def test_recipe_mix_covers_high_low_cooccurrence(segment_pool):
     assert both.mean() > 0.07, (
         f"고부하+저부하 동시 가동 창이 {100*both.mean():.1f}% 뿐입니다 "
         f"(보강 전 3.3%). 오차 전가를 배울 표본이 부족합니다."
+    )
+
+
+def test_smps_overlap_puts_two_or_three_smps_on_the_target(segment_pool):
+    """SMPS 2~3대가 **타깃 시점에** 동시에 켜져 있어야 한다 (12.88.4 의 1번).
+
+    12.81 이 미니PC 미검출의 조건을 "경쟁 SMPS 가 함께 켜져 있을 때" 로 좁혔는데
+    (경쟁 없으면 재현율 99%, 있으면 30~67%), 학습 분포에는 그 상황이 타깃 시점
+    기준 12.2% 뿐이었다. 켜 두는 것만으로는 부족하고 타깃 시점에 걸려야 한다 -
+    `resistive_overlap` 이 겪은 것과 같은 함정이다.
+    """
+    from src.model.inputs import TARGET_LOOKAHEAD
+    from src.preprocessing.file_registry import get_smps_appliances
+    from src.synthesis.synthesizer import window_target_index
+
+    smps = set(get_smps_appliances())
+    syn = LoadSynthesizer(segment_pool=segment_pool, compute_gt_harmonics=False)
+    ti = window_target_index(600, TARGET_LOOKAHEAD)
+
+    n_on_target, trio = 0, 0
+    for _ in range(20):
+        s = syn.synthesize_smps_overlap_window(600, target_lookahead_cycles=TARGET_LOOKAHEAD)
+        on = {a for a in smps if int(s.gt_is_on[a][ti]) == 1}
+        n_on_target += len(on) >= 2
+        trio += len(on) >= 3
+    assert n_on_target >= 17, f"타깃 시점에 SMPS 2대 이상인 창이 20 중 {n_on_target} 뿐입니다"
+    assert trio >= 3, f"3종 동시가 20 중 {trio} 뿐입니다 (p_trio 기본 0.5)"
+
+
+def test_smps_overlap_is_off_by_default_in_the_recipe_mix(segment_pool):
+    """기본 믹스에서는 지분이 0 이어야 한다 - 기존 캐시와 같은 분포를 유지한다."""
+    from src.synthesis.dataset import DEFAULT_RECIPE_MIX
+
+    assert DEFAULT_RECIPE_MIX["smps_overlap"] == 0.0
+    gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=600)
+    i = gen.recipe_names.index("smps_overlap")
+    assert gen.recipe_probs[i] == 0.0
+
+
+def test_smps_preset_raises_smps_cooccurrence(segment_pool):
+    """`smps_hi` 프리셋이 SMPS 동시 가동 창을 실제로 늘려야 한다.
+
+    12.68 이 **전체** 동시성을 올렸다가 실패했다. 늘어야 하는 것은 그것이 아니라
+    SMPS 끼리의 겹침이다 (측정: 기본 믹스 타깃 12.2% -> smps_hi 33.8%).
+    """
+    from src.run_recipe_mix_probe import PRESETS
+
+    def smps_pairs(mix):
+        gen = NILMBatchGenerator(segment_pool=segment_pool, window_size_cycles=600,
+                                 recipe_mix=mix)
+        idx = [gen.appliance_list.index(a)
+               for a in ("beam_projector", "laptop_charger", "minipc")
+               if a in gen.appliance_list]
+        y = np.concatenate([gen.generate_batch_dict(32)["y_on"] for _ in range(8)])
+        return (y[:, idx].sum(1) >= 2).mean()
+
+    base = smps_pairs(None)
+    hi = smps_pairs(PRESETS["smps_hi"])
+    assert hi > base + 0.10, (
+        f"SMPS 동시 가동 창이 {100*base:.1f}% -> {100*hi:.1f}% 로 거의 안 늘었습니다"
     )
 
 
@@ -775,7 +872,7 @@ def test_cache_build_and_read(tmp_path):
     assert len(cache.appliances) == 9
 
     w = cache.get(0)
-    assert w["X"].shape == (33, 600) and w["X"].dtype == np.float32
+    assert w["X"].shape == (RAW_CHANNELS, 600) and w["X"].dtype == np.float32
     for key in ("y_power", "y_standby", "y_on", "y_plugged"):
         assert w[key].shape == (9,)
     assert w["y_state"].shape == (9,)
@@ -853,3 +950,916 @@ def test_cache_weights_sum_to_one(tmp_path):
     negative = on.sum(axis=1) == 0
     assert negative.sum() > 80
     assert abs(w[negative].sum() - 0.2) < 1e-6, "전부 꺼진 창의 몫이 지정값과 다릅니다"
+
+
+def test_duty_period_is_not_frozen_across_augmented_samples():
+    """주기 부하의 **주기**가 증강 표본마다 흔들려야 한다 (설계 문서 12.16절).
+
+    이 검사가 없을 때 핫플레이트의 릴레이 주기는 증강을 거쳐도 10~90% 구간이
+    [1.97, 2.03]초로 사실상 **상수**였다. 학습 활성화가 3개뿐인데 그 셋이 모두
+    같은 주기를 내면, 모델은 듀티를 볼 필요 없이 파형을 대조해 맞힐 수 있다 -
+    실제로 60초 내내 연속 통전한 창에서도 검출이 1.000 이었다 (12.16.2절).
+
+    서모스탯 부하에서 통전 길이와 주기는 기기의 성질이 아니라 설정·주위 온도·
+    부하의 함수다. 실측이 그 폭을 보여 준다 (핫플 통전율 0.358~0.578,
+    오븐 듀티 0.22~0.81).
+    """
+    import numpy as np
+    from src.synthesis.augmentor import DataAugmentor
+    from src.synthesis.segment_pool import SegmentPool
+
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+    acts = pool.appliance_activations.get("hotplate", [])
+    if len(acts) < 1:
+        pytest.skip("핫플레이트 활성화가 없습니다")
+
+    def spread(act, randomize: bool):
+        """**같은 활성화 하나**를 여러 번 증강했을 때의 주기 폭.
+
+        ⚠ 여러 활성화를 섞어서 재면 안 된다 (2026-09-06, 13.17). `hotplate_2` 가
+        들어와 원본이 1개 -> 6개가 되자 '고정' 쪽 폭이 0 -> 53 사이클로 뛰었다 —
+        그것은 증강이 만든 폭이 아니라 **원본끼리의 차이**다. 그때 옛 기준
+        (`varied > 2*frozen`)이 1.998 로 아슬아슬하게 깨졌다. 재는 것은 증강의
+        몫이므로 원본을 고정하고 잰다.
+        """
+        aug = DataAugmentor(randomize_duty=randomize)
+        np.random.seed(0)
+        periods = []
+        for _ in range(40):
+            b = aug.augment_activation(act, target_duration_cycles=3600)
+            tp = np.asarray(b.target_power_w)
+            hot = tp > 0.5 * np.percentile(tp, 99)
+            n_tr = int(np.abs(np.diff(hot.astype(int))).sum())
+            periods.append(3600 / max(n_tr, 1) * 2)
+        p = np.asarray(periods)
+        return float(np.percentile(p, 90) - np.percentile(p, 10))
+
+    worst = None
+    for act in acts:
+        frozen, varied = spread(act, False), spread(act, True)
+        assert varied > 2 * frozen + 10.0, (
+            f"듀티 주기가 충분히 흔들리지 않습니다: 10~90% 폭 {varied:.1f} vs "
+            f"고정 {frozen:.1f} 사이클 (원본 하나 기준)"
+        )
+        worst = varied if worst is None else min(worst, varied)
+    assert worst > 30, f"주기 폭이 0.5초에도 못 미칩니다: {worst:.1f} 사이클"
+
+
+def test_duty_retiming_never_mixes_on_and_off_waveforms():
+    """구간 길이를 흔들되 통전/휴지 파형이 섞이면 안 된다.
+
+    `_retime_duty` 는 구간 **안에서만** 순환한다. 섞이면 릴레이가 반쯤 닫힌,
+    실재하지 않는 상태가 만들어진다.
+    """
+    import numpy as np
+    from src.synthesis.augmentor import DataAugmentor
+    from src.synthesis.segment_pool import SegmentPool
+
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+    acts = pool.appliance_activations.get("hotplate", [])
+    if not acts:
+        pytest.skip("핫플레이트 활성화가 없습니다")
+
+    # `_retime_duty` 를 직접 본다. `augment_activation` 은 이 뒤에 전력 스케일(±15%)
+    # 과 위상 지터를 걸므로 값 범위가 원본을 벗어나는 것이 정상이다.
+    aug = DataAugmentor(randomize_duty=True)
+    src = acts[0]
+    original = set(np.asarray(src.target_power_w).tolist())
+    np.random.seed(3)
+    for _ in range(20):
+        _, _, state, tp, on = aug._retime_duty(
+            src.net_harmonics_complex, src.net_power_features,
+            src.state_id, src.target_power_w, src.is_on,
+        )
+        tp = np.asarray(tp)
+        # 리타이밍은 원본 사이클을 **골라 쓰기만** 한다. 새 값을 만들면 안 된다.
+        assert set(tp.tolist()) <= original, "원본에 없던 전력이 생겼습니다"
+        # 통전/휴지 구분이 살아 있어야 한다
+        hot = tp > 0.5 * np.percentile(tp, 99)
+        assert 0.05 < hot.mean() < 0.95, f"통전/휴지 구분이 사라졌습니다: {hot.mean():.3f}"
+        assert len(state) == len(tp) == len(on), "배열 길이가 어긋났습니다"
+
+
+def test_load_stratified_crop_covers_rare_high_load():
+    """긴 활성화에서 드문 고부하 구간이 시간 비율보다 자주 뽑혀야 한다 (12.34.6).
+
+    미니PC 가 그 예다. 33.9분짜리 활성화 안에서 CPU 부하가 걸린 구간이 6.7% 뿐이라
+    시간 균등으로 자르면 풀 전체의 >=20W 가 13.9% 밖에 안 된다. 실측 미니PC 단독은
+    30.3W 인데 합성 60초 창의 최대가 27.9W 였다 (분포 밖).
+
+    여기서는 90% 가 10W, 10% 가 30W 인 활성화를 만들어, 계층 추출이 고부하 창을
+    시간 비율(10%)보다 확실히 자주 고르는지 본다.
+    """
+    n, win = 60_000, 3_600
+    target_p = np.full(n, 10.0, np.float32)
+    target_p[-6_000:] = 30.0                      # 마지막 10% 만 고부하
+    on = np.ones(n, np.int8)
+    aug_on = DataAugmentor(load_stratified=True)
+    aug_off = DataAugmentor(load_stratified=False)
+
+    def high_share(aug, trials=400):
+        rng = np.random.RandomState(0)
+        np.random.seed(0)
+        hits = 0
+        for _ in range(trials):
+            s = aug._stratified_start(target_p, on, win, n - win)
+            if float(np.median(target_p[s:s + win])) > 20.0:
+                hits += 1
+        return hits / trials
+
+    off, onr = high_share(aug_off), high_share(aug_on)
+    assert onr > off * 1.8, f"계층 추출이 고부하를 더 뽑지 못했습니다: {off:.3f} -> {onr:.3f}"
+    assert onr > 0.20, f"고부하 창 비율이 여전히 낮습니다: {onr:.3f}"
+
+
+def test_load_stratified_crop_is_noop_on_flat_activation():
+    """전력이 평평한 기기(프로젝터)에서는 계층 추출이 무작위와 같아야 한다."""
+    n, win = 20_000, 3_600
+    target_p = np.full(n, 47.5, np.float32)
+    on = np.ones(n, np.int8)
+    aug = DataAugmentor(load_stratified=True)
+    np.random.seed(0)
+    starts = [aug._stratified_start(target_p, on, win, n - win) for _ in range(300)]
+    # 한쪽으로 몰리면 안 된다 - 시작 위치가 전 구간에 퍼져 있어야 한다
+    span = n - win
+    assert min(starts) < span * 0.15 and max(starts) > span * 0.85, (
+        f"평평한 활성화인데 자르는 지점이 몰렸습니다: {min(starts)}~{max(starts)} / {span}")
+
+
+def test_duty_appliances_never_reach_stratified_crop():
+    """듀티 부하는 `_crop_window` 에 오지 않아야 한다 (통전율이 물리다).
+
+    오븐은 팬/조명만 도는 활성화와 히터 활성화가 섞여 있어(통전중앙 14/14/15/1160W),
+    전력으로 계층화하면 히터 노출이 줄어든다. `augment_activation` 이 앞에서
+    `_tile_or_crop` 으로 보내는지 확인한다.
+    """
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+    aug = DataAugmentor(load_stratified=True)
+    called = []
+    orig = aug._stratified_start
+    aug._stratified_start = lambda *a, **k: (called.append(1), orig(*a, **k))[1]
+    for app in ("oven", "hotplate"):
+        acts = pool.appliance_activations.get(app, [])
+        if not acts:
+            pytest.skip(f"{app} 활성화가 없습니다")
+        np.random.seed(0)
+        for _ in range(20):
+            aug.augment_activation(pool.sample_activation(app), target_duration_cycles=3600)
+    assert not called, "듀티 부하가 전력 계층 자르기를 탔습니다"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 차수별 지문 지터 (12.62절)
+# ─────────────────────────────────────────────────────────────────────────
+
+def _odd_median_spread(acts):
+    """활성화 목록 -> (홀수차 진폭 상대산포 중앙값 %, 위상 원형산포 중앙값 도)."""
+    from src.run_fingerprint_spread_probe import circ_spread, rel_spread, signature
+
+    sigs = []
+    for r in acts:
+        c = r.net_harmonics_complex
+        v = np.median(c.real, 0) + 1j * np.median(c.imag, 0)
+        if abs(v[0]) > 1e-6:
+            sigs.append(signature(v))
+    assert len(sigs) > 30
+    g = rel_spread(np.array([s[0] for s in sigs]))
+    psi = circ_spread(np.array([s[1] for s in sigs]))
+    odd = [k - 2 for k in range(3, 16, 2)]
+    return float(np.nanmedian(g[odd])), float(np.nanmedian(psi[odd]))
+
+
+def test_기존_증강은_지문을_바꾸지_못한다():
+    """12.62 의 출발점. 이것이 깨지면 지터의 근거가 사라진다.
+
+    공통 배율은 |I_k|/|I_1| 을, k차 위상 회전은 ∠I_k − k∠I_1 을 정확히
+    불변으로 남긴다. 그래서 같은 활성화를 몇 번 증강해도 정규화 지문이 안 움직인다.
+    """
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+    if "beam_projector" not in pool.get_appliance_types():
+        pytest.skip("프로젝터 활성화가 없습니다")
+    aug = DataAugmentor()
+    np.random.seed(0)
+    a0 = pool.sample_activation("beam_projector")
+    np.random.seed(1)
+    g, psi = _odd_median_spread([aug.augment_activation(a0) for _ in range(120)])
+    assert g < 5.0, f"진폭 지문이 {g:.1f}% 움직였습니다 - 증강이 바뀌었습니까"
+    assert psi < 3.0, f"위상 지문이 {psi:.1f}도 움직였습니다"
+
+
+def test_지터가_요청한_크기로_지문을_흔든다():
+    """지정한 값이 **홀수차 중앙값**이 되고 차수에 비례해 커져야 한다."""
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+    if "beam_projector" not in pool.get_appliance_types():
+        pytest.skip("프로젝터 활성화가 없습니다")
+    aug = DataAugmentor(harmonic_dither_amp=0.50, harmonic_dither_phase_deg=15.0)
+    np.random.seed(0)
+    a0 = pool.sample_activation("beam_projector")
+    np.random.seed(1)
+    outs = [aug.augment_activation(a0) for _ in range(300)]
+    g, psi = _odd_median_spread(outs)
+    assert 35.0 < g < 75.0, f"진폭 지터 중앙값이 {g:.1f}% 입니다 (목표 50%)"
+    assert 10.0 < psi < 22.0, f"위상 지터 중앙값이 {psi:.1f}도 입니다 (목표 15도)"
+
+    # 차수 비례 — k=15 가 k=3 보다 뚜렷하게 커야 한다
+    from src.run_fingerprint_spread_probe import rel_spread, signature
+    A = np.array([signature(np.median(r.net_harmonics_complex.real, 0)
+                            + 1j * np.median(r.net_harmonics_complex.imag, 0))[0]
+                  for r in outs])
+    gk = rel_spread(A)
+    assert gk[13] > 2.5 * gk[1], f"차수 비례가 아닙니다: k=3 {gk[1]:.1f}% / k=15 {gk[13]:.1f}%"
+
+
+def test_지터는_기본파와_전력라벨을_건드리지_않는다():
+    """k=1 과 P·Q 를 두면 전력 라벨이 정확히 유효하게 남는다."""
+    pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+    if "beam_projector" not in pool.get_appliance_types():
+        pytest.skip("프로젝터 활성화가 없습니다")
+    np.random.seed(0)
+    a0 = pool.sample_activation("beam_projector")
+
+    off = DataAugmentor()
+    on = DataAugmentor(harmonic_dither_amp=0.50, harmonic_dither_phase_deg=15.0)
+    np.random.seed(7)
+    r_off = off.augment_activation(a0, duration_scale=1.0, power_scale=1.0,
+                                   phase_jitter_deg=0.0)
+    np.random.seed(7)
+    r_on = on.augment_activation(a0, duration_scale=1.0, power_scale=1.0,
+                                 phase_jitter_deg=0.0)
+    np.testing.assert_allclose(r_on.net_harmonics_complex[:, 0],
+                               r_off.net_harmonics_complex[:, 0], rtol=0, atol=0)
+    np.testing.assert_allclose(r_on.net_power_features, r_off.net_power_features,
+                               rtol=0, atol=0)
+    np.testing.assert_allclose(r_on.target_power_w, r_off.target_power_w, rtol=0, atol=0)
+    # 그런데 고차는 실제로 달라져 있어야 한다
+    assert not np.allclose(r_on.net_harmonics_complex[:, 2],
+                           r_off.net_harmonics_complex[:, 2])
+
+
+def test_다단_강하_채널이_기착을_짚는다():
+    """12.62 의 다단 강하 2채널. 프로젝터 팬 기착이 있고 충전기는 없다.
+
+    긴 탭(5.5초)이 기착 1~5초 전부에서 발화하고, 기착이 없으면 0 이어야 한다.
+    짧은 탭(3.0초)은 짧은 기착에서만 발화해 **기착 길이**를 준다.
+    """
+    from src.model.inputs import (DROP_TAPS, RIPPLE_SCALE, build_fine,
+                                 fine_target_index)
+
+    T = 3600
+    tgt = T - 1 - 360                       # 창 전체의 타깃 시점
+    ti = fine_target_index()
+    assert DROP_TAPS[1] > DROP_TAPS[0]
+
+    def drop_w(pedestal_s: float):
+        prof = np.zeros(T, np.float32)
+        prof[:tgt] = 45.0
+        n = int(pedestal_s * 60)
+        prof[tgt:tgt + n] = 4.0
+        x = np.zeros((1, RAW_CHANNELS, T), np.float32)
+        x[0, 30] = prof
+        x[0, 32] = 220.0
+        f = build_fine(x)
+        from src.model.inputs import DROP0
+        return [float(np.sinh(f[0, DROP0 + i, ti]) * RIPPLE_SCALE) for i in range(2)]
+
+    # 충전기 — 기착 없음. 두 탭 다 0
+    short, long = drop_w(0.0)
+    assert abs(short) < 0.1 and abs(long) < 0.1, f"기착이 없는데 {short:.2f}/{long:.2f}W"
+
+    # 프로젝터 — 기착 1~5초. 긴 탭이 언제나 발화한다 (12.60.1 의 실측·합성 범위)
+    for ped in (1.0, 2.0, 3.0, 4.0, 5.0):
+        short, long = drop_w(ped)
+        assert long > 3.0, f"기착 {ped}초에서 긴 탭이 {long:.2f}W 입니다"
+
+    # 짧은 탭은 기착이 짧을 때만 — 그래서 둘이 함께 길이를 준다
+    assert drop_w(2.0)[0] > 3.0
+    assert abs(drop_w(5.0)[0]) < 0.1
+
+
+def test_voltage_texture_stays_in_its_site_and_balances_sessions():
+    """전압 텍스처는 **그 자리에서만**, 세션은 고르게 뽑혀야 한다 (설계 13.19).
+
+    왜 검사하나 — 텍스처 선택이 고차 전류를 크게 움직인다. 같은 자리라도 세션이 다르면
+    미니PC 의 |I13|/P 가 30~45% 갈리고, 자리가 섞이면 vh3 이 0.7% 대 3.0% 로 4배 갈린다.
+    그런데 옛 코드는 **기저 전압만** 보고 골랐다:
+
+      · 236V 위 창(탐색 성분의 22%)은 ±4V 안에 후보가 없어 **라이브러리 전체 균등**으로
+        떨어졌고, 그 절반이 216V 자리의 텍스처였다.
+      · 후보 안에서 텍스처를 균등하게 뽑아, 녹화가 긴 세션 하나가 그 자리를 대표했다
+        (E1 82% 대 E2 18%).
+
+    둘 다 **조용히** 틀린다 — 합성은 정상으로 보이고 고차 자리 반응만 어긋난다.
+    """
+    import numpy as np
+    from collections import Counter
+    from src.synthesis.vtexture import VoltageTextureLibrary
+
+    lib = VoltageTextureLibrary.from_npz_dir()
+    if len(lib) < 20:
+        pytest.skip("텍스처 라이브러리가 없습니다")
+    sites = {t.site for t in lib.textures if t.site}
+    if len(sites) < 2:
+        pytest.skip("자리가 하나뿐입니다")
+
+    rng = np.random.default_rng(0)
+    for site, v in (("D", 216.5), ("E", 229.5)):
+        got = [lib.sample(rng, vrms_target=v, site=site) for _ in range(400)]
+        bad = [t.stem for t in got if t.site != site]
+        assert not bad, f"{site} 창에 다른 자리의 텍스처가 섞였습니다: {sorted(set(bad))[:3]}"
+        c = Counter(t.session for t in got)
+        if len(c) > 1:
+            lo = min(c.values()) / sum(c.values())
+            assert lo > 0.25, (
+                f"{site} 의 세션이 한쪽으로 쏠립니다: "
+                + ", ".join(f"{k} {n/len(got)*100:.0f}%" for k, n in c.most_common()))
+
+    # 라이브러리 전압 범위 **밖**에서도 균등 난수로 떨어지면 안 된다 — 가장 가까운 쪽이어야 한다
+    top = max(t.vrms for t in lib.textures)
+    far = [lib.sample(rng, vrms_target=top + 12.0) for _ in range(200)]
+    assert all(t.vrms > top - 8.0 for t in far), (
+        "전압 범위 밖 창이 먼 텍스처를 받았습니다 — 균등 난수로 떨어진 것입니다")
+
+
+def test_circuit_model_does_not_fail_silently():
+    """회로 모델이 **조용히 전부 실패**하지 않는가 (설계 13.23.5).
+
+    `SmpsCircuit.current` 는 예외를 삼키고 `failures` 만 올린다. 그래서 회로 모델이 통째로
+    죽어도 합성은 그냥 돌아가고 — 텍스처·결합 델타가 0 이 될 뿐 — 아무도 모른다.
+    실제로 2026-09-07 에 그랬다: `circuit12` 를 한 번은 최상위로, 한 번은 `circuit_model.circuit12`
+    로 임포트하자 `_core12` 의 numba 디스크 캐시(`@njit(cache=True)`)가 섞여
+    `ModuleNotFoundError: No module named 'circuit12'` 로 모든 호출이 실패했다. 혼합검증이
+    "SMPS 창이 없다" 로 나와서 겨우 알아챘다. 걸리면 `circuit_model/__pycache__` 를 지운다.
+    """
+    import numpy as np
+    from src.synthesis.coupling import SmpsCircuit
+    from src.synthesis.vtexture import VoltageTextureLibrary
+
+    lib = VoltageTextureLibrary.from_npz_dir()
+    if len(lib) == 0:
+        pytest.skip("텍스처 라이브러리가 없습니다")
+    tex = lib.textures[0]
+    circ = SmpsCircuit()
+    if not circ.models:
+        pytest.skip("회로 파라미터(pkl)가 없습니다")
+
+    for dev in sorted(circ.models):
+        I = circ.current(dev, 30.0, tex.source_rel(), 220.0)
+        assert I is not None and np.all(np.isfinite(I)), f"{dev} 전류가 안 나옵니다"
+        assert abs(I[0]) > 1e-4, f"{dev} 기본파가 0 입니다"
+    d = circ.coupling_delta({"laptop_charger": 45.0}, tex.source_rel(), tex.id, 220.0, 1.0, 100e-6)
+    assert d, "단독 SMPS 결합 델타가 비었습니다 (13.22 에서 문턱을 1 로 내렸다)"
+    assert circ.stats()["failures"] == 0, (
+        f"회로 모델이 조용히 실패했습니다: {circ.stats()} — "
+        "`circuit_model/__pycache__` 를 지우고 다시 보십시오 (13.23.5)")
+
+
+def test_resistive_loads_carry_the_window_voltage_texture():
+    """저항 부하가 **그 창의** 전압 텍스처를 다는가 (13.69).
+
+    순저항은 자기 서명이 없다 — `I_h = V_h/R` 이라 정규화 서명이 곧 그 세션의 전압이다.
+    2026-09-09 까지 저항 부하에는 창당 스칼라 배율(`kappa`) 하나만 걸려 `|I3|/|I1|` 이
+    **녹화 세션 값에 박제**됐다. 그 탓에 포트·드라이기(E1 녹화, vh3 2.9~3.2%)는 어느 자리에서든
+    h3 을 3.3% 달고 핫플·오븐(D 녹화, 0.56~0.67%)은 0.46% 를 달아 **7.0배의 가짜 판별자**가
+    생겼다. 실측에서는 한 창의 두 기기가 같은 전압을 보므로 그 판별자가 증발한다.
+
+    세 가지를 묶는다.
+      ① 저항 부하의 h3 이 **녹화 텍스처가 아니라 환경 텍스처**를 따라간다
+      ② h1 은 안 움직인다 (kappa 몫이다)
+      ③ SMPS·MOTOR 는 안 건드린다 (SMPS 는 회로 델타가, 선풍기·에어컨은 자기 지문이 있다)
+    """
+    import numpy as np
+    import pytest as _pytest
+    from src.synthesis.grid_simulator import GridSimulator
+    from src.synthesis.vtexture import default_library
+
+    lib = default_library()
+    if len(lib) == 0:
+        _pytest.skip("텍스처 라이브러리가 없습니다")
+    grid = GridSimulator()
+    if grid.texture_library is None or not grid.use_texture:
+        _pytest.skip("텍스처가 꺼져 있습니다")
+
+    # 서로 다른 자리의 텍스처 둘 — 하나는 녹화, 하나는 창
+    by_site = {}
+    for t in lib.textures:
+        by_site.setdefault(t.site, t)
+    if len(by_site) < 2:
+        _pytest.skip("자리가 둘 이상 있어야 합니다")
+    t_rec, t_env = (by_site["D"], by_site["E"]) if "D" in by_site and "E" in by_site         else tuple(list(by_site.values())[:2])
+    rec_id = lib.file_id(t_rec.stem) if hasattr(lib, "file_id") else t_rec.id
+    if lib.file_rel_by_id(int(rec_id)) is None:
+        _pytest.skip("녹화 텍스처 id 를 못 찾습니다")
+    rel_rec = np.asarray(lib.file_rel_by_id(int(rec_id)), complex)
+    rel_env = np.asarray(t_env.rel, complex)
+
+    class _Env:
+        texture = t_env
+    N = 8
+    I = np.zeros((N, 15), np.complex64)
+    I[:, 0] = 6.7                                  # 1450W 급 저항의 h1
+    I[:, 1:] = (6.7 * rel_rec[1:]).astype(np.complex64)   # 녹화 세션의 전압이 곧 서명
+    rid = np.full(N, int(rec_id), np.int64)
+
+    out = grid.apply_site_distortion("electiric_kettle", I, _Env(), rid)
+    got = out[:, 2] / out[:, 0]
+    assert np.allclose(np.abs(got), abs(rel_env[2]), rtol=1e-4), (
+        f"h3 이 환경 텍스처를 안 따라갑니다: {100 * abs(got[0]):.3f}% "
+        f"(환경 {100 * abs(rel_env[2]):.3f}% · 녹화 {100 * abs(rel_rec[2]):.3f}%)")
+    assert np.allclose(out[:, 0], I[:, 0]), "h1 이 움직였습니다 — 그건 kappa 몫입니다"
+    # 고차까지 전부 (h3~h15 는 NILM 특징 벡터가 쓰는 대역이다)
+    for h in (5, 7, 9, 11, 13, 15):
+        assert abs(abs(out[0, h - 1] / out[0, 0]) - abs(rel_env[h - 1])) < 1e-6, f"h{h} 가 안 따라갑니다"
+
+    for dev in ("laptop_charger", "fan", "air_conditioner"):
+        same = grid.apply_site_distortion(dev, I, _Env(), rid)
+        assert np.array_equal(same, I), f"{dev} 는 건드리면 안 됩니다 (SMPS 는 회로 델타 · MOTOR 는 자기 지문)"
+
+
+def test_sim_harmonics_references_the_measured_voltage():
+    """`sim_harmonics` 의 위상 기준이 **계측 전압**인가 (13.68).
+
+    펌웨어 규약은 `ihdeg_h = arg(I_h) − h·arg(V1)` 이고 그 `V1` 은 계측 전압이다. 2026-09-09
+    까지 `sim_harmonics` 는 계측 영역 전류를 **참** 전압에 기준했다 — 크기는 그대로인데 위상만
+    `atan(2πFτ)` = 1.2958°/h 로 어긋났고, h15 에서 19.44° 였다. 생성기의 SMPS 층 전체가
+    저항성 층에 대해 그만큼 돌아간 채 나갔다 (자리 D 에서 |I| 의 h13 30% · h15 35%).
+
+    두 가지로 묶는다.
+      ① 닫힌 꼴 회전이 기준을 실제로 `rc_periodic(v)` 로 옮긴 것과 같은가 (1e-9).
+      ② 같은 조건에서 `sim_wave` 입구(적합이 타는 길, 처음부터 계측 전압 기준)와
+         **h 비례 위상 어긋남**이 없는가. 버그가 있으면 이 기울기가 1.2958°/h 로 나온다.
+    `measured=False` 는 참전류·참전압이라 회전이 없어야 한다.
+    """
+    import numpy as np
+    import pytest as _pytest
+    from circuit_model.circuit12 import (F, NCYC, VF, _core12, harmonics_from_wave, rc_periodic,
+                                         sim_harmonics, sim_wave, wave_from_harmonics)
+
+    par = (1.067e-4, 3.70, 4.262e-4, 1.523, 2.079e-7, 0.1179, 6.708e-5)   # circ12_laptop_charger
+    tau, npc, P = 60e-6, 3072, 45.0
+    V15 = np.zeros(15, complex); V15[0] = 217.0
+    V15[2] = 217 * 0.021 * np.exp(1j * np.radians(190.0))
+    V15[4] = 217 * 0.017 * np.exp(1j * np.radians(20.0))
+    V15[6] = 217 * 0.008 * np.exp(1j * np.radians(-70.0))
+
+    # ① 닫힌 꼴 == 기준을 계측 전압 파형으로 옮긴 것
+    C, R, L0, Isat, Cx, rd, G = par
+    dt = 1.0 / (F * npc); v = wave_from_harmonics(V15, npc)
+    I = _core12(np.tile(v, NCYC), dt, max(P - G * np.mean(v ** 2), 0.5),
+                C, R, L0, Isat, Cx, VF, rd, np.tile(v, NCYC).max() - VF)
+    ref = harmonics_from_wave(rc_periodic(I[-npc:] + G * v, dt, tau), rc_periodic(v, dt, tau))
+    got = sim_harmonics(P, V15, par, tau=tau, npc=npc)
+    assert np.abs(got - ref).max() / np.abs(ref).max() < 1e-9, (
+        "닫힌 꼴 회전이 계측 전압 기준과 다릅니다")
+
+    # 참전류 경로는 회전이 없다 (참전압 기준으로 자기 정합)
+    raw = harmonics_from_wave(I[-npc:] + G * v, v)
+    assert np.abs(sim_harmonics(P, V15, par, tau=tau, npc=npc, measured=False) - raw).max()         / np.abs(raw).max() < 1e-9, "measured=False 에 회전이 섞였습니다"
+
+    # ② `sim_wave` 입구와 h 비례 어긋남이 없다.
+    #    ⚠ `up=1` 로 부른다. 생산 기본값 `up=12` 는 마지막 줄
+    #    `Ic.reshape(npc, up).mean(1)` 이 블록 **평균**을 블록의 **첫 표본**에 놓아
+    #    파형을 (up−1)/(2·up)·dt = 29.84µs 만큼 앞세우기 때문이다 (+0.6445°/h,
+    #    측정 +0.6447°/h). 그것은 이 수정과 **별개의** 결함이고 (13.68.3),
+    #    고치려면 pkl 재적합을 같이 해야 해서 여기서는 빗긴다.
+    Vm = wave_from_harmonics(V15, npc)                        # 계측 전압으로 쓴다
+    Is = sim_wave(P, Vm, par, npc, tau, up=1)
+    if Is is None:
+        _pytest.skip("sim_wave 가 수렴하지 않았습니다")
+    A = harmonics_from_wave(Is, Vm)
+    Vt = rc_periodic(Vm, dt, tau, inverse=True)
+    B = sim_harmonics(P, harmonics_from_wave(Vt, Vt), par, tau=tau, npc=npc)
+    h = np.arange(1, 16)
+    slope = float(np.median(np.degrees(np.angle(A / B))[:9] / h[:9]))
+    assert abs(slope) < 0.1, (
+        f"두 입구의 위상 기준이 다릅니다: {slope:.4f}°/h "
+        f"(버그가 있으면 {np.degrees(np.arctan(2 * np.pi * F * tau)):.4f}°/h 로 나옵니다)")
+
+
+def test_scoring_does_not_assume_a_fixed_test_file():
+    """채점기가 **파일 이름**으로 옛 시대 자료 모양을 가정하면 안 된다 (13.24.10).
+
+    2026-09-06 계측기 교체로 `test_1`~`test_5` 가 전부 **다른 녹화**로 갈렸는데
+    이름은 그대로다. 그래서 이름에 건 가정이 셋이나 새 자료를 덮쳤다:
+      · `results/seq_time_map.json` 이 새 test_4 를 옛 seq 로 납치 (13.19)
+      · `run_line_impedance` 가 새 test_5 를 "장소 A" 로 (13.19)
+      · `run_gate_check.oven_on_breakdown` 이 `ev["test_4"]` 하드코딩 -> KeyError (13.24.10)
+
+    이 검사는 **자료의 모양으로 걸러야 한다**는 규약을 지킨다.
+    """
+    from src.evaluation.real_events import load_events
+    from src.run_gate_check import oven_breakdown_ok
+
+    ev = load_events()
+    assert ev, "real_events 가 비었습니다"
+
+    # 모든 파일이 같은 기기를 담고 있지 않다 — 채점기는 그걸 견뎌야 한다
+    sets = {s: frozenset(ev[s]["appliances_present"]) for s in ev}
+    assert len(set(sets.values())) > 1, (
+        "모든 파일의 기기 구성이 같습니다 — 이 검사가 지키려는 상황이 아닙니다")
+
+    for stem in ev:
+        ok = oven_breakdown_ok(stem, ev)          # 던지면 안 된다
+        if ok:
+            iv = ev[stem]["intervals"]
+            assert "_heater_pulses" in iv["oven"], f"{stem}: 통과했는데 키가 없습니다"
+            assert "hotplate" in iv and "electiric_kettle" in iv
+
+    # 없는 이름을 물어도 조용히 False 여야 한다
+    assert not oven_breakdown_ok("test_does_not_exist", ev)
+
+
+def test_coupling_solver_converges_at_high_impedance():
+    """결합 고정점 — 무감쇠는 Z 가 크면 안 잠기고, 감쇠는 잠긴다 (13.24.13).
+
+    그리고 `relax=1.0` 이 옛 무감쇠 반복과 **한 비트도 안 다른지** 지킨다 — 감쇠를 넣으려고
+    풀개를 `_solve_vterm` 으로 뽑아냈으므로 되돌림이 깨지면 여기서 걸려야 한다.
+    """
+    import numpy as np
+    from src.synthesis.coupling import SmpsCircuit
+    from src.synthesis.vtexture import default_library
+
+    rng = np.random.default_rng(0)
+    tex = default_library().sample(rng)
+    rel = tex.source_rel()
+    mix = {"laptop_charger": 55.0, "minipc": 12.0, "beam_projector": 40.0}
+    v1 = 220.0
+
+    now = SmpsCircuit(n_iter=3, relax=1.0)
+    ref = SmpsCircuit(models=now.models, n_iter=200, relax=0.5)
+    damp = SmpsCircuit(models=now.models, n_iter=6, relax=0.5)
+
+    def err(c, Z):
+        V, Vr = c.solve_terminal(mix, rel, v1, Z, 100e-6), ref.solve_terminal(mix, rel, v1, Z, 100e-6)
+        assert V is not None and Vr is not None, "풀개가 실패했습니다"
+        I = sum(np.asarray(c.current(d, p, V / v1, v1)) for d, p in mix.items())
+        Ir = sum(np.asarray(ref.current(d, p, Vr / v1, v1)) for d, p in mix.items())
+        return float(np.max(np.abs(I - Ir) / np.maximum(np.abs(Ir), 1e-9)))
+
+    # 감쇠는 모든 Z 에서 잠긴다
+    for Z in (0.42, 1.15, 2.00):
+        e = err(damp, Z)
+        assert e < 0.03, f"감쇠 풀개가 Z={Z}Ω 에서 {e:.1%} 틀립니다 (3% 이내여야 합니다)"
+
+    # 무감쇠는 Z 가 크면 못 잠근다 — 이 사실이 사라지면 기본값을 다시 봐야 한다
+    assert err(now, 2.00) > 0.10, (
+        "무감쇠 풀개가 Z=2Ω 에서 잠겼습니다 — 결함이 고쳐졌다면 이 검사와 "
+        "SmpsCircuit 의 기본값을 같이 갱신하십시오 (13.24.13)")
+
+    # relax=1.0 은 옛 거동 그대로여야 한다 (되돌림)
+    a = SmpsCircuit(models=now.models, n_iter=3, relax=1.0).coupling_delta(
+        mix, rel, 1, v1, 1.15, 100e-6)
+    b = SmpsCircuit(models=now.models, n_iter=3).coupling_delta(mix, rel, 1, v1, 1.15, 100e-6)
+    assert a and b
+    for k in a:
+        assert np.max(np.abs(a[k] - b[k])) == 0.0, f"{k}: relax=1.0 이 옛 거동과 다릅니다"
+
+
+def test_state_mix_raises_rare_state_share():
+    """상태 계층 표집이 좁은 상태를 시간 비율보다 자주 뽑아야 한다 (13.35).
+
+    미니PC 가 그 예다. IDLE 은 8.8~12.0W 로 좁고 ACTIVE 는 11.5~26.7W 로 넓어서,
+    전력 균등 계층화(12.34.6)가 IDLE 에 17.2% 밖에 안 준다. 그런데 실측 복합은
+    미니PC 를 IDLE 로만 돌린다.
+
+    여기서는 80% 가 ACTIVE(19W), 20% 가 IDLE(9.7W) 인 활성화를 만들어 반반 요청이
+    IDLE 몫을 실제로 올리는지 본다.
+    """
+    n, win = 60_000, 3_600
+    state = np.full(n, 2, np.int16)
+    state[:12_000] = 1                                  # 앞 20% 만 IDLE
+    target_p = np.where(state == 1, 9.7, 19.0).astype(np.float32)
+    on = np.ones(n, np.int8)
+    span = n - win
+
+    aug = DataAugmentor(state_mix={"minipc": {1: 0.5, 2: 0.5}})
+    assert aug.state_mix == {"minipc": {1: 0.5, 2: 0.5}}
+
+    np.random.seed(0)
+    hits = 0
+    for _ in range(400):
+        s = aug._state_start(state, on, win, span, 1)
+        assert s is not None
+        if float(np.median(state[s:s + win])) == 1.0:
+            hits += 1
+    share = hits / 400
+    assert share > 0.35, f"IDLE 몫이 안 올랐습니다: {share:.3f} (시간 비율은 0.20)"
+
+
+def test_state_mix_falls_back_when_state_absent():
+    """그 상태가 활성화에 없으면 `None` 을 돌려 전력 계층화로 떨어져야 한다 (13.35).
+
+    다른 상태로 메우면 IDLE 이 없는 활성화가 ACTIVE 를 두 번 내게 되어, 요청한
+    비율이 조용히 어긋난다.
+    """
+    n, win = 20_000, 3_600
+    state = np.full(n, 2, np.int16)                     # ACTIVE 뿐이다
+    on = np.ones(n, np.int8)
+    aug = DataAugmentor(state_mix={"minipc": {1: 1.0}})
+    np.random.seed(0)
+    assert all(aug._state_start(state, on, win, n - win, 1) is None
+               for _ in range(20))
+    assert aug._state_fill(state, on, win, 1) is None
+
+
+def test_state_mix_only_touches_named_appliances():
+    """이름이 없는 기기는 기존 경로 그대로여야 한다 (13.35)."""
+    n, win = 20_000, 3_600
+    state = np.full(n, 2, np.int16); state[:4_000] = 1
+    target_p = np.where(state == 1, 9.7, 19.0).astype(np.float32)
+    on = np.ones(n, np.int8)
+    c = np.zeros((n, 15), np.complex64)
+    pw = np.zeros((n, 6), np.float32); pw[:, 0] = target_p
+    aug = DataAugmentor(state_mix={"minipc": {1: 1.0}})
+
+    called = []
+    orig = aug._state_start
+    aug._state_start = lambda *a, **k: (called.append(1), orig(*a, **k))[1]
+    np.random.seed(0)
+    for _ in range(60):
+        aug._crop_window(c, pw, state, target_p, on, target_len=win,
+                         appliance_type="beam_projector")
+    assert not called, "이름 없는 기기에 상태 표집이 걸렸습니다"
+    for _ in range(60):
+        aug._crop_window(c, pw, state, target_p, on, target_len=win,
+                         appliance_type="minipc")
+    assert called, "이름 있는 기기에 상태 표집이 안 걸렸습니다"
+
+
+def test_state_fill_makes_a_window_full_of_one_state():
+    """상태 구간이 창보다 짧아도 이어 붙여 창을 채워야 한다 (13.35).
+
+    미니PC IDLE 은 풀 전체 최장이 51.8초라 60초 창을 혼자 못 채운다. 그래서
+    캐시에 IDLE 80% 이상인 창이 0.4% 뿐인데, **실측 복합은 분 단위로 IDLE 이다.**
+    """
+    n, win = 60_000, 3_600
+    state = np.full(n, 2, np.int16)
+    for k in range(10):                                  # 30초짜리 IDLE 10토막
+        state[k * 6_000:k * 6_000 + 1_800] = 1
+    on = np.ones(n, np.int8)
+    aug = DataAugmentor()
+    np.random.seed(0)
+    sel = aug._state_fill(state, on, win, 1)
+    assert sel is not None and len(sel) == win
+    assert (state[sel] == 1).all(), "채운 창에 다른 상태가 섞였습니다"
+    assert len(np.unique(sel)) == win, "같은 사이클을 두 번 쓰면 안 됩니다"
+
+
+def test_state_fill_prefers_long_runs():
+    """길이 가중이므로 긴 구간이 먼저 쓰여 이음매가 적어야 한다 (13.35)."""
+    n, win = 60_000, 3_600
+    state = np.full(n, 2, np.int16)
+    state[0:3_000] = 1                                   # 50초 한 덩어리
+    for k in range(20):                                  # 1초짜리 스무 토막
+        state[10_000 + k * 500:10_000 + k * 500 + 60] = 1
+    on = np.ones(n, np.int8)
+    aug = DataAugmentor()
+    np.random.seed(0)
+    seams = []
+    for _ in range(40):
+        sel = aug._state_fill(state, on, win, 1)
+        if sel is None:
+            continue
+        seams.append(int((np.diff(sel) != 1).sum()))
+    assert seams, "채우기가 한 번도 성공하지 못했습니다"
+    assert np.median(seams) <= 8, f"이음매가 너무 많습니다: 중앙 {np.median(seams)}"
+
+
+def test_state_fill_rejects_too_short_runs():
+    """1초 미만 토막만 있으면 이어 붙이지 않는다 — 전이의 잔재다 (13.35)."""
+    n, win = 60_000, 3_600
+    state = np.full(n, 2, np.int16)
+    for k in range(200):
+        state[k * 250:k * 250 + 30] = 1                  # 0.5초씩
+    on = np.ones(n, np.int8)
+    aug = DataAugmentor()
+    np.random.seed(0)
+    assert aug._state_fill(state, on, win, 1) is None
+
+
+def test_cache_index_plan_matches_iter_batches():
+    """로더 작업자 경로는 **색인 열을 바꾸지 않는다** (13.47).
+
+    `run_train_cnn.cache_index_plan` 이 `CachedWindows.iter_batches` 와 같은 순서로
+    같은 난수를 소모해야, `--cache-workers` 를 켜도 학습이 그대로다. 둘 중 하나만
+    고치면 v21 이 v19·v20 과 비교 불가가 되므로 여기서 못박는다.
+
+    캐시가 없어도 도는 시험이다 — 색인 논리만 재현해 견준다.
+    """
+    import numpy as np
+    from src.run_train_cnn import cache_index_plan
+
+    def reference(n, batch_size, n_batches, rng, block_windows):
+        """`CachedWindows.iter_batches` 의 색인 부분 그대로 (traincache.py)."""
+        n_blocks = max(1, (n + block_windows - 1) // block_windows)
+        out, made = [], 0
+        while made < n_batches:
+            for b in rng.permutation(n_blocks):
+                lo = int(b) * block_windows
+                hi = min(lo + block_windows, n)
+                if hi - lo < batch_size:
+                    continue
+                order = lo + rng.permutation(hi - lo)
+                for k in range(0, len(order) - batch_size + 1, batch_size):
+                    out.append(order[k:k + batch_size])
+                    made += 1
+                    if made >= n_batches:
+                        return out
+        return out
+
+    for n, bs, nb, bw in ((300_000, 512, 40, 24_000), (50_000, 256, 25, 8_000),
+                          (9_000, 128, 30, 24_000)):
+        a = cache_index_plan(n, bs, nb, np.random.default_rng(7), block_windows=bw)
+        b = reference(n, bs, nb, np.random.default_rng(7), bw)
+        assert len(a) == len(b) == nb, f"배치 수가 다릅니다: {len(a)} vs {len(b)}"
+        for i, (x, y) in enumerate(zip(a, b)):
+            assert np.array_equal(x, y), f"n={n} 배치 {i} 의 색인이 다릅니다"
+        # 난수 소모량도 같아야 뒤따르는 난수가 안 어긋난다
+        r1, r2 = np.random.default_rng(7), np.random.default_rng(7)
+        cache_index_plan(n, bs, nb, r1, block_windows=bw)
+        reference(n, bs, nb, r2, bw)
+        assert np.array_equal(r1.integers(0, 2**31, 4), r2.integers(0, 2**31, 4)), \
+            f"n={n} 에서 rng 소모량이 다릅니다"
+
+
+def test_voltage_tail_is_a_no_op_when_absent():
+    """꼬리가 없으면 **비트 단위로** 옛 결과와 같은가 (13.73).
+
+    back-fill 은 소스 전압의 길이만 늘린다 (h15 -> h31). 늘린 자리가 0 이면 `irfft` 에 아무것도
+    안 더하므로 파형이 **정확히** 같아야 한다. 여기가 흔들리면 꼬리를 안 쓰는 경로(옛 캐시 재현,
+    `sp_curves` 재생성)까지 값이 바뀐 것이라 되돌림 검정이 통째로 무의미해진다.
+    """
+    import numpy as np
+    from src.synthesis.coupling import SmpsCircuit
+
+    circ = SmpsCircuit()
+    if not circ.models:
+        pytest.skip("회로 파라미터(pkl)가 없습니다")
+    rel = np.zeros(15, complex)
+    rel[0] = 1.0 + 0j
+    rel[2] = 0.03 * np.exp(1j * 2.0)
+    rel[4] = 0.017 * np.exp(-1j * 1.1)
+    rel[6] = 0.009 * np.exp(1j * 0.4)
+    pad = np.concatenate([rel, np.zeros(16, complex)])
+
+    for dev in sorted(circ.models):
+        for p in (12.0, 30.0, 55.0):
+            a = circ.current(dev, p, rel, 224.0)
+            b = circ.current(dev, p, pad, 224.0)
+            assert a is not None and b is not None, f"{dev} @ {p}W 전류가 안 나옵니다"
+            assert np.array_equal(a, b), (
+                f"{dev} @ {p}W: 0 을 덧붙였는데 값이 바뀝니다 "
+                f"(최대 {np.abs(a - b).max():.3e} A) — wave_from_harmonics 를 보십시오")
+
+    # 결합 고정점도 (꼬리는 강하 없이 통과시키므로 0 꼬리는 아무 일도 안 해야 한다)
+    pw = {"laptop_charger": 45.0, "minipc": 15.0}
+    d15 = SmpsCircuit().coupling_delta(pw, rel, 1, 224.0, 1.15, 225e-6)
+    d31 = SmpsCircuit().coupling_delta(pw, pad, 1, 224.0, 1.15, 225e-6)
+    assert set(d15) == set(d31) and d15, "결합 델타의 기기 구성이 다릅니다"
+    for k in d15:
+        assert np.array_equal(d15[k], d31[k]), (
+            f"결합 델타 {k}: 0 꼬리가 값을 바꿉니다 (최대 {np.abs(d15[k] - d31[k]).max():.3e} A)")
+
+
+def test_voltage_tail_reaches_the_simulator():
+    """꼬리가 **실제로 회로에 들어가는가** — 관문 확인 (13.73).
+
+    ⚠ "값이 안 바뀐다"는 통과가 아니다. `vtail.npz` 가 없거나 세션 귀속이 어긋나면 꼬리가
+    조용히 안 붙고, 그러면 back-fill 을 켠 채로 옛 거동을 재게 된다 (규칙: 관문이 그 경로를
+    부르는지 확인하라). 그래서 **h13 이 눈에 띄게 움직이는 것**까지 확인한다.
+
+    꼬리 크기는 V1 의 0.16~0.55% 뿐인데 SMPS 전류의 h13 은 그것에 초선형으로 반응한다 —
+    충전기 원시 20구간에서 |I13| 오차 중앙값이 자리 D 0.449 -> 0.042 로 내렸다.
+    """
+    import numpy as np
+    from src.synthesis.coupling import SmpsCircuit
+    from src.synthesis.vtexture import (DEFAULT_VTAIL_NPZ, TAIL_ORDERS, VoltageTextureLibrary,
+                                        splice_tail)
+
+    # ⚠ **명시로 켠다.** 기본은 꺼짐이라 그냥 부르면 꼬리가 안 붙고, 이 시험이 통째로
+    #   skip 되면서 "통과" 처럼 보인다.
+    lib = VoltageTextureLibrary.from_npz_dir(vtail=DEFAULT_VTAIL_NPZ)
+    if len(lib) == 0:
+        pytest.skip("텍스처 라이브러리가 없습니다")
+    if lib.n_tails() == 0:
+        pytest.skip("processed_data/vtail.npz 가 없습니다 (run_build_vtail 로 만듭니다)")
+
+    # 붙는 자리가 맞는가 — 홀수 h17~h31 만, 짝수와 h16 은 0
+    tex = next(t for t in lib.textures if t.tail is not None)
+    full = tex.rel_full()
+    assert len(full) == 31, f"rel_full 이 h1..h31 이 아닙니다: {len(full)}"
+    assert np.array_equal(full[:15], tex.rel), "앞 15 차가 원래 텍스처와 다릅니다"
+    for h in TAIL_ORDERS:
+        assert full[h - 1] == tex.tail[TAIL_ORDERS.index(h)], f"h{h} 가 제자리에 없습니다"
+    # ⚠ **꼬리 구간만** 본다. h2~h14 의 짝수차는 녹화가 실제로 갖고 있는 값이다 (계측 인공물,
+    #   vh2/vh1 0.03%). 거기까지 0 을 요구하면 없는 결함을 만든다 — `fcm.to_spectrum` 이
+    #   어차피 아래에서 지운다. 꼬리는 원시에서 **홀수만** 떠 왔으므로 h16~h30 은 0 이어야 한다.
+    even_tail = [h for h in range(16, 32, 2)]
+    assert np.all(full[np.array(even_tail) - 1] == 0), (
+        "꼬리 구간의 짝수차가 0 이 아닙니다 (계통 전압은 반파 대칭이라 짝수가 없다)")
+
+    # 녹화 쪽도 같은 길이여야 한다 — 한쪽만 길면 델타에 가짜 항이 생긴다
+    fid = lib.file_id(tex.stem)
+    rec = lib.file_rel_full_by_id(fid)
+    assert rec is not None and len(rec) == len(full), (
+        f"녹화 텍스처 길이가 다릅니다: {None if rec is None else len(rec)} vs {len(full)}")
+
+    # 그리고 실제로 h13 을 움직이는가
+    circ = SmpsCircuit()
+    if not circ.models:
+        pytest.skip("회로 파라미터(pkl)가 없습니다")
+    moved = []
+    for dev in sorted(circ.models):
+        a = circ.current(dev, 30.0, splice_tail(tex.rel, None), 224.0)
+        b = circ.current(dev, 30.0, full, 224.0)
+        if a is None or b is None:
+            continue
+        moved.append(abs(b[12] - a[12]) / max(abs(a[12]), 1e-12))
+    assert moved, "회로가 한 번도 안 돌았습니다"
+    assert max(moved) > 0.02, (
+        f"꼬리를 붙였는데 h13 이 {100 * max(moved):.2f}% 밖에 안 움직입니다 — "
+        "꼬리가 회로에 안 들어가고 있습니다 (fcm.H_SRC / to_spectrum 절단을 보십시오)")
+
+
+def test_sp_curves_follow_the_recording_texture():
+    """s(p) 곡선이 **그 녹화의 텍스처**를 따라 갈리는가 (13.74).
+
+    옛 곡선은 `rel[0]=1` 인 깨끗한 정현파에서 만들어 자리 차이가 **원리적으로 없었다** —
+    충전기 h13 저P/고P 모양비가 어디서나 1.62 였다. 13.71 은 이 칸을 "회로모델이 h15 까지만
+    본다" 로 귀속했지만 13.73 이 반증했다: 꼬리를 얹어도 정현파면 그대로고, 텍스처만 바꿔도
+    3.85 대 0.81 로 갈린다.
+
+    실측 채점(고전력 조각을 s(p) 로 저전력으로 옮겨 같은 녹화의 실측과 견주기)에서 크기 오차
+    중앙값이 **0.123 -> 0.031** 이다 (자리 D 는 0.211 -> 0.049).
+
+    ⚠ 곡선이 **실제로 갈리는지**까지 본다. 파일만 있고 내용이 같으면 아무 일도 안 한 것이다.
+    """
+    import numpy as np
+    from src.run_build_sp_curves import TEX_CURVES
+    from src.synthesis.sp_curves import load_curves
+
+    tex = load_curves(TEX_CURVES)
+    if not tex:
+        pytest.skip(f"{TEX_CURVES} 가 없습니다 (run_build_sp_curves --per-texture)")
+
+    # ① 키가 `<기기>@<stem>` 이고 augmentor 가 찾는 꼴이다
+    bad = [k for k in tex if "@" not in k]
+    assert not bad, f"`기기@stem` 이 아닌 키가 있습니다: {bad[:3]}"
+
+    # ② 같은 기기라도 **자리가 다르면 곡선이 다르다** — 여기가 이 변경의 전부다
+    def ratio_h13(cv, lo=20.0, hi=61.0):
+        lo = max(lo, cv.p_min); hi = min(hi, cv.p_max)
+        a, b = cv.signature(lo), cv.signature(hi)
+        return float(abs(a[12]) / max(abs(b[12]), 1e-12))
+
+    pairs = [("minipc@minipc_1", "minipc@minipc_2"),          # D1 대 E2
+             ("laptop_charger@laptop_charger_1", "laptop_charger@laptop_charger_2")]  # D1 대 E1
+    seen = 0
+    for ka, kb in pairs:
+        if ka not in tex or kb not in tex:
+            continue
+        seen += 1
+        ra, rb = ratio_h13(tex[ka]), ratio_h13(tex[kb])
+        assert abs(ra - rb) / max(ra, rb) > 0.05, (
+            f"{ka} 와 {kb} 의 h13 전력 의존이 같습니다 ({ra:.3f} 대 {rb:.3f}) — "
+            "곡선이 텍스처를 안 따라갑니다")
+    if seen == 0:
+        pytest.skip("견줄 녹화 짝이 없습니다")
+
+    # ③ 정현파 곡선과도 다르다 (옛 곡선을 그대로 복사한 게 아니다)
+    base = load_curves()
+    for k, cv in tex.items():
+        dev = k.split("@")[0]
+        if dev not in base:
+            continue
+        p = 0.5 * (cv.p_min + cv.p_max)
+        if np.abs(cv.signature(p) - base[dev].signature(p)).max() > 1e-6:
+            break
+    else:
+        pytest.fail("텍스처 곡선이 정현파 곡선과 전부 같습니다 — rel 이 안 먹혔습니다")
+
+
+def test_augmentor_falls_back_when_the_recording_has_no_curve():
+    """모르는 녹화는 **안 건드린다** — 정현파 곡선으로 폴백 (13.74).
+
+    텍스처 곡선은 SMPS 녹화에만 있다. 없는 녹화까지 텍스처 곡선을 억지로 붙이면 남의 자리
+    지문을 실어 주는 셈이라 절단보다 나쁘다 (13.73 4절의 "자리를 틀리면" 과 같은 함정).
+    """
+    from src.run_build_sp_curves import TEX_CURVES
+    from src.synthesis.augmentor import DataAugmentor
+    from src.synthesis.sp_curves import load_curves
+
+    if not load_curves(TEX_CURVES):
+        pytest.skip(f"{TEX_CURVES} 가 없습니다")
+    aug = DataAugmentor(sp_curves=True, sp_per_texture=True)
+    assert aug._sp_tex, "텍스처 곡선이 안 실렸습니다"
+    assert aug._sp, "정현파 곡선(폴백)이 안 실렸습니다"
+
+    pick = lambda app, stem: (aug._sp_tex.get(f"{app}@{stem}") or aug._sp.get(app))  # noqa: E731
+    known = next(iter(aug._sp_tex))
+    app, stem = known.split("@", 1)
+    assert pick(app, stem) is aug._sp_tex[known], "아는 녹화인데 텍스처 곡선을 안 씁니다"
+    assert pick(app, "없는_녹화_9999") is aug._sp[app], "모르는 녹화가 폴백을 안 탑니다"
+
+    # 곡선이 아예 없는 기기(저항)는 둘 다 None -> 선형 곱으로 간다
+    assert pick("electiric_kettle", "electric_kettle_1") is None, (
+        "회로모델이 없는 기기에 곡선이 붙었습니다")

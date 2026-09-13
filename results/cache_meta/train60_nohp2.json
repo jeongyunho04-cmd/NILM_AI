@@ -1,0 +1,40 @@
+{
+  "n_windows": 300000,
+  "window_cycles": 3600,
+  "appliances": [
+    "air_conditioner",
+    "beam_projector",
+    "electiric_kettle",
+    "fan",
+    "hair_dryer",
+    "hotplate",
+    "laptop_charger",
+    "minipc",
+    "oven"
+  ],
+  "time_split": "train",
+  "seed": 0,
+  "n_wide": 120,
+  "exclude_activation_files": {
+    "hotplate": [
+      "hotplate_2"
+    ]
+  },
+  "fine_shape": [
+    38,
+    600
+  ],
+  "bytes": 14588700000,
+  "build_seconds": 770.5,
+  "positive_rate": {
+    "air_conditioner": 0.03796,
+    "beam_projector": 0.15501666666666666,
+    "electiric_kettle": 0.11401,
+    "fan": 0.17445,
+    "hair_dryer": 0.11669333333333333,
+    "hotplate": 0.08013333333333333,
+    "laptop_charger": 0.19019666666666668,
+    "minipc": 0.19575666666666666,
+    "oven": 0.11842
+  }
+}

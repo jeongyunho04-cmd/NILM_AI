@@ -23,6 +23,10 @@ NILM NumPy 전용 바이너리 데이터셋 변환기 (.npz / .npy)
    - is_valid: (N,) int8 [1: 계측 신뢰 가능, 0: 품질 게이팅에 걸렸거나 보간된 값]
    - is_segment_seam: (N,) int8 [타임라인 이어붙인 자리 표시]
    - t_rel_s: (N,) float32 [60Hz 연속 상대 시간]
+   - seq / cycle: (N,) int32 / int8 [수신기 프레임 번호와 프레임 안 사이클. 사람 타임라인(seq 단위)과
+       맞출 때 `t = (seq − seq[0])·0.5` 의 근거. seq 0 프레임은 전처리가 버린다 (규칙 3)]
+   - is_unplugged: (N,) int8 [녹화 끝의 '플러그 뽑은 꼬리' = 계측계만 남은 구간 (규칙 2).
+       세그먼트 풀이 이 구간을 **그 파일의** 노이즈 기준으로 쓰고 대기 지문에서는 뺀다]
 """
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
@@ -69,6 +73,20 @@ class NumpyDatasetExporter:
             harmonics_ri[:, idx, 1] = i_val  # 허수부 채널
             harmonics_complex[:, idx] = r_val + 1j * i_val
 
+        # 1b. 전압 고조파 복소 텐서 (N, 15). 크기 `vh{k}` 는 모든 펌웨어가 내보내고,
+        #     위상 `vhdeg{k}` 는 4차 펌웨어(2026-09-04)부터 있다. 위상이 없으면 0 으로 두고
+        #     메타에 `voltage_phase_available: False` 를 적는다 — 소비자가 구분할 수 있게.
+        #     (vh 블록은 0.5초 창의 공통값이라 30사이클마다 같은 값이 반복된다.)
+        voltage_complex = np.zeros((n_samples, self.harmonics_count), dtype=np.complex64)
+        has_vmag = all(f"vh{k}" in df.columns for k in range(1, self.harmonics_count + 1))
+        has_vphase = has_vmag and all(f"vhdeg{k}" in df.columns for k in range(1, self.harmonics_count + 1))
+        if has_vmag:
+            for k in range(1, self.harmonics_count + 1):
+                mag = df[f"vh{k}"].values.astype(np.float32)
+                rad = (np.radians(df[f"vhdeg{k}"].values.astype(np.float32))
+                       if has_vphase else np.zeros(n_samples, np.float32))
+                voltage_complex[:, k - 1] = mag * np.cos(rad) + 1j * mag * np.sin(rad)
+
         # 2. 물리 전력 특징 행렬 (N, 6)
         power_cols = ["p_w", "q_var", "s_va", "power_factor", "vrms", "thd_i"]
         power_features = np.zeros((n_samples, len(power_cols)), dtype=np.float32)
@@ -105,6 +123,14 @@ class NumpyDatasetExporter:
             if "is_segment_seam" in df.columns else np.zeros(n_samples, dtype=np.int8)
         )
 
+        # 4b. 프레임 번호와 꼬리 표시 (규칙 2·3)
+        seq = (df["seq"].values.astype(np.int32) if "seq" in df.columns
+               else np.full(n_samples, -1, dtype=np.int32))
+        cycle = (df["cycle"].values.astype(np.int8) if "cycle" in df.columns
+                 else np.full(n_samples, -1, dtype=np.int8))
+        is_unplugged = (df["is_unplugged"].values.astype(np.int8) if "is_unplugged" in df.columns
+                        else np.zeros(n_samples, dtype=np.int8))
+
         # 5. 메타데이터 JSON 직렬화
         meta_dict = metadata or {}
         meta_dict.update({
@@ -115,13 +141,21 @@ class NumpyDatasetExporter:
             "harmonics_ri_shape": list(harmonics_ri.shape),
             "harmonics_ri_format": "(N, harmonics_15, [Real, Imag])",
             "valid_sample_ratio": round(float(is_valid.mean()), 4),
+            "voltage_available": bool(has_vmag),
+            "voltage_phase_available": bool(has_vphase),
         })
         if "noise_floor_w" in df.columns and n_samples:
             meta_dict.setdefault("noise_floor_w", float(df["noise_floor_w"].iloc[0]))
+        if "noise_floor_source" in df.columns and n_samples:
+            meta_dict.setdefault("noise_floor_source", str(df["noise_floor_source"].iloc[0]))
+        if n_samples:
+            meta_dict.setdefault("seq_first", int(seq[0]))
+            meta_dict.setdefault("unplugged_cycles", int(is_unplugged.sum()))
 
         return {
             "harmonics_ri": harmonics_ri,
             "harmonics_complex": harmonics_complex,
+            "voltage_harmonics_complex": voltage_complex,
             "power_features": power_features,
             "harmonic_ratios": harmonic_ratios,
             "is_on": is_on,
@@ -131,6 +165,9 @@ class NumpyDatasetExporter:
             "is_valid": is_valid,
             "is_segment_seam": segment_seam,
             "t_rel_s": t_rel_s,
+            "seq": seq,
+            "cycle": cycle,
+            "is_unplugged": is_unplugged,
             "metadata_json": json.dumps(meta_dict, ensure_ascii=False),
         }
 
