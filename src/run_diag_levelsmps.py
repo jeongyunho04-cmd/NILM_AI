@@ -60,13 +60,52 @@ KO = {"beam_projector": "빔프", "laptop_charger": "충전기", "minipc": "미�
       "hair_dryer": "드라이", "fan": "선풍기", "air_conditioner": "에어컨"}
 
 
-def edge_truth(ev, app):
-    """[(t0, t1, 참W)] — 그 기기 자신의 on/off 계단으로 낸 구간별 참값."""
-    out = []
-    step = {}
+#: 전환 앞뒤 가드와 정착 창 (초). 가드는 전이를, 창은 잡음을 다룬다.
+STEP_GUARD, STEP_WIN = 2.0, 6.0
+#: ⚠⚠ **양쪽이 조용할 때만 쓴다** (W). 오븐·핫플의 듀티 순환은 `events` 에 **안 적혀**
+#:   있어서 "다른 기기 전환" 거르개로는 못 거른다. 이걸 안 걸었더니 test_1/3/5 에서
+#:   계단이 1,070~1,140W 로 읽혀 빔프 참값이 123W 가 됐다 (2026-09-14).
+#:   `run_diag_zharm` 이 `P.std() > 40` 으로 같은 일을 한다.
+STEP_QUIET_W = 3.0
+
+
+def observed_step(ev, P, fs, app):
+    """{전환시각: 계단W} — **관측 총전력**의 정착 구간 차.
+
+    ⚠⚠ 2026-09-14: 처음에 `real_events.json` 의 `delta_p_w` 를 참값으로 썼다가
+    **빔프로젝터를 39.4W 로 읽어 "+19% 과대예측" 이라는 틀린 결론**을 냈다.
+    사용자가 *"복합 녹화도 45~46W 수준이야"* 라고 짚어 다시 재보니 관측 계단이
+    **42.8W**(깨끗한 전환 10개 중앙)였다 — 라벨이 3~7W 를 과소로 적는다.
+    `delta_p_w` 는 **귀속값**(`_note` 의 "ΔP출처 h3")이지 계단 자체가 아니다.
+    ⇒ 참값은 **관측에서** 낸다. 그리고 다른 기기가 그 창에서 전환하면 **버린다**.
+    """
+    n = len(P)
+    t = np.arange(n) / fs
+    others = sorted(float(e["t_s"]) for e in ev.get("events", [])
+                    if e.get("appliance") != app)
+    out = {}
     for e in ev.get("events", []):
-        if e.get("appliance") == app:
-            step[round(float(e["t_s"]), 2)] = abs(float(e.get("delta_p_w") or 0.0))
+        if e.get("appliance") != app:
+            continue
+        te = float(e["t_s"])
+        a0, a1 = te - STEP_GUARD - STEP_WIN, te - STEP_GUARD
+        b0, b1 = te + STEP_GUARD, te + STEP_GUARD + STEP_WIN
+        if a0 < 0 or b1 > t[-1]:
+            continue
+        if any(a0 - 1 <= o <= b1 + 1 for o in others):
+            continue                                   # 다른 기기 전환이 겹친다
+        ma, mb = (t >= a0) & (t < a1), (t >= b0) & (t < b1)
+        if P[ma].std() > STEP_QUIET_W or P[mb].std() > STEP_QUIET_W:
+            continue                                   # 한쪽이라도 시끄럽다
+        pa, pb = float(np.median(P[ma])), float(np.median(P[mb]))
+        out[round(te, 2)] = abs(pb - pa)
+    return out
+
+
+def edge_truth(ev, app, P=None, fs=60.0):
+    """[(t0, t1, 참W, 계단수)] — 그 기기 자신의 on/off 계단으로 낸 구간별 참값."""
+    out = []
+    step = observed_step(ev, P, fs, app) if P is not None else {}
     for t0, t1 in ev["intervals"].get(app, {}).get("on", []):
         v = [step.get(round(float(t0), 2)), step.get(round(float(t1), 2))]
         v = [x for x in v if x and x > 0]
@@ -113,7 +152,10 @@ def main() -> int:
                         continue
                     t = d["t"]
                     w = pr[stem][1][:, k]
-                    for t0, t1, tw, nedge in edge_truth(ev, app):
+                    from src.preprocessing import load_nilm_npz
+                    _r = load_nilm_npz("processed_data/composite_eval/%s.npz" % stem)
+                    _P = np.asarray(_r["power_features"])[:, 0]
+                    for t0, t1, tw, nedge in edge_truth(ev, app, _P, 60.0):
                         if t1 - t0 < a.min_s:
                             continue
                         m = (t >= t0 + a.guard_s) & (t <= t1 - a.guard_s)
