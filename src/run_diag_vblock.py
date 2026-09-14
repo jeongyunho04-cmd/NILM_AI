@@ -38,11 +38,18 @@ from src import env_guard  # noqa: F401
 
 import torch  # noqa: E402
 
-from src.model.inputs import FINE_VOLT0, VOLT_ORDERS  # noqa: E402
+from src.model.inputs import FINE_VOLT0, VOLT_ORDERS, WIDE_VOLT0  # noqa: E402
 
 SMPS = ("minipc", "laptop_charger", "beam_projector")
 RES = ("oven", "hotplate", "electiric_kettle", "hair_dryer")
-VBLK = slice(FINE_VOLT0, FINE_VOLT0 + 2 * len(VOLT_ORDERS))     # 45..56
+NV = len(VOLT_ORDERS)
+#: ⚠⚠ **두 갈래를 따로 재야 한다** (14.58). 세밀(45~56)은 창의 **뒤 10초**뿐이고
+#:   광역(35~46)은 60초 전부다. `--vtex-seg-s 10` 은 세밀 창 전체가 토막 하나라
+#:   **세밀 블록을 한 톨도 안 바꾼다** — 광역만 x1.4~12.3 이 된다 (캐시 대조 실측).
+#:   14.39 가 짚은 과민 채널은 **세밀** 쪽이라, 세밀만 재면 v32s 효과를 0 으로 읽고
+#:   광역만 재면 14.39 의 병을 못 본다.
+VBLK_FINE = slice(FINE_VOLT0, FINE_VOLT0 + 2 * NV)              # 45..56
+VBLK_WIDE = slice(WIDE_VOLT0, WIDE_VOLT0 + 2 * NV)              # 35..46
 
 
 def _run(m, fine, wide, dev, bs=256):
@@ -60,6 +67,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ckpt", nargs="+", required=True)
+    ap.add_argument("--block", default="fine", choices=("fine", "wide", "both"),
+                    help="어느 전압 고조파 블록을 바꿔 끼울 것인가 (14.58). "
+                         "**fine**(세밀 45~56, 창의 뒤 10초)이 14.39 가 짚은 자리고, "
+                         "**wide**(광역 35~46, 60초 전부)가 `--vtex-seg-s 10` 이 실제로 "
+                         "바꾼 자리다. 둘은 **다른 것을 잰다** — 겨냥에 맞춰 골라라.")
     ap.add_argument("--stems", nargs="+", default=["test_1", "test_2", "test_3", "test_5"])
     ap.add_argument("--stride", type=int, default=120, help="실측 창 보폭 (사이클)")
     ap.add_argument("--seed", type=int, default=0, help="어느 창의 블록을 끼울지 섞는 씨앗")
@@ -81,7 +93,7 @@ def main() -> int:
     fine = np.concatenate(F); wide = np.concatenate(W)
     stems = np.asarray(FS)
     rng = np.random.default_rng(a.seed)
-    swapped = fine.copy()
+    swapped, swapw = fine.copy(), wide.copy()
     for stem in a.stems:                      # ⚠ **같은 파일 안에서만** — 자리·Z 를 안 바꾼다
         m = np.flatnonzero(stems == stem)
         if len(m) < 2:
@@ -90,9 +102,14 @@ def main() -> int:
         bad = perm == m
         if bad.any():                         # 자기 자신이면 한 칸 민다 (Δ=0 을 안 만들려고)
             perm[bad] = m[(np.flatnonzero(bad) + 1) % len(m)]
-        swapped[m, VBLK] = fine[perm, VBLK]
-    print(f"창 {len(fine)}개 / 파일 {len(a.stems)}개 · 전압 블록 채널 "
-          f"{VBLK.start}~{VBLK.stop - 1} 만 같은 파일 안에서 교체\n")
+        if a.block in ("fine", "both"):
+            swapped[m, VBLK_FINE] = fine[perm, VBLK_FINE]
+        if a.block in ("wide", "both"):
+            swapw[m, VBLK_WIDE] = wide[perm, VBLK_WIDE]
+    where = {"fine": "세밀 45~56 (뒤 10초)", "wide": "광역 35~46 (60초)",
+             "both": "세밀 + 광역"}[a.block]
+    print(f"창 {len(fine)}개 / 파일 {len(a.stems)}개 · 바꿔 끼운 곳 **{where}** "
+          f"(같은 파일 안에서만)" + chr(10))
 
     names = [p.split("/")[-1].replace(".pt", "") for p in a.ckpt]
     rows = {}
@@ -102,7 +119,7 @@ def main() -> int:
         m.eval()
         apps = list(torch.load(p, map_location="cpu", weights_only=False)["appliances"])
         p0, g0 = _run(m, fine, wide, dev)
-        p1, g1 = _run(m, swapped, wide, dev)
+        p1, g1 = _run(m, swapped, swapw, dev)
         rel = np.abs(p1 - p0) / np.maximum(p0, 1.0)
         flip = ((g0 > 0.5) != (g1 > 0.5)).mean(0)
         si = [apps.index(x) for x in SMPS if x in apps]

@@ -43,11 +43,14 @@ def _cmed(x: np.ndarray) -> np.ndarray:
     return np.median(x.real, 0) + 1j * np.median(x.imag, 0)
 
 
-def window_stats(rel: np.ndarray, ok: np.ndarray, w: int, nsegs, min_ok: int = 1800):
+def window_stats(rel: np.ndarray, ok: np.ndarray, w: int, nsegs, min_ok: int = 0):
     """(창, 차수) 별 `Re/Im(rel_h)` 표준편차. 반환 {n: (창수, 표준편차 (K,2))}.
 
     `n = 0` 은 원시(사이클별)다. `n >= 1` 은 창을 n 토막 낸 계단함수다 (n=1 이 지금 판).
     """
+    # ⚠ 문턱은 **창 길이에 비례**해야 한다 — 1800 을 박아 두면 600사이클(10초) 창이
+    #   전부 걸러진다 (세밀 갈래를 재려다 "녹화가 없다" 가 나왔다).
+    min_ok = min_ok or max(30, w // 2)
     idx = [h - 1 for h in VOLT_ORDERS if h > 1]
     out = {n: [] for n in [0] + list(nsegs)}
     for a in range(0, len(rel) - w + 1, w):
@@ -62,7 +65,7 @@ def window_stats(rel: np.ndarray, ok: np.ndarray, w: int, nsegs, min_ok: int = 1
             for k in range(n):
                 b0, b1 = k * w // n, (k + 1) * w // n
                 s2 = ok[a + b0:a + b1]
-                if int(s2.sum()) < 30:
+                if int(s2.sum()) < max(5, (b1 - b0) // 4):
                     bad = True
                     break
                 step[b0:b1] = _cmed(rel[a + b0:a + b1][s2][:, idx])[None, :]

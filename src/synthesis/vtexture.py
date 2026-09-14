@@ -76,6 +76,13 @@ class Texture:
     #: 개방 꼬리 — 그 원시 스냅샷 자신의 부하 강하 `Z(h)·I_h` 를 벗긴 것 (`rel_open` 과 같은 규약).
     #: 강하가 꼬리의 2~29% 라 무시할 크기가 아니다. Z 를 모르는 세션이면 `tail` 과 같다.
     tail_open: Optional[np.ndarray] = None
+    #: **개방 전압의 크기** |V_1| (14.59). `rel_open` 을 만들 때 이미 계산되는 `|vo[0]|` 인데
+    #: 정규화에만 쓰고 **버리고 있었다**. 텍스처가 파형(`rel`)만 나르고 크기를 안 날라서
+    #: 생성기가 크기를 **독립 OU 난수**로 만들었고, 그래서 실측에 있는 **크기-파형 짝**이
+    #: 합성에 없다 (실측 h3 r = **+0.85**, V산포>0.5V 인 60초 창 90개).
+    #: Z 를 모르는 세션이면 `None` — 그때는 de-embed 를 못 하므로 **쓰면 안 된다**
+    #: (그대로 재생하면 녹화의 자기 강하와 창의 자기 강하가 **이중 계상**된다, 13.22).
+    vrms_open: Optional[float] = None
 
     def source_rel(self) -> np.ndarray:
         """합성의 소스로 쓸 상대 텍스처 (개방 전압이 있으면 그것). **h1..h15 만** — 옛 서명 그대로."""
@@ -234,6 +241,7 @@ class VoltageTextureLibrary:
                 rel = (np.median(seg.real, 0) + 1j * np.median(seg.imag, 0)).astype(np.complex128)
                 rel[0] = 1.0 + 0j
                 rel_open = None
+                vrms_open = None
                 if Zh is not None:
                     Vseg = V[a:a + step][sel][:, :H]
                     Iseg = Icur[a:a + step][sel][:, :H]
@@ -242,11 +250,13 @@ class VoltageTextureLibrary:
                     if np.all(np.isfinite(vo)) and abs(vo[0]) > 1.0:
                         rel_open = (vo / abs(vo[0])).astype(np.complex128)
                         rel_open[0] = 1.0 + 0j
+                        vrms_open = float(abs(vo[0]))      # 14.59 — 버리지 않는다
                 textures.append(Texture(id=len(textures), stem=f.stem, t_rel_s=float(t[a]),
                                         vrms=float(np.median(v1[a:a + step][sel])), rel=rel,
                                         site=st_, session=sess_, rel_open=rel_open,
                                         tail=None if tl is None else tl[0],
-                                        tail_open=None if tl is None else tl[1]))
+                                        tail_open=None if tl is None else tl[1],
+                                        vrms_open=vrms_open))
         return cls(textures, file_rel, file_tail)
 
     # ── 조회 ──────────────────────────────────────────────────────────────
