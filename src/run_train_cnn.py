@@ -543,6 +543,13 @@ def main() -> int:
                          "13.69 가 생성기에서 없앤 가짜 판별자인데 손실에는 그 고침이 없었다. "
                          "생성기와 **같은 덧셈 꼴**로 건다: `sig_h += sig_1*(rel_창 − rel_녹화)`. "
                          "⚠ `--harm-vhrel-frac` 이 0 이면 **아무것도 안 한다**.")
+    ap.add_argument("--harm-vhrel-src", default="conducting",
+                    choices=("conducting", "file"),
+                    help="`rel_녹화` 를 어디서 내나 (14.61). **conducting**(기본) 은 `sig` 와 "
+                         "**같은 통전 사이클**의 `V_h/V_1` 이다. `file` 은 14.56 이 쓴 "
+                         "`vtexture.file_rel`(파일 전체 중앙값)인데 **14.60 에서 기각됐다** — "
+                         "둘이 1~15%% 다르고(오븐 h3 0.734 대 0.649), 실측 창 h3 0.694 에 대해 "
+                         "보정 부호가 **−0.040 대 +0.045 로 뒤집힌다**.")
     ap.add_argument("--harm-vhrel-frac", type=float, default=0.0, metavar="F",
                     help="위 파형 앵커를 **몇 할만** 건다 (14.56). 0 = 끔(**비트 동일**). "
                          "⚠⚠ 기본이 0 인 까닭: 14.49 가 전량을 걸었다가 부호를 넘겼다 "
@@ -757,13 +764,13 @@ def main() -> int:
     # 14.49 — `harm_sig_vnorm` 의 기준전압. `--harm-vnorm-anchor` 가 아니면 안 넘긴다.
     _vref, _vref_st = harmonic_signature_vref(pool, apps)
     # 14.56 — 그 녹화의 상대 전압 파형. `--harm-vhrel-anchor` 가 아니면 안 넘긴다.
-    _vhrel = harmonic_signature_vhrel(pool, apps)
+    _vhrel = harmonic_signature_vhrel(pool, apps, source=a.harm_vhrel_src)
     #: 파형 앵커를 걸 기기 — `--harm-vnorm-classes` 와 **같은 무리**다 (순저항).
     #: `I_h = V_h/R` 이 성립하는 곳만. SMPS 는 비선형이라 이 법칙이 없다 (13.69 와 같다).
     _vhrel_on = (np.asarray(_vnorm_exp(apps, a.harm_vnorm_classes), dtype=np.float32) != 0
                  ).astype(np.float32)
     if a.harm_vhrel_anchor:
-        print("  ** 14.56 sig 파형 앵커 %.2f할 · 기기 %s **"
+        print("  ** 14.56/14.61 sig 파형 앵커 %.2f할 · 기준 " + a.harm_vhrel_src + " · 기기 %s **"
               % (a.harm_vhrel_frac,
                  " ".join(x[:4] for x, o in zip(apps, _vhrel_on) if o)))
     if a.harm_vnorm_anchor:
@@ -959,6 +966,7 @@ def main() -> int:
                     "vrel_target": bool(a.vrel_target),
                     "harm_vhrel_anchor": bool(a.harm_vhrel_anchor),
                     "harm_vhrel_frac": float(a.harm_vhrel_frac),
+                    "harm_vhrel_src": str(a.harm_vhrel_src),
                     # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)

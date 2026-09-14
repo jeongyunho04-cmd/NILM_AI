@@ -92,6 +92,14 @@ class ApplianceActivation:
     # 돌입 전류(inrush) 구간 길이. 시간 워핑 시 이 구간은 늘이지 않는다.
     inrush_cycles: int
 
+    #: **녹화 당시의 전압 고조파** (L, 15) complex64 (14.61). `None` 이면 안 실은 것이다.
+    #: 왜 싣나: `sig = median(I_h/P)` 는 **통전 사이클**에서 적합되는데, 그 사이클의
+    #: `v_h_rel = V_h/V_1` 을 알 길이 없어 14.56 이 `vtexture.file_rel`(파일 전체 중앙값)을
+    #: 대신 썼다. 둘은 1~15% 다르다 (오븐 h3 **0.889** · h11 1.707) — **보정하려는 바로
+    #: 그 양에서 기준이 11% 어긋난 채** 걸었고 14.60 에서 기각됐다. 이것을 실으면
+    #: `sig` 와 **같은 사이클**로 `rel_녹화` 를 만들 수 있다.
+    #: ⚠ 증강된 활성화에는 안 실린다(`None`) — 읽는 것은 **풀의 원본**뿐이다.
+    net_voltage_harmonics_complex: Optional[np.ndarray] = None
     # 이 파형이 실제로 녹화될 때의 계통 전압. 전압 환산의 기준(kappa = V_bus / v_ref).
     v_ref_v: float = 220.0
     # 서모스탯/릴레이로 주기적 ON-OFF 를 반복하는 부하인가 (시간 워핑 방식이 달라진다)
@@ -322,6 +330,11 @@ class SegmentPool:
                     is_on=a.is_on[:j],
                     state_id=a.state_id[:j],
                     target_power_w=a.target_power_w[:j],
+                    # 14.61 — ⚠ **이것도 잘라야 한다.** 안 자르면 길이가 어긋나
+                    #   `harmonic_signature_vhrel` 이 딴 사이클을 읽는다.
+                    net_voltage_harmonics_complex=(
+                        None if a.net_voltage_harmonics_complex is None
+                        else a.net_voltage_harmonics_complex[:j]),
                     inrush_cycles=min(a.inrush_cycles, max(1, j // 3)),
                 ))
             self.appliance_activations[app] = cut
@@ -720,6 +733,11 @@ class SegmentPool:
                 is_on=data["is_on"][start_i:end_i],
                 state_id=data["state_id"][start_i:end_i],
                 target_power_w=data["target_power_w"][start_i:end_i],
+                # 14.61 — 그 구간의 전압 고조파. 없는 녹화(옛 계측기)면 None 이다.
+                net_voltage_harmonics_complex=(
+                    np.asarray(data["voltage_harmonics_complex"][start_i:end_i],
+                               dtype=np.complex64)
+                    if "voltage_harmonics_complex" in data else None),
                 inrush_cycles=min(len(block) // 3, 60),
                 v_ref_v=v_ref,
                 periodic_duty=periodic,

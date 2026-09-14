@@ -728,8 +728,8 @@ def harmonic_signature_vref(pool, appliances: Sequence[str],
     return vref, vref_state
 
 
-def harmonic_signature_vhrel(pool, appliances: Sequence[str], n_harm: int = 15
-                             ) -> np.ndarray:
+def harmonic_signature_vhrel(pool, appliances: Sequence[str], n_harm: int = 15,
+                             source: str = "conducting") -> np.ndarray:
     """기기별 **녹화의 상대 전압 파형** `v_h_rel = V_h/V_1` (K, n_harm, 2) [Re, Im] (14.56).
 
     왜: 순저항은 `I_h = V_h/R`, `P = V_1²/R` 이므로
@@ -760,6 +760,40 @@ def harmonic_signature_vhrel(pool, appliances: Sequence[str], n_harm: int = 15
     """
     out = np.zeros((len(appliances), n_harm, 2), dtype=np.float32)
     out[:, 0, 0] = 1.0
+    # ── 14.61: **`sig` 와 같은 사이클**에서 낸다 (기본) ────────────────────
+    #   14.56 은 `vtexture.file_rel`(파일 전체 중앙값)을 썼는데 `sig` 는 **통전
+    #   사이클**에서 적합된다. 둘은 1~15% 다르다 (오븐 h3 0.889 · h11 1.707) —
+    #   보정하려는 바로 그 양에서 기준이 11% 어긋난 채 걸었고 14.60 에서 기각됐다.
+    #   ⚠ **선택 규칙을 `harmonic_signatures` 와 한 글자도 다르게 쓰지 마라.**
+    #     아래는 그것을 복사한 것이다 (`run_gate_vhrel` 이 사이클 수를 대조한다).
+    if source == "conducting":
+        for j, app in enumerate(appliances):
+            acts = pool.appliance_activations.get(app, [])
+            if not acts:
+                continue
+            thr = 0.5 * pool.get_steady_power_w(app)          # `harmonic_signatures` 와 같다
+            vs = []
+            for a in acts:
+                vh = getattr(a, "net_voltage_harmonics_complex", None)
+                if vh is None or len(vh) != len(a.target_power_w):
+                    continue
+                m = a.target_power_w > max(thr, 1.0)           # 〃
+                if not m.any():
+                    continue
+                v = np.asarray(vh[m][:, :n_harm], dtype=np.complex128)
+                v1 = np.abs(v[:, 0])
+                ok = v1 > 1.0
+                if ok.any():
+                    vs.append(v[ok] / v1[ok][:, None])
+            if not vs:
+                continue
+            c = np.concatenate(vs)
+            r = np.median(c.real, 0) + 1j * np.median(c.imag, 0)
+            r[0] = 1.0 + 0j
+            out[j, :len(r), 0] = r.real.astype(np.float32)
+            out[j, :len(r), 1] = r.imag.astype(np.float32)
+        return out
+    # ── 옛 경로: 그 녹화의 **파일 전체** 단자 텍스처 (14.56) ───────────────
     try:
         from src.synthesis.vtexture import default_library
         lib = default_library()

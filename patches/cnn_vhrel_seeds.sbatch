@@ -36,10 +36,21 @@
 #   ⑤ ⚠ **SMPS 세 종은 이 보정을 안 받는다** (`I_h = V_h/R` 이 없다). `_vhrel_on` 이
 #      정확히 0 인 것을 `run_gate_vhrel` ④ 가 확인한다 — 움직이면 배선이 샌 것이다.
 #
+# ★★ 14.61 재시도 — **`rel_녹화` 를 통전 사이클에서 낸다** (`--harm-vhrel-src` 기본값).
+#   14.60 이 기각된 까닭으로 짚은 것: `sig` 는 **통전 사이클**에서 적합되는데 `rel_녹화` 로
+#   `vtexture.file_rel`(파일 전체 중앙값)을 썼다. 활성화에 전압 고조파를 실어 고쳤다
+#   (`ApplianceActivation.net_voltage_harmonics_complex`, 79개 전부 길이 일치).
+#   **보정 부호가 뒤집힌다** (실측 고전력 창의 h3 = 0.694 기준):
+#       오븐  rel_녹화 0.734(파일) -> **0.649**(통전)   델타 −0.040 -> **+0.045**
+#       핫플           0.677       -> **0.601**                −0.076 -> **+0.093**
+#   => 14.60 은 **반대 방향으로 밀고 있었다.** 그래서 f 를 0.5·1.0 으로 올려 건다.
+#   ⚠ 관문 ① 이 `sig` 와 **같은 사이클**(433,646개)을 쓰는지 대조한다.
+#   ⚠ 그래도 안 들면 이 축을 접어라 — 세 번째다.
+#
 # ⚠ `VFRAC`(14.51 의 크기 앵커)은 **983591 의 승자**로 맞춰라. 두 손잡이가 겹치므로
 #   한 판에 둘을 바꾸지 않는다 ([[count-how-many-things-differ-before-attributing]]).
 #
-#SBATCH -J nilm_vhrel
+#SBATCH -J nilm_vhrl2
 #SBATCH -p gpu3,gpu4,gpu5,gpu2,gpu6
 #SBATCH -N 1
 #SBATCH -n 1
@@ -80,18 +91,18 @@ BASE="--cache $CACHE --holdout $HOLDOUT \
       --harm-vhrel-anchor"
 echo "=== 학습 시작 $(date '+%F %H:%M:%S')"
 CUDA_VISIBLE_DEVICES=0 $PY -X utf8 -m src.run_train_cnn $BASE \
-    --harm-vhrel-frac 0.25 \
-    --tag cnn_vhrel_25_s${SEED} > "results/cnn_vhrel_25_s${SEED}.log" 2>&1 &
+    --harm-vhrel-frac 0.5 \
+    --tag cnn_vhrc_50_s${SEED} > "results/cnn_vhrc_50_s${SEED}.log" 2>&1 &
 A=$!
 CUDA_VISIBLE_DEVICES=1 $PY -X utf8 -m src.run_train_cnn $BASE \
-    --harm-vhrel-frac 0.5 \
-    --tag cnn_vhrel_50_s${SEED} > "results/cnn_vhrel_50_s${SEED}.log" 2>&1 &
+    --harm-vhrel-frac 1.0 \
+    --tag cnn_vhrc_100_s${SEED} > "results/cnn_vhrc_100_s${SEED}.log" 2>&1 &
 B=$!
 RC=0; wait $A || RC=1; wait $B || RC=1
-echo "=== f=0.25 ==="; tail -32 "results/cnn_vhrel_25_s${SEED}.log"
+echo "=== 통전기준 f=0.5 ==="; tail -32 "results/cnn_vhrc_50_s${SEED}.log"
 echo "===================================================================================="
-echo "=== f=0.50 ==="; tail -32 "results/cnn_vhrel_50_s${SEED}.log"
-ls -la results/cnn_vhrel_*_s${SEED}.pt
+echo "=== 통전기준 f=1.0 ==="; tail -32 "results/cnn_vhrc_100_s${SEED}.log"
+ls -la results/cnn_vhrc_*_s${SEED}.pt
 echo "끝 $(date '+%F %H:%M:%S') · rc=$RC"
 echo
 echo "판정 (로컬, 실측 복합 5파일). **이 순서로**:"

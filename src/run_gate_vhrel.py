@@ -62,12 +62,42 @@ def main() -> int:
     # ── ① 녹화 파형이 자리별로 갈린다 ──────────────────────────────────
     c = _cx(vh)
     h3 = {a: 100 * abs(c[j, 2]) for j, a in enumerate(apps)}
+    # ⚠ **앵커가 걸리는 저항 넷만** 본다 (14.61). SMPS 는 보정 대상이 아니고,
+    #   통전 기준에서는 미니PC h3 가 3.67 -> 0.85 로 크게 움직여 이 검사를 깬다
+    #   (그 활성화가 자리 D 쪽이라는 뜻이라 오히려 통전 기준이 맞다는 증거다).
     d_site = [h3["oven"], h3["hotplate"]]
-    e_site = [h3[a] for a in apps if a not in ("oven", "hotplate")]
-    ck("① 녹화 파형이 자리별로 갈린다 (h3: D 무리 아래 1% 아래 E 무리)",
+    e_site = [h3[a] for a in ("electiric_kettle", "hair_dryer")]
+    ck("① 저항 넷이 자리별로 갈린다 (h3: D 무리 아래 1% 아래 E 무리)",
        max(d_site) < 1.0 and min(e_site) > 2.0,
-       "오븐 %.2f · 핫플 %.2f | E 무리 %.2f~%.2f (백분율)"
-       % (h3["oven"], h3["hotplate"], min(e_site), max(e_site)))
+       "오븐 %.2f · 핫플 %.2f | 포트 %.2f · 드라이 %.2f (백분율)"
+       % (h3["oven"], h3["hotplate"], e_site[0], e_site[1]))
+    # ★ 14.61 — **`sig` 와 같은 사이클을 쓰는가.** 규칙을 복사해 놓고 어긋나면 잡는다.
+    n_sig, n_vh = 0, 0
+    for app in apps:
+        acts = pool.appliance_activations.get(app, [])
+        thr = 0.5 * pool.get_steady_power_w(app)
+        for aa in acts:
+            m = aa.target_power_w > max(thr, 1.0)
+            n_sig += int(m.sum())
+            vv = getattr(aa, "net_voltage_harmonics_complex", None)
+            if vv is not None and len(vv) == len(aa.target_power_w):
+                n_vh += int(m.sum())
+    ck("① ★ `rel_녹화` 가 **`sig` 와 같은 사이클**을 쓴다 (14.61)",
+       n_sig == n_vh and n_sig > 0,
+       "sig 사이클 %d · 전압 고조파가 실린 사이클 %d" % (n_sig, n_vh))
+    lens = []
+    for app in apps:
+        for aa in pool.appliance_activations.get(app, []):
+            vv = getattr(aa, "net_voltage_harmonics_complex", None)
+            lens.append(((-1 if vv is None else len(vv)), len(aa.target_power_w)))
+    ck("① 활성화마다 전압 고조파 길이가 맞는다 (자를 때 같이 잘렸나)",
+       all(a == b for a, b in lens), "활성화 %d개" % len(lens))
+    vh_f = harmonic_signature_vhrel(pool, apps, source="file")
+    d3 = [(100 * abs(_cx(vh_f[j])[2]), 100 * abs(c[j, 2])) for j, x in enumerate(apps)
+          if x in ("oven", "hotplate")]
+    ck("① 통전 기준이 파일 기준과 **다르다** (같으면 새 경로가 안 탄 것이다)",
+       all(abs(f_ - c_) > 0.02 for f_, c_ in d3),
+       " · ".join("%.3f -> %.3f" % (f_, c_) for f_, c_ in d3))
     ck("① h1 은 정의상 1+0j",
        bool(np.allclose(vh[:, 0, 0], 1.0) and np.allclose(vh[:, 0, 1], 0.0)))
 
