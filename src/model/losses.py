@@ -193,6 +193,16 @@ class NILMLoss(torch.nn.Module):
         swap_tiebreak: str = "off",
         swap_tb_orders: Sequence[int] = (3, 5, 7),
         off_detach_praw: bool = False,
+        #: 14.76 — **켜진 창에서 게이트를 떼어낸다.** `off_detach_praw` 의 대칭.
+        #:   `power = sigmoid(on_logit) * p_raw` 라 `L_power` 의 기울기가 게이트로도
+        #:   흐른다. 그래서 합이 안 맞으면 **게이트를 눌러 맞추는 것**이 허용돼 있고,
+        #:   A 기기의 수준 오차가 B 기기의 게이트를 죽인다.
+        #:   실측(14.75, test_4): 빔프가 +7.4W 과대라 충전기가 꺼지면 남는 자리가
+        #:   2.5W 뿐이고, 미니PC 는 `p_raw` 9.96W 로 **맞게** 내는데 게이트가
+        #:   0.004 로 눌려 그 10W 가 통째로 사라진다 (참 ON 인데).
+        #:   켜면 켜진 창의 게이트는 **BCE 만** 받는다 — '켜졌나' 는 게이트의 일,
+        #:   '얼마인가' 는 `p_raw` 의 일로 갈린다. 끄면 **비트 동일**.
+        on_detach_gate: bool = False,
         gate_smooth: float = 0.0,                    # 게이트 BCE 라벨 완화 (13.80)
         gate_focal: float = 0.0,                     # 쉬운 창 가중 낮추기 (13.80)                  # 꺼진 창에서 p_raw 를 detach (13.11)
         signatures_state: Optional[torch.Tensor] = None,  # (K,S,H,2) 상태별 지문 (13.11)
@@ -363,6 +373,7 @@ class NILMLoss(torch.nn.Module):
         self.swap_tb_orders_fwd = tuple(swap_tb_orders)
         # `L_swap`(12.158) 이 셀 조합. 저항 열의 on/off 전수다 (4종이면 16개).
         self.off_detach_praw = bool(off_detach_praw)
+        self.on_detach_gate = bool(on_detach_gate)
         # ── 상태별 지문 (2026-09-06, 13.11) ────────────────────────────────
         # 기기당 페이저 하나로는 **한 기기의 상태들이 고조파 모양이 다를 때** 못 담는다.
         # 드라이기 약풍은 반파(|I2|/|I1| 0.431), 강풍은 순저항(0.0004)인데 지문 중앙값이
@@ -845,16 +856,23 @@ class NILMLoss(torch.nn.Module):
         # 꺼진 창을 0 으로 만드는 것은 **게이트의 일**이다 (`power = σ(on)·p_raw`).
         # 그 창의 상태 혼합은 뜻이 없으므로 p_raw 를 detach 해 게이트만 경사를 받게 한다.
         # 학습에만 걸린다 — 추론 경로도 저장되는 가중치의 뜻도 그대로다.
-        if (self.off_detach_praw and tgt.get("y_on") is not None
+        if ((self.off_detach_praw or self.on_detach_gate) and tgt.get("y_on") is not None
                 and out.get("power_raw") is not None and out.get("on_logit") is not None):
             if float(getattr(self, "_proj_seen", 0.0)) > 0:
                 raise ValueError(
-                    "off_detach_praw 와 사영(proj>0)은 같이 못 쓴다 — 여기서 "
+                    "off_detach_praw/on_detach_gate 와 사영(proj>0)은 같이 못 쓴다 — 여기서 "
                     "out['power'] 을 다시 만들면 사영이 지워진다 (net._project 독스트링)")
             _pr = out["power_raw"]
             _on = tgt["y_on"] > 0.5
+            _g = torch.sigmoid(out["on_logit"])
+            if self.on_detach_gate:
+                # 14.76 — **켜진 창의 게이트만** 떼어낸다. 꺼진 창은 그대로 둬야
+                #   `L_power` 가 샌 전력을 게이트로 눌러 0 을 만들 수 있다 (위 주석).
+                _g = torch.where(_on, _g.detach(), _g)
+            if self.off_detach_praw:
+                _pr = torch.where(_on, _pr, _pr.detach())
             out = dict(out)
-            out["power"] = torch.sigmoid(out["on_logit"]) * torch.where(_on, _pr, _pr.detach())
+            out["power"] = _g * _pr
 
         # 3.1절 — 스케일 정규화 전력 회귀. 절대 W 를 쓰면 오븐 60W 와 프로젝터 60W 가
         # 같은 벌점이 되고, 0.7절의 오차 전가 보호막(87배)이 사라진다.

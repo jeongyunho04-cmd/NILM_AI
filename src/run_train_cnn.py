@@ -629,6 +629,15 @@ def main() -> int:
                     help="**꺼진 창에서 `p_raw` 에 경사를 주지 않는다** (13.11). 상태 전력 머리가 "
                          "죽는 것을 막는다 — 드라이기 HIGH 가 정확히 그렇게 0W 가 됐다. "
                          "게이트가 꺼진 창을 0 으로 만드는 일을 맡는다.")
+    ap.add_argument("--on-detach-gate", action="store_true",
+                    help="**켜진 창에서 게이트에 경사를 주지 않는다** (14.76). "
+                         "--off-detach-praw 의 대칭이다. power = sigmoid(on_logit)*p_raw 라 "
+                         "L_power 의 경사가 게이트로도 흘러, 합이 안 맞으면 게이트를 눌러 "
+                         "맞추는 것이 허용돼 있다 — A 기기의 수준 오차가 B 기기의 게이트를 "
+                         "죽인다. 실측(14.75 test_4): 빔프가 +7.4W 과대라 충전기가 꺼지면 "
+                         "남는 자리가 2.5W 뿐이고, 미니PC 는 p_raw 9.96W 로 맞게 내는데 "
+                         "게이트가 0.004 로 눌려 그 10W 가 사라진다(참 ON 인데). "
+                         "켜면 '켜졌나'는 BCE 가, '얼마인가'는 p_raw 가 맡는다. 끄면 비트 동일.")
     ap.add_argument("--harm-even-by-class", action="store_true",
                     help="짝수차 위상을 기기 부류별로 살린다 (13.45). "
                          "--harm-even-magnitude 와 같이 써야 뜻이 있다 — 위상이 뭉치는 "
@@ -821,6 +830,7 @@ def main() -> int:
                                if (a.harm_vnorm_anchor and a.harm_sig_vnorm) else None),
         harm_odd_only=a.harm_odd_only,
         off_detach_praw=a.off_detach_praw,
+        on_detach_gate=a.on_detach_gate,
         signatures_state=(torch.from_numpy(sig_state) if a.state_signatures else None),
         harm_even_magnitude=a.harm_even_magnitude,
         harm_sig_vnorm=a.harm_sig_vnorm,
