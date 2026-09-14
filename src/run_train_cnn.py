@@ -469,6 +469,15 @@ def main() -> int:
                     help="광역 갈래에도 amax + 창끝 슬라이스를 준다 (12.19.4 후보 1)")
     ap.add_argument("--periodicity", action="store_true",
                     help="자기상관·교차율을 헤드 직전에 직접 준다 (12.19.4 후보 2)")
+    ap.add_argument("--seg-pool", type=int, default=0, metavar="N",
+                    help="**구간별 풀링** (14.46). 전역 `mean`/`amax` 를 **타깃을 경계로 한 "
+                         "N구간**으로 쪼갠다 (세밀·광역·원시 전력 통계 셋 다). "
+                         "14.41~14.42 가 잰 것 — 세밀 창 600 중 360(6초)이 타깃보다 뒤인데 "
+                         "깊은 탭의 수용영역은 ±93 뿐이라, 그 바깥 증거가 머리에 닿는 길이 "
+                         "**위치를 모르는 전역 요약 하나**다. 수용영역 밖만 지워도 오븐 혼합이 "
+                         "0.137 -> 0.941 로 살아난다. **0/1 이면 비트 동일**이다. "
+                         "⚠ 없애지 않고 쪼갠다 — `amax` 는 conv 로 표현 안 되고(12.9.8) "
+                         "`fp_max` 는 물리 프라이어가 쓴다.")
     ap.add_argument("--w-over", type=float, default=0.1,
                     help="물리 상한 힌지. 예측 합이 관측 총전력을 넘을 때만 벌한다")
     ap.add_argument("--gate-smooth", type=float, default=0.0, metavar="EPS",
@@ -662,7 +671,7 @@ def main() -> int:
                     prior_kappa=a.prior_kappa, prior_beta=a.prior_beta,
                     fine_channels=a.fine_channels,
                     aux_z=(a.w_z > 0),
-                    vexp=a.vexp).to(dev)
+                    vexp=a.vexp, seg_pool=a.seg_pool).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
     crit = NILMLoss(
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
@@ -811,6 +820,7 @@ def main() -> int:
                     "aux_z": bool(model.aux_z),
                     # ⚠ **추론에도 써야 한다** — 지수를 박고 배운 모델이다 (14.7).
                     "vexp": bool(model.vexp),
+                    "seg_pool": int(model.seg_pool),
                     # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)

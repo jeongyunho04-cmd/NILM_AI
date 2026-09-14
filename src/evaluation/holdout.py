@@ -94,6 +94,7 @@ def build_holdout(
     steady_crop: Optional[Dict[str, dict]] = None,
     standby_jitter_cap: float = 0.0,
     sibling_rotate: Optional[Dict[str, dict]] = None,
+    vtex_step_s: float = 0.0,
 ) -> dict:
     """홀드아웃 구간에서만 평가 셋을 만들어 저장한다.
 
@@ -124,7 +125,20 @@ def build_holdout(
                         steady_crop=steady_crop,
                         # 13.84.8 ② 형제 전용 차수 비례 회전. None 이면 옛 경로.
                         sibling_rotate=sibling_rotate)
-    from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
+    from src.synthesis.vtexture import (DEFAULT_VTAIL_NPZ, default_library,
+                                        set_default_step_s, set_default_vtail)
+    # ⚠⚠ **배선 구멍이었다** (14.44). `run_build_traincache` 는 14.33 ⓑ 에서 `vtex_step_s`
+    #   를 받게 고쳤는데 **이쪽은 안 고쳤다** — 두 입구가 또 갈려 있었다
+    #   ([[pin-the-two-entry-points-against-each-other]]). 0 이면 옛 경로(60초)와 **비트 동일**이다.
+    #   여기는 `spawn` 풀이 아니라 한 프로세스라 한 번만 걸면 된다.
+    if vtex_step_s and vtex_step_s > 0:
+        _n0 = len(default_library().textures)
+        set_default_step_s(float(vtex_step_s))
+        _n1 = len(default_library().textures)
+        print(f"  ** 전압 텍스처 표집 간격 {vtex_step_s}s (14.12): "
+              f"텍스처 {_n0} -> {_n1}개 **")
+        if _n1 <= _n0:
+            raise SystemExit("[holdout] 간격을 줄였는데 텍스처가 안 늘었다 — 안 걸렸다")
     set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
     syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
                           augmentor=aug, background=bool(background),
@@ -194,6 +208,8 @@ def build_holdout(
         "sibling_rotate": sibling_rotate,  # 13.84.8 ②
         # 학습 캐시와 짝이 맞아야 하는 설정 (12.168.4)
         "sp_curves": bool(sp_curves),
+        # 14.44 — 0 이면 옛 경로(기본 60초)다. 학습 캐시와 **같아야** 한다.
+        "vtex_step_s": float(vtex_step_s or 0.0),
         "sp_per_texture": bool(sp_per_texture),
         "vtail": bool(vtail),
         "background": bool(background),

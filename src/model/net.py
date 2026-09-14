@@ -198,6 +198,11 @@ class NILMNet(nn.Module):
         appl_attn: int = 0,
         #: 어텐션 머리 수. `appl_attn` 이 이것으로 나눠떨어져야 한다.
         appl_attn_heads: int = 4,
+        # ── 구간별 풀링 (14.46) ──────────────────────────────────────────────
+        #: 전역 `mean`/`amax` 를 **타깃을 경계로 한 n구간**으로 쪼갠다.
+        #: **0 또는 1 이면 창 전체 한 구간 = 지금과 비트 동일**이다 (`pool_segments` 참조).
+        #: 세밀·광역·원시 전력 통계 셋 다에 같은 n 을 건다.
+        seg_pool: int = 0,
     ):
         super().__init__()
         # 세밀 갈래가 실제로 쓸 채널 수. 입력은 항상 FINE_CHANNELS 개로 오지만
@@ -255,11 +260,15 @@ class NILMNet(nn.Module):
 
         # 전역 평균 + 전역 최대 + 깊은 층 타깃 + 얕은 층 타깃 2개 + 원본 타깃
         # + 광역 평균 + **원시 창 전력 통계 4개**
-        trunk_in = c2 * 2 + c2 + (c1 + c1) + self.fine_channels + w2 + WINDOW_STATS
+        # 14.46 — 구간 수. 0/1 이면 전체 한 구간이라 아래 식이 옛 값과 **정확히 같다**.
+        self.seg_pool = int(seg_pool or 0)
+        ns = max(self.seg_pool, 1)
+        trunk_in = (c2 * 2 * ns + c2 + (c1 + c1) + self.fine_channels
+                    + w2 * ns + WINDOW_STATS * ns)
         if self.wide_target:
             trunk_in += w2              # 광역 타깃 블록 (13.44)
         if self.wide_summary:
-            trunk_in += w2 * 2          # 광역 amax + 창 끝 슬라이스 (후보 1)
+            trunk_in += w2 * ns + w2    # 광역 amax(구간별) + 창 끝 슬라이스 (후보 1)
         if self.periodicity:
             trunk_in += N_PERIOD        # 후보 2
         h = int(256 * width)
@@ -312,11 +321,12 @@ class NILMNet(nn.Module):
         # 세밀 유래 차원 표식. **연결 순서를 바꾸지 않고** 마스킹만 한다.
         # 순서를 바꾸면 이전 체크포인트가 뒤섞인 입력을 받는다 (실제로 한 번 겪었다).
         fine_flags: List[int] = (
-            [1] * self.fine_channels + [1] * c1 + [1] * c1 + [1] * c2 + [1] * c2 + [1] * c2
-            + [0] * w2                                        # 광역 평균
+            [1] * self.fine_channels + [1] * c1 + [1] * c1
+            + [1] * (c2 * ns) + [1] * (c2 * ns) + [1] * c2   # 구간별 평균·최대 + 깊은 타깃
+            + [0] * (w2 * ns)                                 # 광역 평균 (구간별)
             + ([0] * w2 if self.wide_target else [])           # 광역 타깃 블록 (13.44)
-            + ([0] * (w2 * 2) if self.wide_summary else [])   # 광역 amax + 창끝
-            + [1, 1, 0, 0]                                    # fp_max, fp_min, wp_max, wp_mean
+            + ([0] * (w2 * ns) + [0] * w2 if self.wide_summary else [])  # 광역 amax + 창끝
+            + [1, 1] * ns + [0, 0] * ns   # 구간별 fp(max,min) 그리고 wp(max,mean)
         )
         if self.periodicity:
             fine_flags += ([1] * len(PERIOD_LAGS_FINE) + [0] * len(PERIOD_LAGS_WIDE)
@@ -408,9 +418,17 @@ class NILMNet(nn.Module):
             h = blk(h)
             if i in self.tap_layers:                # 얕은 층의 타깃 슬라이스
                 feats.append(h[:, :, t])
-        feats += [h.mean(-1), h.amax(-1), h[:, :, t]]   # 전역 요약 + 깊은 층 타깃
+        # 14.46 — 구간별 요약. `seg_pool` 이 0/1 이면 구간이 창 전체 하나라
+        #   `h[:, :, 0:n].mean(-1)` == `h.mean(-1)` 이고 **옛 경로와 비트 동일**이다.
+        fsegs = pool_segments(h.shape[-1], t, max(self.seg_pool, 1))
+        for _a, _b in fsegs:
+            feats += [h[:, :, _a:_b].mean(-1), h[:, :, _a:_b].amax(-1)]
+        feats.append(h[:, :, t])                        # 깊은 층 타깃
         hw = self.wide(wide)
-        feats.append(hw.mean(-1))
+        wsegs = pool_segments(hw.shape[-1], wide_target_index(hw.shape[-1]),
+                              max(self.seg_pool, 1))
+        for _a, _b in wsegs:
+            feats.append(hw[:, :, _a:_b].mean(-1))
         if self.wide_target:
             # **평균에 더한다. 대체하지 않는다** (13.44) — 미니PC 는 60초 문맥이
             # 순시값보다 낫다(0.795 대 0.680). 둘 다여야 0.937 로 최고다.
@@ -418,15 +436,24 @@ class NILMNet(nn.Module):
         if self.wide_summary:
             # 세밀은 전역평균·전역최대·타깃슬라이스 세 갈래로 오는데 광역은 평균
             # 하나뿐이었다 (12.19.1절). 비대칭을 없앤다.
-            feats += [hw.amax(-1), hw[:, :, -1]]
+            for _a, _b in wsegs:
+                feats.append(hw[:, :, _a:_b].amax(-1))
+            feats.append(hw[:, :, -1])
 
         # 원시 창 전력 통계. **conv 도 GroupNorm 도 거치지 않는다.**
         # 지금까지 헤드가 받는 원시 값은 타깃 시점(fine[:,:,t]) 하나뿐이었고,
         # 창 전체의 최대/최소는 *학습된 특징* 의 amax 로만 있었다(h.amax(-1)).
         # 12.9.8절 측정: 총전력을 1/10 로 줄여도 핫플 on 로짓이 0.09 밖에 안 움직였다.
         fp, wp = fine[:, P_CH_FINE], wide[:, P_CH_WIDE]        # asinh(P/100)
+        # ⚠ `fp_max`/`wp_max` 는 **물리 프라이어(12.9.8)가 전역으로** 쓴다 — 그것은 그대로 두고,
+        #   머리에 주는 통계만 구간별로 쪼갠다 (14.46).
         fp_max, wp_max = fp.amax(-1), wp.amax(-1)
-        feats.append(torch.stack([fp_max, fp.amin(-1), wp_max, wp.mean(-1)], dim=1))
+        _st = []
+        for _a, _b in fsegs:
+            _st += [fp[:, _a:_b].amax(-1), fp[:, _a:_b].amin(-1)]
+        for _a, _b in wsegs:
+            _st += [wp[:, _a:_b].amax(-1), wp[:, _a:_b].mean(-1)]
+        feats.append(torch.stack(_st, dim=1))
 
         if self.periodicity:
             # 시간 구조를 **직접** 준다 (`_autocorr` 주석). conv 를 안 거친다.
@@ -577,6 +604,34 @@ class NILMNet(nn.Module):
 def appliance_state_counts(appliances: Sequence[str]) -> List[int]:
     from src.labeling.state_definitions import get_appliance_config
     return [min(len(get_appliance_config(a).states), MAX_STATES) for a in appliances]
+
+
+def pool_segments(n_total: int, target: int, n_seg: int):
+    """타깃 **직후를 반드시 경계로** 두고 과거/미래를 각각 등분한 구간 목록 (14.46).
+
+    `n_seg <= 1` 이면 창 전체 하나 — 그 경우 `h[:, :, 0:n].mean(-1)` 가
+    `h.mean(-1)` 과 **같은 계산**이므로 옛 경로와 **비트 동일**이다.
+
+    왜 필요한가 (14.41~14.42): 머리는 `h.mean(-1)`·`h.amax(-1)` 같은 **전역 요약**을
+    받는데 그것은 **과거와 미래를 구별하지 못한다.** 세밀 창 600 중 360(6초)이 타깃보다
+    뒤이고, 깊은 탭의 수용영역은 ±93 뿐이라 그 바깥 증거가 머리에 닿는 길이 전역 요약
+    하나다. 실제로 **수용영역 밖만** 지워도 오븐 혼합이 0.137 -> 0.941 로 살아났다.
+    ⇒ 없애지 말고 **쪼갠다** — `amax` 는 conv 로 표현되지 않는 연산자이고(12.9.8 전례),
+      `fp_max` 는 물리 프라이어가 쓴다. 정보를 하나도 안 버리고 **시간 부호만** 붙인다.
+
+        n_seg=2, 600, t=239 -> [(0,240), (240,600)]              과거 / 미래
+        n_seg=4             -> [(0,120), (120,240), (240,420), (420,600)]
+    """
+    n_total = int(n_total); target = int(target); n_seg = int(n_seg)
+    if n_seg <= 1:
+        return [(0, n_total)]
+    cut = min(max(target + 1, 1), n_total - 1)          # 타깃 직후 = 반드시 경계
+    n_past = min(max(int(round(n_seg * cut / n_total)), 1), n_seg - 1)
+    n_fut = n_seg - n_past
+    edges = [int(round(cut * i / n_past)) for i in range(n_past)]
+    edges += [cut + int(round((n_total - cut) * i / n_fut)) for i in range(n_fut)]
+    edges.append(n_total)
+    return [(edges[i], edges[i + 1]) for i in range(n_seg)]
 
 
 def harmonic_signatures(pool, appliances: Sequence[str], n_harm: int = 15) -> np.ndarray:

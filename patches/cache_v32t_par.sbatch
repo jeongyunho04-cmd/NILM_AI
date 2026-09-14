@@ -27,13 +27,20 @@
 #   30만창에서 적중률이 어떻게 되는지는 실제로 구워 봐야 안다고 적혀 있다).
 #
 #SBATCH -J nilm_v32t
-#SBATCH -p cpu2
+# ⚠⚠ **상한에 딱 붙여 달라고 하지 마라** (2026-09-14, 982938 이 23시간 섰다).
+#   `-p cpu2 -c 64` 는 `cpu2_limit` 의 노드당 상한 **그대로**라, 한 노드에 64코어가
+#   통째로 비어야 앉는다. 그날 cpu2 는 전체 116코어가 놀고 있었는데 **한 노드 최대
+#   구멍이 56** 이라 어디에도 못 앉았고, Slurm 이 n115 를 **다음날 13:09 로 예약**해
+#   버렸다. 코어를 줄이고 토막을 늘리면 그 구멍들에 나눠 들어간다.
+#   ⚠ 코어 수는 **캐시 내용을 안 바꾼다** — `_chunk` 가 청크 번호로 시드하고 `imap` 이
+#     순서를 지킨다 (14.13). `--workers` 는 병렬도일 뿐이다.
+#SBATCH -p cpu1,gpu6,cpu2
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -c 64           # cpu2_limit 의 노드당 상한 (HPC_RULES §2)
-#SBATCH --mem=100G      # 실측: 64코어 굽기 MaxRSS 113GB 가 100G 안에서 완료 (963826)
-#SBATCH -t 01:10:00     # v32 는 15만창 ≈ 12분. 텍스처 2.9배라 여유를 더 둔다
-#SBATCH -a 0-1          # ← **배열 작업**. 토막 둘이 노드 둘에서 동시에 돈다
+#SBATCH -c 24           # 상한(cpu2 64 · gpu6 40 · cpu1 48)보다 **한참 아래**로
+#SBATCH --mem=100G      # 실측 MaxRSS: 64워커 113GB · 40워커 54GB. 24워커면 넉넉하다
+#SBATCH -t 01:10:00     # 토막당 7.5만창. 느린 노드(1.95 win/s/코어)에서도 ~27분
+#SBATCH -a 0-3          # ← **배열 작업**. NSHARD 는 아래에서 이 크기로부터 나온다
 #SBATCH -o %x_%A_%a.out
 #SBATCH -e %x_%A_%a.out
 set -euo pipefail
@@ -43,7 +50,9 @@ PY=./env/bin/python
 WINDOWS=${WINDOWS:-300000}
 GEN=${GEN:-v32t}
 VTEX=${VTEX:-20.0}
-NSHARD=2
+# ⚠⚠ **토막 수를 손으로 적지 마라.** 배열 크기와 어긋나면 조용히 절반만 구워진다
+#   (`-a 0-1` 인데 NSHARD=4 면 청크의 절반이 빠지고 아무도 안 죽는다).
+NSHARD=${SLURM_ARRAY_TASK_COUNT:-2}
 OUT="$HOME/NILM_AI/cache/train60_${GEN}_s${SLURM_ARRAY_TASK_ID}"
 
 echo "노드 $(hostname) · 토막 ${SLURM_ARRAY_TASK_ID}/${NSHARD} · 코어 ${SLURM_CPUS_PER_TASK} · $(date '+%F %H:%M:%S')"
@@ -101,7 +110,8 @@ print('  관문: meta vtex_step_s = %s ✅' % d['vtex_step_s'])
 "
 echo "끝 $(date '+%F %H:%M:%S')"
 echo
-echo "두 토막이 다 끝나면 이어붙여라 (로그인 노드에서 1~2분):"
-echo "  \$PY -X utf8 src/run_merge_traincache.py --out cache/train60_${GEN} \\"
-echo "      cache/train60_${GEN}_s0 cache/train60_${GEN}_s1"
-echo "  그 뒤 토막 삭제는 **사람이 확인하고** — rm -rf cache/train60_${GEN}_s[01]"
+SHARDS=""
+for i in $(seq 0 $((NSHARD - 1))); do SHARDS="$SHARDS cache/train60_${GEN}_s${i}"; done
+echo "토막 ${NSHARD}개가 다 끝나면 이어붙여라 (로그인 노드에서 1~2분):"
+echo "  \$PY -X utf8 src/run_merge_traincache.py --out cache/train60_${GEN}${SHARDS}"
+echo "  그 뒤 토막 삭제는 **사람이 확인하고** — rm -rf cache/train60_${GEN}_s[0-9]" 

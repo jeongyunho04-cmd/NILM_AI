@@ -70,6 +70,13 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--allow-partial", action="store_true",
                     help="토막이 다 모이지 않아도 있는 것만 붙인다 (⚠ 단일 노드와 달라진다)")
+    ap.add_argument("--rm-shards", action="store_true",
+                    help="⚠⚠ **복사가 끝난 토막 배열 파일을 즉시 지운다** — 쿼터가 빠듯할 때. "
+                         "안 주면 최대 사용량이 `토막 + 통짜` 라 두 배가 된다 (v32t 실측: "
+                         "23G + 23G = 107G 가 하드 한도 110G 에 3G 남기고 닿았다). 주면 "
+                         "`fine`(전체 바이트의 87%%)이 토막마다 바로 빠져 **89G** 로 눌린다. "
+                         "⚠ 대가: 중간에 죽으면 토막이 반쯤 지워져 **다시 구워야 한다**. "
+                         "복사 바이트 수를 확인한 뒤에만 지운다.")
     a = ap.parse_args()
 
     metas = []
@@ -138,6 +145,7 @@ def main():
             raise SystemExit("[merge] 배열이 없다: %s" % miss)
         a0 = np.load(srcs[0], mmap_mode="r")
         shape = (N,) + a0.shape[1:]
+        row_bytes = int(np.prod(a0.shape[1:])) * a0.dtype.itemsize
         for p in srcs:
             src = np.load(p, mmap_mode="r")
             if src.shape[1:] != a0.shape[1:] or src.dtype != a0.dtype:
@@ -161,7 +169,17 @@ def main():
                     raise SystemExit("[merge] fortran_order 인 토막은 못 붙인다: %s" % p)
                 with open(p, "rb") as fi:
                     fi.seek(off_)
+                    at = fo.tell()
                     shutil.copyfileobj(fi, fo, length=32 * 1024 * 1024)
+                    wrote = fo.tell() - at
+                # ⚠ **세고 나서 지운다.** 바이트가 안 맞으면 지우지 않고 죽는다 —
+                #   반쯤 복사된 것을 지우면 되돌릴 길이 없다.
+                want = n_ * row_bytes
+                if wrote != want:
+                    raise SystemExit("[merge] %s 를 %d 바이트 복사해야 하는데 %d 를 썼다"
+                                     % (p, want, wrote))
+                if a.rm_shards:
+                    p.unlink()
         print("   %-12s %s" % (name, shape))
 
     meta = dict(base)
@@ -185,8 +203,15 @@ def main():
                                       (meta.get("positive_rate") or {}).items()},
                                      ensure_ascii=False))
     free = shutil.disk_usage(out).free / 1e9
-    print("   남은 자리 %.1f GB · ⚠ 토막은 안 지웠다 (%s)"
-          % (free, " ".join(str(d) for d, _ in metas)))
+    if a.rm_shards:
+        for d, _ in metas:
+            for q in sorted(d.glob("*")):
+                q.unlink()
+            d.rmdir()
+        print("   남은 자리 %.1f GB · **토막을 지웠다** (--rm-shards)" % free)
+    else:
+        print("   남은 자리 %.1f GB · ⚠ 토막은 안 지웠다 (%s)"
+              % (free, " ".join(str(d) for d, _ in metas)))
     return 0
 
 

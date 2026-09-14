@@ -106,6 +106,12 @@ def main() -> int:
                          "합성 F1 이 분포 어긋남과 교락되지 않는다")
     ap.add_argument("--sp-curves", action="store_true",
                     help="증강 전력스케일을 s(p) 로 (12.166). **학습 캐시와 같아야 한다**")
+    ap.add_argument("--vtex-step-s", type=float, default=0.0, metavar="S",
+                    help="전압 텍스처 표집 간격(초). 14.12 가 60 -> 20 으로 줄이면 텍스처가 "
+                         "280 -> 819개, h3~h15 산포/원시가 0.73 -> 0.95 가 된다고 쟀다. "
+                         "⚠ **학습 캐시와 같은 값을 줘라** — `run_build_traincache --vtex-step-s` "
+                         "와 짝이다 (14.44 에서 이쪽 배선이 빠져 있던 것을 메웠다). "
+                         "0 이면 옛 경로(60초)와 비트 동일이다.")
     ap.add_argument("--vtail", action="store_true",
                     help="전압 꼬리(h17~h31)를 텍스처에 얹는다 (13.73/13.78). processed_data/vtail.npz 가 필요하다. 절대 경로(모델 단독)는 확실히 좋아지지만 델타 경로는 나빠진 전례가 있다 — A/B 로 판정하라")
     ap.add_argument("--steady-crop", default="",
@@ -191,7 +197,8 @@ def main() -> int:
                                 else (tuple(a.carrier_on) or ("oven",))),
                   couple_ext=a.couple_ext,
                   recipe_mix=_parse_mix(a.recipe_mix),
-                  smps_focus_off_p=a.smps_focus_off_p)
+                  smps_focus_off_p=a.smps_focus_off_p,
+                  vtex_step_s=a.vtex_step_s)
     return inspect(a.out)
 
 

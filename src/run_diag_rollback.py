@@ -137,6 +137,11 @@ def main():
                     help="`cap` 물리 상한 · `full` 거기에 **저항 조합 정합**까지 (14.31). "
                          "⚠ 기본은 off — 지난 표와 잇기 위해서다. 켠 값과 끈 값을 "
                          "**같은 표에 나란히 놓아야** 후처리 몫과 모델 몫이 안 섞인다")
+    ap.add_argument("--mask-future", default="off", choices=("off", "all", "even"),
+                    help="세밀 창의 **타깃 이후**(360사이클 = 6초)를 타깃 이전 평균으로 덮는다 "
+                         "(14.45). `all` 전 채널 · `even` 짝수차 |I_h|(16~22)+43,44 만. "
+                         "14.41 이 확인한 것 — 미래 6초의 반파 증거가 현재 상태를 뒤집는다. "
+                         "⚠ **분포 밖 입력**이라 하락분에 분포 이동이 섞인다. 상한으로만 읽어라.")
     ap.add_argument("--half-ratio", action="store_true",
                     help="정합기의 반파 관문을 **옛 비율 판**으로 되돌린다 (`half_abs=False`). "
                          "`--postproc full` 에서만 뜻이 있다. 14.31 의 B 를 가르는 자다")
@@ -145,6 +150,20 @@ def main():
     apps0 = list(torch.load(a.ckpt[0], map_location="cpu",
                             weights_only=False)["appliances"])
     cache = real_windows(apps0, a.grid_s, dev)
+    if a.mask_future != "off":
+        # 14.45 — 미래가 값을 하는가. **모든 체크포인트가 같은 가려진 입력을 본다.**
+        from src.model.inputs import fine_target_index
+        _t = fine_target_index()
+        _sl = (slice(None) if a.mask_future == "all" else slice(16, 23))
+        _n = 0
+        for _d in cache.values():
+            f = _d["fine"]
+            f[:, _sl, _t + 1:] = f[:, _sl, :_t + 1].mean(-1, keepdims=True)
+            if a.mask_future == "even":
+                f[:, 43:45, _t + 1:] = f[:, 43:45, :_t + 1].mean(-1, keepdims=True)
+            _n += len(f)
+        print("  ** 미래 가림 '%s': 타깃 %d 이후 %d사이클(%.1f초)을 이전 평균으로 · %d창 **"
+              % (a.mask_future, _t, 599 - _t, (599 - _t) / 60.0, _n), flush=True)
 
     print("사슬을 버리면 — **같은 채점기**로 나란히 (score_arm)  후처리 %s%s"
           % (a.postproc, " (반파 비율판)" if a.half_ratio else ""), flush=True)
