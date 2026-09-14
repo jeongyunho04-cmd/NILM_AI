@@ -66,6 +66,11 @@ def main() -> int:
                          "전력 균등 계층화(12.34.6)가 좁은 상태를 과소 노출한다 — "
                          "미니PC IDLE 은 8.8~12.0W 로 좁아 17.2%% 만 나오는데 "
                          "**실측 복합은 IDLE 로만 돈다**")
+    ap.add_argument("--vtex-step-s", type=float, default=0.0, metavar="S",
+                    help="전압 텍스처 표집 간격 (초). 0 이면 기본 60 = 옛 경로. "
+                         "20 이 `genopts.V32T` 다 — 14.12 가 **표류의 모자란 몫이 이 상수**라고 "
+                         "쟀다 (파일 안 전압 산포 원시 대비 0.73 -> 0.95, 합성 표류가 실측의 "
+                         "0.75 -> 0.80배 = 이론 √0.654). ⚠ 텍스처가 280 -> 819개가 된다.")
     ap.add_argument("--vtail", action="store_true",
                     help="전압 꼬리(h17~h31)를 텍스처에 얹는다 (13.73/13.78). processed_data/vtail.npz 가 필요하다. 절대 경로(모델 단독)는 확실히 좋아지지만 델타 경로는 나빠진 전례가 있다 — A/B 로 판정하라")
     ap.add_argument("--steady-crop", default="",
@@ -200,6 +205,7 @@ def main() -> int:
             raise SystemExit("[traincache] --shard 는 K/N 꼴이어야 한다 (예: 0/2). 받은 값 %r" % a.shard)
         shard = (k, n)
     build_cache(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
+                vtex_step_s=a.vtex_step_s,
                 time_split=a.split, seed=a.seed, n_workers=a.workers, shard=shard,
                 exclude_activation_files=excl,
                 dither_amp=a.dither_amp, dither_phase_deg=a.dither_phase_deg,

@@ -75,6 +75,7 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           power_scale_std_json: str = "",
           sp_curves: bool = False,
           sp_per_texture: bool = False, vtail: bool = False,
+          vtex_step_s: float = 0.0,
           background: bool = False,
           level_scramble: Optional[Dict[str, tuple]] = None,
           state_mix_json: str = "",
@@ -127,7 +128,12 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
                         # 13.84.8 ② 형제 전용 차수 비례 회전. 빈 문자열이면 옛 경로.
                         sibling_rotate=(json.loads(sibling_rotate_json) if sibling_rotate_json else None))
     # 13.78: 전압 꼬리(h17~h31)를 켠다. 기본은 꺼짐이라 안 부르면 옛 거동 그대로다.
-    from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
+    from src.synthesis.vtexture import (DEFAULT_VTAIL_NPZ, set_default_step_s,
+                                        set_default_vtail)
+    # ⚠ 풀이 `spawn` 이라 **워커마다** 다시 걸어야 한다 — 부모 프로세스에서만
+    #   부르면 워커에는 안 물려진다 (14.33 ⓑ). `set_default_vtail` 과 같은 자리다.
+    if vtex_step_s and vtex_step_s > 0:
+        set_default_step_s(float(vtex_step_s))
     set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
@@ -197,6 +203,14 @@ def build_cache(
     sp_curves: bool = False,
     sp_per_texture: bool = False,
     vtail: bool = False,
+    #: 전압 텍스처 표집 간격 (초). 0 이면 `vtexture.DEFAULT_STEP_S`(60) — 옛 경로다.
+    #: 14.12 가 **표류의 모자란 몫이 이 상수였다**고 쟀다: 텍스처는 `step_s` 구간의
+    #: 중앙값이라 그보다 짧은 전압 변동이 뭉개진다. 20 으로 줄이면 파일 안 전압 산포가
+    #: 원시의 0.73 -> 0.95 가 되고 합성 표류가 실측의 0.75 -> **0.80** 배가 된다
+    #: (이론값 √0.654 = 0.809 와 일치). 프리셋 `genopts.V32T` 가 이 값 20.0 하나다.
+    #: ⚠ **여태 창 캐시에는 배선이 없었다** — `genopts.build_synthesizer` 는 걸지만
+    #:   `build_cache` 는 `set_default_vtail` 만 불렀다 (14.33 ⓑ). 두 입구가 갈렸던 자리다.
+    vtex_step_s: float = 0.0,
     background: bool = False,
     dither_min_order: int = 2,
     couple_ext: bool = False,
@@ -274,6 +288,7 @@ def build_cache(
                             dither_amp, dither_phase_deg, mix_json,
                             dither_even_amp, dither_even_phase_deg, pss_json,
                             bool(sp_curves), bool(sp_per_texture), bool(vtail),
+                            float(vtex_step_s or 0.0),
                             bool(background), level_scramble,
                             smx_json, tuple(carrier_apps or ()),
                             int(dither_min_order), bool(couple_ext),
@@ -296,7 +311,8 @@ def build_cache(
     for m_ in mm.values():
         m_.flush()
 
-    meta = {"float_fill": float_fill,          # 13.83.23 상태 채움 + 전력 축소 (None 이면 옛 경로)
+    meta = {"vtex_step_s": float(vtex_step_s or 0.0),   # 14.33 ⓑ (0 = 기본 60초)
+            "float_fill": float_fill,          # 13.83.23 상태 채움 + 전력 축소 (None 이면 옛 경로)
             "steady_crop": steady_crop,        # 13.83.26 정상 구간 자르기 (None 이면 옛 경로)
             "standby_jitter_cap": float(standby_jitter_cap or 0.0),   # 13.83.26 대기 잔차 상한 백분위 (0 = 옛 경로)
             "sibling_rotate": sibling_rotate,  # 13.84.8 ② 형제 전용 차수 비례 회전 (None 이면 옛 경로)
