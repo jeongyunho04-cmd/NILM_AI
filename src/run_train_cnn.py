@@ -47,7 +47,8 @@ from src.model.traincache import CachedWindows
 from src.model.losses import (LossWeights, NILMLoss, PHASE_COHERENT_EVEN,
                              build_state_scales)
 from src.model.net import (
-    NILMNet, appliance_state_counts, harmonic_scales, harmonic_signatures,
+    NILMNet, appliance_state_counts, harmonic_scales, harmonic_signature_vref,
+    harmonic_signatures,
     noise_signature, standby_signatures,
 )
 from src.run_baseline import LOW_LOAD, S_I, baseline_reference
@@ -469,6 +470,13 @@ def main() -> int:
                     help="광역 갈래에도 amax + 창끝 슬라이스를 준다 (12.19.4 후보 1)")
     ap.add_argument("--periodicity", action="store_true",
                     help="자기상관·교차율을 헤드 직전에 직접 준다 (12.19.4 후보 2)")
+    ap.add_argument("--harm-vnorm-anchor", action="store_true",
+                    help="**`harm_sig_vnorm` 의 기준전압을 기기별 sig 적합값으로 옮긴다** (14.49). "
+                         "지금은 `sig × (V/V_CENTER=222)^e` 인데 `sig` 는 각 기기의 격리 녹화 "
+                         "전압에서 잰 값이다 (오븐 210.4V · 핫플 214.4V · 드라이 227.3V · 포트 227.7V). "
+                         "어긋남 `(222/V_적합)^e` 가 기기별 상수 편향이 된다 — 오븐은 5.5%% 다. "
+                         "합성 홀드아웃의 `p_states/참` 이 오븐 0.970 · 핫플 0.985 · 드라이 1.030 · "
+                         "포트 1.014 로 **부호 4/4 · 순서 4/4** 맞는다. 끄면 **비트 동일**.")
     ap.add_argument("--seg-pool", type=int, default=0, metavar="N",
                     help="**구간별 풀링** (14.46). 전역 `mean`/`amax` 를 **타깃을 경계로 한 "
                          "N구간**으로 쪼갠다 (세밀·광역·원시 전력 통계 셋 다). "
@@ -647,6 +655,11 @@ def main() -> int:
         print(f"  ** 상시 배경 (12.166): +{background_power():.2f}W, "
               f"|I1| +{np.hypot(_bg[0,0], _bg[0,1])*1000:.1f} mA -> noise_sig **")
     h_scale = harmonic_scales(pool, apps)
+    # 14.49 — `harm_sig_vnorm` 의 기준전압. `--harm-vnorm-anchor` 가 아니면 안 넘긴다.
+    _vref, _vref_st = harmonic_signature_vref(pool, apps)
+    if a.harm_vnorm_anchor:
+        print("  ** 14.49 sig 기준전압을 기기별 적합값으로: "
+              + " ".join("%s=%.1fV" % (x[:4], v) for x, v in zip(apps, _vref)) + " **")
     # 상태별 지문 (13.11). `del pool` 앞에서 만들어야 한다.
     sig_state = None
     if a.state_signatures:
@@ -679,6 +692,12 @@ def main() -> int:
         standby_sig=torch.from_numpy(sb_sig),
         noise_sig=torch.from_numpy(nz_sig),
         harm_scale=torch.from_numpy(h_scale),
+        # 14.49 — `harm_sig_vnorm` 의 기준전압을 **기기별 sig 적합값**으로 옮긴다.
+        #   None 이면 222V 고정 = 옛 경로와 **비트 동일**.
+        harm_vnorm_vref=(torch.from_numpy(_vref)
+                         if (a.harm_vnorm_anchor and a.harm_sig_vnorm) else None),
+        harm_vnorm_vref_state=(torch.from_numpy(_vref_st)
+                               if (a.harm_vnorm_anchor and a.harm_sig_vnorm) else None),
         harm_odd_only=a.harm_odd_only,
         off_detach_praw=a.off_detach_praw,
         signatures_state=(torch.from_numpy(sig_state) if a.state_signatures else None),
@@ -821,6 +840,7 @@ def main() -> int:
                     # ⚠ **추론에도 써야 한다** — 지수를 박고 배운 모델이다 (14.7).
                     "vexp": bool(model.vexp),
                     "seg_pool": int(model.seg_pool),
+                    "harm_vnorm_anchor": bool(a.harm_vnorm_anchor),
                     # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)

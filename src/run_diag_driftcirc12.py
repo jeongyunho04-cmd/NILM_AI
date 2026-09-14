@@ -130,7 +130,7 @@ def main():
     ap.add_argument("--block", type=int, default=600)
     ap.add_argument("--npc", type=int, default=3072,
                     help="주기당 표본. **3072 을 쓴다** — 512/1024/2048 은 3072 대비 야코비 행 "
-                         "방향이 최대 6.4/2.4/0.6° 어긋난다 (크기는 0.5% 안). 셋째 주각을 "
+                         "방향이 최대 6.4/2.4/0.6° 어긋난다 (크기는 0.5%% 안). 셋째 주각을 "
                          "도 단위로 보는 절이라 수렴한 자리에서 재야 한다")
     ap.add_argument("--steps", action="store_true", help="[S] 보폭 고원을 훑는다 (느리다)")
     ap.add_argument("--vh", type=int, default=31,

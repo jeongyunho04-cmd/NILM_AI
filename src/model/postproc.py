@@ -582,6 +582,7 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
                     cand_gate_min: float = 0.0, margin: float = 2.0,
                     snap: bool = False, half_abs: bool = True,
                     half_requires_dryer: bool = True,
+                    allow_drop: bool = False,
                     ) -> Tuple[np.ndarray, np.ndarray]:
     """관측 전력·전압에 **맞는 저항 조합**을 골라 재배정한다 (12.112).
 
@@ -621,6 +622,13 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
             본다 (기본). `False` 면 옛 비율 관문 `|I2|/|I1| > HALFWAVE_I2_MIN` 이고
             그때는 이 함수가 **비트 동일**하게 옛 동작을 낸다. 근거는 아래 `half` 계산
             자리의 주석에 있다 (14.31).
+        allow_drop: 조합의 **개수를 줄이는 것**까지 후보에 넣는다 (14.48 ⑤ 가). 늘리는 것은
+            **여전히 금지**다 — 그것이 12.117.3 이 막은 실패(`test_9` 유령 3.94 -> 86.98W)이고,
+            여기서 여는 것은 **반대 방향**이다.
+            겨냥: `test_3` 153~162초. 참 `오븐+드라이`(ΣG 상대오차 **−0.9%**)인데 모델이
+            `포트+오븐+드라이`(**+63%**)를 낸다. 3개짜리 후보 중 최선이 +21.7% 라 `tol` 밖이고,
+            맞는 답이 **2개짜리**라 `len(pick) != len(cur)` 에서 통째로 빠진다 -> 손을 못 댄다.
+            `False` 면 옛 경로와 **비트 동일**이다.
         snap: 조합이 이미 맞을 때(`best == cur`)도 전력을 `V^2/R` 로 맞춘다
             (12.117 의 A). 개수도 신원도 안 바뀌므로 규칙 18 과 충돌하지 않는다 —
             **같은 집합**이다. 겨냥은 `test3` 처럼 조합은 맞는데 전력이 모자라
@@ -711,7 +719,11 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
 
         best, best_err, cur_err = None, np.inf, np.inf
         for pick in combos:
-            if len(pick) != len(cur):
+            # ⚠ **늘리는 것은 언제나 금지**다 (12.117.3 의 `test_9` 유령). `allow_drop` 은
+            #   **줄이는 쪽만** 연다 — 관측이 못 받치는 기기를 끄는 방향이다 (14.48 ⑤ 가).
+            if (len(pick) > len(cur)) or (not allow_drop and len(pick) != len(cur)):
+                continue
+            if allow_drop and len(pick) == 0:
                 continue
             if allow is not None and not set(pick) <= allow:
                 continue

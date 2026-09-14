@@ -32,23 +32,38 @@ RES = ("electiric_kettle", "oven", "hotplate", "hair_dryer")
 OVEN_COND, DRYER_HW = 2, 1          #: 오븐 HEATING · 드라이 약풍(반파)
 
 
-def _stats(fine, mix_ok, tag):
-    """반파 증거의 크기·지속·위치를 찍는다."""
-    i2 = fine[:, I2_CH]                                  # (n, 600) arcsinh
-    i1 = np.hypot(fine[:, I1_RE], fine[:, I1_IM])
-    pre = i2[:, :TGT + 1].mean(-1); post = i2[:, TGT + 1:].mean(-1)
-    ons = post - pre
-    hi = ons > 0.5
-    if not hi.any():
-        print(f"    {tag}: 미래 전환 창 0개")
+def _stats(fine, mask, ok, tag, hi_thr=2.0):
+    """**실제로 쓴 마스크 그대로** 반파 증거의 성질을 찍는다 (14.47).
+
+    ⚠ 14.43 에서 이 함수가 **무딘 자(평균차이)의 부분집합**을 서술하고 있었다 —
+      판정은 날카로운 자로 하면서 서술은 다른 창을 보고 있었던 것이다. 마스크를 받는다.
+    """
+    if mask.sum() < 5:
+        print(f"    {tag}: 표본 {int(mask.sum())}개 — 못 읽는다")
         return
-    # 미래 구간에서 반파가 켜져 있는 사이클 비율 (타깃 이전 평균의 3배 넘는 지점)
-    thr = (pre[:, None] + 0.5)
-    frac = (i2[:, TGT + 1:] > thr).mean(-1)
-    print(f"    {tag}: 미래 전환 {int(hi.sum())}창 · 타깃 |I2| {np.median(i2[hi, TGT]):.3f}"
-          f" · 미래 |I2| 중앙 {np.median(post[hi]):.3f} (최대 {np.median(i2[hi, TGT+1:].max(-1)):.3f})"
-          f" · 미래 구간 점유 {np.median(frac[hi]):.0%}"
-          f" · 붕괴 {100 * (~mix_ok[hi]).mean():.1f}%")
+    i2 = fine[mask][:, I2_CH]
+    i1 = np.hypot(fine[mask][:, I1_RE], fine[mask][:, I1_IM])
+    fut = i2[:, TGT + 1:]
+    on = fut > hi_thr
+    n = len(i2)
+    # 반파가 미래에서 **처음 켜지는 시점** (타깃 기준 초)
+    first = np.full(n, np.nan)
+    any_on = on.any(-1)
+    first[any_on] = on[any_on].argmax(-1) / 60.0
+    occ = on.mean(-1)                                    # 미래 구간 점유
+    run = on.sum(-1) / 60.0                              # 켜져 있는 총 시간(초)
+    r21 = (i2[:, TGT + 1:] / np.maximum(i1[:, TGT + 1:], 1e-6))
+    print(f"    {tag}  n={n} · 붕괴 {100 * (~ok[mask]).mean():.1f}%")
+    print(f"      타깃 |I2| {np.median(i2[:, TGT]):.3f}"
+          f" · 과거 최대 {np.median(i2[:, :TGT + 1].max(-1)):.3f}"
+          f" · 미래 최대 {np.median(fut.max(-1)):.3f}")
+    print(f"      **미래 점유 {np.median(occ):.0%}** (p25 {np.percentile(occ, 25):.0%}"
+          f" · p75 {np.percentile(occ, 75):.0%})"
+          f" · 켜진 시간 중앙 **{np.median(run):.2f}초** / 6.0초")
+    print(f"      **켜지는 시점** 타깃 +{np.nanmedian(first):.2f}초"
+          f" (p25 +{np.nanpercentile(first, 25):.2f} · p75 +{np.nanpercentile(first, 75):.2f})")
+    print(f"      미래 |I2|/|I1| 최대 중앙 {np.median(r21.max(-1)):.3f}"
+          f" · 타깃 |I1| {np.median(i1[:, TGT]):.3f}")
 
 
 def main() -> int:
@@ -105,7 +120,8 @@ def main() -> int:
             co = m & (np.asarray(hs.y_on)[:, jd] > 0) & (np.asarray(hs.y_state)[:, jd] == DRYER_HW)
             print(f"  [동시성] 오븐 HEATING **과 동시에** 드라이 약풍(반파) 인 창: "
                   f"**{int(co.sum())}** / {int(m.sum())} = {100*co.sum()/max(m.sum(),1):.1f}%")
-            _stats(F[m], ok[m], "합성 오븐통전")
+            _stats(F, hi, ok, "합성 · 결합 창(오븐 통전 × 반파 미래)")
+            _stats(F, lo, ok, "합성 · 전환 없는 창")
 
         if a.real:
             from src.evaluation.sealing import is_sealed
@@ -149,7 +165,8 @@ def main() -> int:
             print(f"  [실측 · 조인 자] 오븐 단독통전 {int(m.sum())}창 · 붕괴 {f(m, m & ~ok):.1f}%"
                   f"  │ 미래 전환 있음 {int(hi.sum())}창 **{f(hi, hi & ~ok):.1f}%**"
                   f"  │ 없음 {int(lo.sum())}창 {f(lo, lo & ~ok):.1f}%")
-            _stats(F[m], ok[m], "실측 오븐단독통전")
+            _stats(F, hi, ok, "실측 · 결합 창(오븐 단독통전 × 반파 미래)")
+            _stats(F, lo, ok, "실측 · 전환 없는 창")
     return 0
 
 

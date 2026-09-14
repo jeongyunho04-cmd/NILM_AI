@@ -203,6 +203,11 @@ class NILMLoss(torch.nn.Module):
         #: 이라 `I/P ∝ V⁰` 로 전압과 **무관**하다. 균일 −1 을 걸면 에어컨 MAE 가 17.19 ->
         #: 19.35 로 나빠진다 (14.27 ⑦). 저항·SMPS 는 둘 다 −1 이라 안 바뀐다.
         harm_vnorm_exp: Optional[torch.Tensor] = None,
+        #: `sig` 를 **적합한 전압** (K,) 과 (K,S) — 14.49. 주면 `harm_sig_vnorm` 의 기준을
+        #: `V_CENTER` 가 아니라 **그 기기의 녹화 전압**으로 옮긴다. `None` 이면 옛 경로와
+        #: **비트 동일**이다 (222V 에 고정).
+        harm_vnorm_vref: Optional[torch.Tensor] = None,
+        harm_vnorm_vref_state: Optional[torch.Tensor] = None,
         harm_even_magnitude: bool = False,              # 짝수차를 크기 공간에서 잰다 (13.11)
         even_coherent: Optional[torch.Tensor] = None,   # (K,) 짝수차 위상이 기기 속성인 기기 (13.45)
         signatures_site: Optional[torch.Tensor] = None,      # (Nz,K,H,2) 자리별 지문 (13.59)
@@ -354,6 +359,17 @@ class NILMLoss(torch.nn.Module):
         self.use_state_sig = signatures_state is not None
         #: 14.26 — `L_harm` 지문의 전압 정규화. `_vrel` 은 `forward` 가 `tgt["vrel"]` 로 채운다.
         self.harm_sig_vnorm = bool(harm_sig_vnorm)
+        # 14.49 — 기기별 sig 적합 전압. `V_CENTER` 로 나눠 **상수 배수**로 만들어 둔다:
+        #   맞는 식 `(V/V_적합)^e` = `(V/V_CENTER)^e · (V_CENTER/V_적합)^e`
+        # 그러니 기존 `vrel^e` 에 이 상수만 곱하면 된다. 없으면 1.0 -> **비트 동일**.
+        from src.model.inputs import V_CENTER as _VC
+        def _k(x, shape):
+            if x is None:
+                return torch.ones(shape, dtype=torch.float32)
+            t = torch.as_tensor(x, dtype=torch.float32)
+            return torch.where(t > 0, _VC / t.clamp(min=1.0), torch.ones_like(t))
+        self.register_buffer("vnorm_vref_k", _k(harm_vnorm_vref, (len(s_i),)))
+        self.register_buffer("vnorm_vref_ks", _k(harm_vnorm_vref_state, (len(s_i), 1)))
         self._vrel = None
         self.register_buffer("vnorm_exp",
                              (torch.as_tensor(harm_vnorm_exp, dtype=torch.float32)
@@ -668,6 +684,10 @@ class NILMLoss(torch.nn.Module):
                 #   ⚠ `.reshape(-1,1,1)` 로 줄이면 오른쪽 정렬 방송이 K 축과 B 를 맞부딪친다
                 #     (980573 이 그렇게 죽었다: "size of tensor a (9) ... b (8)").
                 sg = sg * _vn.pow(self.vnorm_exp.reshape(1, -1, 1, 1))
+                # 14.49 — 기준을 `V_CENTER` 에서 **그 기기의 sig 적합 전압**으로 옮긴다.
+                #   `(V/V_적합)^e = (V/V_CENTER)^e · (V_CENTER/V_적합)^e` 이므로 상수 배수다.
+                #   `vnorm_vref_k` 가 없으면 전부 1.0 -> **비트 동일**.
+                sg = sg * self.vnorm_vref_k.pow(self.vnorm_exp).reshape(1, -1, 1, 1)
             per_k = power[..., None, None] * sg                               # (B,K,H,2)
             return self._apply_pow_gain(per_k, power).sum(1)
         # power = 게이트 · p_raw 이므로 게이트는 power/p_raw 로 되살린다 —
@@ -680,6 +700,9 @@ class NILMLoss(torch.nn.Module):
         if _vn is not None:
             # (B,K,1,1,1) — 기기별 지수 (14.28)
             sgs = sgs * _vn[..., None].pow(self.vnorm_exp.reshape(1, -1, 1, 1, 1))
+            # 14.49 — 상태별 적합 전압으로 기준을 옮긴다 (없으면 1.0, 비트 동일).
+            sgs = sgs * self.vnorm_vref_ks.pow(
+                self.vnorm_exp.reshape(-1, 1)).reshape(1, sgs.shape[1], -1, 1, 1)
         per_k = torch.einsum("bks,bkshc->bkhc", pw, sgs)
         return self._apply_pow_gain(per_k, power).sum(1)
 

@@ -662,6 +662,72 @@ def harmonic_signatures(pool, appliances: Sequence[str], n_harm: int = 15) -> np
     return sig
 
 
+def harmonic_signature_vref(pool, appliances: Sequence[str],
+                            max_states: int = MAX_STATES, min_cycles: int = 200
+                            ) -> Tuple[np.ndarray, np.ndarray]:
+    """`sig` 를 **적합한 전압** (K,) 과 (K,S). 14.49 의 고침이 쓴다.
+
+    ⚠⚠ **`harm_sig_vnorm` 이 222V 에 고정돼 있었다.** `sig = median(I_h/P)` 는 각 기기의
+    **격리 녹화 전압**에서 잰 값인데, 보정이 `sig × (V/V_CENTER)^e` 로 **모두 222V 에서
+    적합했다고 가정**했다. 실제 적합 전압은 기기마다 다르다 (2026-09-14 실측):
+    ```
+    오븐 210.4V · 핫플 214.4V · 미니PC 218.7V · 드라이 227.3V · 포트 227.7V
+    에어컨 227.7V · 선풍 228.8V · 프로젝 228.7V · 충전기 229.0V
+    ```
+    어긋남은 `(V_CENTER/V_적합)^e` 라는 **기기별 상수**이고, `e=−1`(저항)이면 오븐에서
+    `222/210.4 = 1.055` — 지문이 5.5% 크게 잡혀 `L_harm` 이 전력을 그만큼 **덜 요구**한다.
+    합성 홀드아웃에서 실제로 그 순서대로 나온다 (참값 기준 `p_states/참`):
+    ```
+    기기   적합 V   예상 편향   관측 편향
+    오븐   210.4V   −5.5%     **−3.0%**
+    핫플   214.4V   −3.5%     **−1.5%**
+    드라이  227.3V   +2.3%     **+3.0%**
+    포트   227.7V   +2.5%     **+1.4%**
+    ```
+    **부호 4/4 · 순서 4/4.** (`L_power` 가 반대로 당기므로 크기는 절반쯤에서 평형이다.)
+
+    ⚠ **선택 규칙을 `harmonic_signatures`·`harmonic_signatures_by_state` 와 한 글자도
+      다르게 쓰지 마라** — 다르면 두 입구가 또 갈린다
+      ([[pin-the-two-entry-points-against-each-other]]). 아래는 그 둘을 복사한 것이다.
+    """
+    vref = np.zeros(len(appliances), dtype=np.float32)
+    vref_state = np.zeros((len(appliances), max_states), dtype=np.float32)
+    for j, app in enumerate(appliances):
+        acts = pool.appliance_activations.get(app, [])
+        if not acts:
+            continue
+        thr = 0.5 * pool.get_steady_power_w(app)          # `harmonic_signatures` 와 같다
+        vs, by = [], {}
+        for a in acts:
+            pf = np.asarray(a.net_power_features, dtype=np.float64)
+            if pf.ndim != 2 or pf.shape[1] <= 4:
+                continue
+            v = pf[:, 4]
+            m = a.target_power_w > max(thr, 1.0)
+            if m.any():
+                vs.append(v[m])
+            st = getattr(a, "state_id", None)             # `..._by_state` 와 같다
+            if st is None:
+                continue
+            m0 = a.target_power_w > 1.0
+            for s_ in np.unique(np.asarray(st)[m0]).astype(int):
+                if not 0 < s_ < max_states:
+                    continue
+                ms = m0 & (np.asarray(st) == s_)
+                if ms.any():
+                    by.setdefault(s_, []).append(v[ms])
+        if vs:
+            vref[j] = float(np.median(np.concatenate(vs)))
+        for s_, vv in by.items():
+            c = np.concatenate(vv)
+            if len(c) >= min_cycles:                      # `..._by_state` 의 문턱과 같다
+                vref_state[j, s_] = float(np.median(c))
+    # 상태별로 못 채운 칸은 기기 전체 값으로 되돌린다 (`..._by_state` 와 같은 규약)
+    for j in range(len(appliances)):
+        vref_state[j][vref_state[j] <= 0] = vref[j]
+    return vref, vref_state
+
+
 def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 15,
                                  max_states: int = MAX_STATES, min_cycles: int = 200
                                  ) -> Tuple[np.ndarray, np.ndarray]:

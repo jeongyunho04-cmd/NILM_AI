@@ -56,7 +56,8 @@ def _rp(cf, app):
     return "%.3f / %.3f" % (tp / (tp + fn), tp / (tp + fp))
 
 
-def predict(path, cache, dev, no_chain=False, postproc="off", half_abs=True):
+def predict(path, cache, dev, no_chain=False, postproc="off", half_abs=True,
+            res_drop=False):
     """(on (T,K) bool, power (T,K))  파일별. 사슬이면 Viterbi, 아니면 창별 게이트.
 
     `postproc` (14.31) — `off`(기본, 옛 동작) · `cap`(물리 상한) · `full`(거기에
@@ -121,7 +122,8 @@ def predict(path, cache, dev, no_chain=False, postproc="off", half_abs=True):
                 if postproc == "full":
                     pw, g = resistive_match(pw, g, apps, d["p_obs"].astype(np.float64),
                                             d["v_obs"], sb, d["p_noise"].astype(np.float64),
-                                            obs_harm=d["obs_harm"], half_abs=half_abs)
+                                            obs_harm=d["obs_harm"], half_abs=half_abs,
+                                            allow_drop=res_drop)
                 pw = np.asarray(pw, np.float64); on = np.asarray(g) > 0.5
             out[stem] = (on, pw)
     return apps, out
@@ -142,6 +144,13 @@ def main():
                          "(14.45). `all` 전 채널 · `even` 짝수차 |I_h|(16~22)+43,44 만. "
                          "14.41 이 확인한 것 — 미래 6초의 반파 증거가 현재 상태를 뒤집는다. "
                          "⚠ **분포 밖 입력**이라 하락분에 분포 이동이 섞인다. 상한으로만 읽어라.")
+    ap.add_argument("--res-drop", action="store_true",
+                    help="`resistive_match` 가 **개수를 줄이는 조합**까지 본다 (14.48 ⑤ 가). "
+                         "늘리는 것은 여전히 금지다 — 12.117.3 이 막은 `test_9` 유령은 "
+                         "**늘리는** 쪽이었고 여기서 여는 것은 반대 방향이다. "
+                         "겨냥: test_3 153~162초에서 참 `오븐+드라이`(상대오차 −0.9%%)인데 모델이 "
+                         "`포트+오븐+드라이`(+63%%)를 내고, 맞는 답이 2개짜리라 후보에서 통째로 빠진다. "
+                         "`--postproc full` 과 같이 써야 뜻이 있다.")
     ap.add_argument("--half-ratio", action="store_true",
                     help="정합기의 반파 관문을 **옛 비율 판**으로 되돌린다 (`half_abs=False`). "
                          "`--postproc full` 에서만 뜻이 있다. 14.31 의 B 를 가르는 자다")
@@ -171,7 +180,8 @@ def main():
     res = {}
     for path in a.ckpt:
         apps, pr = predict(path, cache, dev, no_chain=(path in a.no_chain),
-                           postproc=a.postproc, half_abs=not a.half_ratio)
+                           postproc=a.postproc, half_abs=not a.half_ratio,
+                           res_drop=a.res_drop)
         assert apps == apps0, "기기 순서가 다르다 — 비교가 안 선다"
         acc, idn, pwr, rec, cf = {}, {}, [], {}, {}
         for stem, d in cache.items():
