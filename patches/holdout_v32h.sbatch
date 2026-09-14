@@ -37,19 +37,27 @@ $PY -X utf8 src/run_gate_zharm.py
 $PY -X utf8 src/run_gate_hzwire.py
 $PY -X utf8 src/run_gate_holdout_par.py --n 120 --tmp "${TMPDIR:-/tmp}"
 
-$PY -X utf8 -m src.run_build_holdout --out "$OUT" \
-    --windows 8000 --window-cycles 3600 --holdout-frac 0.2 --seed 20260821 \
-    --workers "$W" --chunk-windows 100 \
-    --recipe-mix steady2 \
-    --smps-focus-off-p 0.4 \
-    --state-mix minipc_balanced \
-    --carrier-on oven \
-    --couple-ext \
-    --sp-curves --sp-per-texture --vtail \
-    --float-fill charger_float \
-    --steady-crop smps_steady \
-    --standby-jitter-cap 95 \
-    --vtex-step-s 10 --vtex-seg-s 10
+# ⚠⚠ 인자를 **한 곳에 모아** 굽기 **전에** 되짚는다. 984095 가 여기서 조용히 어긋났다 —
+#   sbatch 를 만들 때 문자열 치환이 접혀 `--vtex-step-s 10 --vtex-seg-s 10` 이 그대로
+#   남고 `--harmonic-z` 는 안 들어갔는데, 내 assert 가 **파일 전체**에서 `--harmonic-z`
+#   를 찾아 (위 `--help | grep` 줄에) 걸려 통과했다. **굽기 명령 자체**를 봐야 한다.
+FLAGS="--windows 8000 --window-cycles 3600 --holdout-frac 0.2 --seed 20260821 \
+        --workers "$W" --chunk-windows 100 \
+        --recipe-mix steady2 \
+        --smps-focus-off-p 0.4 \
+        --state-mix minipc_balanced \
+        --carrier-on oven \
+        --couple-ext \
+        --sp-curves --sp-per-texture --vtail \
+        --float-fill charger_float \
+        --steady-crop smps_steady \
+        --standby-jitter-cap 95 \
+        --harmonic-z"
+echo "굽기 인자: $FLAGS"
+case "$FLAGS" in *--vtex*) echo "vtex 가 남았다 — 학습 캐시는 seg 끔이다"; exit 1;; esac
+case "$FLAGS" in *--harmonic-z*) ;; *) echo "--harmonic-z 가 없다 — 이 판의 목적이다"; exit 1;; esac
+
+$PY -X utf8 -m src.run_build_holdout --out "$OUT" $FLAGS
 
 echo "=== 관문: v32 와 **harmonic_z·병렬 표시 말고** 다 같은가 ==="
 $PY -X utf8 -c "
