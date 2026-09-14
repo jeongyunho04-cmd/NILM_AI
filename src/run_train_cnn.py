@@ -248,6 +248,29 @@ def _vnorm_exp(apps):
                          for a in apps], dtype=torch.float32)
 
 
+def _res_ohm(apps, res_apps: str, half: bool) -> torch.Tensor:
+    """(K,) 등가저항 Ω. 목록에 없는 기기는 0 = 안 건다 (14.32)."""
+    from src.model.postproc import HALFWAVE_OHM, RESISTIVE_OHM
+    want = {x.strip() for x in res_apps.split(",") if x.strip()}
+    tbl = HALFWAVE_OHM if half else RESISTIVE_OHM
+    return torch.tensor([tbl[x] if (x in tbl and x in want) else 0.0 for x in apps],
+                        dtype=torch.float32)
+
+
+def _res_cond(apps, spec: str) -> torch.Tensor:
+    """(K,) long 통전 상태 번호. `"oven:2,hotplate:2"` 꼴. 0 = 켜짐이 곧 통전 (14.32)."""
+    d = {}
+    for it in spec.split(","):
+        if not it.strip():
+            continue
+        k, _, v = it.partition(":")
+        k = k.strip()
+        if k not in apps:
+            raise SystemExit(f"--res-cond-state: 모르는 기기 {k!r} — 있는 것: {apps}")
+        d[k] = int(v)
+    return torch.tensor([d.get(x, 0) for x in apps], dtype=torch.long)
+
+
 def to_targets(batch, dev):
     (fine, wide, yp, yo, ypl, ys, yst, oh, pn, pobs, zg) = [
         b.to(dev, non_blocking=True) for b in batch]
@@ -257,6 +280,9 @@ def to_targets(batch, dev):
         # 14.26 — 창 전압비 V/V_CENTER. `L_harm` 의 지문을 이것으로 나눈다 (`--harm-sig-vnorm`).
         #   세밀 채널 25 가 `(v − V_CENTER)/V_SPAN` 이다 (`net.V_CH_FINE`).
         "vrel": (fine[:, 25].mean(-1) * V_SPAN + V_CENTER) / V_CENTER,
+        # 14.32 — `L_swap` 이 쓰는 창 전압 (V). **같은 채널에서 같은 식으로** 낸다.
+        #   ⚠ 이것이 없으면 `_swap_term` 의 가드가 **조용히 0** 을 낸다.
+        "v_rms": fine[:, 25].mean(-1) * V_SPAN + V_CENTER,
         # 13.55 — 이 창의 선로 저항 [Ω]. 옛 캐시면 NaN 이고 손실이 알아서 건너뛴다.
         "log_z": torch.log(zg[:, 0].clamp(min=1e-3)),
     }
@@ -336,6 +362,44 @@ def main() -> int:
                          "2 로 가고 실측 절대잔차가 41->24W 로 준다. 모터는 지수 0 이라 "
                          "보정이 안 걸린다. `--no-harm-sig-vnorm` 이면 옛 판과 비트 동일")
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
+    # ── 저항 조합 맞바꿈 `L_swap` 을 1단계에 (14.32) ──────────────────────────
+    ap.add_argument("--w-swap", type=float, default=0.0, metavar="W",
+                    help="**저항 조합 맞바꿈** `L_swap` (12.158 을 1단계로, 14.32). "
+                         "니크롬선은 P=V²/R 이고 R 이 기기 고유값이라 컨덕턴스로 옮기면 "
+                         "조합을 셀 수 있다 — 오븐 40.15Ω 대 포트 35.65Ω 은 겹치지 "
+                         "않는데(각 폭 1.5~2.4%%, 녹화 사이 0.08%%) 고조파로는 각도가 "
+                         "1.91°%% 라 못 가른다. 겹친 구간에서 몫을 통째로 뒤집어도 고조파 "
+                         "모양이 0.1~0.2%%밖에 안 변한다. **기본 0 = 완전히 꺼짐.** "
+                         "⚠ `L_res` 가 아니라 이 항을 쓴다 — `L_res` 는 비저항 일곱의 "
+                         "게이트로 기울기가 샌다 (`run_gate_swap1.py` [1]).")
+    ap.add_argument("--swap-tol", type=float, default=0.02, metavar="TOL",
+                    help="상대오차 문턱. 12.112.3 이 0.02 를 최적으로 쟀다 "
+                         "(0.01 은 아무것도 안 고치고 0.05 이상은 엉뚱한 조합을 문다).")
+    ap.add_argument("--swap-slack", type=int, default=0, metavar="N",
+                    help="켜진 기기 **개수**의 허용 변화. 0 이면 맞바꿈만 (12.112). "
+                         "⚠ 후처리에서 이 제한을 풀었을 때 없는 기기를 발명했다.")
+    ap.add_argument("--swap-tiebreak", default="mag", choices=("off", "h3", "mag"),
+                    help="tol 안에 여러 조합이 들면 무엇으로 고르나 (12.165.6). "
+                         "컨덕턴스가 같으면 **전력도 같아**(포트 1377W 대 드라이기강+핫플 "
+                         "1392W) 정보가 0 이다. `mag` 는 차수별 크기만 봐 공통 위상 회전에 "
+                         "면역이고, `h3`(복소)은 `harm_offset` 이 안 빠져 **반증됐다**.")
+    ap.add_argument("--swap-tb-orders", default="3", metavar="LIST",
+                    help="동점깨기에 쓸 차수. h1 은 안 쓴다(거기가 축퇴인 축이다). "
+                         "12.165.6 이 h3 하나가 맞다고 쟀다.")
+    ap.add_argument("--res-apps", default="electiric_kettle,oven,hotplate,hair_dryer",
+                    metavar="LIST",
+                    help="`--w-swap` 이 저항을 못 박을 기기. **넷 다 기본**이다 — 새 계측기 "
+                         "격리 녹화에서 R 폭이 0.4~2.4%%이고 녹화 사이가 오븐 0.08%% · "
+                         "핫플 0.26%% 다. 2단계 기본(포트·오븐)이 좁은 것은 옛 계측기 "
+                         "결론이라 규칙 1 대상이다. 드라이기는 `HALFWAVE_OHM` 이 "
+                         "약풍(108.6Ω)을 따로 가른다.")
+    ap.add_argument("--res-cond-state", default="oven:2,hotplate:2", metavar="LIST",
+                    help="`on=1` 인데 통전이 아닌 상태가 있는 기기의 **통전 상태 번호** "
+                         "(14.32). 오븐 {1: 팬·조명 16.8W, 2: 히터 1357W} · 핫플 "
+                         "{1: 표시등 10W, 2: 통전 549.6W} 가 그렇다. 안 주면 조합 탐색이 "
+                         "오븐 팬·조명 창을 '통전' 으로 세어 `L_on` 과 싸운다 — 실측에서 "
+                         "오븐 게이트가 켜진 창의 전력 중앙이 16.0W 인데 σ·V²/R 은 "
+                         "1094W 를 요구한다. 빈 문자열이면 옛 동작(켜짐=통전).")
     ap.add_argument("--w-state-power", type=float, default=0.0, metavar="W",
                     help="상태별 전력 출력을 그 상태의 실제 전력에 묶는 항 (12.35). "
                          "0 이면 끈다 - 그러면 전력 손실이 섞인 뒤에만 걸려 "
@@ -582,9 +646,16 @@ def main() -> int:
         smps_group=[apps.index(x) for x in
                     ("beam_projector", "laptop_charger", "minipc") if x in apps],
         weights=LossWeights(harm=a.w_harm, cons=a.w_cons, over=a.w_over,
-                            state_power=a.w_state_power, z=a.w_z),
+                            state_power=a.w_state_power, z=a.w_z, swap=a.w_swap),
         s_state=(build_state_scales(apps, [S_I[x] for x in apps])
                  if a.per_state_scale else None),
+        # ── 저항 조합 맞바꿈 (14.32). `--w-swap 0` 이면 버퍼만 생기고 안 걸린다 ──
+        res_ohm=_res_ohm(apps, a.res_apps, half=False),
+        res_ohm_half=_res_ohm(apps, a.res_apps, half=True),
+        res_cond_state=_res_cond(apps, a.res_cond_state),
+        swap_tol=a.swap_tol, swap_slack=a.swap_slack,
+        swap_tiebreak=a.swap_tiebreak,
+        swap_tb_orders=[int(x) for x in a.swap_tb_orders.split(",") if x.strip()],
     ).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd)
     steps = a.epochs * max(1, a.epoch_windows // a.batch)
