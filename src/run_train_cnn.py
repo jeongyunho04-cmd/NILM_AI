@@ -770,8 +770,8 @@ def main() -> int:
     _vhrel_on = (np.asarray(_vnorm_exp(apps, a.harm_vnorm_classes), dtype=np.float32) != 0
                  ).astype(np.float32)
     if a.harm_vhrel_anchor:
-        print("  ** 14.56/14.61 sig 파형 앵커 %.2f할 · 기준 " + a.harm_vhrel_src + " · 기기 %s **"
-              % (a.harm_vhrel_frac,
+        print("  ** 14.56/14.61 sig 파형 앵커 %.2f할 · 기준 %s · 기기 %s **"
+              % (a.harm_vhrel_frac, a.harm_vhrel_src,
                  " ".join(x[:4] for x, o in zip(apps, _vhrel_on) if o)))
     if a.harm_vnorm_anchor:
         print("  ** 14.49 sig 기준전압을 기기별 적합값으로 (%.2f할): " % a.harm_vnorm_frac
