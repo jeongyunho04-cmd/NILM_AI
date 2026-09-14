@@ -816,9 +816,14 @@ def main() -> int:
         # 13.55: 보조 Z 항은 **표현이 잡히는지**를 바로 보여준다. 출발점은
         # 평균 예측 = Var(log r) 0.296 이다. 이 값이 안 내려가면 헤드가 논 것이다.
         _zs = f" z {agg['z']:.4f}" if a.w_z > 0 else ""
+        # 14.32 — `L_swap` 이 **실제로 물고 있는지** 매 에포크 보인다.
+        #   `swap_frac` 이 0 이면 항이 안 걸린 것이고, 그것이 이 계열의 기본 실패다
+        #   (관문은 학습 전 한 번만 본다 — 중간에 0 으로 주저앉는 것은 못 잡는다).
+        _sw = (f" swap {agg['swap']:.4f}/{agg['swap_frac']:.3f}"
+               if a.w_swap > 0 else "")
         if ep % a.eval_every and ep != a.epochs:
             print(f"  ep{ep:>3d}  loss {agg['total']:.4f} (pw {agg['power']:.4f} "
-                  f"harm {agg['harm']:.4f}{_zs})  [{t_train:.0f}s, "
+                  f"harm {agg['harm']:.4f}{_zs}{_sw})  [{t_train:.0f}s, "
                   f"{a.epoch_windows/max(t_train,1e-9):,.0f} win/s]", flush=True)
             continue
 
@@ -831,7 +836,7 @@ def main() -> int:
                "train_sec": round(t_train, 1)}
         hist.append(row)
         print(f"  ep{ep:>3d}  loss {agg['total']:.4f} (pw {agg['power']:.4f} "
-              f"harm {agg['harm']:.4f}{_zs})  |  MAE {row['mae']:.3f}W  F1 {row['f1']:.4f}  "
+              f"harm {agg['harm']:.4f}{_zs}{_sw})  |  MAE {row['mae']:.3f}W  F1 {row['f1']:.4f}  "
               f"저항3종 {row['resistive_acc']:.3f}  잔차 {row['resid_abs']:.1f}W  "
               f"[{t_train:.0f}s 학습 / {row['sec']-t_train:.0f}s 평가, "
               f"{a.epoch_windows/max(t_train,1e-9):,.0f} win/s]", flush=True)
