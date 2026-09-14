@@ -64,9 +64,14 @@ if not b.get('harmonic_z'): sys.exit('켬 캐시 meta 에 harmonic_z 가 없다'
 if a.get('harmonic_z'):     sys.exit('끔 캐시 meta 에 harmonic_z 가 있다')
 skip = {'harmonic_z','shard','shard_chunks','build_seconds','bytes','merged_from',
         'merged_partial','positive_rate','recipe_counts','built_at','content_sha256'}
+# ⚠ '키 없음' 과 '0/False' 는 **같은 뜻**이다 — `train60_v32` 는 `vtex_step_s` 가 생기기
+#   전에 구운 캐시라 키가 아예 없고, 새 캐시는 0.0 으로 적는다. 그대로 견주면 983992 처럼
+#   자료가 멀쩡한데 관문이 운다 (자료 비트 동일은 굽기 관문 ③이 이미 증명했다).
+def nz(v):
+    return None if v is None or v == 0 or v == '' or v is False else v
 d = [k for k in set(a)|set(b) if k not in skip
-     and json.dumps(a.get(k), sort_keys=True, default=str)
-      != json.dumps(b.get(k), sort_keys=True, default=str)]
+     and json.dumps(nz(a.get(k)), sort_keys=True, default=str)
+      != json.dumps(nz(b.get(k)), sort_keys=True, default=str)]
 if d: sys.exit('두 캐시가 harmonic_z 말고도 다르다: %s' % d)
 print('  관문 OK 두 캐시는 harmonic_z **하나만** 다르다 (창 %d)' % b['n_windows'])
 "

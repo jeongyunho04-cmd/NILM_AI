@@ -106,10 +106,33 @@ def main() -> int:
         ck("① %-10s 텍스처 de-embed 쪽" % e, a)
         ck("① %-10s 시뮬레이터 re-embed 쪽" % e, b,
            "" if b else "**여기가 2026-09-14 에 비어 있었다**")
-    # holdout 은 워커 초기화가 무거워 배선 줄만 정적으로 본다 (⑤ 가 일반 규칙으로 덮는다)
+    # ── holdout: **글자 검사로는 부족했다** (2026-09-14, 984064) ──────────
+    #   두 줄이 다 있는데도 `NameError: harmonic_z` 로 죽었다 — `_build_generator(o)` 가
+    #   `o['harmonic_z']` 를 안 꺼냈기 때문이다 (14.51 에서 함수로 뽑을 때 안 따라왔다).
+    #   ⚠ 아래 키 검사는 **그 버그를 못 잡는다** — 버그는 *없는 키를 읽은 것*이 아니라
+    #     **이름을 아예 안 묶은 것**(NameError)이라 `need - have` 가 빈다. 처음에 이걸로
+    #     닫았다고 적었다가 되짚어보고 거뒀다. 키 검사는 *다른* 부류(옵션을 opts 에 안 넣고
+    #     읽는 꼴)를 막으니 남겨 둔다.
+    #   ⇒ **진짜 닫는 것은 `run_gate_fmt.py` 의 '안 묶인 이름' 검사다** (14.67).
+    #     거기서 고침 전 `holdout.py` 를 넣으면 `_build_generator -> harmonic_z` 가 잡힌다.
+    import ast as _a
     ho = Path("src/evaluation/holdout.py").read_text(encoding="utf-8")
+    _t = _a.parse(ho)
+    _fn = next(n for n in _a.walk(_t)
+               if isinstance(n, _a.FunctionDef) and n.name == "_build_generator")
+    need = {n.slice.value for n in _a.walk(_fn)
+            if isinstance(n, _a.Subscript) and isinstance(n.value, _a.Name)
+            and n.value.id == "o" and isinstance(n.slice, _a.Constant)
+            and isinstance(n.slice.value, str)}
+    have = {n.elts[0].value for n in _a.walk(_t)
+            if isinstance(n, _a.Tuple) and len(n.elts) == 2
+            and isinstance(n.elts[0], _a.Constant) and isinstance(n.elts[0].value, str)}
+    miss = sorted(need - have)
+    ck("① holdout    `_build_generator` 가 읽는 키가 opts 에 다 있다", not miss,
+       ("**빠진 키: %s**" % miss) if miss else "키 %d개 전부" % len(need))
     ck("① holdout    두 줄이 다 있다",
        "set_default_harmonic_z(_hz)" in ho and "grid_sim.harmonic_z_table = _hz" in ho)
+    ck("① holdout    `harmonic_z` 를 `o` 에서 꺼낸다", "harmonic_z" in need)
 
     # ── ②③④ 자료로 본다 ───────────────────────────────────────────────
     #  ⚠ **순서가 중요하다.** 텍스처 라이브러리는 모듈 전역 캐시라, 배선마다 `_build` 를

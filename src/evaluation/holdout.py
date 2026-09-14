@@ -148,6 +148,11 @@ def _build_generator(o: dict, quiet: bool = False):
     float_fill = o['float_fill']
     steady_crop = o['steady_crop']
     sibling_rotate = o['sibling_rotate']
+    # 14.62 ⚠ 이 줄이 빠져 있었다 — 14.51 에서 `_build_generator` 를 함수로 뽑을 때
+    #   따라오지 않았고, `harmonic_z` 를 쓰는 아래 세 줄이 **NameError** 로 죽었다
+    #   (984064). `run_gate_hzwire` (1) 이 이 파일에 그 두 줄이 **있는지만** 보는
+    #   글자 검사라 못 잡았다 — 이제 `o[...]` 키가 opts 에 다 있는지 AST 로 본다.
+    harmonic_z = o['harmonic_z']
     vtex_step_s = o['vtex_step_s']
     vtail = o['vtail']
     background = o['background']
@@ -304,6 +309,7 @@ def build_holdout(
         ('background', background),
         ('couple_ext', couple_ext),
         ('vtex_seg_s', vtex_seg_s),
+        ('harmonic_z', harmonic_z),
         ('window_cycles', window_cycles),
         ('recipe_mix', recipe_mix),
         ('smps_focus_off_p', smps_focus_off_p),

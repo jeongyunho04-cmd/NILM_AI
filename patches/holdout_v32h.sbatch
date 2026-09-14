@@ -58,9 +58,14 @@ a = json.load(open('processed_data/holdout60_v32/meta.json', encoding='utf-8'))
 b = json.load(open('$OUT/meta.json', encoding='utf-8'))
 skip = {'harmonic_z', 'workers_chunked', 'chunk_windows',
         'content_sha256', 'bytes', 'built_at', 'positive_rate', 'recipe_counts'}
+# ⚠ '키 없음' 과 '0/False' 는 **같은 뜻**이다 — `train60_v32` 는 `vtex_step_s` 가 생기기
+#   전에 구운 캐시라 키가 아예 없고, 새 캐시는 0.0 으로 적는다. 그대로 견주면 983992 처럼
+#   자료가 멀쩡한데 관문이 운다 (자료 비트 동일은 굽기 관문 ③이 이미 증명했다).
+def nz(v):
+    return None if v is None or v == 0 or v == '' or v is False else v
 diff = [k for k in set(a) | set(b) if k not in skip
-        and json.dumps(a.get(k), sort_keys=True, default=str)
-        != json.dumps(b.get(k), sort_keys=True, default=str)]
+        and json.dumps(nz(a.get(k)), sort_keys=True, default=str)
+        != json.dumps(nz(b.get(k)), sort_keys=True, default=str)]
 if diff: sys.exit('❌ 텍스처 손잡이 말고도 다르다: %s' % diff)
 if not b.get('harmonic_z'):                sys.exit('❌ meta 에 harmonic_z 가 안 적혔다')
 if not b.get('workers_chunked'):           sys.exit('❌ 병렬로 안 구웠다 — 워커가 0으로 떨어졌다')

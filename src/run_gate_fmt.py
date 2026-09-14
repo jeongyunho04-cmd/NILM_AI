@@ -27,6 +27,7 @@ print("  ** ... %.2f할 · 기준 " + a.harm_vhrel_src + " · 기기 %s **"
 """
 from pathlib import Path
 import ast
+import builtins
 import re
 import sys
 
@@ -69,6 +70,86 @@ def bad_formats(src):
     return out
 
 
+# ── 14.67: 함수 안에서 Load 되는데 **어디에도 안 묶인 이름** ────────────────────
+#   2026-09-14 에 홀드아웃(984064)이 `NameError: harmonic_z` 로 죽었다. 14.51 에서
+#   `_build_generator` 를 함수로 뽑을 때 `harmonic_z = o['harmonic_z']` 가 안 따라왔다.
+#   `run_gate_hzwire` (1) 은 그 파일에 배선 두 줄이 **있는지**만 보는 글자 검사라 못 잡았고,
+#   "`o[...]` 키가 opts 에 다 있나" 로도 **못 잡는다** — 버그는 없는 키를 읽은 게 아니라
+#   **이름을 아예 안 묶은** 것이기 때문이다. 방향을 바로잡아 이렇게 잡는다.
+#   ⚠ 한쪽으로만 틀리게 짠다: `bound` 를 **넉넉히** 모아 오탐을 안 낸다 (놓칠지언정).
+def _bound(fn):
+    """`fn` 안에서 묶이는 이름 ∪ 인자. Load 만 되는 이름은 빼고 돌려준다."""
+    b, loads = set(), set()
+
+    def args_of(a):
+        out = [x.arg for x in list(a.posonlyargs) + list(a.args) + list(a.kwonlyargs)]
+        if a.vararg:
+            out.append(a.vararg.arg)
+        if a.kwarg:
+            out.append(a.kwarg.arg)
+        return out
+
+    b.update(args_of(fn.args))
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Name):
+            (b if isinstance(n.ctx, (ast.Store, ast.Del)) else loads).add(n.id)
+        elif isinstance(n, ast.Lambda):
+            b.update(args_of(n.args))
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if n is not fn:
+                b.add(n.name)
+                if getattr(n, "args", None):
+                    b.update(args_of(n.args))
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            for al in n.names:
+                b.add((al.asname or al.name).split(".")[0])
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            b.add(n.name)
+        elif isinstance(n, (ast.Global, ast.Nonlocal)):
+            b.update(n.names)
+    return loads - b
+
+
+def _module_names(tree):
+    """모듈 수준에서 묶이는 이름 ∪ 빌트인. 함수/클래스 **안**은 안 본다."""
+    g = set(dir(builtins)) | {"__name__", "__file__", "__doc__", "__package__"}
+    for st in tree.body:
+        if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            g.add(st.name)
+            continue
+        for n in ast.walk(st):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                g.add(n.id)
+            elif isinstance(n, (ast.Import, ast.ImportFrom)):
+                for al in n.names:
+                    g.add((al.asname or al.name).split(".")[0])
+            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                g.add(n.name)
+    return g
+
+
+def free_names(src):
+    """[(줄, 함수, 이름)] — 실행하면 `NameError` 가 날 이름."""
+    t = ast.parse(src)
+    g = _module_names(t)
+    out = []
+
+    def visit(node):
+        # ⚠ **중첩 함수로는 내려가지 않는다.** 중첩 함수는 바깥 함수의 지역을 닫아 읽으므로
+        #   따로 재면 바깥 지역이 전부 '안 묶인 이름' 으로 보인다 (`losses.py` 의 `_k` 가
+        #   `__init__` 의 `_VC` 를 읽는 꼴). 바깥 함수를 잴 때 `_bound` 가 하위 트리를 통째로
+        #   훑으므로 중첩 함수의 Load 도 거기서 같이 검사된다.
+        for ch in ast.iter_child_nodes(node):
+            if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for nm in sorted(_bound(ch) - g):
+                    out.append((ch.lineno, ch.name, nm))
+            else:
+                visit(ch)
+
+    visit(t)
+    return out
+
+
 def ck(name, ok, note=""):
     print("  [" + (OK if ok else NG) + "] " + name + (("   " + note) if note else ""))
     if not ok:
@@ -85,15 +166,31 @@ _GOOD = ('print("a %s b %s" % (x, y))' + chr(10)
 
 
 def main() -> int:
-    print("`%` 형식 자리 수 관문 (14.66)")
+    print("정적 관문 — `%` 형식 자리 수 (14.66) · 안 묶인 이름 (14.67)")
     print()
     ck("음성 대조 — 2026-09-14 에 학습을 죽인 그 꼴을 잡는다",
        len(bad_formats(_BROKEN)) == 1, str(bad_formats(_BROKEN)))
     ck("음성 대조 — 멀쩡한 꼴은 안 잡는다 (%%, 이름 있는 형태, 별표 너비 포함)",
        not bad_formats(_GOOD), str(bad_formats(_GOOD)))
 
+    _NBROKEN = ("def f(o):" + chr(10) + "    x = o['x']" + chr(10)
+                + "    if flag:" + chr(10) + "        return x" + chr(10))
+    _NGOOD = ("import os" + chr(10) + "G = 1" + chr(10)
+              + "def f(o, flag=0):" + chr(10)
+              + "    g = lambda n: n + G" + chr(10)
+              + "    import re as _r" + chr(10)
+              + "    try:" + chr(10) + "        pass" + chr(10)
+              + "    except OSError as e:" + chr(10) + "        print(e, _r, os)" + chr(10)
+              + "    return [y for y in o if flag], g" + chr(10)
+              + "def h():" + chr(10) + "    return f" + chr(10))
+    ck("음성 대조 — 안 묶인 이름을 잡는다 (984064 의 그 꼴)",
+       [x[2] for x in free_names(_NBROKEN)] == ["flag"], str(free_names(_NBROKEN)))
+    ck("음성 대조 — 멀쩡한 꼴은 안 잡는다 (lambda·내포·except as·모듈 전역·늦은 def)",
+       not free_names(_NGOOD), str(free_names(_NGOOD)))
+
     bad = []
     skipped = []
+    nbad = []
     for f in sorted(Path("src").rglob("*.py")):
         try:
             t = f.read_text(encoding="utf-8")
@@ -106,6 +203,13 @@ def main() -> int:
             continue
         for ln, k, m in hits:
             bad.append("%s:%d 자리 %d 대 값 %d" % (str(f).replace(chr(92), "/"), ln, k, m))
+        try:
+            for ln, fn, nm in free_names(t):
+                nbad.append("%s:%d %s -> %s" % (str(f).replace(chr(92), "/"), ln, fn, nm))
+        except SyntaxError:
+            pass
+    ck("src 전체 — 안 묶인 이름이 없다 (NameError 예약)", not nbad,
+       ("  ".join(nbad[:6]) if nbad else "검사 통과"))
     ck("src 전체 — 자리 수가 안 맞는 `%` 가 없다", not bad,
        ("  ".join(bad[:6]) if bad else "검사 통과"))
     if skipped:
