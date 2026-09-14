@@ -173,7 +173,7 @@ class SmpsCircuit:
     # ── 결합 델타 ─────────────────────────────────────────────────────────
     def coupling_delta(self, powers: Dict[str, float], rel_env: np.ndarray, env_id: int, v1: float,
                        r_line: float, l_line: float, R: Optional[Dict[str, float]] = None,
-                       i_ext: Optional[np.ndarray] = None) -> Dict[str, np.ndarray]:
+                       i_ext: Optional[np.ndarray] = None, zk=()) -> Dict[str, np.ndarray]:
         """{기기: I_i(V_term) − I_i(V_src)}. SMPS 가 **하나여도** 돈다 (13.22).
 
         V_term = V_src − Z(h)·Σ_i I_i, Z(h) = r_line + j·2π·60·h·l_line, 고정점 `n_iter` 회 (2회면 잠긴다, 가이드 §6.1).
@@ -196,13 +196,14 @@ class SmpsCircuit:
         if i_ext is None:
             eb, iq = (), None
         else:
-            _z = r_line + 1j * 2 * np.pi * F * np.arange(1, H + 1) * l_line
+            _z = zline(r_line, l_line, zk)
             _d = np.asarray(i_ext, complex) * _z
             _dq = (np.round(_d.real / EXT_DROP_BIN_V) + 1j * np.round(_d.imag / EXT_DROP_BIN_V))
             eb = tuple(_dq.real.astype(np.int64)) + tuple(_dq.imag.astype(np.int64))
             iq = _dq * EXT_DROP_BIN_V / _z
         key = ("cpl", pb, rb, int(env_id), int(round(v1 / V_BIN_V)),
-               int(round(r_line / Z_BIN_OHM)), int(round(l_line / L_BIN_H)), eb)
+               int(round(r_line / Z_BIN_OHM)), int(round(l_line / L_BIN_H)), eb,
+               tuple(zk))          # 14.59 — 표가 키에 없으면 다른 Z 가 같은 칸을 먹는다
         got = self._cpl_cache.get(key)
         if got is not None:
             self.hits += 1
@@ -213,7 +214,7 @@ class SmpsCircuit:
         vq = int(round(v1 / V_BIN_V)) * V_BIN_V
         zr = int(round(r_line / Z_BIN_OHM)) * Z_BIN_OHM
         zl = int(round(l_line / L_BIN_H)) * L_BIN_H
-        out = self._compute_coupling(pq, rel_env, vq, zr, zl, rq, iq)
+        out = self._compute_coupling(pq, rel_env, vq, zr, zl, rq, iq, zk)
         if len(self._cpl_cache) < self.max_cache:
             self._cpl_cache[key] = out
         return out
@@ -247,9 +248,30 @@ class SmpsCircuit:
         corr = np.where(np.abs(corr) > AITKEN_CLAMP * np.abs(d1), 0.0, corr)
         return x2 - corr
 
+def zline(r_line: float, l_line: float, zk=()) -> np.ndarray:
+    """(H,) 선로 임피던스. `zk` 가 비면 `r + j·2πF·h·L` — **옛 경로와 비트 동일**.
+
+    `zk` 는 `((차수, Re, Im), ...)` — `Z_1` 에 대한 **복소 배수** (14.59). 해시 가능해야
+    캐시 키에 들어간다. ⚠ 이것은 `grid_simulator.harmonic_z` 와 **같은 표**를 받아야 한다
+    — 두 입구가 갈리면 결합 델타와 단자 전압이 서로 다른 Z 를 쓴다
+    ([[pin-the-two-entry-points-against-each-other]]). 여기서 `grid_simulator` 를 수입하지
+    않는 까닭은 순환 수입이라서다 — 그래서 **값으로** 받는다.
+    """
+    h = np.arange(1, H + 1)
+    z = float(r_line) + 1j * 2 * np.pi * F * h * float(l_line)
+    if not zk:
+        return z
+    z1 = float(r_line) + 1j * 2 * np.pi * F * float(l_line)
+    z = z.astype(np.complex128).copy()
+    for hh, re_, im_ in zk:
+        if 1 <= int(hh) <= H:
+            z[int(hh) - 1] = z1 * complex(float(re_), float(im_))
+    return z
+
+
     def solve_terminal(self, powers: Dict[str, float], rel_env: np.ndarray, v1: float,
                        r_line: float, l_line: float,
-                       R: Optional[Dict[str, float]] = None) -> Optional[np.ndarray]:
+                       R: Optional[Dict[str, float]] = None, zk=()) -> Optional[np.ndarray]:
         """개방 전압 `rel_env` 에서 **단자 전압**(절대, V)을 푼다 — 검증기가 이 경로를 직접 재려고 쓴다.
 
         `coupling_delta` 와 **같은 풀개**(`_solve_vterm`)를 탄다. 양자화는 하지 않는다 —
@@ -258,8 +280,7 @@ class SmpsCircuit:
         p = {d: float(v) for d, v in powers.items() if self.has(d) and v is not None and v > 0.5}
         if not p:
             return None
-        h = np.arange(1, H + 1)
-        Z = float(r_line) + 1j * 2 * np.pi * F * h * float(l_line)
+        Z = zline(r_line, l_line, zk)
         V_src, tail = _split_tail(np.asarray(rel_env, complex) * float(v1))
         ms = self.models
         Rd = R or {}
@@ -280,9 +301,8 @@ class SmpsCircuit:
 
     def _compute_coupling(self, powers: Dict[str, float], rel_env: np.ndarray, v1: float,
                           r_line: float, l_line: float, R: Dict[str, Optional[float]],
-                          i_ext: Optional[np.ndarray] = None) -> Dict[str, np.ndarray]:
-        h = np.arange(1, H + 1)
-        Z = r_line + 1j * 2 * np.pi * F * h * l_line
+                          i_ext: Optional[np.ndarray] = None, zk=()) -> Dict[str, np.ndarray]:
+        Z = zline(r_line, l_line, zk)
         # 13.73: 꼬리(h17~h31)는 **강하 없이 통과**시킨다. 고정점은 h1~h15 그대로다 —
         # 꼬리의 부하 전류가 mA 라 Z·I 가 1~2mV(기본파의 0.001%)이고, 늘리면 고정점이
         # 32차원이 되면서 회로 호출이 는다. 값에 비해 비싸다 (설계 5.2절).

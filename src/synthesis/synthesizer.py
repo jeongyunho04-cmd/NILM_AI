@@ -365,8 +365,12 @@ class LoadSynthesizer:
             src = _tx.source_rel() if hasattr(_tx, "source_rel") else np.asarray(_tx)
             src = np.asarray(src, dtype=np.complex128)
             rel[_a:_b, :min(len(src), NUM_HARMONICS)] = src[None, :NUM_HARMONICS]
+        # 14.59 — 차수별 `Z_h`. 표가 없으면 `r + j·h·x` 그대로라 **비트 동일**이다.
+        from src.synthesis.grid_simulator import harmonic_z
         h = np.arange(1, NUM_HARMONICS + 1)
-        z = float(env.r_grid_ohm) + 1j * h * float(env.x_grid_ohm)
+        z = harmonic_z(h, float(env.r_grid_ohm), float(env.x_grid_ohm),
+                       getattr(env, "site", ""),
+                       getattr(self.grid_sim, "harmonic_z_table", None))
         v_op = np.asarray(v_open, dtype=np.float64).reshape(-1, 1)
         return (rel * v_op - z[None, :] * np.asarray(total_complex)).astype(np.complex64)
 

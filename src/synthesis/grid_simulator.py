@@ -167,8 +167,74 @@ class VoltageEnvironment:
     #: 비었거나 길이 1 이면 옛 경로(정적 하나)와 **비트 동일**이다. `texture` 는 이 열의
     #: 가운데 원소이므로 이 손잡이를 꺼도 쓰이는 텍스처가 안 바뀐다.
     texture_seq: Tuple[object, ...] = ()
+    #: 이 창의 **자리** (D·E). 차수별 `Z_h` 표를 고르는 데 쓴다 (14.59). 탐색 성분은 "" 다.
+    site: str = ""
     #: SMPS 별 NTC 상태 R [Ω] — pkl 의 실측 범위에서 창마다 뽑는다 (README_v12 "R 은 상태다").
     r_state: Dict[str, float] = field(default_factory=dict)
+
+
+#: **실측 차수별 선로 임피던스** — `Z_1` 에 대한 **복소 배수** (14.59, 2026-09-14).
+#:
+#: 왜 배수인가: `Z_1` 은 자리·세션마다 이미 실측돼 있다 (D 1.15 · E 0.42, 13.4). 차수
+#: 의존만 따로 실으면 그 값을 안 건드린다.
+#:
+#: 어떻게 쟀나 (`src/run_diag_zharm.py`): 계단 앞뒤 3초 창(가드 0.75초, 양쪽 P 산포<40W)에서
+#: 모은 `(ΔV_h, ΔI_h)` 쌍을 **복소 최소제곱** `ΔV = −Z·ΔI` 로 푼다. `|ΔI|²` 가 자동
+#: 가중치라 조건화가 좋은 계단이 지배한다.
+#: ⚠ **계단마다 비를 내고 중앙값을 잡으면 안 된다** — 작은 계단이 큰 계단과 같은 무게를
+#:   받아 h3 이 음성대조와 겹쳐 보였다. 그렇게 쟀다가 결론을 한 번 거뒀다.
+#: ```
+#:   자리 D (표본 115)   Re      Im     |Z|   Z/Z_1     R²   음성 R²
+#:     h1              1.140  +0.002  1.140   1.00   0.996   0.938   <- 13.4 의 1.15 와 일치
+#:     h3              6.059  +4.672  7.651  **6.71** 0.742   0.468   ✅
+#:     h5              0.263  −2.364  2.379  **2.09** 0.580   0.047   ✅
+#:     h7~h15                                        0.04~0.43        ⚠ 못 푼다
+#:   자리 E (표본 82)
+#:     h1              0.418  +0.001  0.418   1.00   0.997   0.656
+#:     h3              0.937  +0.322  0.991  **2.37** 0.635   0.248   ✅
+#: ```
+#: ⚠⚠ **`r + j·h·X` 로는 못 쓴다.** D 에서 h3 Im 이 **양**(유도성)인데 h5 Im 이 **음**
+#:   (용량성)으로 부호가 뒤집히고 Re 도 6.06 -> 0.26 으로 상수가 아니다. 옥내 배선에
+#:   **공진**이 있다는 뜻이고, `x_grid` 를 올리는 것으로는 재현이 안 된다 (그건 |Z| 를
+#:   단조로 올릴 뿐이다). 그래서 **표**다.
+#: ⚠ 표에 **없는 차수는 옛 식 `r + j·h·x`** 다. h7 위를 안 넣은 까닭은 못 쟀기 때문만이
+#:   아니다 — **잴 것이 없다**: 통전/비통전 `v_h_rel` 비가 1 에서 벗어난 폭이
+#:   h3 **12.1%** 인데 h5 3.0% · h7 0.3% · h9 0.6% · h11 1.2% · h13 0.3% 다 (저항 6녹화).
+#:   그 위는 강하가 파형을 거의 안 바꾸므로 **텍스처가 나르는 것이 맞다.**
+HARMONIC_Z_K: Dict[str, Dict[int, complex]] = {
+    "D": {3: 6.059 / 1.140 + 4.672 / 1.140 * 1j,     # 5.315 + 4.098j
+          5: 0.263 / 1.140 - 2.364 / 1.140 * 1j},    # 0.231 − 2.074j
+    "E": {3: 0.937 / 0.418 + 0.322 / 0.418 * 1j},    # 2.242 + 0.770j
+}
+
+
+def harmonic_z(h: np.ndarray, r: float, x: float, site: str = "",
+               table: Optional[Dict[str, Dict[int, complex]]] = None) -> np.ndarray:
+    """차수별 선로 임피던스 `(H,) complex` — **하나뿐인 출처** (14.59).
+
+    `table` 이 `None` 이면 `r + j·h·x` 그대로라 **옛 경로와 비트 동일**이다.
+    표에 있는 차수만 `Z_1 · k_h` 로 바뀌고 나머지는 옛 식이다.
+
+    ⚠⚠ **Z 를 쓰는 데가 넷이다** — `_terminal_voltage_harmonics` ·
+      `coupling.coupling_delta` · `apply_load_drop`(h1 뿐) · `vtexture` 의 개방전압
+      de-embed. **넷이 반드시 이 함수를 타야 한다.** 특히 `vtexture` 는 이 값이
+      바뀌면 **텍스처 자신이 바뀌어** 캐시를 다시 구워야 한다 (오븐 h3 에서
+      `Z·I_3` 가 `V_3` 의 18%다). [[pin-the-two-entry-points-against-each-other]]
+    """
+    h = np.asarray(h)
+    z = float(r) + 1j * h * float(x)
+    if not table:
+        return z
+    t = table.get(site or "", {})
+    if not t:
+        return z
+    z1 = float(r) + 1j * float(x)
+    z = np.asarray(z, dtype=np.complex128).copy()
+    for hh, k in t.items():
+        m = (h == int(hh))
+        if np.any(m):
+            z[m] = z1 * complex(k)
+    return z
 
 
 def texture_segments(env, n_cycles: int) -> List[Tuple[int, int, object]]:
@@ -277,6 +343,10 @@ class GridSimulator:
     ):
         self._texture_library = texture_library
         self.vtex_seg_s = float(vtex_seg_s or 0.0)
+        #: 차수별 `Z_h` 표 (14.59). `None` 이면 `r + j·h·x` — **옛 경로와 비트 동일**.
+        #: 켜려면 `HARMONIC_Z_K` 를 넣는다. ⚠ 켜면 **캐시를 다시 구워야 한다**
+        #: (`vtexture` 의 de-embed 가 바뀌어 텍스처 자신이 달라진다).
+        self.harmonic_z_table = None
         self.use_texture = bool(use_texture) and texture_library is not False
         self.use_coupling = bool(use_coupling) and texture_library is not False
         #: 결합 델타의 Σ 에 비SMPS 전류를 넣는가 (13.45). 지금까지 SMPS 3종만 더해서
@@ -367,6 +437,7 @@ class GridSimulator:
             texture=tex,
             texture_id=(tex.id if tex is not None else -1),
             texture_seq=tuple(seq),
+            site=site,
             r_state=r_state,
         )
 
@@ -706,6 +777,15 @@ class GridSimulator:
             self._circuit = SmpsCircuit()
         return self._circuit
 
+    def zk_tuple(self, site: str = ""):
+        """`coupling.zline` 이 받는 해시 가능한 꼴 `((h, Re, Im), ...)` (14.59).
+
+        표가 없으면 **빈 튜플** — 그러면 `coupling` 이 옛 식을 쓴다 (비트 동일).
+        ⚠ `harmonic_z` 와 **같은 표**를 써야 한다. 여기가 그 둘을 잇는 유일한 자리다.
+        """
+        t = (self.harmonic_z_table or {}).get(site or "", {})
+        return tuple(sorted((int(h), float(k.real), float(k.imag)) for h, k in t.items()))
+
     def texture_file_id(self, stem: str) -> int:
         """녹화 stem -> 텍스처 라이브러리의 파일 id (델타의 기준). 모르면 −1."""
         lib = self.texture_library if (self.use_texture or self.use_coupling) else None
@@ -837,7 +917,8 @@ class GridSimulator:
                     continue
                 i_ext = None if ext_c is None else ext_c[m_rows].mean(0)
                 deltas = circ.coupling_delta(pw, _tx.source_rel_full(), _tx.id, v1,
-                                             float(env.r_grid_ohm), l_line, R, i_ext=i_ext)
+                                             float(env.r_grid_ohm), l_line, R, i_ext=i_ext,
+                                             zk=self.zk_tuple(getattr(env, "site", "")))
                 for d, delta in deltas.items():
                     out[d][m_rows] += delta.astype(np.complex64)
         res = dict(layers)

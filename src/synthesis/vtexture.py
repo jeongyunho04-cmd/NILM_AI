@@ -215,8 +215,22 @@ class VoltageTextureLibrary:
             st_, sess_, z_ohm = _site_session(f.stem)
             Icur = (np.asarray(z["harmonics_complex"], dtype=np.complex128)
                     if "harmonics_complex" in z.files else None)
-            Zh = (None if (z_ohm is None or Icur is None or Icur.shape[1] < H)
-                  else z_ohm + 1j * 2 * np.pi * 60.0 * np.arange(1, H + 1) * DEEMBED_L_H)
+            # 14.59 — 차수별 `Z_h`. `set_default_harmonic_z` 로 표를 걸지 않으면
+            #   `z + j·2πf·h·L` 그대로라 **비트 동일**이다.
+            #   ⚠⚠ 이것을 바꾸면 `rel_open` 이 바뀌어 **텍스처 자신이 달라진다** —
+            #     캐시와 홀드아웃을 **다시 구워야 한다** (오븐 h3 에서 `Z·I_3` 가 `V_3` 의 18%).
+            if z_ohm is None or Icur is None or Icur.shape[1] < H:
+                Zh = None
+            else:
+                _hh = np.arange(1, H + 1)
+                Zh = z_ohm + 1j * 2 * np.pi * 60.0 * _hh * DEEMBED_L_H
+                _t = (_DEFAULT_HZ or {}).get(st_ or "", {})
+                if _t:
+                    _z1 = z_ohm + 1j * 2 * np.pi * 60.0 * DEEMBED_L_H
+                    Zh = np.asarray(Zh, dtype=np.complex128).copy()
+                    for _h, _k in _t.items():
+                        if 1 <= int(_h) <= H:
+                            Zh[int(_h) - 1] = _z1 * complex(_k)
             valid = (np.asarray(z["is_valid"]) == 1) if "is_valid" in z.files else np.ones(len(V), bool)
             v1 = np.abs(V[:, 0])
             ok = valid & (v1 > 150.0) & (v1 < 280.0) & np.isfinite(V[:, :H]).all(axis=1)
@@ -406,6 +420,23 @@ def set_default_vtail(path: Union[str, Path, None]) -> None:
 
 #: 이 프로세스의 `default_library()` 표집 간격. `set_default_step_s` 로 바꾼다.
 _DEFAULT_STEP_S: float = DEFAULT_STEP_S
+
+
+#: 이 프로세스의 차수별 `Z_h` 표 (14.59). `None` 이면 `z + j·2πf·h·L` — **비트 동일**.
+_DEFAULT_HZ = None
+
+
+def set_default_harmonic_z(table) -> None:
+    """`default_library()` 의 개방전압 de-embed 에 쓸 차수별 `Z_h` 표 (14.59).
+
+    ⚠⚠ **이것을 바꾸면 텍스처 자신이 바뀐다** — `rel_open` 이 달라지므로 학습 캐시와
+    홀드아웃을 **다시 구워야 하고**, 14.56 의 `harmonic_signature_vhrel` 도 값이 바뀐다.
+    ⚠ `grid_simulator.HARMONIC_Z_K` 와 **같은 표**를 걸어라. 갈리면 생성기가 만든 강하와
+    텍스처가 벗긴 강하가 서로 다른 Z 를 쓴다.
+    """
+    global _DEFAULT_HZ, _DEFAULT
+    _DEFAULT_HZ = table
+    _DEFAULT = None
 
 
 def set_default_step_s(step_s: Union[float, None]) -> None:
