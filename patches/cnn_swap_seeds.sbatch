@@ -57,7 +57,11 @@
 #SBATCH -c 16
 #SBATCH --gres=gpu:2
 #SBATCH --mem=100G
-#SBATCH -t 01:15:00
+# ⚠⚠ `-t` 는 **실측의 1.5배**다 (HPC_RULES §2). 짧을수록 backfill 이 잘 문다 —
+#   `-t 01:15` 로 3.2배를 불렀다가 시드 1·2 가 한 시간을 섰다 (983243, 2026-09-14).
+#   ⚠ `squeue --start`·`sbatch --test-only` 는 **backfill 을 모델링하지 않는다** —
+#     모양을 바꿔도 같은 날짜가 나온다. 그 값으로 '자리가 없다' 고 읽지 마라.
+#SBATCH -t 00:35:00     # 실측 19~24분(982936·982937)의 1.5배
 #SBATCH -a 0-2
 #SBATCH -o %x_%A_%a.out
 #SBATCH -e %x_%A_%a.out
