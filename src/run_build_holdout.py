@@ -112,6 +112,21 @@ def main() -> int:
                          "⚠ **학습 캐시와 같은 값을 줘라** — `run_build_traincache --vtex-step-s` "
                          "와 짝이다 (14.44 에서 이쪽 배선이 빠져 있던 것을 메웠다). "
                          "0 이면 옛 경로(60초)와 비트 동일이다.")
+    ap.add_argument("--workers", type=int, default=0, metavar="N",
+                    help="병렬 워커 수 (14.51). 0 이면 옛 직렬 경로와 **비트 동일**이다. "
+                         "1 이상이면 창을 청크로 잘라 spawn 풀에 던지는데, 시드를 **청크 "
+                         "번호**로 걸고 imap(순서 보장)으로 받으므로 **워커 수를 바꿔도 같은 "
+                         "바이트**가 나온다 (`traincache` 가 14.13 항등 검정으로 확인한 설계). "
+                         "⚠ 0 과 1 이상은 **서로 다른 홀드아웃**이다 — 옛 점수와 견주려면 "
+                         "그때 쓴 홀드아웃 폴더를 그대로 써라. 노드당 코어 상한을 봐라 "
+                         "(HPC_RULES §3: gpu1/gpu6 은 40, cpu2 는 64).")
+    ap.add_argument("--chunk-windows", type=int, default=100, metavar="N",
+                    help="청크 하나가 만드는 창 수 (--workers 와 함께). ⚠ 이 값이 바뀌면 "
+                         "**내용도 바뀐다** — 청크 경계가 난수를 가른다.")
+    ap.add_argument("--vtex-seg-s", type=float, default=0.0, metavar="S",
+                    help="텍스처 한 장이 덮는 합성 시간(초). 0 이면 창 전체 하나 = 옛 경로 "
+                         "(14.51). ⚠ **학습 캐시와 같은 값을 줘라** — 다르면 홀드아웃 창의 "
+                         "창-안 전압 변동이 학습 창과 달라진다. --vtex-step-s 와도 같아야 한다.")
     ap.add_argument("--vtail", action="store_true",
                     help="전압 꼬리(h17~h31)를 텍스처에 얹는다 (13.73/13.78). processed_data/vtail.npz 가 필요하다. 절대 경로(모델 단독)는 확실히 좋아지지만 델타 경로는 나빠진 전례가 있다 — A/B 로 판정하라")
     ap.add_argument("--steady-crop", default="",
@@ -198,7 +213,8 @@ def main() -> int:
                   couple_ext=a.couple_ext,
                   recipe_mix=_parse_mix(a.recipe_mix),
                   smps_focus_off_p=a.smps_focus_off_p,
-                  vtex_step_s=a.vtex_step_s)
+                  vtex_step_s=a.vtex_step_s, vtex_seg_s=a.vtex_seg_s,
+                  workers=a.workers, chunk_windows=a.chunk_windows)
     return inspect(a.out)
 
 

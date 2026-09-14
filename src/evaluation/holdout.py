@@ -30,6 +30,9 @@ from pathlib import Path
 from typing import Sequence, Dict, List, Optional, Union
 import hashlib
 import json
+import multiprocessing as mp
+import time
+
 import numpy as np
 
 from src.model.inputs import RAW_CHANNELS
@@ -71,40 +74,88 @@ class HoldoutSet:
         )
 
 
-def build_holdout(
-    out_dir: Union[str, Path] = DEFAULT_DIR,
-    npz_dir: Union[str, Path] = "processed_data/npz",
-    n_windows: int = DEFAULT_N_WINDOWS,
-    window_cycles: int = 600,
-    seed: int = DEFAULT_SEED,
-    holdout_frac: float = 0.2,
-    recipe_mix: Optional[Dict[str, float]] = None,
-    progress_every: int = 1000,
-    ablate_pedestal_apps: Optional[Sequence[str]] = None,
-    level_scramble: Optional[Dict[str, tuple]] = None,
-    state_mix: Optional[Dict[str, Dict[int, float]]] = None,
-    carrier_apps: Optional[Sequence[str]] = None,
-    sp_curves: bool = False,
-    sp_per_texture: bool = False,
-    vtail: bool = False,
-    background: bool = False,
-    couple_ext: bool = False,
-    smps_focus_off_p: Optional[float] = None,
-    float_fill: Optional[Dict[str, dict]] = None,
-    steady_crop: Optional[Dict[str, dict]] = None,
-    standby_jitter_cap: float = 0.0,
-    sibling_rotate: Optional[Dict[str, dict]] = None,
-    vtex_step_s: float = 0.0,
-) -> dict:
-    """홀드아웃 구간에서만 평가 셋을 만들어 저장한다.
+_WGEN = None            #: 워커의 `NILMBatchGenerator` (spawn 풀, 워커마다 하나)
+_WTGT = 0               #: 그 생성기의 타깃 시점
+_WSEED = 0
 
-    `smps_focus_off_p` (13.83.4): `smps_overlap` 에서 미니PC 를 끄고 형제 SMPS 만
-    켤 확률. **학습 캐시와 같은 값을 줘야 한다** — 다르면 홀드아웃이 학습과 다른
-    동시성 구조를 재게 된다. None/0.0 이면 옛 경로다.
+
+def _w_init(opts_json: str, seed: int) -> None:
+    """워커 초기자. `spawn` 이라 **워커마다** 조립을 다시 한다 (14.33 ⓑ 의 교훈).
+
+    ⚠ 시드는 여기서 걸지 않는다 — 워커 번호로 걸면 어느 워커가 어느 청크를 집어 가느냐에
+    따라 결과가 달라진다. 청크마다 `_w_chunk` 안에서 **청크 번호**로 건다 (`chunk_seed`).
     """
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    np.random.seed(seed)
+    global _WGEN, _WTGT, _WSEED
+    o = json.loads(opts_json)
+    # JSON 은 튜플을 잃는다 — `DataAugmentor` 가 기대하는 모양으로 되돌린다.
+    if o.get("level_scramble"):
+        o["level_scramble"] = {k: tuple(v) for k, v in o["level_scramble"].items()}
+    if o.get("state_mix"):
+        o["state_mix"] = {a: {int(x): float(y) for x, y in m.items()}
+                          for a, m in o["state_mix"].items()}
+    o["carrier_apps"] = tuple(o["carrier_apps"]) if o.get("carrier_apps") else None
+    o["ablate_pedestal_apps"] = tuple(o["ablate_pedestal_apps"] or ())
+    _WSEED = int(seed)
+    _, _, _WGEN = _build_generator(o, quiet=True)
+    _WTGT = _WGEN.target_index
+
+
+def _w_chunk(task):
+    """청크 하나. 시드는 **청크 번호**로 건다 — 워커 수를 바꿔도 같은 바이트가 나온다."""
+    from src.synthesis.dataset import chunk_seed
+    index, n = task
+    np.random.seed(chunk_seed(_WSEED, index))
+    g, tgt = _WGEN, _WTGT
+    k = len(g.appliance_list)
+    r = {"X": np.empty((n, RAW_CHANNELS, g.window_size), np.float32),
+         "y_power": np.empty((n, k), np.float32), "y_standby": np.empty((n, k), np.float32),
+         "y_on": np.empty((n, k), np.int8), "y_state": np.empty((n, k), np.int16),
+         "y_plugged": np.empty((n, k), np.int8),
+         "p_noise": np.empty(n, np.float32), "p_observed": np.empty(n, np.float32)}
+    rec = []
+    for j in range(n):
+        smp, recipe = g._synthesize_window()
+        t = g._format_targets(smp)
+        r["X"][j] = g._format_inputs(smp)
+        r["y_power"][j], r["y_standby"][j] = t["y_power"], t["y_standby_power"]
+        r["y_on"][j], r["y_state"][j], r["y_plugged"][j] = t["y_on"], t["y_state"], t["y_plugged"]
+        r["p_noise"][j] = smp.p_noise_w[tgt]
+        r["p_observed"][j] = smp.power_features[tgt, 0]
+        rec.append(recipe)
+    r["recipe"] = np.asarray(rec)
+    return r
+
+
+def _build_generator(o: dict, quiet: bool = False):
+    """설정 한 벌 -> `(SegmentPool, LoadSynthesizer, NILMBatchGenerator)`.
+
+    ⚠⚠ **직렬 경로와 병렬 워커가 반드시 이 한 곳을 탄다** (14.51). 이 저장소는 같은 것을
+    두 입구에서 조립하다 설정이 갈린 사고를 세 번 냈다 — 13.84.27(시퀀스 캐시에 설정 아홉이
+    빠짐) · 14.33 ⓑ(창 캐시에 `vtex_step_s` 배선 없음) · 14.44(홀드아웃에 같은 것이 또 없음).
+    [[pin-the-two-entry-points-against-each-other]]
+
+    `quiet` 는 워커용이다 — 24개 워커가 같은 안내를 24번 찍지 않게.
+    """
+    npz_dir = o['npz_dir']
+    holdout_frac = o['holdout_frac']
+    ablate_pedestal_apps = o['ablate_pedestal_apps']
+    carrier_apps = o['carrier_apps']
+    standby_jitter_cap = o['standby_jitter_cap']
+    level_scramble = o['level_scramble']
+    state_mix = o['state_mix']
+    sp_curves = o['sp_curves']
+    sp_per_texture = o['sp_per_texture']
+    float_fill = o['float_fill']
+    steady_crop = o['steady_crop']
+    sibling_rotate = o['sibling_rotate']
+    vtex_step_s = o['vtex_step_s']
+    vtail = o['vtail']
+    background = o['background']
+    couple_ext = o['couple_ext']
+    vtex_seg_s = o['vtex_seg_s']
+    window_cycles = o['window_cycles']
+    recipe_mix = o['recipe_mix']
+    smps_focus_off_p = o['smps_focus_off_p']
 
     pool = SegmentPool(npz_dir=npz_dir, time_split="holdout", holdout_frac=holdout_frac,
                        ablate_pedestal_apps=ablate_pedestal_apps,
@@ -135,19 +186,113 @@ def build_holdout(
         _n0 = len(default_library().textures)
         set_default_step_s(float(vtex_step_s))
         _n1 = len(default_library().textures)
-        print(f"  ** 전압 텍스처 표집 간격 {vtex_step_s}s (14.12): "
-              f"텍스처 {_n0} -> {_n1}개 **")
+        if not quiet:
+            print(f"  ** 전압 텍스처 표집 간격 {vtex_step_s}s (14.12): "
+                  f"텍스처 {_n0} -> {_n1}개 **")
         if _n1 <= _n0:
             raise SystemExit("[holdout] 간격을 줄였는데 텍스처가 안 늘었다 — 안 걸렸다")
     set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
     syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
                           augmentor=aug, background=bool(background),
-                          couple_ext=bool(couple_ext))
+                          couple_ext=bool(couple_ext),
+                          # 14.51 — 창 안 텍스처 교체. 학습 캐시와 짝이 맞아야 한다.
+                          vtex_seg_s=float(vtex_seg_s or 0.0))
+    if vtex_seg_s and float(vtex_seg_s) > 0:
+        _got = float(getattr(syn.grid_sim, "vtex_seg_s", 0.0) or 0.0)
+        if _got != float(vtex_seg_s):
+            raise SystemExit("[holdout] vtex_seg_s=%s 인데 시뮬레이터는 %s 다 — 안 걸렸다"
+                             % (vtex_seg_s, _got))
+        if abs(float(vtex_step_s or 60.0) - float(vtex_seg_s)) > 1e-6:
+            raise SystemExit("[holdout] vtex_seg_s=%s 인데 vtex_step_s=%s 다 — 텍스처는 "
+                             "step_s 구간의 중앙값이라 둘이 같아야 한다 (14.51)"
+                             % (vtex_seg_s, vtex_step_s or 60.0))
+        if not quiet:
+            print("  ** 창-안 텍스처 교체 %.0f초마다 (60초 창 -> %d장) (14.51) **"
+                  % (float(vtex_seg_s), syn.grid_sim.n_texture_segments(3600)))
     gen = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         recipe_mix=recipe_mix or DEFAULT_RECIPE_MIX, synthesizer=syn,
         compute_gt_harmonics=False, smps_focus_off_p=smps_focus_off_p,
     )
+    return pool, syn, gen
+
+
+def build_holdout(
+    out_dir: Union[str, Path] = DEFAULT_DIR,
+    npz_dir: Union[str, Path] = "processed_data/npz",
+    n_windows: int = DEFAULT_N_WINDOWS,
+    window_cycles: int = 600,
+    seed: int = DEFAULT_SEED,
+    holdout_frac: float = 0.2,
+    recipe_mix: Optional[Dict[str, float]] = None,
+    progress_every: int = 1000,
+    ablate_pedestal_apps: Optional[Sequence[str]] = None,
+    level_scramble: Optional[Dict[str, tuple]] = None,
+    state_mix: Optional[Dict[str, Dict[int, float]]] = None,
+    carrier_apps: Optional[Sequence[str]] = None,
+    sp_curves: bool = False,
+    sp_per_texture: bool = False,
+    vtail: bool = False,
+    background: bool = False,
+    couple_ext: bool = False,
+    smps_focus_off_p: Optional[float] = None,
+    float_fill: Optional[Dict[str, dict]] = None,
+    steady_crop: Optional[Dict[str, dict]] = None,
+    standby_jitter_cap: float = 0.0,
+    sibling_rotate: Optional[Dict[str, dict]] = None,
+    vtex_step_s: float = 0.0,
+    #: 텍스처 한 장이 덮는 합성 시간 (초). 0 이면 창 전체 하나 = 옛 경로 (14.51).
+    #: ⚠ **학습 캐시와 같은 값이어야 한다** — 다르면 홀드아웃 창의 창-안 전압 변동이
+    #:   학습 창과 달라져 전압 블록에 대한 민감도를 잘못 잰다.
+    vtex_seg_s: float = 0.0,
+    #: 병렬 워커 수 (14.51). **0 이면 옛 직렬 경로와 비트 동일**이다.
+    #: 1 이상이면 창을 `chunk_windows` 짜리 청크로 잘라 `spawn` 풀에 던진다 — 시드를
+    #: **청크 번호**로 걸고 `imap`(순서 보장)으로 받으므로 **워커 수를 바꿔도 같은
+    #: 바이트**가 나온다 (`traincache` 가 14.13 항등 검정으로 확인한 그 설계).
+    #: ⚠ 그래도 `workers=0` 과 `workers>=1` 은 **서로 다른 홀드아웃**이다 — 난수를
+    #:   자르는 방식이 다르다. 옛 체크포인트 점수와 견주려면 그때 쓴 홀드아웃을 그대로 써라.
+    workers: int = 0,
+    #: 청크 하나가 만드는 창 수. ⚠ 이 값이 바뀌면 **내용도 바뀐다** (청크 경계가 난수를 가른다).
+    #: ⚠⚠ **워커 수에 따라 바꾸지 마라** — 그러면 "워커 수가 바뀌어도 같은 바이트" 가 깨진다.
+    #: 100 인 까닭: 8,000창이면 80청크라 워커 24개에도 꼬리 불균형이 작고, 청크 하나가
+    #: 돌려주는 X 가 100x45x3600x4B = **65MB** 라 워커 24개가 동시에 던져도 1.5GB 다
+    #: (250이면 3.9GB).
+    chunk_windows: int = 100,
+) -> dict:
+    """홀드아웃 구간에서만 평가 셋을 만들어 저장한다.
+
+    `smps_focus_off_p` (13.83.4): `smps_overlap` 에서 미니PC 를 끄고 형제 SMPS 만
+    켤 확률. **학습 캐시와 같은 값을 줘야 한다** — 다르면 홀드아웃이 학습과 다른
+    동시성 구조를 재게 된다. None/0.0 이면 옛 경로다.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    np.random.seed(seed)
+
+    # 설정 한 벌. 직렬 경로와 워커가 **같은 조립기**(`_build_generator`)를 탄다.
+    opts = {n: v for n, v in (
+        ('npz_dir', npz_dir),
+        ('holdout_frac', holdout_frac),
+        ('ablate_pedestal_apps', ablate_pedestal_apps),
+        ('carrier_apps', carrier_apps),
+        ('standby_jitter_cap', standby_jitter_cap),
+        ('level_scramble', level_scramble),
+        ('state_mix', state_mix),
+        ('sp_curves', sp_curves),
+        ('sp_per_texture', sp_per_texture),
+        ('float_fill', float_fill),
+        ('steady_crop', steady_crop),
+        ('sibling_rotate', sibling_rotate),
+        ('vtex_step_s', vtex_step_s),
+        ('vtail', vtail),
+        ('background', background),
+        ('couple_ext', couple_ext),
+        ('vtex_seg_s', vtex_seg_s),
+        ('window_cycles', window_cycles),
+        ('recipe_mix', recipe_mix),
+        ('smps_focus_off_p', smps_focus_off_p),
+    )}
+    pool, syn, gen = _build_generator(opts)
     apps = gen.appliance_list
     k, tgt = len(apps), gen.target_index
 
@@ -164,21 +309,51 @@ def build_holdout(
     pobs = np.empty(n_windows, np.float32)
     rec: List[str] = []
 
+    nw = max(0, int(workers or 0))
     print(f"[holdout] 뒤 {holdout_frac:.0%} 구간에서 {n_windows:,}창 생성 "
-          f"| 타깃 시점 {tgt}/{window_cycles}")
-    for i in range(n_windows):
-        smp, recipe = gen._synthesize_window()
-        t = gen._format_targets(smp)
-        X[i] = gen._format_inputs(smp)
-        yp[i], ys[i] = t["y_power"], t["y_standby_power"]
-        yo[i], yst[i], ypl[i] = t["y_on"], t["y_state"], t["y_plugged"]
-        pn[i] = smp.p_noise_w[tgt]
-        pobs[i] = smp.power_features[tgt, 0]
-        rec.append(recipe)
-        if progress_every and (i + 1) % progress_every == 0:
-            print(f"  {i + 1:>6,}/{n_windows:,}", flush=True)
+          f"| 타깃 시점 {tgt}/{window_cycles}"
+          + ("  | 직렬" if nw == 0 else f"  | 워커 {nw}개 · 청크 {chunk_windows}창"))
+    t0 = time.time()
+    if nw == 0:
+        for i in range(n_windows):
+            smp, recipe = gen._synthesize_window()
+            t = gen._format_targets(smp)
+            X[i] = gen._format_inputs(smp)
+            yp[i], ys[i] = t["y_power"], t["y_standby_power"]
+            yo[i], yst[i], ypl[i] = t["y_on"], t["y_state"], t["y_plugged"]
+            pn[i] = smp.p_noise_w[tgt]
+            pobs[i] = smp.power_features[tgt, 0]
+            rec.append(recipe)
+            if progress_every and (i + 1) % progress_every == 0:
+                print(f"  {i + 1:>6,}/{n_windows:,}", flush=True)
+    else:
+        # 청크 번호로 시드하고 `imap`(순서 보장)으로 받는다 — 워커 수와 무관하게 같은 바이트다.
+        # ⚠ `imap_unordered` 를 쓰면 안 된다. 이어붙이는 순서가 실행마다 달라진다 (12.11).
+        cw = max(1, int(chunk_windows))
+        tasks = [(i, min(cw, n_windows - i * cw)) for i in range((n_windows + cw - 1) // cw)]
+        dst = {"y_power": yp, "y_standby": ys, "y_on": yo, "y_state": yst,
+               "y_plugged": ypl, "p_noise": pn, "p_observed": pobs}
+        ctx = mp.get_context("spawn")
+        pos = 0
+        with ctx.Pool(nw, initializer=_w_init,
+                      initargs=(json.dumps(opts, ensure_ascii=False), int(seed))) as wp:
+            for i, r in enumerate(wp.imap(_w_chunk, tasks), 1):
+                m = len(r["y_power"])
+                X[pos:pos + m] = r["X"]
+                for name, arr in dst.items():
+                    arr[pos:pos + m] = r[name]
+                rec.extend(r["recipe"].tolist())
+                pos += m
+                if progress_every and (pos % max(progress_every, 1) < cw):
+                    el = max(time.time() - t0, 1e-9)
+                    print(f"  {pos:>7,}/{n_windows:,}  ({pos/el:,.0f} win/s, "
+                          f"남은 {max(0, (n_windows-pos)/max(pos/el, 1))/60:.1f}분)", flush=True)
+        if pos != n_windows:
+            raise SystemExit(f"[holdout] 청크가 {pos}창만 냈다 (원한 것 {n_windows})")
 
     X.flush()
+    print(f"[holdout] 생성 {time.time() - t0:.0f}초 "
+          f"({n_windows / max(time.time() - t0, 1e-9):,.0f} win/s)")
     arrays = {"y_power": yp, "y_standby": ys, "y_on": yo, "y_state": yst,
               "y_plugged": ypl, "p_noise": pn, "p_observed": pobs,
               "recipe": np.asarray(rec)}
@@ -210,6 +385,11 @@ def build_holdout(
         "sp_curves": bool(sp_curves),
         # 14.44 — 0 이면 옛 경로(기본 60초)다. 학습 캐시와 **같아야** 한다.
         "vtex_step_s": float(vtex_step_s or 0.0),
+        "vtex_seg_s": float(vtex_seg_s or 0.0),          # 14.51
+        # 14.51 — 병렬로 구웠는가. **0 과 1 이상은 서로 다른 홀드아웃이다** (난수를 자르는
+        # 방식이 다르다). 1 이상끼리는 워커 수와 무관하게 같은 바이트다.
+        "workers_chunked": bool(workers and int(workers) > 0),
+        "chunk_windows": (int(chunk_windows) if (workers and int(workers) > 0) else 0),
         "sp_per_texture": bool(sp_per_texture),
         "vtail": bool(vtail),
         "background": bool(background),

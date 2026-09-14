@@ -252,6 +252,8 @@ class LoadSynthesizer:
         sustained_power_limit_w: Optional[float] = DEFAULT_SUSTAINED_POWER_LIMIT_W,
         background: bool = False,
         background_w_range: Tuple[float, float] = BACKGROUND_W_RANGE,
+        #: 14.51 — 텍스처 한 장이 덮는 합성 시간 (초). 0 이면 창 전체 하나(옛 경로, 비트 동일).
+        vtex_seg_s: float = 0.0,
     ):
         self.pool = segment_pool
         # 상시 배경 부하 (12.166). 기본은 꺼 둔다 — 켜면 합성 분포가 바뀌므로
@@ -268,6 +270,9 @@ class LoadSynthesizer:
         # 13.45: 결합 델타의 Σ 에 비SMPS 전류를 넣는다. 주입된 시뮬레이터에도 건다.
         if couple_ext:
             self.grid_sim.couple_ext = True
+        # 14.51: 주입된 시뮬레이터에도 건다 (`couple_ext` 와 같은 자리·같은 이유).
+        if vtex_seg_s:
+            self.grid_sim.vtex_seg_s = float(vtex_seg_s)
         self.augmentor = augmentor or DataAugmentor()
         self.known_appliances = self.pool.get_appliance_types()
         # 지속 부하 상한. None 이면 제한하지 않는다.
@@ -346,17 +351,24 @@ class LoadSynthesizer:
         """
         if n == 0:
             return np.zeros((0, NUM_HARMONICS), dtype=np.complex64)
-        rel = np.zeros(NUM_HARMONICS, dtype=np.complex128)
-        rel[0] = 1.0 + 0.0j
-        tex = getattr(env, "texture", None)
-        if tex is not None:
-            src = tex.source_rel() if hasattr(tex, "source_rel") else np.asarray(tex)
+        # 14.51 — `rel` 은 이제 **(N, 15)** 다. 창을 시간으로 토막 내 그 녹화의 연속된
+        # 텍스처를 얹는다. 토막이 하나면 옛 경로와 비트 동일이다.
+        #
+        # ★ **이 한 줄이 14.50 이 잰 구멍이었다.** 정적 `rel` 이면 창-안 `V_h/|V_1|` 변동이
+        #   정확히 0 이고, 남는 것은 `−z·I` 항뿐이라 실측의 13~35% 밖에 안 됐다. 실측
+        #   60초 창을 1 로 보면 회수율이 `n=2 35% · n=3 55% · n=6 78%` 다
+        #   (`run_diag_vtexseg.py`). 기본파만 `v_open` 표류 때문에 1.4~1.6배로 컸다.
+        from src.synthesis.grid_simulator import texture_segments
+        rel = np.zeros((n, NUM_HARMONICS), dtype=np.complex128)
+        rel[:, 0] = 1.0 + 0.0j
+        for _a, _b, _tx in texture_segments(env, n):
+            src = _tx.source_rel() if hasattr(_tx, "source_rel") else np.asarray(_tx)
             src = np.asarray(src, dtype=np.complex128)
-            rel[:min(len(src), NUM_HARMONICS)] = src[:NUM_HARMONICS]
+            rel[_a:_b, :min(len(src), NUM_HARMONICS)] = src[None, :NUM_HARMONICS]
         h = np.arange(1, NUM_HARMONICS + 1)
         z = float(env.r_grid_ohm) + 1j * h * float(env.x_grid_ohm)
         v_op = np.asarray(v_open, dtype=np.float64).reshape(-1, 1)
-        return (rel[None, :] * v_op - z[None, :] * np.asarray(total_complex)).astype(np.complex64)
+        return (rel * v_op - z[None, :] * np.asarray(total_complex)).astype(np.complex64)
 
     def _resolve_plugged(
         self,
@@ -401,7 +413,8 @@ class LoadSynthesizer:
         )
 
         # 1. 배전 환경 결정 (전압 무리, 배선 임피던스, 요동 특성)
-        env = voltage_environment or self.grid_sim.sample_environment()
+        # 14.51 — 창 길이를 넘겨야 텍스처를 몇 장 얹을지 정해진다 (`vtex_seg_s`).
+        env = voltage_environment or self.grid_sim.sample_environment(N)
 
         # 2. 플러그 연결 상태
         is_plugged = self._resolve_plugged(plugged_in_appliances, default_plugged_prob)
@@ -806,7 +819,7 @@ class LoadSynthesizer:
 
         # 전압을 먼저 정해야 지속 부하 예산을 제대로 계산할 수 있다.
         # (같은 전기포트도 212V 에서 1271W, 240V 에서 1621W 를 먹는다)
-        env = self.grid_sim.sample_environment()
+        env = self.grid_sim.sample_environment(int(window_size_cycles))
 
         # 1. 어떤 가전을 켤지 고른다
         if force_active is not None:

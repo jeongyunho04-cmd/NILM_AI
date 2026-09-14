@@ -71,6 +71,13 @@ def main() -> int:
                          "20 이 `genopts.V32T` 다 — 14.12 가 **표류의 모자란 몫이 이 상수**라고 "
                          "쟀다 (파일 안 전압 산포 원시 대비 0.73 -> 0.95, 합성 표류가 실측의 "
                          "0.75 -> 0.80배 = 이론 √0.654). ⚠ 텍스처가 280 -> 819개가 된다.")
+    ap.add_argument("--vtex-seg-s", type=float, default=0.0, metavar="S",
+                    help="텍스처 **한 장이 덮는 합성 시간** (초). 0 이면 창 전체에 한 장 = "
+                         "옛 경로다 (14.51). 14.50 이 남긴 구멍을 메운다: 정적 텍스처면 "
+                         "창-안 V_h/|V_1| 변동이 **정확히 0** 이고 합성이 내던 13~35%% 는 "
+                         "전부 -Z*I 항이었다. 창을 토막 내 그 녹화의 **연속** 텍스처를 얹으면 "
+                         "실측 대비 회수율이 2토막 35%% / 3토막 55%% / 6토막 78%% 다. "
+                         "⚠ --vtex-step-s 와 **같은 값**을 줘라 (10 10 이 `genopts.V32S`).")
     ap.add_argument("--vtail", action="store_true",
                     help="전압 꼬리(h17~h31)를 텍스처에 얹는다 (13.73/13.78). processed_data/vtail.npz 가 필요하다. 절대 경로(모델 단독)는 확실히 좋아지지만 델타 경로는 나빠진 전례가 있다 — A/B 로 판정하라")
     ap.add_argument("--steady-crop", default="",
@@ -205,7 +212,7 @@ def main() -> int:
             raise SystemExit("[traincache] --shard 는 K/N 꼴이어야 한다 (예: 0/2). 받은 값 %r" % a.shard)
         shard = (k, n)
     build_cache(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
-                vtex_step_s=a.vtex_step_s,
+                vtex_step_s=a.vtex_step_s, vtex_seg_s=a.vtex_seg_s,
                 time_split=a.split, seed=a.seed, n_workers=a.workers, shard=shard,
                 exclude_activation_files=excl,
                 dither_amp=a.dither_amp, dither_phase_deg=a.dither_phase_deg,

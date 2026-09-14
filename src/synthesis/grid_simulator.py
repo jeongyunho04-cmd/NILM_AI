@@ -163,8 +163,31 @@ class VoltageEnvironment:
     #: 13.2 — 이 세션의 전압 텍스처 (`vtexture.Texture`, 2Hz 녹화의 vh·vhdeg 에서). None 이면 텍스처 델타 없음.
     texture: Optional[object] = None
     texture_id: int = -1
+    #: 14.51 — 창을 시간으로 토막 내 얹는 **연속된 텍스처들** (`vtexture.sample_run`).
+    #: 비었거나 길이 1 이면 옛 경로(정적 하나)와 **비트 동일**이다. `texture` 는 이 열의
+    #: 가운데 원소이므로 이 손잡이를 꺼도 쓰이는 텍스처가 안 바뀐다.
+    texture_seq: Tuple[object, ...] = ()
     #: SMPS 별 NTC 상태 R [Ω] — pkl 의 실측 범위에서 창마다 뽑는다 (README_v12 "R 은 상태다").
     r_state: Dict[str, float] = field(default_factory=dict)
+
+
+def texture_segments(env, n_cycles: int) -> List[Tuple[int, int, object]]:
+    """창을 시간으로 토막 낸 `[(시작, 끝, Texture)]` (14.51).
+
+    `texture_seq` 가 비었거나 길이 1 이면 **창 전체가 한 토막**이라 옛 경로와 비트 동일이다.
+    토막 경계는 `k·N//K` — 사이클 색인이라 `N` 이 `K` 로 안 나눠떨어져도 빈틈·겹침이 없다.
+    """
+    seq = tuple(getattr(env, "texture_seq", ()) or ())
+    if not seq:
+        t = getattr(env, "texture", None)
+        seq = () if t is None else (t,)
+    n = int(n_cycles)
+    if not seq or n <= 0:
+        return []
+    k = len(seq)
+    if k == 1:
+        return [(0, n, seq[0])]
+    return [(i * n // k, (i + 1) * n // k, seq[i]) for i in range(k)]
 
 
 class GridSimulator:
@@ -247,8 +270,13 @@ class GridSimulator:
         randomize_r: bool = True,
         texture_stems: Optional[Sequence[str]] = None,
         texture_model=None,
+        #: 14.51 — 텍스처 한 장이 덮는 **합성 시간** (초). 0 이면 창 전체 하나(옛 경로, 비트 동일).
+        #: ⚠ `vtexture` 의 `step_s` 와 **같은 값**이어야 한다 — 텍스처는 그 녹화의 `step_s`
+        #:   구간 중앙값이라, 20초 중앙값을 10초씩 틀면 변화를 2배로 빨리 감는 것이 된다.
+        vtex_seg_s: float = 0.0,
     ):
         self._texture_library = texture_library
+        self.vtex_seg_s = float(vtex_seg_s or 0.0)
         self.use_texture = bool(use_texture) and texture_library is not False
         self.use_coupling = bool(use_coupling) and texture_library is not False
         #: 결합 델타의 Σ 에 비SMPS 전류를 넣는가 (13.45). 지금까지 SMPS 3종만 더해서
@@ -288,8 +316,18 @@ class GridSimulator:
             self.exploration_range = exploration_range
 
     # ── 환경 샘플링 ─────────────────────────────────────────────────────────
-    def sample_environment(self) -> VoltageEnvironment:
-        """이번 합성이 놓일 배전 환경 하나를 뽑는다."""
+    def n_texture_segments(self, n_cycles: Optional[int]) -> int:
+        """창 `n_cycles` 사이클을 텍스처 몇 장으로 덮는가 (14.51). `vtex_seg_s` 가 0 이면 1."""
+        if self.vtex_seg_s <= 0 or not n_cycles:
+            return 1
+        return max(1, int(round(int(n_cycles) / float(self.sampling_hz) / self.vtex_seg_s)))
+
+    def sample_environment(self, n_cycles: Optional[int] = None) -> VoltageEnvironment:
+        """이번 합성이 놓일 배전 환경 하나를 뽑는다.
+
+        14.51 — `n_cycles` 를 주고 `vtex_seg_s > 0` 이면 그 녹화의 **연속된 텍스처 여러 장**을
+        뽑아 `texture_seq` 에 담는다. 안 주면 한 장이라 옛 경로와 비트 동일이다.
+        """
         base_v, source, cluster_r, cluster_bg, d3, site = self._sample_base_voltage()
         # 실측 콘센트에서 뽑았다면 그 회선의 배선 저항을 함께 쓴다.
         # 전압과 임피던스는 같은 회선의 성질이므로 따로 뽑으면 짝이 어긋난다.
@@ -303,7 +341,11 @@ class GridSimulator:
         # (`test_worker_count_does_not_change_the_generated_training_set`). 생성자에서 뽑는 _tex_rng 는 안 쓴다.
         _key = np.array([base_v, r, x], dtype=np.float64).view(np.uint64)
         _rng = np.random.default_rng(int(np.bitwise_xor.reduce(_key) & np.uint64(0x7FFFFFFF)))
-        tex = self._sample_texture(base_v, _rng, site)
+        nseg = self.n_texture_segments(n_cycles)
+        seq = self._sample_texture_run(base_v, _rng, site, nseg)
+        # 대표 텍스처는 **가운데** 장이다 — `sample_run` 이 뽑은 장을 가운데 두므로
+        # 이 손잡이를 꺼도 `env.texture` 가 옛 경로와 같은 텍스처다 (14.51).
+        tex = seq[len(seq) // 2] if seq else None
         r_state: Dict[str, float] = {}
         if tex is not None and self.randomize_r:
             from src.synthesis.coupling import SMPS_DEVICES
@@ -324,6 +366,7 @@ class GridSimulator:
             texture_stem=(tex.stem if tex is not None else ""),
             texture=tex,
             texture_id=(tex.id if tex is not None else -1),
+            texture_seq=tuple(seq),
             r_state=r_state,
         )
 
@@ -345,6 +388,24 @@ class GridSimulator:
             return None
         return lib.sample(rng if rng is not None else self._tex_rng, vrms_target=base_v,
                           site=site or None)
+
+    def _sample_texture_run(self, base_v: Optional[float], rng: Optional[np.random.Generator],
+                            site: str, n: int) -> List[object]:
+        """연속된 텍스처 n 장 (14.51). `n <= 1` 이면 `[_sample_texture(...)]` 과 **같은 난수**다.
+
+        ⚠ `sample_run` 은 `sample` 을 그대로 한 번 부르고 나머지는 녹화 안에서 떼 오므로
+        난수 흐름이 한 칸도 안 밀린다 — 켜고 꺼도 기기 선택·시각이 같다 (13.2 의 규율).
+        """
+        if not self.use_texture:
+            return []
+        lib = self.texture_library
+        if lib is None or len(lib) == 0:
+            return []
+        r = rng if rng is not None else self._tex_rng
+        if int(n) <= 1:
+            t = lib.sample(r, vrms_target=base_v, site=site or None)
+            return [] if t is None else [t]
+        return list(lib.sample_run(r, int(n), vrms_target=base_v, site=site or None))
 
     def _sample_base_voltage(
         self,
@@ -691,17 +752,27 @@ class GridSimulator:
         R = (getattr(env, "r_state", None) or {}).get(appliance_type)
         pb = np.round(p / P_BIN_W).astype(np.int64)
         keys = pb * 100000 + rid
-        for k in np.unique(keys[on]):
-            m = on & (keys == k)
-            b_, r_id = int(k // 100000), int(k % 100000)
-            # 13.73: **양쪽 다 꼬리까지** 준다. 합성 쪽에만 붙이면 "녹화에는 꼬리가 없었다" 는
-            # 뜻이 되어 가짜 항이 생긴다 — 녹화도 자기 세션의 꼬리를 갖고 찍힌 것이다.
-            # 같은 세션이면 꼬리가 뺄셈에서 거의 상쇄되고, 자리가 갈릴 때만 값이 산다.
-            rel_rec = lib.file_rel_full_by_id(r_id)
-            d = circ.texture_delta(appliance_type, float(b_ * P_BIN_W), tex.source_rel_full(), tex.id,
-                                   rel_rec, r_id, v1, R)
-            if d is not None:
-                out[m] += d.astype(np.complex64)
+        # 14.51 — 창 토막마다 **그 토막의 텍스처**로 델타를 다시 낸다. 토막이 하나면 옛 경로다.
+        # ⚠ 공짜가 아니다: `texture_delta` 의 캐시 키에 `v1`(창마다 연속값)이 들어 있어 창 사이
+        #   적중이 사실상 없다 — 토막 수만큼 회로 호출이 는다 (~2.4 ms/호출).
+        #   그래도 빼면 안 된다: 연속 텍스처 6장이 만드는 창-안 전류 변동이 **지금 넣고 있는
+        #   텍스처 델타 자체의 48~73%** 다 (`probe_texrun`). 2차 항이 아니다.
+        for _a, _b, _tx in texture_segments(env, out.shape[0]):
+            base = np.flatnonzero(on[_a:_b]) + _a
+            if not len(base):
+                continue
+            kk = keys[base]
+            for k in np.unique(kk):
+                m = base[kk == k]
+                b_, r_id = int(k // 100000), int(k % 100000)
+                # 13.73: **양쪽 다 꼬리까지** 준다. 합성 쪽에만 붙이면 "녹화에는 꼬리가 없었다" 는
+                # 뜻이 되어 가짜 항이 생긴다 — 녹화도 자기 세션의 꼬리를 갖고 찍힌 것이다.
+                # 같은 세션이면 꼬리가 뺄셈에서 거의 상쇄되고, 자리가 갈릴 때만 값이 산다.
+                rel_rec = lib.file_rel_full_by_id(r_id)
+                d = circ.texture_delta(appliance_type, float(b_ * P_BIN_W),
+                                       _tx.source_rel_full(), _tx.id, rel_rec, r_id, v1, R)
+                if d is not None:
+                    out[m] += d.astype(np.complex64)
         return out
 
     def apply_smps_coupling(
@@ -751,18 +822,24 @@ class GridSimulator:
                 ext_c = np.zeros(np.asarray(layers[devs[0]]).shape, dtype=np.complex128)
                 for a in ext_apps:
                     ext_c += np.asarray(layers[a], dtype=np.complex128)
-        keys, inv = np.unique(pb[rows], axis=0, return_inverse=True)
-        inv = np.asarray(inv).reshape(-1)
-        for ki, key in enumerate(keys):
-            m_rows = rows[inv == ki]
-            pw = {d: float(key[j] * P_BIN_W) for j, d in enumerate(devs) if key[j] >= 0}
-            if not pw:
+        # 14.51 — 창 토막마다 그 토막의 텍스처로 결합 델타를 다시 낸다 (위와 같은 이유).
+        nrow = P.shape[0]
+        for _a, _b, _tx in texture_segments(env, nrow):
+            srow = rows[(rows >= _a) & (rows < _b)]
+            if not len(srow):
                 continue
-            i_ext = None if ext_c is None else ext_c[m_rows].mean(0)
-            deltas = circ.coupling_delta(pw, tex.source_rel_full(), tex.id, v1,
-                                         float(env.r_grid_ohm), l_line, R, i_ext=i_ext)
-            for d, delta in deltas.items():
-                out[d][m_rows] += delta.astype(np.complex64)
+            keys, inv = np.unique(pb[srow], axis=0, return_inverse=True)
+            inv = np.asarray(inv).reshape(-1)
+            for ki, key in enumerate(keys):
+                m_rows = srow[inv == ki]
+                pw = {d: float(key[j] * P_BIN_W) for j, d in enumerate(devs) if key[j] >= 0}
+                if not pw:
+                    continue
+                i_ext = None if ext_c is None else ext_c[m_rows].mean(0)
+                deltas = circ.coupling_delta(pw, _tx.source_rel_full(), _tx.id, v1,
+                                             float(env.r_grid_ohm), l_line, R, i_ext=i_ext)
+                for d, delta in deltas.items():
+                    out[d][m_rows] += delta.astype(np.complex64)
         res = dict(layers)
         res.update(out)
         return res
@@ -805,22 +882,30 @@ class GridSimulator:
         tex = getattr(env, "texture", None)
         if not self.use_texture or lib is None or tex is None or rec_ids is None:
             return harmonics_complex
-        rel_env = np.asarray(getattr(tex, "rel", None), dtype=np.complex128)
-        if rel_env.size != harmonics_complex.shape[1]:
-            return harmonics_complex
         rid = np.asarray(rec_ids, dtype=np.int64)
         out = np.asarray(harmonics_complex, dtype=np.complex64).copy()
         live = (rid >= 0) & (np.abs(out[:, 0]) > 1e-6)
         if not live.any():
             return out
-        for r_id in np.unique(rid[live]):
-            m = live & (rid == int(r_id))
-            rel_rec = lib.file_rel_by_id(int(r_id))
-            if rel_rec is None:
+        # 14.51 — 창을 토막 내 **구간마다 그 구간의 텍스처**를 쓴다. 토막이 하나면 옛 경로다.
+        # ⚠ 전압 쪽(`_terminal_voltage_harmonics`)만 흔들고 여기를 안 흔들면 "V_h 는 움직이는데
+        #   저항 전류의 I_h 는 안 움직인다" 는 창이 되어, 13.69 가 없앴던 가짜 판별자가
+        #   **시간 축으로** 되살아난다. 두 곳은 반드시 같이 움직인다.
+        for _a, _b, _tx in texture_segments(env, out.shape[0]):
+            rel_env = np.asarray(getattr(_tx, "rel", None), dtype=np.complex128)
+            if rel_env.size != harmonics_complex.shape[1]:
                 continue
-            d = rel_env - np.asarray(rel_rec, dtype=np.complex128)
-            d[0] = 0.0                      # h1 은 kappa 가 이미 했다 (rel[0] ≡ 1 이라 원래 0 이다)
-            out[m] += (out[m, :1] * d[None, :]).astype(np.complex64)
+            base = np.flatnonzero(live[_a:_b]) + _a      # **절대 색인** — 겹쓰기 사고를 막는다
+            if not len(base):
+                continue
+            for r_id in np.unique(rid[base]):
+                m = base[rid[base] == int(r_id)]
+                rel_rec = lib.file_rel_by_id(int(r_id))
+                if rel_rec is None:
+                    continue
+                d = rel_env - np.asarray(rel_rec, dtype=np.complex128)
+                d[0] = 0.0                  # h1 은 kappa 가 이미 했다 (rel[0] ≡ 1 이라 원래 0 이다)
+                out[m] += (out[m, :1] * d[None, :]).astype(np.complex64)
         return out
 
     def apply_power_voltage_response(

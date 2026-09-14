@@ -59,6 +59,32 @@ V32: Dict[str, Any] = {k: v for k, v in V36.items() if k != "sibling_rotate"}
 #: ⚠ 텍스처가 280 -> 819개라 `SmpsCircuit` 캐시 키 공간이 2.9배다. 굽기가 느려질 수 있다 (13.10.5).
 V32T: Dict[str, Any] = dict(V32, vtex_step_s=20.0)
 
+#: V32 + **창 안에서 텍스처를 갈아 끼운다** (14.51, 2026-09-14). 14.50 이 남긴 구멍을 메운다.
+#:
+#: 14.50 이 잰 것: v32t(표집 간격 60->20초)는 텍스처 수를 280->819 로 늘렸고 짝 창의 차이도
+#: 13.47 mA 로 커졌는데 **표류비가 안 늘었다**(1.000~1.005). 까닭이 자료형이 아니라 **배선**이었다:
+#: `Texture.rel` 은 창 하나에 **정적으로 한 번** 얹힌다 (`_terminal_voltage_harmonics` 의
+#: `rel[None,:] * v_op`). 그래서 **창-안** `V_h/|V_1|` 변동이 정확히 0 이고, 합성이 실측의
+#: 13~35% 밖에 못 낸 것은 전부 `−Z·I` 항이 낸 것이었다. 기본파만 `v_open` 표류로 1.4~1.6배였다 —
+#: **텍스처가 소유한 축이 통째로 비어 있었다.**
+#:
+#: 고침: 창 하나에 그 녹화의 **연속된 텍스처 여러 장**을 `t_rel_s` 순서로 얹는다. 실측 60초 창의
+#: 창-안 변동을 1 로 본 회수율 (`run_diag_vtexseg.py`, 실측 24녹화·256창):
+#: ```
+#:   토막   step_s   텍스처    회수율(중앙)      비고
+#:     1      60      280       **0.0%**     <- 지금. 0 은 '작다' 가 아니라 '없다' 다
+#:     2      30      551        35.2%
+#:     3      20      819        55.0%
+#:     6      10     1628      **78.2%**     <- 이것을 쓴다
+#:    12       5     3223        86.7%       남은 몫은 10초보다 짧은 변동(계측 잡음 섞임)
+#: ```
+#: ⚠ `vtex_seg_s` 는 `vtex_step_s` 와 **같아야 한다** — 텍스처는 그 녹화의 `step_s` 구간
+#:   중앙값이라, 20초 중앙값을 10초씩 틀면 변화를 2배로 빨리 감는 것이 된다. `check()` 가 막는다.
+#: ⚠ 굽는 시간이 는다. 토막마다 회로를 다시 부르는데 `texture_delta`/`coupling_delta` 의 캐시
+#:   키에 `v1`(창마다 연속값)이 있어 창 사이 적중이 없다. 빼면 안 되는 까닭은 측정에 있다:
+#:   연속 텍스처 6장이 만드는 창-안 SMPS 전류 변동이 **지금 넣는 텍스처 델타 자체의 48~73%** 다.
+V32S: Dict[str, Any] = dict(V32, vtex_step_s=10.0, vtex_seg_s=10.0)
+
 #: V36 + **녹화별 대기 지문을 기록당 하나씩** (13.84.40).
 #: 실측 전부-OFF 배경의 파일 간 편차에서 꽂힌 기기 대기로 설명되는 몫을 빼면
 #: h9~h15 에 4.7~7.0mA 가 남는데 V36 은 1.3~1.5mA 밖에 안 준다 (계측계 잡음 참조 3개).
@@ -81,7 +107,7 @@ V36DP: Dict[str, Any] = dict(V36, sibling_rotate="smps_driftp")
 #: `seqraw_v1` 을 그대로 다시 만드는 설정 (대조군용).
 LEGACY: Dict[str, Any] = dict(carrier_apps=("oven",))
 
-PRESETS: Dict[str, Dict[str, Any]] = {"v32": V32, "v32t": V32T, "v36": V36, "v36r": V36R, "v36p": V36P,
+PRESETS: Dict[str, Dict[str, Any]] = {"v32": V32, "v32t": V32T, "v32s": V32S, "v36": V36, "v36r": V36R, "v36p": V36P,
                                       "v36d": V36D, "v36d47": V36D47, "v36dp": V36DP,
                                       "legacy": LEGACY}
 
@@ -146,7 +172,9 @@ def build_synthesizer(opts: Dict[str, Any], npz_dir: str, time_split: str,
     set_default_step_s(opts.get("vtex_step_s"))
     return LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=compute_gt_harmonics,
                            augmentor=aug, background=bool(opts.get("background")),
-                           couple_ext=bool(opts.get("couple_ext")))
+                           couple_ext=bool(opts.get("couple_ext")),
+                           # 14.51 — 창 안에서 텍스처를 갈아 끼운다. 0 이면 옛 경로(정적 하나).
+                           vtex_seg_s=float(opts.get("vtex_seg_s") or 0.0))
 
 
 def describe(opts: Dict[str, Any]) -> str:
@@ -173,6 +201,26 @@ def check(opts: Dict[str, Any], gen) -> Sequence[str]:
             n = -1
         if 0 <= n <= 400:
             bad.append("vtex_step_s=%s 인데 텍스처가 %d개다 (60초면 280개) — 안 걸렸다" % (want, n))
+    # 14.51 — 창 안 텍스처 교체. **배선을 재라** (14.49 에서 `str.replace` 가 조용히 빗나가
+    #   45분을 버렸다). 손잡이가 시뮬레이터까지 닿았는지, 그리고 `vtex_step_s` 와 **같은 값**인지.
+    seg = float(opts.get("vtex_seg_s") or 0.0)
+    if seg:
+        got = float(getattr(gen.grid_sim, "vtex_seg_s", 0.0) or 0.0)
+        if got != seg:
+            bad.append("vtex_seg_s=%s 인데 시뮬레이터는 %s 다 — 안 걸렸다" % (seg, got))
+        step = float(opts.get("vtex_step_s") or 0.0) or 60.0
+        if abs(step - seg) > 1e-6:
+            bad.append("vtex_seg_s=%s 인데 vtex_step_s=%s 다 — 텍스처는 step_s 구간의 "
+                       "중앙값이라 둘이 같아야 감는 속도가 맞는다 (14.51)" % (seg, step))
+        try:
+            from src.synthesis.vtexture import default_library
+            n = min(default_library().run_lengths().values())
+        except Exception:
+            n = -1
+        want = int(round(3600 / 60.0 / seg))
+        if 0 <= n < want:
+            bad.append("녹화당 텍스처가 최소 %d장인데 창 하나가 %d장을 쓴다 — 짧은 녹화는 "
+                       "마지막 장을 늘여 쓴다 (14.51)" % (n, want))
     if opts.get("sp_curves") and not getattr(a, "_sp", None):
         bad.append("sp_curves 가 안 걸렸다 (processed_data/sp_curves.npz)")
     if opts.get("sp_per_texture") and not getattr(a, "_sp_tex", None):

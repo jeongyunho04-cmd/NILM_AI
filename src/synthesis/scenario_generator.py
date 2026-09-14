@@ -134,7 +134,7 @@ class ScenarioGenerator:
         limit = syn.sustained_power_limit_w
 
         # 이 타임라인의 전압 환경을 먼저 정해야 용량 계산이 맞는다.
-        env = syn.grid_sim.sample_environment()
+        env = syn.grid_sim.sample_environment(int(n_cycles))   # 14.51 텍스처 장수
 
         # 1. 기기별로 가동 에피소드 후보를 만든다
         candidates: List[Tuple[str, int, int, float]] = []  # (가전, 시작, 끝, 지속전력)

@@ -85,7 +85,7 @@ def make_record(gen: LoadSynthesizer, n_cycles: int, rng: np.random.RandomState,
     plugged = {a: bool(rng.rand() < plugged_prob) for a in gen.known_appliances}
     for s in sch:
         plugged[s.appliance_type] = True
-    env = gen.grid_sim.sample_environment()
+    env = gen.grid_sim.sample_environment(int(n_cycles))      # 14.51 텍스처 장수
     return gen.synthesize_scenario(
         total_duration_cycles=n_cycles,
         schedules=sch,

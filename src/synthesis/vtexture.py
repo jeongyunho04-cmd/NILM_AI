@@ -159,6 +159,15 @@ class VoltageTextureLibrary:
         self._file_ids: Dict[str, int] = {s: i for i, s in enumerate(sorted(self._file_rel))}
         self._vrms = np.array([t.vrms for t in self.textures], dtype=np.float64)
         self._site = np.array([t.site for t in self.textures], dtype=object)
+        # 14.51 — **녹화 안에서 시간순**으로 늘어놓은 색인. `sample_run` 이 여기서 연속을 뗀다.
+        self._runs: Dict[str, List[Texture]] = {}
+        for _t in sorted(self.textures, key=lambda t: (t.stem, t.t_rel_s)):
+            self._runs.setdefault(_t.stem, []).append(_t)
+        #: 텍스처 id -> 그 녹화 안의 자리. `Texture.id` 는 `from_npz_dir` 이 색인으로 준다.
+        self._runpos: Dict[int, int] = {}
+        for _lst in self._runs.values():
+            for _k, _t in enumerate(_lst):
+                self._runpos[int(_t.id)] = _k
 
     # ── 구성 ──────────────────────────────────────────────────────────────
     @classmethod
@@ -318,6 +327,47 @@ class VoltageTextureLibrary:
                 pick = sess[int(rng.integers(len(sess)))]
                 idx = np.array([i for i in idx if self.textures[i].session == pick])
         return self.textures[int(idx[int(rng.integers(len(idx)))])]
+
+    def sample_run(self, rng: np.random.Generator, n: int, vrms_target: Optional[float] = None,
+                   tol_v: float = DEFAULT_TOL_V, site: Optional[str] = None,
+                   by_session: bool = True) -> List["Texture"]:
+        """그 환경의 **연속된** 텍스처 n개 — 창 하나를 시간으로 토막 낼 때 쓴다 (14.51).
+
+        왜: 창 하나에 텍스처 하나를 정적으로 얹으면 창-안 `V_h/|V_1|` 변동이 **정확히 0** 이다
+        (`run_diag_vtexseg.py`). 실측 60초 창의 그 변동을 1 로 보면 회수율이
+        `n=2 35% · n=3 55% · n=6 78% · n=12 87%` 다. 14.50 이 "합성 창-안 V_h 변동이 실측의
+        13~35%" 라고 쟀던 그 구멍이고, 남은 13~35% 는 `−Z·I` 항이 내던 것이다.
+
+        ⚠ **난수를 한 톨도 더 쓰지 않는다.** `sample()` 로 하나 뽑고 그 녹화 안의 자리에서
+        앞뒤로 떼 온다. 그래서 이 손잡이를 켜고 꺼도 기기 선택·시각·증강이 한 칸도 안 밀린다
+        (13.2 가 텍스처 RNG 를 따로 둔 것과 같은 규율). `n <= 1` 이면 `[sample()]` 과 같다.
+
+        ⚠ **감싸지 않는다** — 녹화 끝에서 시작하면 뒤로 당긴다. 마지막 텍스처와 첫 텍스처는
+        몇 분 떨어져 있어 이어 붙이면 실재하지 않는 계단이 생긴다.
+        뽑은 텍스처가 **가운데**(`run[n//2]`)에 오게 맞춘다 — 쓰이는 텍스처의 분포를
+        옛 경로와 같은 자리에 두려는 것이다.
+        """
+        t0 = self.sample(rng, vrms_target=vrms_target, tol_v=tol_v, site=site,
+                         by_session=by_session)
+        if t0 is None:
+            return []
+        n = int(n)
+        if n <= 1:
+            return [t0]
+        lst = self._runs.get(t0.stem) or [t0]
+        m = len(lst)
+        if m <= 1:
+            return [t0] * n
+        j = self._runpos.get(int(t0.id), 0)
+        a = int(np.clip(j - n // 2, 0, max(m - n, 0)))
+        run = list(lst[a:a + n])
+        while len(run) < n:                 # 녹화가 n개보다 짧다 — 마지막을 늘린다
+            run.append(run[-1])
+        return run
+
+    def run_lengths(self) -> Dict[str, int]:
+        """녹화별 텍스처 개수 — 관문용. `min()` 이 토막 수보다 작으면 그 녹화는 늘여 쓴다."""
+        return {k: len(v) for k, v in self._runs.items()}
 
     def describe(self) -> str:
         if not self.textures:

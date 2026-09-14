@@ -75,7 +75,7 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           power_scale_std_json: str = "",
           sp_curves: bool = False,
           sp_per_texture: bool = False, vtail: bool = False,
-          vtex_step_s: float = 0.0,
+          vtex_step_s: float = 0.0, vtex_seg_s: float = 0.0,
           background: bool = False,
           level_scramble: Optional[Dict[str, tuple]] = None,
           state_mix_json: str = "",
@@ -139,7 +139,9 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
         segment_pool=pool, window_size_cycles=window_cycles,
         synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
                                     augmentor=aug, background=bool(background),
-                                    couple_ext=bool(couple_ext)),
+                                    couple_ext=bool(couple_ext),
+                                    # 14.51 — 창 안에서 텍스처 갈아 끼우기. 0 이면 옛 경로.
+                                    vtex_seg_s=float(vtex_seg_s or 0.0)),
         recipe_mix=mix, compute_gt_harmonics=False,
         smps_focus_off_p=smps_focus_off_p)
 
@@ -211,6 +213,15 @@ def build_cache(
     #: ⚠ **여태 창 캐시에는 배선이 없었다** — `genopts.build_synthesizer` 는 걸지만
     #:   `build_cache` 는 `set_default_vtail` 만 불렀다 (14.33 ⓑ). 두 입구가 갈렸던 자리다.
     vtex_step_s: float = 0.0,
+    #: 텍스처 **한 장이 덮는 합성 시간** (초). 0 이면 창 전체에 한 장 — 옛 경로다 (14.51).
+    #: 14.50 이 남긴 구멍: `_terminal_voltage_harmonics` 가 `rel` 을 창 전체에 정적으로
+    #: 곱해 **창-안 `V_h/|V_1|` 변동이 정확히 0** 이었다. 합성이 내던 13~35% 는 전부
+    #: `−Z·I` 항이었고 텍스처가 소유한 축은 비어 있었다. 창을 토막 내 그 녹화의 연속
+    #: 텍스처를 얹으면 실측 대비 회수율이 `2토막 35% · 3토막 55% · 6토막 78%` 다
+    #: (`run_diag_vtexseg.py`). 프리셋 `genopts.V32S` 가 10.0/10.0 이다.
+    #: ⚠ **`vtex_step_s` 와 같은 값**이어야 한다 — 텍스처는 그 구간의 중앙값이라
+    #:   20초 중앙값을 10초씩 틀면 변화를 2배로 빨리 감는 것이 된다.
+    vtex_seg_s: float = 0.0,
     background: bool = False,
     dither_min_order: int = 2,
     couple_ext: bool = False,
@@ -288,7 +299,7 @@ def build_cache(
                             dither_amp, dither_phase_deg, mix_json,
                             dither_even_amp, dither_even_phase_deg, pss_json,
                             bool(sp_curves), bool(sp_per_texture), bool(vtail),
-                            float(vtex_step_s or 0.0),
+                            float(vtex_step_s or 0.0), float(vtex_seg_s or 0.0),
                             bool(background), level_scramble,
                             smx_json, tuple(carrier_apps or ()),
                             int(dither_min_order), bool(couple_ext),
@@ -343,6 +354,8 @@ def build_cache(
             "sp_curves": bool(sp_curves),
             "sp_per_texture": bool(sp_per_texture),
             "vtail": bool(vtail),
+            # 14.51 — 텍스처 **한 장이 덮는 시간**. (`vtex_step_s` 는 위에 이미 있다.)
+            "vtex_seg_s": float(vtex_seg_s or 0.0),
             "background": bool(background),
             "fine_shape": [FINE_CHANNELS, FINE_CYCLES], "bytes": int(total),
             "zero_even_harmonics": bool(ZERO_EVEN_HARMONICS),
