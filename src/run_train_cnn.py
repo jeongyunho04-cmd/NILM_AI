@@ -327,10 +327,14 @@ def main() -> int:
                          "잘 내는데 **같은 상태 안의 V² 의존**을 0.33~0.83 로만 읽어 순 지수가 "
                          "0.85 다(물리는 2). 저전압에서 과예측한다 (14.6). 끄면 비트 동일")
     ap.add_argument("--w-harm", type=float, default=0.1)
-    ap.add_argument("--harm-sig-vnorm", action="store_true",
-                    help="L_harm 의 지문을 창 전압으로 나눈다 (14.26). sig=median(I/P) 인데 "
-                         "I=P/V 라 I/P ∝ 1/V 다 — 상수 sig 는 power ∝ V¹ 을 밀어 모델 지수를 "
-                         "1 에 앉힌다 (물리 2). 끄면 비트 동일")
+    ap.add_argument("--harm-sig-vnorm", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="**기본 켜짐 (14.29 에서 채택).** L_harm 의 지문에 창 전압비를 "
+                         "기기별 지수로 건다 (14.26·14.28). sig=median(I/P) 인데 I=P/V 라 "
+                         "I/P ∝ V^(i_exp−p_exp) 다 — 상수 sig 는 저항·SMPS 에 power ∝ V¹ 을 "
+                         "밀어 모델 지수를 1 에 앉힌다 (물리 2). 켜면 3/3 시드에서 지수가 "
+                         "2 로 가고 실측 절대잔차가 41->24W 로 준다. 모터는 지수 0 이라 "
+                         "보정이 안 걸린다. `--no-harm-sig-vnorm` 이면 옛 판과 비트 동일")
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
     ap.add_argument("--w-state-power", type=float, default=0.0, metavar="W",
                     help="상태별 전력 출력을 그 상태의 실제 전력에 묶는 항 (12.35). "

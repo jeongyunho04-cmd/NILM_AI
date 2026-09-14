@@ -120,9 +120,11 @@ BASE="--cache $CACHE --holdout $HOLDOUT \
       --w-z 0.3 --w-over 0.0 --w-harm 0.1 --eval-every 10 --cache-workers 4 \
       --harm-even-magnitude --state-signatures --standby-operating session"
 
+# ⚠ 14.29 에서 `--harm-sig-vnorm` 이 **기본 켜짐**이 됐다. 대조 팔은 이제
+#   **`--no-harm-sig-vnorm` 을 명시**해야 한다 — 안 하면 두 팔이 같아진다.
 echo "=== 학습 시작 $(date '+%F %H:%M:%S')"
 CUDA_VISIBLE_DEVICES=0 $PY -X utf8 -m src.run_train_cnn $BASE \
-    --tag cnn_sigc_ctl_s${SEED} > "results/cnn_sigc_ctl_s${SEED}.log" 2>&1 &
+    --no-harm-sig-vnorm --tag cnn_sigc_ctl_s${SEED} > "results/cnn_sigc_ctl_s${SEED}.log" 2>&1 &
 A=$!
 CUDA_VISIBLE_DEVICES=1 $PY -X utf8 -m src.run_train_cnn $BASE --harm-sig-vnorm \
     --tag cnn_sigc_vn_s${SEED}  > "results/cnn_sigc_vn_s${SEED}.log"  2>&1 &
