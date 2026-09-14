@@ -112,10 +112,18 @@ wait $B || RC=1
 
 # ── ① 항이 실제로 물었나 — **이것이 0 이면 나머지는 볼 필요가 없다** ──────
 echo "=== 예측 ① swap_frac 이 0 이 아닌가 ==="
-grep -o "swap [0-9.]*/[0-9.]*" "results/cnn_swap_on_s${SEED}.log" | head -3
-grep -o "swap [0-9.]*/[0-9.]*" "results/cnn_swap_on_s${SEED}.log" | tail -3
-NZ=$(grep -o "swap [0-9.]*/[0-9.]*" "results/cnn_swap_on_s${SEED}.log" \
-     | awk -F/ '$2+0 > 0' | wc -l)
+# ⚠⚠ `set -euo pipefail` 아래에서 `grep ... | head -N` 은 **작업을 죽인다** —
+#   `head` 가 N줄 뒤에 닫으면 `grep` 이 SIGPIPE 로 죽고 `pipefail` 이 그 실패를
+#   파이프라인 종료코드로 올린다. 982881_0/1 이 학습을 다 끝내고 체크포인트까지
+#   쓴 뒤 **여기서** FAILED 가 됐다. `tail` 은 전부 읽으므로 안전하다.
+#   고침: 파이프라인 전체에 `|| true`.
+SWAPLINES=$(grep -o "swap [0-9.]*/[0-9.]*" "results/cnn_swap_on_s${SEED}.log" || true)
+echo "$SWAPLINES" | head -3 || true
+echo "$SWAPLINES" | tail -3 || true
+#   ⚠ 여기도 같은 함정이다 — `grep` 이 **한 줄도 못 찾으면 종료코드 1** 이라
+#     `NZ=$(...)` 대입이 `set -e` 로 작업을 죽인다. 정작 그 경우를 **보고하려고**
+#     만든 검사인데 보고 전에 죽는다. `|| true` 로 막는다.
+NZ=$( { echo "$SWAPLINES" | awk -F/ '$2+0 > 0' | wc -l; } || true )
 echo "  swap_frac > 0 인 에포크 ${NZ}개"
 if [ "$NZ" -eq 0 ]; then
   echo "  ❌ **항이 한 번도 안 물었다.** tol(0.02) 이 너무 빡빡하거나 배선이 샜다."

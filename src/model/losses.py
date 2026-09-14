@@ -892,7 +892,8 @@ class NILMLoss(torch.nn.Module):
 
     def _swap_term(self, parts, out, tgt, w_swap: float, swap_tol: float,
                    swap_slack: int, swap_tiebreak: str, swap_tb_orders,
-                   companion: bool = False, comp=None) -> None:
+                   companion: bool = False, comp=None,
+                   half_requires_dryer: bool = True) -> None:
         """저항 조합 맞바꿈 `L_swap` — `parts` 에 swap/swap_frac/swap_ties 를 채운다.
 
         **1단계와 2단계가 같은 코드를 쓴다** (14.32). 여태 이 항은 `unlabeled()`
@@ -965,6 +966,25 @@ class NILMLoss(torch.nn.Module):
                 err = (cg - g_need[None]).abs()
                 err = err.masked_fill(~same_k, float("inf"))
                 # 모든 후보의 상대오차. tol 안에 든 것이 **여럿**일 수 있다.
+                # ── 반파 증거로 후보를 좁힌다 (14.34) ─────────────────────
+                # `resistive_match` 와 **같은 규칙**이다 (두 입구를 맞춰 둔다).
+                # 반파를 내는 것은 드라이기 약풍 하나뿐이므로 `|I2|−|I4|` 가 크면
+                # 그 창의 조합에 드라이기가 반드시 들어간다. 드라이약(108.6Ω)과
+                # 핫플(101.8Ω)이 **6.3%** 로 붙어 있어(10쌍 중 유일하게 10% 미만)
+                # tol 2% 로는 못 가르는데, 그 자리에 음성 증거가 안 걸려 있었다.
+                # ⚠ 반대 방향은 안 건다 — 반파가 없다는 것은 "약풍이 아니다" 일 뿐
+                #   강풍(54.3Ω)일 수 있다.
+                # ⚠ `res_ohm_half` 가 비어 있으면(반파 기기를 안 걸었으면) 항등이다.
+                # ⚠ 조건이 위 `hf` 블록과 **글자 그대로 같아야** 한다 — 다르면 `hf` 가
+                #   정의 안 된 채로 여기 들어와 NameError 다.
+                if (half_requires_dryer
+                        and float(self.res_ohm_half.abs().sum()) > 0
+                        and tgt.get("obs_harm") is not None):
+                    hw_col = (self.res_ohm_half[cols] > 0).to(cb.dtype)   # (R,)
+                    has_hw = (cb @ hw_col) > 0                            # (C,)
+                    need = hf.reshape(-1) > 0                             # (B,)
+                    bad = (~has_hw)[:, None] & need[None, :]              # (C,B)
+                    err = err.masked_fill(bad, float("inf"))
                 rel_all = err * v2[None] / p_res.abs().clamp(min=1.0)[None]  # (C,B)
                 feas = rel_all <= swap_tol                                # (C,B)
 

@@ -581,6 +581,7 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
                     tol: float = 0.05, min_w: float = 150.0,
                     cand_gate_min: float = 0.0, margin: float = 2.0,
                     snap: bool = False, half_abs: bool = True,
+                    half_requires_dryer: bool = True,
                     ) -> Tuple[np.ndarray, np.ndarray]:
     """관측 전력·전압에 **맞는 저항 조합**을 골라 재배정한다 (12.112).
 
@@ -603,6 +604,19 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
             경고한 "게이트로 후보를 좁히면 고쳐야 할 맞바꿈을 놓친다" 를 피한다
             (`test3` 오븐 게이트 0.09). 겨냥은 게이트가 **바닥**인 기기를
             맞바꿈으로 켜는 것이다 (`test_9` 드라이기).
+        half_requires_dryer: 반파 증거가 있으면 후보를 **반파 기기를 포함한 조합으로
+            제한**한다 (기본, 14.34). 여태 반파 판정은 드라이기의 **Ω 값만 바꾸고**
+            후보 집합은 안 건드렸다 — `|I2|−|I4|` 가 *"반파 부하가 있다"* 는 양성 증거인
+            동시에 *"핫플이 아니다"* 라는 **음성 증거**인데 앞의 절반만 쓴 것이다.
+            그 둘이 문제가 되는 이유는 간격이다:
+                드라이기 약(108.6Ω) 대 핫플(101.8Ω)   **6.3%**   <- 10개 쌍 중 유일하게 10% 미만
+                포트 대 오븐                          11.8%     (다음으로 가까운 쌍)
+                나머지 여덟 쌍                        25~67%
+            `tol` 이 0.02 라 6.3% 쌍은 **둘 다 tol 밖**이 되기 쉽고, 그러면 argmin 이
+            고르는데 거기에 음성 증거가 안 걸려 있었다.
+            관문은 격리에서 압도적이다 — `|I2|−|I4|` 드라이기 약풍 0.706A(문턱 초과 100%)
+            대 핫플 통전 0.0004A(3.1~3.7%, 릴레이 전이 사이클로 보인다).
+            `False` 면 옛 경로 그대로다.
         half_abs: 반파(드라이기 약) 관문을 **절대량** `|I2|−|I4| > HALFWAVE_ABS_MIN` 으로
             본다 (기본). `False` 면 옛 비율 관문 `|I2|/|I1| > HALFWAVE_I2_MIN` 이고
             그때는 이 함수가 **비트 동일**하게 옛 동작을 낸다. 근거는 아래 `half` 계산
@@ -679,6 +693,14 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
         if not cur:
             continue
 
+        # ── 반파 증거로 후보를 좁힌다 (14.34) ─────────────────────────────
+        # 이 기기 집합에서 반파를 내는 것은 **드라이기 약풍 하나**다. 그러니
+        # `|I2|−|I4|` 가 크면 그 창의 조합에는 드라이기가 **반드시** 들어간다.
+        # ⚠ 그 반대는 안 건다 — 반파가 없다는 것은 "드라이기 **약풍**이 아니다" 일
+        #   뿐이고 강풍(54.3Ω)일 수 있다. 한쪽만 거는 것이 맞다.
+        need_hw = (half[i] and half_requires_dryer
+                   and any(names[k] in HALFWAVE_OHM for k in range(len(cols))))
+
         # 후보 제한 (12.117.3). 게이트가 바닥인 기기는 맞바꿈으로 켜지 못한다.
         # **이미 켜진 것은 무조건 남긴다** — 안 그러면 `cur` 자체가 후보에서
         # 빠져 `cur_err` 이 inf 가 되고 아무 맞바꿈이나 통과한다.
@@ -693,6 +715,8 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
                 continue
             if allow is not None and not set(pick) <= allow:
                 continue
+            if need_hw and not any(names[k] in HALFWAVE_OHM for k in pick):
+                continue        # 반파가 관측됐는데 반파 기기가 없는 조합 — 물리적으로 불가
             gg = sum(1.0 / ohm[names[k]] for k in pick)
             if gg <= 0:
                 continue
