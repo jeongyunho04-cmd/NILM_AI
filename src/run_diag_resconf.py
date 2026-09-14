@@ -120,22 +120,35 @@ def main() -> int:
                     if (y[i] == p[i]).all():
                         continue
                     k = (tuple(y[i]), tuple(p[i]))
-                    c = cnt.setdefault(k, [0, np.zeros(len(RES))])
+                    c = cnt.setdefault(k, [0, [], []])
                     c[0] += 1
-                    c[1] += w[i]
+                    # ⚠ **평균으로 모으지 마라** (14.85). 이 분포는 쌍봉이다 —
+                    #   `{오븐+핫플}->{오븐}` 134창은 중앙 15W(팬·조명)인데 평균은 349W
+                    #   라서 "핫플이 오븐으로 삼켜진다" 로 읽었다. 틀렸다.
+                    c[1].append(w[i])
+                    # 그 창에 **실제로 부하가 있었나.** 핫플은 듀티로 꺼져 있는데
+                    # 라벨만 ON 인 창이 절반이라(13.84.x: 1998창 중 1011창 총전력 42.1W)
+                    # 혼동표가 오답으로 세지만 모델이 맞는 자리가 많다.
+                    c[2].append(float(d["p_obs"][i] - d["p_base"]))
             if not cnt:
                 print("      자리 %s — 어긋난 창 없음" % site)
                 continue
             n = sum(v[0] for v in cnt.values())
-            print("      자리 %s — 어긋난 창 %d개" % (site, n))
+            print("      자리 %s — 어긋난 창 %d개   (예측W 는 **중앙값**, 부하 = 관측−기준선)"
+                  % (site, n))
             for k, v in sorted(cnt.items(), key=lambda x: -x[1][0])[:a.top]:
                 ty, tp = k
-                wt = v[1] / max(v[0], 1)
-                print("        %-22s -> %-22s %6d창 (%4.1f%%)   예측W %s"
+                wt = np.median(np.asarray(v[1]), axis=0)
+                ld = np.asarray(v[2])
+                # 부하가 없는 창이 많으면 그 줄은 **오귀속이 아니라 라벨**이다.
+                flag = "  <- 부하 없음 %.0f%% (듀티 라벨)" % (100.0 * (ld < 100).mean()) \
+                    if (ld < 100).mean() > 0.4 else ""
+                print("        %-22s -> %-22s %6d창 (%4.1f%%)  부하중앙 %5.0fW  예측W %s%s"
                       % ("{" + "+".join(KO[RES[j]] for j in range(4) if ty[j]) + "}",
                          "{" + "+".join(KO[RES[j]] for j in range(4) if tp[j]) + "}" if any(tp) else "{}",
-                         v[0], 100.0 * v[0] / n,
-                         " ".join("%s %.0f" % (KO[RES[j]], wt[j]) for j in range(4) if wt[j] > 20)))
+                         v[0], 100.0 * v[0] / n, np.median(ld),
+                         " ".join("%s %.0f" % (KO[RES[j]], wt[j]) for j in range(4) if wt[j] > 20),
+                         flag))
 
         print()
         print("  (3) 기기별 — 참으로 켜졌을 때 **자기 게이트가 서는 비율** (자리별)")
