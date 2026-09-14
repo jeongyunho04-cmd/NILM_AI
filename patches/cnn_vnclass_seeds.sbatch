@@ -98,7 +98,12 @@ BASE="--cache $CACHE --holdout $HOLDOUT \
 # `--harm-sig-vnorm` 은 14.29 에서 기본 켜짐. 두 팔 다 켜진 채로 간다.
 
 echo "=== 학습 시작 $(date '+%F %H:%M:%S')"
+# ⚠ 14.37 에서 `--harm-vnorm-classes` **기본이 `RESISTIVE` 로 바뀌었다.** A 팔은
+#   전 분류를 **명시로** 줘야 한다 — 안 주면 두 팔이 같아진다. 그리고 앞의 관문은
+#   `_vnorm_exp(apps)` 의 **함수 기본값**을 보므로 이 실수를 못 잡는다 (argparse
+#   기본값이 바뀐 것이라 자리가 다르다).
 CUDA_VISIBLE_DEVICES=0 $PY -X utf8 -m src.run_train_cnn $BASE \
+    --harm-vnorm-classes "" \
     --tag cnn_vncls_all_s${SEED} > "results/cnn_vncls_all_s${SEED}.log" 2>&1 &
 A=$!
 CUDA_VISIBLE_DEVICES=1 $PY -X utf8 -m src.run_train_cnn $BASE \

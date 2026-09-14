@@ -258,6 +258,15 @@ def _vnorm_exp(apps, classes: str = ""):
     from src.synthesis.grid_simulator import GridSimulator
     t = GridSimulator()._LOAD_EXPONENTS
     want = {x.strip().upper() for x in classes.split(",") if x.strip()}
+    # ⚠ **모르는 이름은 죽는다.** 안 그러면 오타 하나가 `want` 를 아무것도 안 맞게 만들어
+    #   **전 기기 지수가 조용히 0** 이 된다 — 보정이 통째로 꺼진 판을 A/B 로 착각하게 된다.
+    #   `BASE` 변수에 `--harm-vnorm-classes ""` 를 넣었다가 확장 뒤 따옴표 두 글자가
+    #   값으로 넘어간 적이 있다 (14.37). 14.8 의 `resolve()` 와 같은 규약이다.
+    known = {c.name.upper() for c in t}
+    bad = want - known
+    if bad:
+        raise SystemExit("--harm-vnorm-classes: 모르는 분류 %s — 있는 것: %s"
+                         % (sorted(bad), sorted(known)))
     out = []
     for a in apps:
         c = get_load_class(a)
@@ -381,9 +390,12 @@ def main() -> int:
                          "밀어 모델 지수를 1 에 앉힌다 (물리 2). 켜면 3/3 시드에서 지수가 "
                          "2 로 가고 실측 절대잔차가 41->24W 로 준다. 모터는 지수 0 이라 "
                          "보정이 안 걸린다. `--no-harm-sig-vnorm` 이면 옛 판과 비트 동일")
-    ap.add_argument("--harm-vnorm-classes", default="", metavar="LIST",
+    ap.add_argument("--harm-vnorm-classes", default="RESISTIVE", metavar="LIST",
                     help="`--harm-sig-vnorm` 보정을 **이 부하 분류에만** 건다 (14.33). "
-                         "빈 문자열(기본)이면 전 분류 = 14.28 과 비트 동일. "
+                         "**2026-09-14 기본이 `RESISTIVE` 로 바뀌었다** (14.37) — 시드 셋에서 "
+                         "판정 줄 **+0.0067 ± 0.0007** 이고 저항 4종 신원은 여섯 판 전부 "
+                         "0.9815 로 한 자리도 안 움직인다. `\"\"`(빈 문자열)이면 전 분류 = "
+                         "14.28 판이고 옛 결과가 재현된다. "
                          "`RESISTIVE` 를 주면 **유도로 정확한 곳에만** 남는다 — SMPS 의 "
                          "−1 은 h1 에서 거의 항등식이고 h>=3 은 도통각 때문에 V^e 꼴이 "
                          "아니며, 실측 차수별 지수가 녹화 사이에 재현되지 않는다 "
@@ -691,6 +703,11 @@ def main() -> int:
 
     print(f"모델 {n_par/1e6:.2f}M 파라미터 | 배치 {a.batch} | {a.epochs} epoch x "
           f"{a.epoch_windows:,}창 = {steps:,} step | 장치 {dev}")
+    if a.harm_sig_vnorm:
+        _ex = _vnorm_exp(apps, a.harm_vnorm_classes)
+        print("harm_vnorm 지수: " + " ".join("%s=%+.0f" % (x[:4], e)
+                                             for x, e in zip(apps, _ex))
+              + f"   (--harm-vnorm-classes {a.harm_vnorm_classes!r})")
     print(f"손실 가중치: power 1.0 / state .3 / on .3 / plugged .1 / standby .1 "
           f"/ harm {a.w_harm} / cons {a.w_cons} / over {a.w_over}")
 
