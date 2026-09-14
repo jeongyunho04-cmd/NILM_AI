@@ -82,8 +82,26 @@ def steps_of(V, I, P, ok, guard, win, dp_min, snr, negative=False, rng=None):
             noise = 0.5 * (ia.std() + ib.std()) / np.sqrt(max(len(ia), 1))
             if abs(dI) < max(snr * noise, 1e-4):
                 continue
-            out[h].append(-(vb.mean() - va.mean()) / dI)
+            # ⚠ **비가 아니라 쌍**을 모은다 (14.59 재정리). 계단마다 비를 내고 중앙값을
+            #   잡으면 작은 계단이 큰 계단과 같은 무게를 받는다. 모아서 복소 최소제곱으로
+            #   풀면 `|ΔI|²` 가 자동 가중치가 되어 **조건화가 좋은 계단이 지배**한다.
+            out[h].append((vb.mean() - va.mean(), dI))
     return out
+
+
+def solve_z(pairs):
+    """모은 (ΔV, ΔI) 쌍 -> `(Z 복소, R², Σ|ΔI|², n)`.  `ΔV = −Z·ΔI` 의 복소 최소제곱."""
+    if len(pairs) < 5:
+        return None
+    dv = np.array([p[0] for p in pairs], dtype=np.complex128)
+    di = np.array([p[1] for p in pairs], dtype=np.complex128)
+    den = float(np.sum(np.abs(di) ** 2))
+    if den <= 0:
+        return None
+    z = -np.sum(np.conj(di) * dv) / den
+    res = dv + z * di
+    r2 = 1.0 - float(np.sum(np.abs(res) ** 2)) / max(float(np.sum(np.abs(dv) ** 2)), 1e-30)
+    return z, r2, den, len(pairs)
 
 
 def main() -> int:
@@ -135,29 +153,47 @@ def main() -> int:
         if len(s[1]) < 5:
             continue
         print("■ 자리 %s" % st)
-        print("    %-5s%6s%9s%17s%8s  %s"
-              % ("차수", "표본", "|Z_h|", "사분위", "Z/Z_1", "음성대조: 표본 중앙 [사분위]"))
+        print("    %-5s%6s%9s%9s%9s%8s%8s%10s%10s"
+              % ("차수", "표본", "Re(Z)", "Im(Z)", "|Z_h|", "Z/Z_1", "R²",
+                 "음성 |Z|", "음성 R²"))
         z1 = None
+        got = {}
         for h in H:
-            v = np.asarray(s[h])
-            if len(v) < 5:
-                print("    h%-4d%6d   (표본 부족)" % (h, len(v)))
+            r_ = solve_z(s[h])
+            if r_ is None:
+                print("    h%-4d%6d   (표본 부족)" % (h, len(s[h])))
                 continue
-            m = float(np.median(np.abs(v)))
-            q1, q3 = np.percentile(np.abs(v), [25, 75])
+            z, r2, den, n = r_
             if h == 1:
-                z1 = m
-            ng = np.abs(np.asarray(neg_site.get(st, {}).get(h, [])))
-            if len(ng) >= 5:
-                n1, n3 = np.percentile(ng, [25, 75])
-                ngs = "%4d  %7.2f [%6.2f~%7.2f]" % (len(ng), np.median(ng), n1, n3)
-                # **가름**: 신호의 사분위와 음성대조의 사분위가 안 겹쳐야 잰 것이다
-                sep = "  ✅" if q3 < n1 else ("  ⚠ 겹침" if q1 < n3 else "  ✅")
-            else:
-                ngs, sep = "   (없음)", ""
-            wide = "  ⚠ 산포>2배" if (q3 - q1) > m else ""
-            print("    h%-4d%6d%9.3f%9.2f~%-7.2f%8.2f  %s%s%s"
-                  % (h, len(v), m, q1, q3, m / max(z1, 1e-9), ngs, sep, wide))
+                z1 = abs(z)
+            ng = solve_z(neg_site.get(st, {}).get(h, []))
+            ngs = ("%10.2f%10.3f" % (abs(ng[0]), ng[1])) if ng else "%20s" % "(없음)"
+            # ⚠ **R² 가 낮으면 그 차수는 못 푼 것이다.** 음성대조 R² 와 반드시 같이 본다.
+            ok_ = (r2 > 0.5) and (ng is None or r2 > ng[1] + 0.2)
+            got[h] = (z, r2, ok_)
+            print("    h%-4d%6d%9.3f%9.3f%9.3f%8.2f%8.3f%s%s"
+                  % (h, n, z.real, z.imag, abs(z), abs(z) / max(z1, 1e-9), r2, ngs,
+                     "  ✅" if ok_ else "  ⚠"))
+        # ── 함수 형태 검정: `Z_h = R + j·h·X` 가 **가능한가** ────────────────
+        #   그 형태면 Re 는 차수에 상수, Im 은 h 에 비례해 **단조 증가**여야 한다.
+        #   ⚠ 실측은 h3 Im 이 양(유도성)이고 h5 Im 이 음(용량성)으로 **부호가 뒤집힌다** —
+        #     공진이 있다는 뜻이고, `x_grid` 를 올리는 것으로는 재현이 **안 된다**.
+        use = [h for h in H if got.get(h, (None, 0, False))[2] and h > 1]
+        if use and 1 in got:
+            print("    믿을 수 있는 차수: " + " ".join("h%d" % h for h in use)
+                  + "   (R² 문턱 0.5 · 음성대조보다 0.2 이상)")
+            ims = [got[h][0].imag for h in use]
+            res = [got[h][0].real for h in use]
+            mono = all(b > a for a, b in zip(ims, ims[1:])) and all(v > 0 for v in ims)
+            flat = (max(res) - min(res)) < 0.5 * max(abs(np.mean(res)), 1e-9)
+            print("      Re(Z): " + " ".join("%.2f" % v for v in res)
+                  + ("   (차수에 상수 ✅)" if flat else "   ⚠ **상수가 아니다**"))
+            print("      Im(Z): " + " ".join("%+.2f" % v for v in ims)
+                  + ("   (h 에 단조 증가 ✅)" if mono else
+                     "   ⚠ **단조도 아니고 부호가 뒤집힌다 -> `R + j·h·X` 로 못 쓴다**"))
+            print("      실측 |Z_h|/|Z_1|: "
+                  + " ".join("h%d **%.2f**" % (h, abs(got[h][0]) / max(z1, 1e-9))
+                             for h in use))
         print()
     r, x = 1.15, 0.085
     print("  생성기 모형 `r + j·h·x`  (r=%.2f, x=%.3f — 자리 D 중앙)" % (r, x))
