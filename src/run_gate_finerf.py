@@ -184,6 +184,63 @@ def main() -> int:
     ck("(5) 원시 `fp.amax/amin` 은 그대로 남는다 (12.9.8)",
        "fp[:, _a:_b].amax(-1)" in Path("src/model/net.py").read_text(encoding="utf-8"))
 
+    # ── (6) 14.80 — **바꾸지 말고 더한다** ───────────────────────────────
+    #   14.78 의 실패: dilation 을 **교체**해 마지막 탭 RF 를 187 -> 727 로 늘렸는데
+    #   그 탭이 **유일한 국소 탭**이었다. 국소성을 잃자 신원 지표가 넓게 무너졌다.
+    #   고침: 앞 다섯을 두고 뒤에 (32,64) 를 붙이고 `tap_layers` 에 **4** 를 넣는다.
+    torch.manual_seed(0)
+    e0 = NILMNet(APPS, [3] * len(APPS)); e0.eval()
+    torch.manual_seed(0)
+    e1 = NILMNet(APPS, [3] * len(APPS), fine_extra_dilations=None, tap_layers=None); e1.eval()
+    with torch.no_grad():
+        q0, q1 = e0(f_, w_), e1(f_, w_)
+    ck("(6) 끄면 **비트 동일**", all(torch.equal(q0[k], q1[k]) for k in q0 if torch.is_tensor(q0[k])))
+    torch.manual_seed(0)
+    e2 = NILMNet(APPS, [3] * len(APPS), fine_extra_dilations=(32, 64),
+                 tap_layers=(0, 1, 4)); e2.eval()
+    ck("(6) 블록 5 -> 7 · 탭 (0,1,4)", len(e2.fine) == 7 and e2.tap_layers == (0, 1, 4))
+
+    def _tap_at(n, layer, offsets):
+        """`layer` 블록 출력의 타깃 슬라이스가 그 오프셋 입력에 얼마나 반응하나."""
+        torch.manual_seed(1)
+        x = torch.randn(1, FINE_CHANNELS, 600)
+        tt = fine_target_index()
+
+        def f(z):
+            h = z
+            for i, blk in enumerate(n.fine):
+                h = blk(h)
+                if i == layer:
+                    return h[:, :, tt]
+            return h[:, :, tt]
+
+        with torch.no_grad():
+            base = f(x).clone()
+            out = []
+            for o in offsets:
+                y = x.clone()
+                y[0, :, tt + o] += 10.0
+                out.append(float((f(y) - base).abs().max()))
+        return out
+
+    o2 = [0, 90, 240]
+    loc = _tap_at(e2, 4, o2)           # 옛 마지막 블록 = 국소 탭
+    wide = _tap_at(e2, 6, o2)          # 덧붙인 마지막 블록 = 넓은 탭
+    print()
+    print("  (6) 두 탭이 **서로 다른 일을 하는가** (블록 4 = 국소 · 블록 6 = 넓음)")
+    print("      %-12s %10s %10s %10s" % ("", "+0", "+90(1.5초)", "+240(4초)"))
+    print("      %-12s %10.3f %10.3f %10.3f" % ("탭 4 (국소)", loc[0], loc[1], loc[2]))
+    print("      %-12s %10.3f %10.3f %10.3f" % ("탭 6 (넓음)", wide[0], wide[1], wide[2]))
+    ck("(6) 국소 탭은 **타깃에서 뾰족하다** (어깨보다 높다)", loc[0] > loc[1] * 1.5,
+       "꼭대기/어깨 %.2f배" % (loc[0] / max(loc[1], 1e-9)))
+    ck("(6) 국소 탭은 +4초를 **거의 안 본다**", loc[2] < loc[0] * 0.35,
+       "+4초/꼭대기 %.2f" % (loc[2] / max(loc[0], 1e-9)))
+    ck("(6) 넓은 탭은 +4초를 **본다**", wide[2] > 1e-6,
+       "|변화| %.3f" % wide[2])
+    ck("(6) 국소 탭이 **지금 판과 같다** (탭을 대체한 게 아니라 더했다)",
+       abs(loc[0] - _tap_at(e0, 4, [0])[0]) < 1e-9,
+       "지금 %.4f · 더한 판 %.4f" % (_tap_at(e0, 4, [0])[0], loc[0]))
+
     print()
     if FAIL:
         print("관문 실패 %d건: %s" % (len(FAIL), " / ".join(FAIL)))

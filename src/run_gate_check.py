@@ -156,6 +156,9 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
                     fine_dilations=pk.get("fine_dilations", None),
                     # 세밀 전역 풀링 (14.79). 없으면 "both" 라 비트 동일.
                     fine_pool=pk.get("fine_pool", "both"),
+                    # 덧붙인 블록·탭 (14.80). 없으면 옛 기본이라 비트 동일.
+                    fine_extra_dilations=pk.get("fine_extra_dilations", None),
+                    tap_layers=pk.get("tap_layers", None),
                     fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
     if weights:
         model.load_state_dict(ck["model"])

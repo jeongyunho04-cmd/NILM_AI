@@ -232,6 +232,23 @@ class NILMNet(nn.Module):
         #:             12.9.8 — 총전력을 1/10 로 줄여도 핫플 on 로짓이 0.09 밖에 안 움직였다.
         #: ⇒ `"amax"` 는 **`mean` 만 뺀다**. `fp.amax/amin` 과 물리 프라이어는 그대로다.
         fine_pool: str = "both",
+        #: 세밀 스택 **뒤에 덧붙일** dilation (14.80). `None` 이면 안 붙는다 = **비트 동일**.
+        #:
+        #: ⚠⚠ 14.78 이 실패한 까닭을 고친 것이다. 거기서는 dilation 을 **교체**해
+        #:   (1,2,4,8,16 -> 1,3,9,27,81) 마지막 탭의 RF 를 187 -> 727 로 늘렸는데,
+        #:   그 탭이 **유일한 국소 탭**이었다. 실측 (`run_gate_finerf`, 무작위 가중치):
+        #:       오프셋   +0      +90
+        #:       기본   **2.393**  0.448    <- 타깃에서 5.3배 뾰족
+        #:       교체     1.494  **1.959**  <- **어깨가 꼭대기보다 높다**
+        #:   국소성을 잃자 저항 신원이 한 시드에서 0.9815 -> **0.9321**, SMPS 신원 0.9518 ->
+        #:   0.9219, 판정 줄 0.9133 -> 0.8871 로 넓게 무너졌다.
+        #: ⇒ **바꾸지 말고 더한다.** 앞 다섯 블록을 그대로 두고 뒤에 (32, 64) 를 붙인 뒤
+        #:   `tap_layers` 에 **4** 를 넣어 옛 마지막 블록(RF 187)의 타깃 슬라이스도 같이 뽑는다.
+        #:   그러면 국소 탭(+-1.56초)과 넓은 탭(+-6.36초)이 **둘 다** 특징에 들어간다.
+        fine_extra_dilations: Optional[Sequence[int]] = None,
+        #: 타깃 슬라이스를 뽑을 블록 번호 (0-based). `None` 이면 `(0, 1)` = **비트 동일**.
+        #: `fine_extra_dilations` 를 쓸 때 **4 를 꼭 넣어라** — 안 넣으면 14.78 과 같은 실수다.
+        tap_layers: Optional[Sequence[int]] = None,
     ):
         super().__init__()
         # 세밀 갈래가 실제로 쓸 채널 수. 입력은 항상 FINE_CHANNELS 개로 오지만
@@ -283,12 +300,22 @@ class NILMNet(nn.Module):
             raise ValueError("fine_dilations 는 5개여야 한다 (블록 수가 같아야 "
                              "파라미터가 안 는다): %r" % (dil,))
         self.fine_dilations = dil
-        self.fine = nn.ModuleList([
-            _blk(self.fine_channels, c1, 7, dil[0]), _blk(c1, c1, 7, dil[1]),
-            _blk(c1, c2, 7, dil[2]), _blk(c2, c2, 7, dil[3]), _blk(c2, c2, 7, dil[4]),
-        ])
+        _extra = tuple(int(x) for x in (fine_extra_dilations or ()))
+        self.fine_extra_dilations = _extra
+        _blocks = [_blk(self.fine_channels, c1, 7, dil[0]), _blk(c1, c1, 7, dil[1]),
+                   _blk(c1, c2, 7, dil[2]), _blk(c2, c2, 7, dil[3]),
+                   _blk(c2, c2, 7, dil[4])]
+        _blocks += [_blk(c2, c2, 7, d) for d in _extra]          # 14.80 — **더한다**
+        self.fine = nn.ModuleList(_blocks)
+        #: 블록별 출력 채널 수 (탭 차원을 세는 데 쓴다)
+        _chans = [c1, c1, c2, c2, c2] + [c2] * len(_extra)
         # 타깃 슬라이스를 뽑을 층 (0-based). 기본 dilation 에서 0 -> 7사이클, 1 -> 19사이클
-        self.tap_layers = (0, 1)
+        self.tap_layers = tuple(int(x) for x in (tap_layers if tap_layers is not None
+                                                 else (0, 1)))
+        if any(not (0 <= i < len(_blocks)) for i in self.tap_layers):
+            raise ValueError("tap_layers 가 블록 범위를 벗어난다: %r (블록 %d개)"
+                             % (self.tap_layers, len(_blocks)))
+        _tap_dim = sum(_chans[i] for i in self.tap_layers)
         w1, w2 = int(32 * width), int(64 * width)
         self.wide = nn.Sequential(_blk(WIDE_CHANNELS, w1, 5, 1), _blk(w1, w1, 5, 2), _blk(w1, w2, 5, 4))
 
@@ -301,7 +328,7 @@ class NILMNet(nn.Module):
         if self.fine_pool not in ("both", "amax", "mean"):
             raise ValueError("fine_pool 은 both/amax/mean: %r" % (fine_pool,))
         _npool = 2 if self.fine_pool == "both" else 1
-        trunk_in = (c2 * _npool * ns + c2 + (c1 + c1) + self.fine_channels
+        trunk_in = (c2 * _npool * ns + c2 + _tap_dim + self.fine_channels
                     + w2 * ns + WINDOW_STATS * ns)
         if self.wide_target:
             trunk_in += w2              # 광역 타깃 블록 (13.44)
@@ -359,7 +386,7 @@ class NILMNet(nn.Module):
         # 세밀 유래 차원 표식. **연결 순서를 바꾸지 않고** 마스킹만 한다.
         # 순서를 바꾸면 이전 체크포인트가 뒤섞인 입력을 받는다 (실제로 한 번 겪었다).
         fine_flags: List[int] = (
-            [1] * self.fine_channels + [1] * c1 + [1] * c1
+            [1] * self.fine_channels + [1] * _tap_dim
             # 14.79 — `fine_pool` 이 `both` 면 두 무리, 아니면 한 무리다 (순서는 그대로).
             + [1] * (c2 * _npool * ns) + [1] * c2            # 구간별 풀링 + 깊은 타깃
             + [0] * (w2 * ns)                                 # 광역 평균 (구간별)

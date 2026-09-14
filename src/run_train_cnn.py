@@ -646,6 +646,18 @@ def main() -> int:
                          "잘 듣는 위치 불변 지름길만 준다 (14.47: 수용영역 밖만 지워도 "
                          "mix 0.941). h.amax 는 max 라 conv 가 표현 못 하고 듀티 기기에 "
                          "필요해서 남긴다. 원시 fp.amax/amin 과 물리 프라이어도 그대로.")
+    ap.add_argument("--fine-extra-dilations", default="",
+                    help="세밀 스택 **뒤에 덧붙일** dilation (쉼표, 예 32,64). 비우면 안 붙는다 "
+                         "= **비트 동일**. 14.78 은 dilation 을 **교체**해 마지막 탭 RF 를 "
+                         "187->727 로 늘렸는데 그 탭이 유일한 국소 탭이라 국소성을 잃었다 "
+                         "(타깃 반응 2.393->1.494, +90 어깨 0.448->1.959 로 어깨가 더 높아짐). "
+                         "저항 신원이 한 시드 0.9321, SMPS 0.9219, 판정 줄 0.8871 로 무너졌다. "
+                         "⇒ **바꾸지 말고 더한다**: 앞 다섯을 그대로 두고 뒤에 붙인 뒤 "
+                         "--tap-layers 에 4 를 넣어 옛 마지막 블록(RF 187)도 같이 뽑는다.")
+    ap.add_argument("--tap-layers", default="",
+                    help="타깃 슬라이스를 뽑을 블록 번호 (쉼표, 0-based). 비우면 0,1 = 비트 동일. "
+                         "⚠ --fine-extra-dilations 를 쓸 때 **4 를 꼭 넣어라** — 안 넣으면 "
+                         "14.78 과 똑같이 국소 탭이 사라진다.")
     ap.add_argument("--harm-even-by-class", action="store_true",
                     help="짝수차 위상을 기기 부류별로 살린다 (13.45). "
                          "--harm-even-magnitude 와 같이 써야 뜻이 있다 — 위상이 뭉치는 "
@@ -819,6 +831,10 @@ def main() -> int:
                     fine_dilations=(tuple(int(x) for x in a.fine_dilations.split(","))
                                     if a.fine_dilations else None),
                     fine_pool=a.fine_pool,
+                    fine_extra_dilations=(tuple(int(x) for x in a.fine_extra_dilations.split(","))
+                                          if a.fine_extra_dilations else None),
+                    tap_layers=(tuple(int(x) for x in a.tap_layers.split(","))
+                                if a.tap_layers else None),
                     aux_z=(a.w_z > 0),
                     vexp=a.vexp, seg_pool=a.seg_pool).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
@@ -968,6 +984,8 @@ def main() -> int:
                     "fine_channels": model.fine_channels,
                     "fine_dilations": list(model.fine_dilations),
                     "fine_pool": model.fine_pool,
+                    "fine_extra_dilations": list(model.fine_extra_dilations),
+                    "tap_layers": list(model.tap_layers),
                     # 타깃 시점 구성 (12.45). 채널 수와 달리 슬라이스로 못 맞춘다 —
                     # 어긋나면 입력과 라벨이 다른 순간을 가리켜 조용히 틀린다.
                     "target_lookahead": TARGET_LOOKAHEAD,
