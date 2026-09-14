@@ -50,7 +50,8 @@ from src.model.traincache import CachedWindows
 from src.model.losses import (LossWeights, NILMLoss, PHASE_COHERENT_EVEN,
                              build_state_scales)
 from src.model.net import (
-    NILMNet, appliance_state_counts, harmonic_scales, harmonic_signature_vref,
+    NILMNet, appliance_state_counts, harmonic_scales, harmonic_signature_vhrel,
+    harmonic_signature_vref,
     harmonic_signatures,
     noise_signature, standby_signatures,
 )
@@ -304,6 +305,40 @@ def _res_cond(apps, spec: str) -> torch.Tensor:
     return torch.tensor([d.get(x, 0) for x in apps], dtype=torch.long)
 
 
+def _vhrel_from_fine(fine, at_target: bool):
+    """세밀 45~56 -> 그 창의 `V_h/V_1` (B, 15, 2) [Re, Im] (14.56).
+
+    `build_inputs` 의 눈금을 **정확히 되돌린다**:
+        h == 1 : `vr = x·V_SPAN + V_CENTER`,  `vi = x·V_SPAN`
+        h  > 1 : `vr = sinh(x)/VOLT_HARM_SCALE`,  `vi = sinh(x)/VOLT_HARM_SCALE`
+    관측 안 되는 차수(h13·h15·짝수)는 0 으로 둔다 — 손실의 가면이 거기를 막는다.
+
+    ⚠ `at_target` 이면 타깃 사이클 하나, 아니면 창 평균이다 — `vrel` 과 **같은 자리**를
+      봐야 한다 (한쪽만 타깃이면 그 자체가 새 불일치다, 14.53).
+    """
+    from src.model.inputs import VOLT_HARM_SCALE
+    n = fine.shape[0]
+    out = fine.new_zeros((n, 15, 2))
+    nv = len(VOLT_ORDERS)
+    for s_, h_ in enumerate(VOLT_ORDERS):
+        xr = fine[:, FINE_VOLT0 + s_]
+        xi = fine[:, FINE_VOLT0 + nv + s_]
+        xr = xr[:, FINE_TPOS] if at_target else xr.mean(-1)
+        xi = xi[:, FINE_TPOS] if at_target else xi.mean(-1)
+        if h_ == 1:
+            vr, vi = xr * V_SPAN + V_CENTER, xi * V_SPAN
+        else:
+            vr, vi = torch.sinh(xr) / VOLT_HARM_SCALE, torch.sinh(xi) / VOLT_HARM_SCALE
+        out[:, h_ - 1, 0] = vr
+        out[:, h_ - 1, 1] = vi
+    v1 = torch.hypot(out[:, 0, 0], out[:, 0, 1]).clamp(min=1.0)[:, None]
+    out[:, :, 0] = out[:, :, 0] / v1
+    out[:, :, 1] = out[:, :, 1] / v1
+    out[:, 0, 0] = 1.0                       # 정의상 rel[0] = 1+0j
+    out[:, 0, 1] = 0.0
+    return out
+
+
 def to_targets(batch, dev, vrel_target: bool = False):
     """배치 -> `(fine, wide, tgt)`.
 
@@ -329,6 +364,11 @@ def to_targets(batch, dev, vrel_target: bool = False):
     _v = (fine[:, V_CH_FINE, FINE_TPOS] if vrel_target
           else fine[:, V_CH_FINE].mean(-1)) * V_SPAN + V_CENTER
     return fine, wide, {
+        # 14.56 — 그 창의 관측 **상대 전압 파형** `V_h/V_1` (B,H,2). `sig` 의 파형 몫을
+        #   앵커하는 데 쓴다. 세밀 45~56 의 **눈금을 되돌려** 낸다 — 캐시를 다시 굽지
+        #   않으려고 입력 채널에서 복원한다 (`inputs.build_inputs` 의 역).
+        #   ⚠ 손실이 `use_vhrel` 이 아니면 **안 읽는다** (계산만 버린다).
+        "vhrel": _vhrel_from_fine(fine, vrel_target),
         "y_power": yp, "y_on": yo, "y_plugged": ypl, "y_standby": ys, "y_state": yst,
         "obs_harm": oh, "p_noise": pn, "p_observed": pobs, "harm_offset": None,
         # 14.26 — 창 전압비 V/V_CENTER. `L_harm` 의 지문을 이것으로 나눈다 (`--harm-sig-vnorm`).
@@ -494,6 +534,20 @@ def main() -> int:
                     help="광역 갈래에도 amax + 창끝 슬라이스를 준다 (12.19.4 후보 1)")
     ap.add_argument("--periodicity", action="store_true",
                     help="자기상관·교차율을 헤드 직전에 직접 준다 (12.19.4 후보 2)")
+    ap.add_argument("--harm-vhrel-anchor", action="store_true",
+                    help="**`sig` 의 파형 몫도 앵커한다** (14.56). 저항은 "
+                         "`sig_h = v_h_rel,h / V_1` 인데 14.49 앵커는 `1/V_1` 쪽만 고쳤고 "
+                         "`v_h_rel = V_h/V_1` 은 **녹화 세션 값 그대로 박제**돼 있었다. "
+                         "실측 대 녹화 비 (14.55): 오븐 h7 0.81 · h11 0.61 / "
+                         "포트·드라이 h3 **0.22~0.24** (E 녹화인데 고전력 창은 D). "
+                         "13.69 가 생성기에서 없앤 가짜 판별자인데 손실에는 그 고침이 없었다. "
+                         "생성기와 **같은 덧셈 꼴**로 건다: `sig_h += sig_1*(rel_창 − rel_녹화)`. "
+                         "⚠ `--harm-vhrel-frac` 이 0 이면 **아무것도 안 한다**.")
+    ap.add_argument("--harm-vhrel-frac", type=float, default=0.0, metavar="F",
+                    help="위 파형 앵커를 **몇 할만** 건다 (14.56). 0 = 끔(**비트 동일**). "
+                         "⚠⚠ 기본이 0 인 까닭: 14.49 가 전량을 걸었다가 부호를 넘겼다 "
+                         "(14.51, 오븐 −2.9%% -> +2.3%%). **처음부터 분수로 짠다.** "
+                         "0.25 / 0.5 를 먼저 재고 직선인지부터 봐라.")
     ap.add_argument("--vrel-target", action="store_true",
                     help="창 전압(`vrel`·`v_rms`)을 **타깃 사이클 하나**에서 읽는다 (14.53). "
                          "끄면 세밀 창 600사이클(10초) 평균 = 옛 경로, **비트 동일**. "
@@ -702,6 +756,16 @@ def main() -> int:
     h_scale = harmonic_scales(pool, apps)
     # 14.49 — `harm_sig_vnorm` 의 기준전압. `--harm-vnorm-anchor` 가 아니면 안 넘긴다.
     _vref, _vref_st = harmonic_signature_vref(pool, apps)
+    # 14.56 — 그 녹화의 상대 전압 파형. `--harm-vhrel-anchor` 가 아니면 안 넘긴다.
+    _vhrel = harmonic_signature_vhrel(pool, apps)
+    #: 파형 앵커를 걸 기기 — `--harm-vnorm-classes` 와 **같은 무리**다 (순저항).
+    #: `I_h = V_h/R` 이 성립하는 곳만. SMPS 는 비선형이라 이 법칙이 없다 (13.69 와 같다).
+    _vhrel_on = (np.asarray(_vnorm_exp(apps, a.harm_vnorm_classes), dtype=np.float32) != 0
+                 ).astype(np.float32)
+    if a.harm_vhrel_anchor:
+        print("  ** 14.56 sig 파형 앵커 %.2f할 · 기기 %s **"
+              % (a.harm_vhrel_frac,
+                 " ".join(x[:4] for x, o in zip(apps, _vhrel_on) if o)))
     if a.harm_vnorm_anchor:
         print("  ** 14.49 sig 기준전압을 기기별 적합값으로 (%.2f할): " % a.harm_vnorm_frac
               + " ".join("%s=%.1fV" % (x[:4], v) for x, v in zip(apps, _vref)) + " **")
@@ -740,6 +804,10 @@ def main() -> int:
         # 14.49 — `harm_sig_vnorm` 의 기준전압을 **기기별 sig 적합값**으로 옮긴다.
         #   None 이면 222V 고정 = 옛 경로와 **비트 동일**.
         harm_vnorm_frac=float(a.harm_vnorm_frac),
+        # 14.56 — `sig` 의 파형 몫. 끄면 `None`/0 이라 **비트 동일**이다.
+        harm_vhrel_rec=(torch.from_numpy(_vhrel) if a.harm_vhrel_anchor else None),
+        harm_vhrel_frac=float(a.harm_vhrel_frac),
+        harm_vhrel_on=(torch.from_numpy(_vhrel_on) if a.harm_vhrel_anchor else None),
         harm_vnorm_vref=(torch.from_numpy(_vref)
                          if (a.harm_vnorm_anchor and a.harm_sig_vnorm) else None),
         harm_vnorm_vref_state=(torch.from_numpy(_vref_st)
@@ -889,6 +957,8 @@ def main() -> int:
                     "harm_vnorm_anchor": bool(a.harm_vnorm_anchor),
                     "harm_vnorm_frac": float(a.harm_vnorm_frac),
                     "vrel_target": bool(a.vrel_target),
+                    "harm_vhrel_anchor": bool(a.harm_vhrel_anchor),
+                    "harm_vhrel_frac": float(a.harm_vhrel_frac),
                     # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)

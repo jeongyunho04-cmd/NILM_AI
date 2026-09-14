@@ -218,6 +218,16 @@ class NILMLoss(torch.nn.Module):
         #: 고전력이 f = **0.745** 다. `L_power` 가 반대로 당기던 평형을 온전히 지우는 것이
         #: 과했던 것이다. ⚠ 선형은 **가정**이다 — 재라.
         harm_vnorm_frac: float = 1.0,
+        #: 14.56 — `sig` 의 **파형 몫** 앵커. `(K,H,2)` 그 녹화의 `v_h_rel = V_h/V_1`.
+        #: 저항은 `sig_h = v_h_rel,h / V_1` 인데 14.49 앵커는 `1/V_1` 만 고쳤다.
+        #: `None` 이면 옛 경로와 **비트 동일**이다.
+        harm_vhrel_rec: Optional[torch.Tensor] = None,
+        #: 그 보정을 **몇 할만**. 0 이면 안 건 것과 같다(비트 동일), 1 이면 온전히.
+        #: ⚠ 14.49 가 전량을 걸었다가 부호를 넘겼다 (14.51) — **처음부터 분수로 짠다.**
+        harm_vhrel_frac: float = 0.0,
+        #: 어느 기기에 걸 것인가 `(K,)` 0/1. 순저항만이다 — `I_h = V_h/R` 이 성립하는 곳.
+        #: SMPS 는 비선형이라 이 법칙이 없다 (13.69 도 `LoadClass.RESISTIVE` 만 한다).
+        harm_vhrel_on: Optional[torch.Tensor] = None,
         harm_even_magnitude: bool = False,              # 짝수차를 크기 공간에서 잰다 (13.11)
         even_coherent: Optional[torch.Tensor] = None,   # (K,) 짝수차 위상이 기기 속성인 기기 (13.45)
         signatures_site: Optional[torch.Tensor] = None,      # (Nz,K,H,2) 자리별 지문 (13.59)
@@ -384,6 +394,32 @@ class NILMLoss(torch.nn.Module):
         self.register_buffer("vnorm_vref_k", _k(harm_vnorm_vref, (len(s_i),)).pow(_vf))
         self.register_buffer("vnorm_vref_ks", _k(harm_vnorm_vref_state, (len(s_i), 1)).pow(_vf))
         self.vnorm_frac = _vf
+        # ── 14.56 `sig` 의 파형 몫 ────────────────────────────────────────
+        #   `I_h = I_1 · v_h_rel` (순저항) 이므로 생성기(13.69 `apply_site_distortion`)와
+        #   **같은 덧셈 꼴**로 건다:  `sig_h += sig_1 · (rel_창 − rel_녹화)`.
+        #   곱셈 꼴이 아니라 덧셈인 까닭: 기기 자신의 지문(I_1 의 0.04~0.50%)을 **안 건드린다**.
+        #   ⚠ 관측할 수 있는 차수만 — `VOLT_ORDERS` 의 h>1 이다. h13·h15·짝수차는 입력에
+        #     `V_h` 가 없으므로 손대지 않는다 (가면이 0 이다).
+        from src.model.inputs import VOLT_ORDERS as _VO
+        _hm = torch.zeros(h, dtype=torch.float32)
+        for _h in _VO:
+            if _h > 1 and _h - 1 < h:
+                _hm[_h - 1] = 1.0
+        self.register_buffer("vhrel_mask", _hm, persistent=False)
+        self.vhrel_frac = float(harm_vhrel_frac or 0.0)
+        _vr = (torch.zeros((len(s_i), h, 2), dtype=torch.float32)
+               if harm_vhrel_rec is None
+               else torch.as_tensor(harm_vhrel_rec, dtype=torch.float32))
+        if harm_vhrel_rec is None:
+            _vr[:, 0, 0] = 1.0
+        self.register_buffer("vhrel_rec", _vr, persistent=False)
+        _vo = (torch.zeros(len(s_i), dtype=torch.float32) if harm_vhrel_on is None
+               else torch.as_tensor(harm_vhrel_on, dtype=torch.float32))
+        self.register_buffer("vhrel_on", _vo, persistent=False)
+        #: 켜졌나 — `harm_vhrel_rec` 이 없거나 `frac` 이 0 이거나 걸린 기기가 없으면 **항등**이다.
+        self.use_vhrel = bool(harm_vhrel_rec is not None and self.vhrel_frac != 0.0
+                              and float(_vo.sum()) > 0)
+        self._vhrel = None
         self._vrel = None
         self.register_buffer("vnorm_exp",
                              (torch.as_tensor(harm_vnorm_exp, dtype=torch.float32)
@@ -668,6 +704,35 @@ class NILMLoss(torch.nn.Module):
             emag = w * err + (1.0 - w) * emag
         return torch.where(self.even_order[None, :, None].bool(), emag, err)
 
+    def _vhrel_delta(self):
+        """`frac · 가면 · (rel_창 − rel_녹화)` 를 `(B,K,H)` Re/Im 둘로 (14.56).
+
+        꺼져 있으면 `None` — 그러면 호출부가 아무것도 안 해 **비트 동일**이다.
+        """
+        if not self.use_vhrel or self._vhrel is None:
+            return None
+        w = self._vhrel.to(self.vhrel_rec.dtype)                 # (B,H,2) 관측 v_h_rel
+        g = (self.vhrel_frac * self.vhrel_mask).reshape(1, 1, -1)             * self.vhrel_on.reshape(1, -1, 1)                     # (1,K,H)
+        dr = (w[:, None, :, 0] - self.vhrel_rec[None, :, :, 0]) * g
+        di = (w[:, None, :, 1] - self.vhrel_rec[None, :, :, 1]) * g
+        return dr, di
+
+    @staticmethod
+    def _vhrel_apply(sg, d, h1_dim: int = -2):
+        """`sg_h += sg_1 · d_h` (복소 곱). `sg` 는 (..., H, 2), `d` 는 (B,K,H) 둘.
+
+        ⚠ **덧셈 꼴**이다 (13.69 `apply_site_distortion` 과 같은 꼴) — 곱셈으로 하면
+          기기 자신의 지문(I_1 의 0.04~0.50%)까지 같이 늘어난다.
+        """
+        dr, di = d
+        if sg.dim() == 5:                       # (B,K,S,H,2) — 상태별
+            dr = dr[:, :, None, :]
+            di = di[:, :, None, :]
+        a1 = sg[..., 0:1, 0]                    # (..., 1) h1 의 Re
+        b1 = sg[..., 0:1, 1]                    # (..., 1) h1 의 Im
+        return torch.stack([sg[..., 0] + a1 * dr - b1 * di,
+                            sg[..., 1] + a1 * di + b1 * dr], -1)
+
     def _harm_pred_active(self, out, power, site_idx=None):
         """활성 기기의 고조파 기여 (B,H,2).
 
@@ -702,6 +767,10 @@ class NILMLoss(torch.nn.Module):
                 #   `(V/V_적합)^e = (V/V_CENTER)^e · (V_CENTER/V_적합)^e` 이므로 상수 배수다.
                 #   `vnorm_vref_k` 가 없으면 전부 1.0 -> **비트 동일**.
                 sg = sg * self.vnorm_vref_k.pow(self.vnorm_exp).reshape(1, -1, 1, 1)
+            # 14.56 — `sig` 의 **파형 몫**도 앵커한다 (꺼져 있으면 `None` 이라 비트 동일).
+            _d = self._vhrel_delta()
+            if _d is not None:
+                sg = self._vhrel_apply(sg, _d)
             per_k = power[..., None, None] * sg                               # (B,K,H,2)
             return self._apply_pow_gain(per_k, power).sum(1)
         # power = 게이트 · p_raw 이므로 게이트는 power/p_raw 로 되살린다 —
@@ -717,6 +786,11 @@ class NILMLoss(torch.nn.Module):
             # 14.49 — 상태별 적합 전압으로 기준을 옮긴다 (없으면 1.0, 비트 동일).
             sgs = sgs * self.vnorm_vref_ks.pow(
                 self.vnorm_exp.reshape(-1, 1)).reshape(1, sgs.shape[1], -1, 1, 1)
+        # 14.56 — 상태별 갈래에도 같이 건다. 파형은 **상태의 성질이 아니라 계통의 성질**이라
+        #   상태 축에 방송한다 (`_vhrel_apply` 가 (B,K,1,H) 로 편다).
+        _d = self._vhrel_delta()
+        if _d is not None:
+            sgs = self._vhrel_apply(sgs, _d)
         per_k = torch.einsum("bks,bkshc->bkhc", pw, sgs)
         return self._apply_pow_gain(per_k, power).sum(1)
 
@@ -752,6 +826,8 @@ class NILMLoss(torch.nn.Module):
         self._proj_seen = 1.0 if "proj_r" in out else 0.0
         # 14.26 — 창 전압비. 없으면 None 이라 `L_harm` 이 옛 경로 그대로 간다.
         self._vrel = tgt.get("vrel") if self.harm_sig_vnorm else None
+        # 14.56 — 그 창의 관측 `v_h_rel = V_h/V_1` (B,H,2). 없으면 보정이 **항등**이다.
+        self._vhrel = tgt.get("vhrel") if self.use_vhrel else None
         parts: Dict[str, torch.Tensor] = {}
 
         # ── 꺼진 창은 `p_raw` 에 경사를 주지 않는다 (2026-09-06, 13.11) ──────────

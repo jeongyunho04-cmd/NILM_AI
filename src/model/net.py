@@ -728,6 +728,58 @@ def harmonic_signature_vref(pool, appliances: Sequence[str],
     return vref, vref_state
 
 
+def harmonic_signature_vhrel(pool, appliances: Sequence[str], n_harm: int = 15
+                             ) -> np.ndarray:
+    """기기별 **녹화의 상대 전압 파형** `v_h_rel = V_h/V_1` (K, n_harm, 2) [Re, Im] (14.56).
+
+    왜: 순저항은 `I_h = V_h/R`, `P = V_1²/R` 이므로
+    ```
+        sig_h = median(I_h/P) = v_h_rel,h / V_1
+    ```
+    14.49 의 앵커는 **`1/V_1` 쪽만** 고쳤다. `v_h_rel` 은 **그 녹화 세션 값 그대로 박제**돼
+    있고, 세션마다 크게 다르다 — 자리 D 는 vh3/V1 0.6~0.85%, 자리 E 는 2.8~3.25% 로 4배다.
+    실측했을 때 (14.55, `run_diag_sigvh`) 실측 고전력 창 대 녹화의 비:
+    ```
+        오븐   h7 0.81 · h11 0.61      (D 녹화 · D 창인데 **세션**이 다르다)
+        포트   h3 **0.22**             (E 녹화 · D 창 — 4.6배 틀렸다)
+        드라이 h3 **0.24**              (〃)
+    ```
+    13.69 가 **생성기**에서 없앤 바로 그 가짜 판별자인데 (`apply_site_distortion`),
+    **손실의 `sig` 에는 그 고침이 없었다.**
+
+    ⚠⚠ **생성기와 같은 것을 쓴다** — `vtexture.file_rel(stem)`, 그 녹화의 **단자** 상대
+      텍스처다. `apply_site_distortion` 이 `rel_rec` 으로 쓰는 바로 그 객체다. 모델은
+      합성으로 학습하므로 손실은 **생성기 규약에 못 박혀야** 한다
+      ([[pin-the-two-entry-points-against-each-other]]).
+      ⚠ 대안은 `sig` 와 같은 **통전 사이클**의 중앙값인데, 활성화가 전압 고조파를 안 싣고
+        있어 같은 사이클 선택을 재현할 수 없다. 둘은 1~15% 다르다 (오븐 h3 0.89 · h11 1.71).
+        활성화에 전압 고조파를 실으면 그때 바꿔라 — 그 전까지는 **생성기 쪽이 정답**이다.
+
+    기기당 여러 녹화가 있으면 `sig` 와 같이 **중앙값**으로 묶는다. h1 은 정의상 1+0j 다.
+    라이브러리가 비면 전부 `1+0j` 로 두고, 그러면 보정이 **항등**이라 비트 동일이다.
+    """
+    out = np.zeros((len(appliances), n_harm, 2), dtype=np.float32)
+    out[:, 0, 0] = 1.0
+    try:
+        from src.synthesis.vtexture import default_library
+        lib = default_library()
+    except Exception:
+        return out
+    for j, app in enumerate(appliances):
+        acts = pool.appliance_activations.get(app, [])
+        stems = sorted({getattr(a, "source_file", "") for a in acts}) if acts else []
+        rels = [lib.file_rel(st) for st in stems if st]
+        rels = [r for r in rels if r is not None]
+        if not rels:
+            continue
+        m = np.stack([np.asarray(r, dtype=np.complex128)[:n_harm] for r in rels])
+        v = np.median(m.real, 0) + 1j * np.median(m.imag, 0)
+        v[0] = 1.0 + 0j
+        out[j, :len(v), 0] = v.real.astype(np.float32)
+        out[j, :len(v), 1] = v.imag.astype(np.float32)
+    return out
+
+
 def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 15,
                                  max_states: int = MAX_STATES, min_cycles: int = 200
                                  ) -> Tuple[np.ndarray, np.ndarray]:
