@@ -29,7 +29,7 @@
 #   `/usr/lpp/mmfs/bin/mmlsquota --block-size auto`. 이 스크립트는 아무것도 안 지운다.
 #
 # 시간 (실측 앵커): v32 meta `build_seconds 555.8` = 15만창/64코어 -> **창당 0.237 코어·초**.
-#   7.5만창 / 24코어 = 740초 ≈ 12분. 관문 2분을 더해 14분 -> `-t 25:00` (1.5배).
+#   ⚠ **이 추정이 2.35배 틀렸다** — 아래 실측을 봐라.
 #
 # ⚠⚠ **코어를 올리면 스케줄이 느려진다 — 처음에 `-c 48 · 4토막` 으로 던졌더니 `(Priority)`
 #   로 섰다.** `-c 48` 은 cpu1(노드 48코어)에서 **노드가 통째로 비어야** 잡히는데, 그때
@@ -37,16 +37,27 @@
 #   cpu2 도 64·60 둘뿐이라 4토막을 못 채웠다.
 #   ⇒ **토막을 잘게, 코어는 노드 여유 아래로.** 24코어면 cpu1 4대 + cpu2 3대 + gpu6 다수가
 #     받는다. 총 144코어라 QOS 640 의 1/4 이고, 토막이 6개라 MaxJobs 10 안에도 든다
-#     (학습 3 + 굽기 4 = 7). [[widen-the-partition-dont-wait-the-queue]]
+#     (굽기 8 <= MaxJobs 10). [[widen-the-partition-dont-wait-the-queue]]
 # ⚠ gpu6·gpu1 은 노드당 상한이 **40** 이라 24는 안전하다.
+#
+# ⚠⚠ **코어당 속도가 파티션마다 다르다 — 983910 이 이것 때문에 잘릴 뻔했다.**
+#   시간 앵커로 v32 meta 의 `build_seconds 555.8`(15만창/64코어 = 창당 **0.237** 코어·초)을
+#   썼는데, 그 굽기는 **cpu2** 에서 돌았다. cpu1 노드에서 실측하니 **43 win/s / 24코어 =
+#   창당 0.558 코어·초** 로 **2.35배** 느렸다. 7.5만창이 29분이 되어 `-t 25:00` 을 넘겼고,
+#   `scontrol update TimeLimit` 은 사용자에게 **권한이 없다**(Access/permission denied) —
+#   늘릴 수 없고 취소 후 재제출뿐이다.
+#   ⇒ **앵커를 쓸 때 그 앵커가 어느 파티션에서 났는지 확인하라.**
+#   ⇒ 지금 값: 3.75만창 / 24코어 / 43 win/s = 872초 ≈ 14.5분 + 관문 2.5분 = **17분**.
+#     `-t 35:00` 은 그 2배다 (1.5배 규칙보다 넉넉하게 잡는다 — 잘리면 판 전체를 다시 굽는데
+#     `-t` 를 늘려 잃는 것은 backfill 확률 조금뿐이라 **비대칭**이다).
 #SBATCH -J nilm_v32h
 #SBATCH -p cpu1,gpu6,cpu2,gpu3,gpu4,gpu5
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 24
 #SBATCH --mem=100G
-#SBATCH -t 00:25:00
-#SBATCH -a 0-3
+#SBATCH -t 00:35:00
+#SBATCH -a 0-7
 #SBATCH -o %x_%A_%a.out
 #SBATCH -e %x_%A_%a.out
 set -euo pipefail
@@ -55,7 +66,7 @@ PY=./env/bin/python
 
 WINDOWS=${WINDOWS:-300000}
 GEN=${GEN:-v32h}
-NSHARD=${SLURM_ARRAY_TASK_COUNT:-4}
+NSHARD=${SLURM_ARRAY_TASK_COUNT:-8}
 OUT="$HOME/NILM_AI/cache/train60_${GEN}_s${SLURM_ARRAY_TASK_ID}"
 
 echo "노드 $(hostname) · 토막 ${SLURM_ARRAY_TASK_ID}/${NSHARD} · 코어 ${SLURM_CPUS_PER_TASK} · $(date '+%F %H:%M:%S')"
