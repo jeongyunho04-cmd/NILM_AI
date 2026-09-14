@@ -56,8 +56,14 @@ def _rp(cf, app):
     return "%.3f / %.3f" % (tp / (tp + fn), tp / (tp + fp))
 
 
-def predict(path, cache, dev, no_chain=False):
+def predict(path, cache, dev, no_chain=False, postproc="off", half_abs=True):
     """(on (T,K) bool, power (T,K))  파일별. 사슬이면 Viterbi, 아니면 창별 게이트.
+
+    `postproc` (14.31) — `off`(기본, 옛 동작) · `cap`(물리 상한) · `full`(거기에
+    **저항 조합 정합**까지). 여태 이 채점기에는 후처리 옵션이 아예 없었고
+    `run_plot_real` 쪽 기본도 `off` 라, 컨덕턴스 축이 **판정 줄에서 한 번도 안 재였다.**
+    ⚠ 정합기에 넘기는 게이트는 `sigmoid(on_logit)` 이 아니라 **채점에 쓰는 판정**(`on`)
+      이다 — 사슬 판은 Viterbi 경로가 판정이라 그것을 넘겨야 두 계열이 같은 자다.
 
     `no_chain=True` 면 **사슬 체크포인트라도 창별 게이트로** 판정한다 — 이것이
     재학습 없는 롤백이다. 몸통은 그 체크포인트가 배운 그대로(v36p 생성기 · 고친
@@ -93,20 +99,30 @@ def predict(path, cache, dev, no_chain=False):
     out = {}
     with torch.no_grad():
         for stem, d in cache.items():
-            Z, GL, PW = [], [], []
+            Z, GL, PW, SB = [], [], [], []
             for i in range(0, len(d["t"]), 512):
                 o = m(torch.from_numpy(d["fine"][i:i + 512]).to(dev),
                       torch.from_numpy(d["wide"][i:i + 512]).to(dev))
                 Z.append(o["z"].float()); GL.append(o["on_logit"].float())
-                PW.append(o["power"].float())
+                PW.append(o["power"].float()); SB.append(o["standby"].float())
             gl = torch.cat(GL)[None]
             pw = torch.cat(PW).cpu().numpy().astype(np.float64)
+            sb = torch.cat(SB).cpu().numpy().astype(np.float64)
             if chain:
                 em, on_, off_, ini = hd(torch.cat(Z)[None],
                                         torch.from_numpy(d["dfeat"]).float()[None].to(dev), gl)
                 on = viterbi(em, on_, off_, ini)[0].cpu().numpy().astype(bool)
             else:
                 on = (gl[0] > 0).cpu().numpy()
+            if postproc != "off":
+                from src.model.postproc import apply_postproc, resistive_match
+                g = on.astype(np.float64)
+                pw, g = apply_postproc(pw, g, apps)
+                if postproc == "full":
+                    pw, g = resistive_match(pw, g, apps, d["p_obs"].astype(np.float64),
+                                            d["v_obs"], sb, d["p_noise"].astype(np.float64),
+                                            obs_harm=d["obs_harm"], half_abs=half_abs)
+                pw = np.asarray(pw, np.float64); on = np.asarray(g) > 0.5
             out[stem] = (on, pw)
     return apps, out
 
@@ -117,17 +133,26 @@ def main():
     ap.add_argument("--no-chain", nargs="*", default=[], metavar="CKPT",
                     help="이 체크포인트들은 **사슬을 떼고** 창별로 채점한다 (재학습 없는 롤백)")
     ap.add_argument("--grid-s", type=float, default=2.0)
+    ap.add_argument("--postproc", default="off", choices=("off", "cap", "full"),
+                    help="`cap` 물리 상한 · `full` 거기에 **저항 조합 정합**까지 (14.31). "
+                         "⚠ 기본은 off — 지난 표와 잇기 위해서다. 켠 값과 끈 값을 "
+                         "**같은 표에 나란히 놓아야** 후처리 몫과 모델 몫이 안 섞인다")
+    ap.add_argument("--half-ratio", action="store_true",
+                    help="정합기의 반파 관문을 **옛 비율 판**으로 되돌린다 (`half_abs=False`). "
+                         "`--postproc full` 에서만 뜻이 있다. 14.31 의 B 를 가르는 자다")
     a = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     apps0 = list(torch.load(a.ckpt[0], map_location="cpu",
                             weights_only=False)["appliances"])
     cache = real_windows(apps0, a.grid_s, dev)
 
-    print("사슬을 버리면 — **같은 채점기**로 나란히 (score_arm)", flush=True)
+    print("사슬을 버리면 — **같은 채점기**로 나란히 (score_arm)  후처리 %s%s"
+          % (a.postproc, " (반파 비율판)" if a.half_ratio else ""), flush=True)
     print("=" * 78)
     res = {}
     for path in a.ckpt:
-        apps, pr = predict(path, cache, dev, no_chain=(path in a.no_chain))
+        apps, pr = predict(path, cache, dev, no_chain=(path in a.no_chain),
+                           postproc=a.postproc, half_abs=not a.half_ratio)
         assert apps == apps0, "기기 순서가 다르다 — 비교가 안 선다"
         acc, idn, pwr, rec, cf = {}, {}, [], {}, {}
         for stem, d in cache.items():

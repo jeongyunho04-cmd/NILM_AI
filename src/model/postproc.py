@@ -580,7 +580,7 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
                     obs_harm: Optional[np.ndarray] = None,
                     tol: float = 0.05, min_w: float = 150.0,
                     cand_gate_min: float = 0.0, margin: float = 2.0,
-                    snap: bool = False,
+                    snap: bool = False, half_abs: bool = True,
                     ) -> Tuple[np.ndarray, np.ndarray]:
     """관측 전력·전압에 **맞는 저항 조합**을 골라 재배정한다 (12.112).
 
@@ -603,6 +603,10 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
             경고한 "게이트로 후보를 좁히면 고쳐야 할 맞바꿈을 놓친다" 를 피한다
             (`test3` 오븐 게이트 0.09). 겨냥은 게이트가 **바닥**인 기기를
             맞바꿈으로 켜는 것이다 (`test_9` 드라이기).
+        half_abs: 반파(드라이기 약) 관문을 **절대량** `|I2|−|I4| > HALFWAVE_ABS_MIN` 으로
+            본다 (기본). `False` 면 옛 비율 관문 `|I2|/|I1| > HALFWAVE_I2_MIN` 이고
+            그때는 이 함수가 **비트 동일**하게 옛 동작을 낸다. 근거는 아래 `half` 계산
+            자리의 주석에 있다 (14.31).
         snap: 조합이 이미 맞을 때(`best == cur`)도 전력을 `V^2/R` 로 맞춘다
             (12.117 의 A). 개수도 신원도 안 바뀌므로 규칙 18 과 충돌하지 않는다 —
             **같은 집합**이다. 겨냥은 `test3` 처럼 조합은 맞는데 전력이 모자라
@@ -621,12 +625,34 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
     p_res = np.asarray(p_observed, np.float64) - other - standby.sum(1) - p_noise
 
     # 반파(드라이기 약) 판정용 짝수차
+    #
+    # ⚠⚠ **2026-09-14 (14.31) — 비율 관문을 기본에서 내렸다.** 여기만 `HALFWAVE_I2_MIN`
+    #   (비율 `|I2|/|I1|`)을 쓰고 있었다. `HALFWAVE_ABS_MIN` 정의 자리의 주석이 그 형태를
+    #   이미 반증해 놨고(*"복합에서 분모가 터져 죽는다 — 12.114.2 가 반증한 형태"*),
+    #   `losses.py:1086·1135` 의 컨덕턴스 항과 `run_degeneracy_probe`·`run_res_ohm_probe`·
+    #   `run_swap_coverage_probe` 는 **전부 절대 판을 쓴다.** 이 파일만 어긋나 있었다
+    #   ([[pin-the-two-entry-points-against-each-other]]).
+    #
+    #   증상: 드라이기 약풍(반파 108.6Ω)과 핫플(101.8Ω)이 6.6% 차이라, 반파 판정이
+    #   빗나가면 정합기가 **드라이기를 핫플로 맞바꾼다.** `test_2` 231~260초에서 관측
+    #   1993W 를 `포트+핫플` 로 98% 창에서 골랐다 (참은 `포트+드라이기약`) — 큰 부하가
+    #   같이 켜져 있어 `|I1|` 이 부풀고 비율이 문턱 아래로 내려간 것이다.
+    #
+    #   절대 판으로 바꾼 효과 (7구간, cnn_sigc_vn_s0):
+    #       test_2 231-260   포트+핫플 98%   -> **포트+드라이 98%**      참 포트+드라이약  ✓
+    #       test_5 128-143   포트+드라이 76% -> **포트+드라이+핫플 76%**  참 셋 다        ✓
+    #       나머지 다섯 구간은 **한 창도 안 바뀐다**
+    #   ⇒ 2구간 고침 · 0구간 손해. `half_abs=False` 면 옛 경로 그대로다.
     half = np.zeros(len(out), bool)
     if obs_harm is not None:
         h = np.asarray(obs_harm, np.float64)
         i1 = np.hypot(h[:, 0, 0], h[:, 0, 1])
         i2 = np.hypot(h[:, 1, 0], h[:, 1, 1])
-        half = (i2 / np.maximum(i1, 1e-9)) > HALFWAVE_I2_MIN
+        if half_abs:
+            i4 = np.hypot(h[:, 3, 0], h[:, 3, 1])
+            half = (i2 - i4) > HALFWAVE_ABS_MIN
+        else:
+            half = (i2 / np.maximum(i1, 1e-9)) > HALFWAVE_I2_MIN
 
     # 16개 조합의 컨덕턴스를 미리 만든다
     import itertools

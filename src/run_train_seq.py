@@ -139,10 +139,10 @@ def real_windows(apps, grid_s, dev):
         n = len(P)
         ok = (tgt >= PRE * FS + 1) & (tgt < n - PRE * FS - 1)
         sel = np.nonzero(ok)[0]
-        F, W = [], []
+        F, W, OH, PN = [], [], [], []
         for i in range(0, len(sel), 512):
-            f, w, _, _, _ = rw.batch(sel[i:i + 512])
-            F.append(f); W.append(w)
+            f, w, _, oh, pn = rw.batch(sel[i:i + 512])
+            F.append(f); W.append(w); OH.append(oh); PN.append(pn)
         t = tgt[sel] / FS
         y = np.zeros((len(t), len(apps)), np.int8)
         for k, a in enumerate(apps):
@@ -158,6 +158,11 @@ def real_windows(apps, grid_s, dev):
                          #   중앙이 안 선다. 사이클로는 999~2,922개다 (13.84.64 ③ 이 쓴 그 양).
                          #   `run_score_seq` 의 전력 채점이 이것을 참값의 기준으로 쓴다.
                          p_base=_alloff_base(ev[stem], P, n),
+                         # 후처리가 쓰는 셋 (14.31). **추가 키라 옛 호출부는 그대로 돈다.**
+                         # `run_diag_rollback --postproc` 가 `resistive_match` 를 부르려면
+                         # 관측 고조파·계측 바닥·창 전압이 있어야 한다.
+                         obs_harm=np.concatenate(OH), p_noise=np.concatenate(PN),
+                         v_obs=np.asarray(rw.v_observed, np.float64)[sel],
                          present=np.array([a in ev[stem]["appliances_present"] for a in apps]))
     return out
 
