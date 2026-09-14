@@ -38,6 +38,9 @@ from src.evaluation import (
     format_table, load_holdout, resistive_confusion,
     score_appliances, summarize, total_power_residual,
 )
+from src.model.inputs import fine_target_index as _fti
+from src.model.net import V_CH_FINE
+FINE_TPOS = _fti()          #: 세밀 창 안의 타깃 위치 (239 = 600−1−360). 14.53 이 쓴다.
 from src.model.inputs import (ZERO_EVEN_HARMONICS, FINE_CYCLES, FINE_LAYOUT,
                              FINE_VOLT0, TARGET_LOOKAHEAD, V_CENTER, V_SPAN,
                              VOLT_ORDERS, WIDE_CHANNELS,
@@ -301,18 +304,39 @@ def _res_cond(apps, spec: str) -> torch.Tensor:
     return torch.tensor([d.get(x, 0) for x in apps], dtype=torch.long)
 
 
-def to_targets(batch, dev):
+def to_targets(batch, dev, vrel_target: bool = False):
+    """배치 -> `(fine, wide, tgt)`.
+
+    `vrel_target` (14.53): 창 전압을 **타깃 사이클 하나**에서 읽는다. `False` 면 세밀 창
+    600사이클(10초) 평균 — 옛 경로이고 **비트 동일**이다.
+
+    ⚠⚠ **두 입구가 갈려 있었다.** 2단계(`run_adapt`)는 `RealWindows.v_observed` 를 쓰는데
+      그것은 `power_features[targets, 4]` — **타깃 사이클** 값이다 (`realdata.py:199`).
+      1단계만 10초 평균이었다 ([[pin-the-two-entry-points-against-each-other]]).
+    ⚠ `L_harm` 이 맞추는 것은 **타깃 사이클 하나**의 `obs_harm` 이다. 그 사이클의 전압은
+      그때 켜진 부하가 같이 만든 강하를 쓰고 있는데, 10초 평균은 통전 안 하는 구간의 높은
+      전압을 섞는다 (핫플은 2.00초 주기로 0.47초만 통전한다, 14.48). 실측 오차
+      (`run_diag_vrel.py`): 전체 창 **−0.01%** 인데 핫플통전·P>1500 **+0.28%** ·
+      오븐통전·P>1000 **+0.30%** — **고전력 창에서만** 뜬다. `sig ∝ V^e`, 저항 `e=−1` 이라
+      V 를 높게 읽으면 지문이 작아지고 `L_harm` 이 전력을 그만큼 **더** 요구한다
+      (= 과대예측 쪽, 1500W 창에서 **+4.5W**).
+    ⚠ `vrel` 과 `v_rms` **둘 다** 옮긴다 — 같은 순간의 같은 물리량이라 한쪽만 옮기면
+      그 자체가 새 불일치다. `v_rms` 는 `L_swap`(14.32)과 `L_res` 의 `P = V²/R` 이 쓴다.
+    """
     (fine, wide, yp, yo, ypl, ys, yst, oh, pn, pobs, zg) = [
         b.to(dev, non_blocking=True) for b in batch]
+    # 14.53 — 타깃 사이클 하나 대 10초 평균. 끄면 옛 식 그대로다.
+    _v = (fine[:, V_CH_FINE, FINE_TPOS] if vrel_target
+          else fine[:, V_CH_FINE].mean(-1)) * V_SPAN + V_CENTER
     return fine, wide, {
         "y_power": yp, "y_on": yo, "y_plugged": ypl, "y_standby": ys, "y_state": yst,
         "obs_harm": oh, "p_noise": pn, "p_observed": pobs, "harm_offset": None,
         # 14.26 — 창 전압비 V/V_CENTER. `L_harm` 의 지문을 이것으로 나눈다 (`--harm-sig-vnorm`).
         #   세밀 채널 25 가 `(v − V_CENTER)/V_SPAN` 이다 (`net.V_CH_FINE`).
-        "vrel": (fine[:, 25].mean(-1) * V_SPAN + V_CENTER) / V_CENTER,
+        "vrel": _v / V_CENTER,
         # 14.32 — `L_swap` 이 쓰는 창 전압 (V). **같은 채널에서 같은 식으로** 낸다.
         #   ⚠ 이것이 없으면 `_swap_term` 의 가드가 **조용히 0** 을 낸다.
-        "v_rms": fine[:, 25].mean(-1) * V_SPAN + V_CENTER,
+        "v_rms": _v,
         # 13.55 — 이 창의 선로 저항 [Ω]. 옛 캐시면 NaN 이고 손실이 알아서 건너뛴다.
         "log_z": torch.log(zg[:, 0].clamp(min=1e-3)),
     }
@@ -470,6 +494,19 @@ def main() -> int:
                     help="광역 갈래에도 amax + 창끝 슬라이스를 준다 (12.19.4 후보 1)")
     ap.add_argument("--periodicity", action="store_true",
                     help="자기상관·교차율을 헤드 직전에 직접 준다 (12.19.4 후보 2)")
+    ap.add_argument("--vrel-target", action="store_true",
+                    help="창 전압(`vrel`·`v_rms`)을 **타깃 사이클 하나**에서 읽는다 (14.53). "
+                         "끄면 세밀 창 600사이클(10초) 평균 = 옛 경로, **비트 동일**. "
+                         "⚠⚠ **두 입구가 갈려 있었다**: 2단계 `run_adapt` 는 "
+                         "`RealWindows.v_observed` = `power_features[targets, 4]` 로 "
+                         "**이미 타깃 사이클**을 쓴다 (`realdata.py:199`). 1단계만 평균이었다. "
+                         "⚠ `L_harm` 이 맞추는 것은 타깃 사이클 하나의 `obs_harm` 인데, 10초 "
+                         "평균은 통전 안 하는 구간의 높은 V 를 섞는다 (핫플은 2.00초 주기로 "
+                         "0.47초만 통전). 실측 오차: 전체 창 **−0.01%%** 인데 "
+                         "핫플통전·P>1500 **+0.28%%** · 오븐통전·P>1000 **+0.30%%** — "
+                         "**고전력 창에서만** 뜬다. V 를 높게 읽으면 `sig ∝ 1/V` 라 지문이 "
+                         "작아지고 `L_harm` 이 전력을 더 요구한다 (과대예측 쪽, 1500W 창에서 "
+                         "+4.5W = 14.51 이 남긴 과대 −16.3W 의 28%%).")
     ap.add_argument("--harm-vnorm-frac", type=float, default=1.0, metavar="F",
                     help="`--harm-vnorm-anchor` 의 보정을 **몇 할만** 건다 (14.51). "
                          "1.0 이 온전한 보정(기본), 0 이면 안 건 것과 같다. "
@@ -851,6 +888,7 @@ def main() -> int:
                     "seg_pool": int(model.seg_pool),
                     "harm_vnorm_anchor": bool(a.harm_vnorm_anchor),
                     "harm_vnorm_frac": float(a.harm_vnorm_frac),
+                    "vrel_target": bool(a.vrel_target),
                     # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)
@@ -866,7 +904,7 @@ def main() -> int:
     for ep in range(1, a.epochs + 1):
         t0 = time.time(); agg, nb = {}, 0
         for batch in epoch_batches():
-            fine, wide, tgt = to_targets(batch, dev)
+            fine, wide, tgt = to_targets(batch, dev, vrel_target=a.vrel_target)
             if ZERO_CH:
                 fine[:, ZERO_CH] = 0.0        # 12.114 재시험의 조인 대조
             if ZERO_W:

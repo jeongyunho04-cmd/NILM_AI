@@ -252,7 +252,11 @@ def wide_target_index(n_blocks: int) -> int:
 
 
 def fine_target_index() -> int:
-    """세밀 갈래 안에서의 타깃 위치. 창 길이와 무관하게 539 다."""
+    """세밀 갈래 안에서의 타깃 위치. 창 길이와 무관하다 — `600 − 1 − TARGET_LOOKAHEAD`.
+
+    ⚠ 옛 주석이 "539 다" 라고 박아 놨는데 `TARGET_LOOKAHEAD` 가 60 이던 시절 값이다.
+      지금은 360 이라 **239** 이고, 창의 뒤 360사이클(6초)이 **미래**다 (14.41).
+    """
     return FINE_CYCLES - 1 - TARGET_LOOKAHEAD
 
 
