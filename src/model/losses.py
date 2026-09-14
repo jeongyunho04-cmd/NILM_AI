@@ -1045,8 +1045,16 @@ class NILMLoss(torch.nn.Module):
                 bce = F.binary_cross_entropy_with_logits(
                     out["on_logit"][:, cols], best, reduction="none")      # (B,R)
             else:
+                # ⚠⚠ **`F.binary_cross_entropy` 를 쓰면 안 된다** (982877 에서 죽었다).
+                #   학습은 `torch.autocast(bfloat16)` 안에서 돌고, 확률을 받는 BCE 는
+                #   autocast 에서 금지돼 있다 (`RuntimeError: ... unsafe to autocast`).
+                #   관문은 fp32 로 돌아서 못 잡았다 — 관문 [6] 이 그 구멍을 메운다.
+                #   대신 통전 확률을 **로짓으로 되돌려** 같은 BCE 를 쓴다:
+                #       BCE(q, t) == BCEWithLogits(log q − log(1−q), t)
+                #   수학적으로 같고 autocast 안전하며 경로가 하나로 유지된다.
                 q = self._cond_prob(out)[:, cols].clamp(1e-6, 1.0 - 1e-6)
-                bce = F.binary_cross_entropy(q, best, reduction="none")    # (B,R)
+                bce = F.binary_cross_entropy_with_logits(
+                    torch.log(q) - torch.log1p(-q), best, reduction="none")  # (B,R)
             parts["swap"] = (bce.mean(1) * m).sum() / m.sum().clamp(min=1.0)
             parts["swap_frac"] = m.mean().detach()
         else:

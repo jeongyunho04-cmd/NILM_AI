@@ -13,6 +13,9 @@
       (세어지면 조합 탐색이 `L_on`(y_on=1) 과 정면으로 싸운다)
   [3] 실제로 무는가 — `swap_frac` 이 0 이 아닌가. 0 이면 항이 안 걸린 것이다.
   [4] 끄면 항등 — `--w-swap 0` 이 옛 동작과 같은가.
+  [6] **autocast** — 학습이 도는 방식(bfloat16 autocast) 그대로 항이 돌아가나.
+      982877 이 여기서 죽었다: 확률을 받는 `F.binary_cross_entropy` 는 autocast 에서
+      금지돼 있는데 관문이 fp32 로 돌아 못 잡았다 ([[verify-the-gate-runs-that-path]]).
   [5] 2단계 불변 — `unlabeled()` 가 **주어진 리비전과 비트 동일**한가.
       1단계에 올리려고 블록을 메서드로 떼어냈으므로, 2단계가 안 흔들렸다는 증거가
       따로 있어야 한다 ([[pin-the-two-entry-points-against-each-other]]).
@@ -197,6 +200,36 @@ def gate4() -> bool:
     return ok_a and ok_b
 
 
+def gate6(dev: str) -> bool:
+    """학습과 **같은 방식**(autocast bfloat16)으로 항을 돌려 본다.
+
+    ⚠ fp32 로만 재면 autocast 금지 연산을 못 잡는다. 982877 의 B 팔이 정확히
+      그것으로 죽었다 — 관문 넷이 다 통과한 뒤 학습 첫 스텝에서 터졌다.
+    """
+    print("\n[6] autocast — 학습이 도는 방식 그대로 돌아가나")
+    ok = True
+    for cond, nm in ((None, "cond 버퍼 0"), (COND, "cond 버퍼 있음(오븐·핫플)")):
+        for dt, dv in ((torch.bfloat16, dev), (torch.float32, "cpu")):
+            if dv == "cpu" and dt is torch.bfloat16:
+                continue
+            crit = _crit(cond=cond).to(dv)
+            out, tgt, _ = _batch()
+            out = {k: (v.to(dv) if torch.is_tensor(v) else v) for k, v in out.items()}
+            tgt = {k: (v.to(dv) if torch.is_tensor(v) else v) for k, v in tgt.items()}
+            try:
+                with torch.autocast("cuda", dtype=dt, enabled=(dv == "cuda")):
+                    parts = crit.unlabeled(out, tgt, w_swap=1.0, swap_tol=0.5)
+                    v = float(parts["swap"])
+                    parts["swap"].backward()
+                tag = "autocast bf16" if dv == "cuda" else "fp32"
+                print(f"    {nm:22s} {tag:14s} swap {v:.4f}  ✅")
+            except Exception as e:                                # noqa: BLE001
+                print(f"    {nm:22s} {dv:14s} ❌ {type(e).__name__}: {str(e)[:90]}")
+                ok = False
+    print(f"    => {'✅ 통과' if ok else '❌ 실패 — 학습에서 터진다'}")
+    return ok
+
+
 def gate5(rev: str) -> bool:
     """`git show <rev>:src/model/losses.py` 와 `unlabeled()` 결과를 대 본다."""
     import importlib.util
@@ -257,7 +290,8 @@ def main() -> int:
     res = [("[1] 기울기 격리", gate1()),
            ("[3] 실제로 무는가", gate3()),
            ("[4] 끄면 항등", gate4()),
-           ("[5] 2단계 불변", gate5(a.vs_rev))]
+           ("[5] 2단계 불변", gate5(a.vs_rev)),
+           ("[6] autocast", gate6(dev))]
     if not a.skip_real:
         res.insert(1, ("[2] 통전 상태", gate2(a.ckpt, dev)))
     print("\n" + "=" * 78)
