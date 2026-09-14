@@ -235,17 +235,37 @@ def vswap(fine: torch.Tensor, wide: torch.Tensor, p: float) -> None:
     wide[:, WIDE_VOLT0:WIDE_VOLT0 + nv] = wide[sel][:, WIDE_VOLT0:WIDE_VOLT0 + nv]
 
 
-def _vnorm_exp(apps):
+def _vnorm_exp(apps, classes: str = ""):
     """기기별 `I/P` 의 전압 지수 `(i_exp − p_exp)` (K,) — 14.28.
 
     저항 `(1.0, 2.0)` · SMPS `(−1.0, 0.0)` 은 둘 다 **−1**, 모터 `(0.7, 0.7)` 과
     수동 `(1.0, 1.0)` 은 **0** 이다. 균일 −1 을 걸면 모터에 틀린 물리를 가르친다.
+
+    `classes` 를 주면 **그 부하 분류에만** 보정을 건다 (14.33). 나머지는 0 이다.
+
+    왜 그런 손잡이가 필요한가 — 두 절반의 근거가 다르다:
+      · **저항**은 유도다. `I_h = V_h/R`, `P = V²/R` 이라 전압 *모양*이 고정된 채
+        크기만 변하면 **모든 차수에서** `I_h/P ∝ 1/V` 다. 적합이 필요 없다.
+      · **SMPS** 는 `h1` 에서만 선다. `P ≈ V·I₁·cosφ` 라 `I₁/P ≈ 1/(V·cosφ)` 는
+        거의 **항등식**이고(기기와 무관하게 −1 이 나온다), `h>=3` 은 도통각이
+        전압에 따라 변해 `V^e` 꼴이 아니다. 실측으로 차수별 지수를 재 봤지만
+        **녹화 사이에 재현이 안 된다** (충전기 h11 폭 79.5 · 미니PC h1 폭 9.2) —
+        확인도 반증도 못 하는 자리다.
+      14.29 ④ 가 적어 둔 대가가 정확히 그 절반에 있다: F1 −0.0029/−0.0003/−0.0015 ·
+      충전기 MAE +0.06/+0.31/+0.18W (셋 다 같은 부호).
     """
     from src.preprocessing.file_registry import get_load_class
     from src.synthesis.grid_simulator import GridSimulator
     t = GridSimulator()._LOAD_EXPONENTS
-    return torch.tensor([float(t[get_load_class(a)][0] - t[get_load_class(a)][1])
-                         for a in apps], dtype=torch.float32)
+    want = {x.strip().upper() for x in classes.split(",") if x.strip()}
+    out = []
+    for a in apps:
+        c = get_load_class(a)
+        e = float(t[c][0] - t[c][1])
+        if want and c.name.upper() not in want:
+            e = 0.0
+        out.append(e)
+    return torch.tensor(out, dtype=torch.float32)
 
 
 def _res_ohm(apps, res_apps: str, half: bool) -> torch.Tensor:
@@ -361,6 +381,13 @@ def main() -> int:
                          "밀어 모델 지수를 1 에 앉힌다 (물리 2). 켜면 3/3 시드에서 지수가 "
                          "2 로 가고 실측 절대잔차가 41->24W 로 준다. 모터는 지수 0 이라 "
                          "보정이 안 걸린다. `--no-harm-sig-vnorm` 이면 옛 판과 비트 동일")
+    ap.add_argument("--harm-vnorm-classes", default="", metavar="LIST",
+                    help="`--harm-sig-vnorm` 보정을 **이 부하 분류에만** 건다 (14.33). "
+                         "빈 문자열(기본)이면 전 분류 = 14.28 과 비트 동일. "
+                         "`RESISTIVE` 를 주면 **유도로 정확한 곳에만** 남는다 — SMPS 의 "
+                         "−1 은 h1 에서 거의 항등식이고 h>=3 은 도통각 때문에 V^e 꼴이 "
+                         "아니며, 실측 차수별 지수가 녹화 사이에 재현되지 않는다 "
+                         "(충전기 h11 폭 79.5). 분류: RESISTIVE·SMPS·MOTOR·PASSIVE.")
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
     # ── 저항 조합 맞바꿈 `L_swap` 을 1단계에 (14.32) ──────────────────────────
     ap.add_argument("--w-swap", type=float, default=0.0, metavar="W",
@@ -637,7 +664,8 @@ def main() -> int:
         harm_even_magnitude=a.harm_even_magnitude,
         harm_sig_vnorm=a.harm_sig_vnorm,
         # 14.28 — 기기별 `I/P` 전압 지수. 모터는 0 이라 보정이 안 걸린다.
-        harm_vnorm_exp=(_vnorm_exp(apps) if a.harm_sig_vnorm else None),
+        harm_vnorm_exp=(_vnorm_exp(apps, a.harm_vnorm_classes)
+                        if a.harm_sig_vnorm else None),
         even_coherent=(torch.tensor(
             [1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
             dtype=torch.float32) if a.harm_even_by_class else None),
