@@ -56,10 +56,22 @@ def main() -> int:
     ap.add_argument("--ckpt", nargs="+", required=True)
     ap.add_argument("--grid-s", type=float, default=2.0)
     ap.add_argument("--postproc", default="off", choices=("off", "cap", "full"))
+    ap.add_argument("--arms", default="", metavar="NAME:N,NAME:N",
+                    help="체크포인트를 **팔로 묶어** 팔마다 평균+-표준편차로 낸다 (14.57). "
+                         "예: `f0:3,f50:3,f70:3,f100:3` 이면 앞 3개가 f0 팔, 다음 3개가 "
+                         "f50 팔 ... 순서가 --ckpt 순서다. 시드 셋을 한 줄로 읽으려는 것이다.")
     ap.add_argument("--pair", type=int, default=0, metavar="N",
                     help="앞 N개를 A팔, 뒤 N개를 B팔로 보고 짝차를 낸다 (시드 셋이면 N=3)")
     a = ap.parse_args()
 
+    arms = []
+    if a.arms:
+        for it in a.arms.split(","):
+            nm, _, k = it.partition(":")
+            arms.append((nm.strip(), int(k)))
+        if sum(k for _, k in arms) != len(a.ckpt):
+            raise SystemExit("--arms 의 합(%d)이 --ckpt 수(%d)와 다르다"
+                             % (sum(k for _, k in arms), len(a.ckpt)))
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     ck0 = torch.load(a.ckpt[0], map_location="cpu", weights_only=False)
     apps = list(ck0["appliances"])
@@ -76,7 +88,10 @@ def main() -> int:
     for label, app, thr in CUTS:
         ai = apps.index(app) if app else None
         print(f"■ {label} — 잔차 중앙값 (W)   **양수 = 과소예측**")
-        print("    %-8s%6s" % ("파일", "창") + "".join("%14s" % n[-13:] for n in names))
+        if arms:
+            print("    %-8s%6s" % ("파일", "창") + "   (팔별 평균)")
+        else:
+            print("    %-8s%6s" % ("파일", "창") + "".join("%14s" % n[-13:] for n in names))
         allsel = {p: [] for p in a.ckpt}
         for stem in stems:
             r0, pobs, y = R[a.ckpt[0]][stem]
@@ -86,17 +101,32 @@ def main() -> int:
             if int(m.sum()) < 5:
                 continue
             line = "    %-8s%6d" % (stem, int(m.sum()))
+            per = []
             for p in a.ckpt:
                 r, _, _ = R[p][stem]
-                line += "%14.1f" % float(np.median(r[m]))
+                per.append(float(np.median(r[m])))
                 allsel[p].append(r[m])
+            if arms:
+                i0 = 0
+                for nm, k in arms:
+                    line += "  %s %+.1f" % (nm, float(np.mean(per[i0:i0 + k])))
+                    i0 += k
+            else:
+                line += "".join("%14.1f" % x for x in per)
             print(line)
         line = "    %-8s%6d" % ("**전부**", sum(len(x) for x in allsel[a.ckpt[0]]))
         med = {}
         for p in a.ckpt:
             v = np.concatenate(allsel[p]) if allsel[p] else np.zeros(0)
             med[p] = float(np.median(v)) if len(v) else float("nan")
-            line += "%14.1f" % med[p]
+            line += "" if arms else ("%14.1f" % med[p])
+        if arms:
+            i0 = 0
+            for nm, k in arms:
+                v = np.array([med[p] for p in a.ckpt[i0:i0 + k]], dtype=float)
+                i0 += k
+                sd = v.std(ddof=1) if len(v) > 1 else float("nan")
+                line += "  %s %+.1f+-%.1f" % (nm, v.mean(), sd)
         print(line)
         if a.pair and len(a.ckpt) == 2 * a.pair:
             A, B = a.ckpt[:a.pair], a.ckpt[a.pair:]
