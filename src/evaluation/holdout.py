@@ -177,7 +177,8 @@ def _build_generator(o: dict, quiet: bool = False):
                         # 13.84.8 ② 형제 전용 차수 비례 회전. None 이면 옛 경로.
                         sibling_rotate=sibling_rotate)
     from src.synthesis.vtexture import (DEFAULT_VTAIL_NPZ, default_library,
-                                        set_default_step_s, set_default_vtail)
+                                        set_default_harmonic_z, set_default_step_s,
+                                        set_default_vtail)
     # ⚠⚠ **배선 구멍이었다** (14.44). `run_build_traincache` 는 14.33 ⓑ 에서 `vtex_step_s`
     #   를 받게 고쳤는데 **이쪽은 안 고쳤다** — 두 입구가 또 갈려 있었다
     #   ([[pin-the-two-entry-points-against-each-other]]). 0 이면 옛 경로(60초)와 **비트 동일**이다.
@@ -192,11 +193,24 @@ def _build_generator(o: dict, quiet: bool = False):
         if _n1 <= _n0:
             raise SystemExit("[holdout] 간격을 줄였는데 텍스처가 안 늘었다 — 안 걸렸다")
     set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
+    # 14.59 — 차수별 `Z_h`. ⚠⚠ **학습 캐시와 반드시 같아야 한다** — 다르면 홀드아웃의
+    #   텍스처가 다른 Z 로 벗겨져 두 분포가 갈린다. 끄면 비트 동일.
+    _hz = None
+    if harmonic_z:
+        from src.synthesis.grid_simulator import HARMONIC_Z_K
+        _hz = HARMONIC_Z_K
+    set_default_harmonic_z(_hz)
     syn = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
                           augmentor=aug, background=bool(background),
                           couple_ext=bool(couple_ext),
                           # 14.51 — 창 안 텍스처 교체. 학습 캐시와 짝이 맞아야 한다.
                           vtex_seg_s=float(vtex_seg_s or 0.0))
+    syn.grid_sim.harmonic_z_table = _hz
+    if harmonic_z:
+        from src.synthesis import vtexture as _vt
+        if getattr(_vt, "_DEFAULT_HZ", None) is None:
+            raise SystemExit("[holdout] harmonic_z 가 vtexture 에 안 걸렸다 (14.59)")
+        print("  ** 차수별 Z_h 표 (14.59): 자리 D h3·h5 · E h3 **")
     if vtex_seg_s and float(vtex_seg_s) > 0:
         _got = float(getattr(syn.grid_sim, "vtex_seg_s", 0.0) or 0.0)
         if _got != float(vtex_seg_s):
@@ -245,6 +259,8 @@ def build_holdout(
     #: ⚠ **학습 캐시와 같은 값이어야 한다** — 다르면 홀드아웃 창의 창-안 전압 변동이
     #:   학습 창과 달라져 전압 블록에 대한 민감도를 잘못 잰다.
     vtex_seg_s: float = 0.0,
+    #: 차수별 `Z_h` 표 (14.59). ⚠⚠ **학습 캐시와 같아야 한다.** 끄면 비트 동일.
+    harmonic_z: bool = False,
     #: 병렬 워커 수 (14.51). **0 이면 옛 직렬 경로와 비트 동일**이다.
     #: 1 이상이면 창을 `chunk_windows` 짜리 청크로 잘라 `spawn` 풀에 던진다 — 시드를
     #: **청크 번호**로 걸고 `imap`(순서 보장)으로 받으므로 **워커 수를 바꿔도 같은
@@ -386,6 +402,7 @@ def build_holdout(
         # 14.44 — 0 이면 옛 경로(기본 60초)다. 학습 캐시와 **같아야** 한다.
         "vtex_step_s": float(vtex_step_s or 0.0),
         "vtex_seg_s": float(vtex_seg_s or 0.0),          # 14.51
+        "harmonic_z": bool(harmonic_z),                  # 14.59
         # 14.51 — 병렬로 구웠는가. **0 과 1 이상은 서로 다른 홀드아웃이다** (난수를 자르는
         # 방식이 다르다). 1 이상끼리는 워커 수와 무관하게 같은 바이트다.
         "workers_chunked": bool(workers and int(workers) > 0),

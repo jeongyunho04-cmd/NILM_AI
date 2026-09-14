@@ -76,6 +76,7 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           sp_curves: bool = False,
           sp_per_texture: bool = False, vtail: bool = False,
           vtex_step_s: float = 0.0, vtex_seg_s: float = 0.0,
+          harmonic_z: bool = False,
           background: bool = False,
           level_scramble: Optional[Dict[str, tuple]] = None,
           state_mix_json: str = "",
@@ -128,13 +129,20 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
                         # 13.84.8 ② 형제 전용 차수 비례 회전. 빈 문자열이면 옛 경로.
                         sibling_rotate=(json.loads(sibling_rotate_json) if sibling_rotate_json else None))
     # 13.78: 전압 꼬리(h17~h31)를 켠다. 기본은 꺼짐이라 안 부르면 옛 거동 그대로다.
-    from src.synthesis.vtexture import (DEFAULT_VTAIL_NPZ, set_default_step_s,
-                                        set_default_vtail)
+    from src.synthesis.vtexture import (DEFAULT_VTAIL_NPZ, set_default_harmonic_z,
+                                        set_default_step_s, set_default_vtail)
     # ⚠ 풀이 `spawn` 이라 **워커마다** 다시 걸어야 한다 — 부모 프로세스에서만
     #   부르면 워커에는 안 물려진다 (14.33 ⓑ). `set_default_vtail` 과 같은 자리다.
     if vtex_step_s and vtex_step_s > 0:
         set_default_step_s(float(vtex_step_s))
     set_default_vtail(DEFAULT_VTAIL_NPZ if vtail else None)
+    # 14.59 — 차수별 `Z_h` 표. ⚠⚠ **여기서 안 걸면 워커의 텍스처가 옛 Z 로 지어진다**
+    #   (`set_default_step_s` 와 정확히 같은 함정, 14.33 ⓑ). 끄면 비트 동일.
+    _hz = None
+    if harmonic_z:
+        from src.synthesis.grid_simulator import HARMONIC_Z_K
+        _hz = HARMONIC_Z_K
+    set_default_harmonic_z(_hz)
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
@@ -222,6 +230,9 @@ def build_cache(
     #: ⚠ **`vtex_step_s` 와 같은 값**이어야 한다 — 텍스처는 그 구간의 중앙값이라
     #:   20초 중앙값을 10초씩 틀면 변화를 2배로 빨리 감는 것이 된다.
     vtex_seg_s: float = 0.0,
+    #: 차수별 `Z_h` 표 (14.59). `False` 면 `r + j·h·x` — 옛 경로와 **비트 동일**.
+    #: ⚠⚠ 켜면 **텍스처 자신이 달라진다** (`rel_open` de-embed) — 홀드아웃도 같이 켜야 한다.
+    harmonic_z: bool = False,
     background: bool = False,
     dither_min_order: int = 2,
     couple_ext: bool = False,
@@ -300,6 +311,7 @@ def build_cache(
                             dither_even_amp, dither_even_phase_deg, pss_json,
                             bool(sp_curves), bool(sp_per_texture), bool(vtail),
                             float(vtex_step_s or 0.0), float(vtex_seg_s or 0.0),
+                            bool(harmonic_z),
                             bool(background), level_scramble,
                             smx_json, tuple(carrier_apps or ()),
                             int(dither_min_order), bool(couple_ext),
@@ -356,6 +368,7 @@ def build_cache(
             "vtail": bool(vtail),
             # 14.51 — 텍스처 **한 장이 덮는 시간**. (`vtex_step_s` 는 위에 이미 있다.)
             "vtex_seg_s": float(vtex_seg_s or 0.0),
+            "harmonic_z": bool(harmonic_z),          # 14.59
             "background": bool(background),
             "fine_shape": [FINE_CHANNELS, FINE_CYCLES], "bytes": int(total),
             "zero_even_harmonics": bool(ZERO_EVEN_HARMONICS),

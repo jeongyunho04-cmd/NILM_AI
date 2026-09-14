@@ -132,6 +132,11 @@ def resolve(spec: str) -> Dict[str, Any]:
     return json.loads(spec)
 
 
+def _hz_table():
+    from src.synthesis.grid_simulator import HARMONIC_Z_K
+    return HARMONIC_Z_K
+
+
 def build_synthesizer(opts: Dict[str, Any], npz_dir: str, time_split: str,
                       compute_gt_harmonics: bool = False):
     """`opts` 대로 `LoadSynthesizer` 를 만든다 — `traincache.build_cache` 와 같은 조립 순서."""
@@ -140,8 +145,8 @@ def build_synthesizer(opts: Dict[str, Any], npz_dir: str, time_split: str,
                                          STATE_MIX_PRESETS, STEADY_CROP_PRESETS)
     from src.synthesis.segment_pool import SegmentPool
     from src.synthesis.synthesizer import LoadSynthesizer
-    from src.synthesis.vtexture import (DEFAULT_VTAIL_NPZ, set_default_step_s,
-                                        set_default_vtail)
+    from src.synthesis.vtexture import (DEFAULT_VTAIL_NPZ, set_default_harmonic_z,
+                                        set_default_step_s, set_default_vtail)
 
     def _p(table, v):
         if not v:
@@ -170,11 +175,19 @@ def build_synthesizer(opts: Dict[str, Any], npz_dir: str, time_split: str,
     # 14.12 — 텍스처 표집 간격. 60초 중앙값이면 그보다 짧은 전압 변동이 뭉개져
     # 합성 표류가 실측의 0.75배가 된다. `set_default_step_s` 주석에 측정표가 있다.
     set_default_step_s(opts.get("vtex_step_s"))
-    return LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=compute_gt_harmonics,
+    # 14.59 — 차수별 `Z_h` 표. ⚠⚠ **텍스처 자신을 바꾼다** (`rel_open` 의 de-embed)라
+    #   여기서 걸어야 라이브러리가 그 표로 지어진다. `None` 이면 옛 경로와 비트 동일.
+    _hz = _hz_table() if opts.get("harmonic_z") else None
+    set_default_harmonic_z(_hz)
+    gen = LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=compute_gt_harmonics,
                            augmentor=aug, background=bool(opts.get("background")),
                            couple_ext=bool(opts.get("couple_ext")),
                            # 14.51 — 창 안에서 텍스처를 갈아 끼운다. 0 이면 옛 경로(정적 하나).
                            vtex_seg_s=float(opts.get("vtex_seg_s") or 0.0))
+    # 14.59 — 시뮬레이터 쪽 표도 **같이** 건다. 둘이 갈리면 텍스처를 벗긴 Z 와
+    #   강하를 만드는 Z 가 달라진다 ([[pin-the-two-entry-points-against-each-other]]).
+    gen.grid_sim.harmonic_z_table = _hz
+    return gen
 
 
 def describe(opts: Dict[str, Any]) -> str:
@@ -221,6 +234,17 @@ def check(opts: Dict[str, Any], gen) -> Sequence[str]:
         if 0 <= n < want:
             bad.append("녹화당 텍스처가 최소 %d장인데 창 하나가 %d장을 쓴다 — 짧은 녹화는 "
                        "마지막 장을 늘여 쓴다 (14.51)" % (n, want))
+    # 14.59 — 차수별 `Z_h` 표. **네 소비처가 같은 표를 봐야 한다.**
+    #   특히 `vtexture` 는 프로세스 전역이라 spawn 워커마다 다시 걸어야 한다 (14.33 ⓑ).
+    from src.synthesis import vtexture as _vt
+    _want = _hz_table() if opts.get("harmonic_z") else None
+    _got_gs = getattr(gen.grid_sim, "harmonic_z_table", None)
+    if (_want is None) != (_got_gs is None):
+        bad.append("harmonic_z 가 시뮬레이터에 안 걸렸다 (표 %s · 시뮬 %s)"
+                   % (_want is not None, _got_gs is not None))
+    if (_want is None) != (getattr(_vt, "_DEFAULT_HZ", None) is None):
+        bad.append("harmonic_z 가 **vtexture 에 안 걸렸다** — 텍스처가 옛 Z 로 지어진다 "
+                   "(spawn 워커마다 `set_default_harmonic_z` 를 다시 걸어야 한다, 14.33 ⓑ)")
     if opts.get("sp_curves") and not getattr(a, "_sp", None):
         bad.append("sp_curves 가 안 걸렸다 (processed_data/sp_curves.npz)")
     if opts.get("sp_per_texture") and not getattr(a, "_sp_tex", None):

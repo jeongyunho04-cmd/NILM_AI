@@ -127,6 +127,10 @@ def main() -> int:
                     help="텍스처 한 장이 덮는 합성 시간(초). 0 이면 창 전체 하나 = 옛 경로 "
                          "(14.51). ⚠ **학습 캐시와 같은 값을 줘라** — 다르면 홀드아웃 창의 "
                          "창-안 전압 변동이 학습 창과 달라진다. --vtex-step-s 와도 같아야 한다.")
+    ap.add_argument("--harmonic-z", action="store_true",
+                    help="차수별 선로 임피던스 표 (14.59). ⚠⚠ **학습 캐시와 같은 값을 줘라** — "
+                         "다르면 홀드아웃 텍스처가 다른 Z 로 벗겨져 두 분포가 갈린다. "
+                         "끄면 비트 동일.")
     ap.add_argument("--vtail", action="store_true",
                     help="전압 꼬리(h17~h31)를 텍스처에 얹는다 (13.73/13.78). processed_data/vtail.npz 가 필요하다. 절대 경로(모델 단독)는 확실히 좋아지지만 델타 경로는 나빠진 전례가 있다 — A/B 로 판정하라")
     ap.add_argument("--steady-crop", default="",
@@ -214,6 +218,7 @@ def main() -> int:
                   recipe_mix=_parse_mix(a.recipe_mix),
                   smps_focus_off_p=a.smps_focus_off_p,
                   vtex_step_s=a.vtex_step_s, vtex_seg_s=a.vtex_seg_s,
+                  harmonic_z=a.harmonic_z,
                   workers=a.workers, chunk_windows=a.chunk_windows)
     return inspect(a.out)
 

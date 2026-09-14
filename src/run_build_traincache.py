@@ -78,6 +78,15 @@ def main() -> int:
                          "전부 -Z*I 항이었다. 창을 토막 내 그 녹화의 **연속** 텍스처를 얹으면 "
                          "실측 대비 회수율이 2토막 35%% / 3토막 55%% / 6토막 78%% 다. "
                          "⚠ --vtex-step-s 와 **같은 값**을 줘라 (10 10 이 `genopts.V32S`).")
+    ap.add_argument("--harmonic-z", action="store_true",
+                    help="**차수별 선로 임피던스 표**를 쓴다 (14.59). 끄면 `r + j*h*x` = "
+                         "옛 경로, **비트 동일**. 실측(계단 차분, 복소 LS): 자리 D 에서 "
+                         "|Z_3|/|Z_1| = **6.71** (R^2 0.74) · |Z_5|/|Z_1| = 2.09 (0.58), "
+                         "자리 E h3 = 2.37 (0.64). 생성기 모형은 1.02/1.06 이다. "
+                         "h7 위는 안 넣는다 — 통전/비통전 v_h_rel 비가 h3 는 12.1%% 벗어나는데 "
+                         "h7 0.3%% · h9 0.6%% 라 **강하가 파형을 거의 안 바꾼다**. "
+                         "⚠⚠ 켜면 `rel_open` de-embed 가 바뀌어 **텍스처 자신이 달라진다** — "
+                         "홀드아웃도 **같이** 켜야 한다.")
     ap.add_argument("--vtail", action="store_true",
                     help="전압 꼬리(h17~h31)를 텍스처에 얹는다 (13.73/13.78). processed_data/vtail.npz 가 필요하다. 절대 경로(모델 단독)는 확실히 좋아지지만 델타 경로는 나빠진 전례가 있다 — A/B 로 판정하라")
     ap.add_argument("--steady-crop", default="",
@@ -213,6 +222,7 @@ def main() -> int:
         shard = (k, n)
     build_cache(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                 vtex_step_s=a.vtex_step_s, vtex_seg_s=a.vtex_seg_s,
+                harmonic_z=a.harmonic_z,
                 time_split=a.split, seed=a.seed, n_workers=a.workers, shard=shard,
                 exclude_activation_files=excl,
                 dither_amp=a.dither_amp, dither_phase_deg=a.dither_phase_deg,
