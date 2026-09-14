@@ -203,6 +203,35 @@ class NILMNet(nn.Module):
         #: **0 또는 1 이면 창 전체 한 구간 = 지금과 비트 동일**이다 (`pool_segments` 참조).
         #: 세밀·광역·원시 전력 통계 셋 다에 같은 n 을 건다.
         seg_pool: int = 0,
+        # -- 세밀 갈래 dilation (14.78) ------------------------------------
+        #: 세밀 conv 스택의 dilation. `None` 이면 `(1, 2, 4, 8, 16)` = **지금과 비트 동일**.
+        #:
+        #: 12.37 이 이미 *"진짜 병목은 수용영역이다"* 라고 적었는데, 그때 처방은 직전 3초
+        #: 요약을 **입력 채널로** 미리 계산하는 것이었다 (ch41·42). 그건 **과거**만 다룬다.
+        #:
+        #: 창은 `타깃 앞 3.98초 | 타깃 | 뒤 6.00초` 인데 깊은 탭의 수용영역은
+        #: `1 + 6*(1+2+4+8+16) = 187` 사이클 = **+-1.56초** 뿐이다. 그래서 창의 44%
+        #: (타깃 뒤 1.56~6.00초)는 **위치를 모르는** `h.mean`/`h.amax` 로만 머리에 닿는다.
+        #: `mean`/`amax` 는 순서 불변이라 "계단이 미래에 있다" 를 표현할 수 없다.
+        #:
+        #: 14.47 의 반사실이 이것을 겨냥한다 — 미래 6초를 다 지우면 mix 0.137 -> 0.939 인데
+        #: **수용영역 밖만** 지워도 **0.941** 이다. 해로운 것은 '미래' 가 아니라 '수용영역 밖'이다.
+        #:
+        #: `(1, 3, 9, 27, 81)` 이면 `1 + 6*121 = 727` 사이클 = **+-6.06초**로 창을 다 덮는다.
+        #: 블록 수가 같아 **파라미터가 안 늘고**, 비율 3 <= 커널-1(6) 이라 틈 없이 덮인다.
+        fine_dilations: Optional[Sequence[int]] = None,
+        #: 세밀 갈래 **전역 풀링**을 무엇으로 할지 (14.79). `"both"` 가 기본 = **비트 동일**.
+        #:
+        #: 셋이 서로 다른 이유로 거기 있다:
+        #:   `h.mean`  창 평균 문맥. **수용영역이 창을 덮으면 필요 없어진다** — 위치를 아는
+        #:             conv 가 어떤 가중평균이든 만들 수 있고, 남기면 **위치를 모르는
+        #:             지름길**만 제공한다. 14.47 이 잰 해가 정확히 그 통로에서 나온다.
+        #:   `h.amax`  **max 는 conv 가 표현 못 하는 비선형**이다. 핫플은 2초 주기로 끊기고
+        #:             휴지 구간도 `is_on=1` 이라(11.1) 순시값만 보면 휴지마다 미탐이 난다.
+        #:   `fp.amax/amin` (원시, 아래 따로) conv·GroupNorm 을 안 거친 **날 크기**.
+        #:             12.9.8 — 총전력을 1/10 로 줄여도 핫플 on 로짓이 0.09 밖에 안 움직였다.
+        #: ⇒ `"amax"` 는 **`mean` 만 뺀다**. `fp.amax/amin` 과 물리 프라이어는 그대로다.
+        fine_pool: str = "both",
     ):
         super().__init__()
         # 세밀 갈래가 실제로 쓸 채널 수. 입력은 항상 FINE_CHANNELS 개로 오지만
@@ -249,11 +278,16 @@ class NILMNet(nn.Module):
 
         c1, c2 = int(64 * width), int(128 * width)
         # Sequential 이 아니라 ModuleList 다. 중간 층의 타깃 슬라이스를 뽑아야 한다.
+        dil = tuple(int(x) for x in (fine_dilations or (1, 2, 4, 8, 16)))
+        if len(dil) != 5:
+            raise ValueError("fine_dilations 는 5개여야 한다 (블록 수가 같아야 "
+                             "파라미터가 안 는다): %r" % (dil,))
+        self.fine_dilations = dil
         self.fine = nn.ModuleList([
-            _blk(self.fine_channels, c1, 7, 1), _blk(c1, c1, 7, 2), _blk(c1, c2, 7, 4),
-            _blk(c2, c2, 7, 8), _blk(c2, c2, 7, 16),
+            _blk(self.fine_channels, c1, 7, dil[0]), _blk(c1, c1, 7, dil[1]),
+            _blk(c1, c2, 7, dil[2]), _blk(c2, c2, 7, dil[3]), _blk(c2, c2, 7, dil[4]),
         ])
-        # 타깃 슬라이스를 뽑을 층 (0-based). 0 -> 7사이클, 1 -> 19사이클
+        # 타깃 슬라이스를 뽑을 층 (0-based). 기본 dilation 에서 0 -> 7사이클, 1 -> 19사이클
         self.tap_layers = (0, 1)
         w1, w2 = int(32 * width), int(64 * width)
         self.wide = nn.Sequential(_blk(WIDE_CHANNELS, w1, 5, 1), _blk(w1, w1, 5, 2), _blk(w1, w2, 5, 4))
@@ -263,7 +297,11 @@ class NILMNet(nn.Module):
         # 14.46 — 구간 수. 0/1 이면 전체 한 구간이라 아래 식이 옛 값과 **정확히 같다**.
         self.seg_pool = int(seg_pool or 0)
         ns = max(self.seg_pool, 1)
-        trunk_in = (c2 * 2 * ns + c2 + (c1 + c1) + self.fine_channels
+        self.fine_pool = str(fine_pool)
+        if self.fine_pool not in ("both", "amax", "mean"):
+            raise ValueError("fine_pool 은 both/amax/mean: %r" % (fine_pool,))
+        _npool = 2 if self.fine_pool == "both" else 1
+        trunk_in = (c2 * _npool * ns + c2 + (c1 + c1) + self.fine_channels
                     + w2 * ns + WINDOW_STATS * ns)
         if self.wide_target:
             trunk_in += w2              # 광역 타깃 블록 (13.44)
@@ -322,7 +360,8 @@ class NILMNet(nn.Module):
         # 순서를 바꾸면 이전 체크포인트가 뒤섞인 입력을 받는다 (실제로 한 번 겪었다).
         fine_flags: List[int] = (
             [1] * self.fine_channels + [1] * c1 + [1] * c1
-            + [1] * (c2 * ns) + [1] * (c2 * ns) + [1] * c2   # 구간별 평균·최대 + 깊은 타깃
+            # 14.79 — `fine_pool` 이 `both` 면 두 무리, 아니면 한 무리다 (순서는 그대로).
+            + [1] * (c2 * _npool * ns) + [1] * c2            # 구간별 풀링 + 깊은 타깃
             + [0] * (w2 * ns)                                 # 광역 평균 (구간별)
             + ([0] * w2 if self.wide_target else [])           # 광역 타깃 블록 (13.44)
             + ([0] * (w2 * ns) + [0] * w2 if self.wide_summary else [])  # 광역 amax + 창끝
@@ -422,7 +461,11 @@ class NILMNet(nn.Module):
         #   `h[:, :, 0:n].mean(-1)` == `h.mean(-1)` 이고 **옛 경로와 비트 동일**이다.
         fsegs = pool_segments(h.shape[-1], t, max(self.seg_pool, 1))
         for _a, _b in fsegs:
-            feats += [h[:, :, _a:_b].mean(-1), h[:, :, _a:_b].amax(-1)]
+            # 14.79 — `both` 면 순서까지 옛 경로 그대로라 **비트 동일**이다.
+            if self.fine_pool in ("both", "mean"):
+                feats.append(h[:, :, _a:_b].mean(-1))
+            if self.fine_pool in ("both", "amax"):
+                feats.append(h[:, :, _a:_b].amax(-1))
         feats.append(h[:, :, t])                        # 깊은 층 타깃
         hw = self.wide(wide)
         wsegs = pool_segments(hw.shape[-1], wide_target_index(hw.shape[-1]),

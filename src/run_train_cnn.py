@@ -629,6 +629,23 @@ def main() -> int:
                     help="**꺼진 창에서 `p_raw` 에 경사를 주지 않는다** (13.11). 상태 전력 머리가 "
                          "죽는 것을 막는다 — 드라이기 HIGH 가 정확히 그렇게 0W 가 됐다. "
                          "게이트가 꺼진 창을 0 으로 만드는 일을 맡는다.")
+    ap.add_argument("--fine-dilations", default="",
+                    help="세밀 conv 스택의 dilation 다섯 개 (쉼표). 비우면 1,2,4,8,16 = "
+                         "**지금과 비트 동일**. 창은 '타깃 앞 3.98초 | 타깃 | 뒤 6.00초' 인데 "
+                         "깊은 탭의 수용영역이 1+6*(1+2+4+8+16)=187사이클 = ±1.56초뿐이라 "
+                         "창의 44%%(타깃 뒤 1.56~6.00초)가 **위치를 모르는** h.mean/h.amax "
+                         "로만 머리에 닿는다. 14.47 의 반사실: 미래 6초를 다 지우면 "
+                         "mix 0.137->0.939 인데 **수용영역 밖만** 지워도 0.941 이다 — "
+                         "해로운 것은 '미래'가 아니라 '수용영역 밖'이다. "
+                         "1,3,9,27,81 이면 RF 727사이클 = ±6.06초로 창을 다 덮고 "
+                         "**블록 수가 같아 파라미터가 안 는다**(624,917 로 동일).")
+    ap.add_argument("--fine-pool", default="both", choices=("both", "amax", "mean"),
+                    help="세밀 갈래 전역 풀링 (14.79). both 가 기본 = **비트 동일**. "
+                         "amax 면 **위치를 모르는 h.mean 을 뺀다** — 수용영역이 창을 덮으면 "
+                         "conv 가 어떤 가중평균이든 만들 수 있어 중복이고, 남기면 합성에서 "
+                         "잘 듣는 위치 불변 지름길만 준다 (14.47: 수용영역 밖만 지워도 "
+                         "mix 0.941). h.amax 는 max 라 conv 가 표현 못 하고 듀티 기기에 "
+                         "필요해서 남긴다. 원시 fp.amax/amin 과 물리 프라이어도 그대로.")
     ap.add_argument("--harm-even-by-class", action="store_true",
                     help="짝수차 위상을 기기 부류별로 살린다 (13.45). "
                          "--harm-even-magnitude 와 같이 써야 뜻이 있다 — 위상이 뭉치는 "
@@ -799,6 +816,9 @@ def main() -> int:
                     fine_dropout=a.fine_dropout,
                     prior_kappa=a.prior_kappa, prior_beta=a.prior_beta,
                     fine_channels=a.fine_channels,
+                    fine_dilations=(tuple(int(x) for x in a.fine_dilations.split(","))
+                                    if a.fine_dilations else None),
+                    fine_pool=a.fine_pool,
                     aux_z=(a.w_z > 0),
                     vexp=a.vexp, seg_pool=a.seg_pool).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
@@ -946,6 +966,8 @@ def main() -> int:
                     # 세밀 채널 수를 반드시 남긴다. 12.34 에서 38 -> 44 로
                     # 늘었고, 이 키가 없는 체크포인트는 38 로 간주된다.
                     "fine_channels": model.fine_channels,
+                    "fine_dilations": list(model.fine_dilations),
+                    "fine_pool": model.fine_pool,
                     # 타깃 시점 구성 (12.45). 채널 수와 달리 슬라이스로 못 맞춘다 —
                     # 어긋나면 입력과 라벨이 다른 순간을 가리켜 조용히 틀린다.
                     "target_lookahead": TARGET_LOOKAHEAD,
