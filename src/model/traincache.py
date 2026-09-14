@@ -152,6 +152,14 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
                                     vtex_seg_s=float(vtex_seg_s or 0.0)),
         recipe_mix=mix, compute_gt_harmonics=False,
         smps_focus_off_p=smps_focus_off_p)
+    # 14.62 ⚠⚠ **굽기 경로가 반쪽이었다.** 위의 `set_default_harmonic_z` 는 텍스처를 **새 Z 로
+    #   벗기게** 만드는데, 단자 전압을 **다시 입히는** 쪽(`_terminal_voltage_harmonics` ->
+    #   `grid_simulator.harmonic_z`)은 시뮬레이터의 표를 본다. 여기서 안 걸면 벗긴 Z 와 입힌 Z 가
+    #   달라 **서로 안 지워지고 (Z_새 − Z_옛)·I 잔차가 남는다** (자리 D h3 은 Z/Z_1 이 6.71 대 1.02).
+    #   `holdout._w_init` 과 `genopts.build_synthesizer` 엔 있었고 **여기에만 없었다** —
+    #   그리고 굽기 전 관문은 `genopts` 로 따로 지은 물건을 재서 **통과했다**.
+    #   [[pin-the-two-entry-points-against-each-other]] · `run_gate_hzwire.py` 가 이 줄을 지킨다.
+    _GEN.synthesizer.grid_sim.harmonic_z_table = _hz
 
 
 def _chunk(task: Tuple[int, int]) -> Dict[str, np.ndarray]:

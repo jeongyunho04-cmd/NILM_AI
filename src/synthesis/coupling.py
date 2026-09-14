@@ -85,6 +85,33 @@ def _join_tail(V15: np.ndarray, tail: np.ndarray) -> np.ndarray:
     return V15 if tail.size == 0 else np.concatenate([V15, tail])
 
 
+# ⚠⚠ 2026-09-14: 이 함수를 **클래스 한가운데 0열**에 두었더니 거기서 `SmpsCircuit` 이
+#   끝나버려 뒤따르던 `solve_terminal`·`_compute_coupling`·`stats` 셋이 통째로 `zline`
+#   의 **중첩 함수**가 됐다. 문법 오류가 안 나서 조용했고, 합성 경로 전체가 죽었다
+#   (`AttributeError: no attribute _compute_coupling`). `run_gate_zharm` 은 `zline` 을
+#   모듈에서 직접 부르기만 해서 통과했다 — **관문이 타는 배선이 진짜 배선이어야 한다.**
+#   ⇒ 클래스 **앞**에 둔다. `run_gate_zharm` ⑦ 이 세 메서드가 클래스에 붙어 있는지 본다.
+def zline(r_line: float, l_line: float, zk=()) -> np.ndarray:
+    """(H,) 선로 임피던스. `zk` 가 비면 `r + j·2πF·h·L` — **옛 경로와 비트 동일**.
+
+    `zk` 는 `((차수, Re, Im), ...)` — `Z_1` 에 대한 **복소 배수** (14.59). 해시 가능해야
+    캐시 키에 들어간다. ⚠ 이것은 `grid_simulator.harmonic_z` 와 **같은 표**를 받아야 한다
+    — 두 입구가 갈리면 결합 델타와 단자 전압이 서로 다른 Z 를 쓴다
+    ([[pin-the-two-entry-points-against-each-other]]). 여기서 `grid_simulator` 를 수입하지
+    않는 까닭은 순환 수입이라서다 — 그래서 **값으로** 받는다.
+    """
+    h = np.arange(1, H + 1)
+    z = float(r_line) + 1j * 2 * np.pi * F * h * float(l_line)
+    if not zk:
+        return z
+    z1 = float(r_line) + 1j * 2 * np.pi * F * float(l_line)
+    z = z.astype(np.complex128).copy()
+    for hh, re_, im_ in zk:
+        if 1 <= int(hh) <= H:
+            z[int(hh) - 1] = z1 * complex(float(re_), float(im_))
+    return z
+
+
 class SmpsCircuit:
     """v12g 모델 위의 델타 계산기 + 캐시. 생성기(`GridSimulator`)가 하나 들고 쓴다."""
 
@@ -247,27 +274,6 @@ class SmpsCircuit:
         corr = np.where(ok, d1 * d1 / np.where(ok, d2, 1.0), 0.0)
         corr = np.where(np.abs(corr) > AITKEN_CLAMP * np.abs(d1), 0.0, corr)
         return x2 - corr
-
-def zline(r_line: float, l_line: float, zk=()) -> np.ndarray:
-    """(H,) 선로 임피던스. `zk` 가 비면 `r + j·2πF·h·L` — **옛 경로와 비트 동일**.
-
-    `zk` 는 `((차수, Re, Im), ...)` — `Z_1` 에 대한 **복소 배수** (14.59). 해시 가능해야
-    캐시 키에 들어간다. ⚠ 이것은 `grid_simulator.harmonic_z` 와 **같은 표**를 받아야 한다
-    — 두 입구가 갈리면 결합 델타와 단자 전압이 서로 다른 Z 를 쓴다
-    ([[pin-the-two-entry-points-against-each-other]]). 여기서 `grid_simulator` 를 수입하지
-    않는 까닭은 순환 수입이라서다 — 그래서 **값으로** 받는다.
-    """
-    h = np.arange(1, H + 1)
-    z = float(r_line) + 1j * 2 * np.pi * F * h * float(l_line)
-    if not zk:
-        return z
-    z1 = float(r_line) + 1j * 2 * np.pi * F * float(l_line)
-    z = z.astype(np.complex128).copy()
-    for hh, re_, im_ in zk:
-        if 1 <= int(hh) <= H:
-            z[int(hh) - 1] = z1 * complex(float(re_), float(im_))
-    return z
-
 
     def solve_terminal(self, powers: Dict[str, float], rel_env: np.ndarray, v1: float,
                        r_line: float, l_line: float,

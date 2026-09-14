@@ -42,6 +42,53 @@ OK, NG = "✅", "❌"
 FAIL = []
 
 
+#: (7) 음성 대조 본 — **일부러 끊은 것**과 **일부러 갈아 끼우는 것**.
+_BROKEN = '''
+class C:
+    def a(self):
+        return 1
+
+def helper(x):
+    return x
+
+    def b(self):
+        return 2
+'''
+
+_PATCH = '''
+class C:
+    def a(self):
+        return 1
+
+def install():
+    def a(self):
+        return 2
+    C.a = a
+'''
+
+
+def _orphans(src):
+    '''[(줄, 이름)] — 모듈 수준 함수 안에 갇힌 **메서드**.
+
+    `self` 를 첫 인자로 받고, 바깥 함수 안에서 **이름이 한 번도 안 불리는** def.
+    이름이 불리면 일부러 갈아 끼우는 덧댐이라 잡지 않는다.
+    '''
+    import ast
+    out = []
+    for top in ast.parse(src).body:
+        if not isinstance(top, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        used = {n.id for n in ast.walk(top)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        for sub in ast.walk(top):
+            if sub is top or not isinstance(sub, ast.FunctionDef):
+                continue
+            arg = sub.args.posonlyargs + sub.args.args
+            if arg and arg[0].arg == "self" and sub.name not in used:
+                out.append((sub.lineno, sub.name))
+    return out
+
+
 def ck(name, ok, note=""):
     print(("  " + (OK if ok else NG) + " ") + name + (("   " + note) if note else ""))
     if not ok:
@@ -129,6 +176,29 @@ def main() -> int:
     ck("⑥ ⚠ 표를 켜면 **텍스처가 달라진다** (캐시를 다시 구워야 한다)",
        bool(d) and float(np.median(d)) > 1e-5,
        "h3 `rel_open` 변화 중앙 %.2e (텍스처 %d개)" % (np.median(d) if d else 0, len(d)))
+
+    # -- (7) 0열 def 가 클래스를 끊지 않았나 (2026-09-14) ----------------
+    #   `zline` 을 `SmpsCircuit` 한가운데 0열에 넣었더니 거기서 클래스가 끝나, 뒤따르던
+    #   `solve_terminal`/`_compute_coupling`/`stats` 가 통째로 `zline` 의 **중첩 함수**가
+    #   됐다. 문법 오류가 안 나서 조용했고 합성 경로가 통째로 죽었다
+    #   (`AttributeError: no attribute _compute_coupling`). `run_gate_zharm` 은 `zline` 을
+    #   모듈에서 직접 부르기만 해서 **통과했다** — 관문이 타는 배선이 진짜 배선이어야 한다.
+    #
+    #   탐지: 모듈 수준 함수 안에 `self` 를 첫 인자로 받는 def 가 있고, **그 이름이 바깥
+    #   함수 안에서 한 번도 안 불리면** 흘러나온 메서드다. 이름이 불리면 일부러 갈아 끼우는
+    #   덧댐이다 (`run_diag_sigv.py` 의 `L.NILMLoss._harm_pred_active = patched`).
+    ck("(7) 음성 대조 — 일부러 끊은 본을 잡아낸다", len(_orphans(_BROKEN)) == 1,
+       "잡은 것 " + str(_orphans(_BROKEN)))
+    ck("(7) 음성 대조 — 일부러 갈아 끼우는 덧댐은 안 잡는다", not _orphans(_PATCH))
+    orphan = []
+    for f in sorted(Path("src").rglob("*.py")):
+        try:
+            orphan += ["%s:%d %s" % (str(f).replace(chr(92), "/"), ln, nm)
+                       for ln, nm in _orphans(f.read_text(encoding="utf-8"))]
+        except SyntaxError:
+            continue                      # 이미 알려진 깨진 파일 둘은 여기서 걸러진다
+    ck("(7) 클래스 밖으로 흘러나온 메서드가 없다", not orphan,
+       ("  ".join(orphan[:4]) if orphan else "src 전체 검사"))
 
     print()
     if FAIL:
