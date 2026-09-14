@@ -93,10 +93,39 @@ def main() -> int:
         print(f"    {a[:6]:>7}{vref[j]:>8.1f}V{ex[j]:>4.0f}{want:>10.4f}{got:>10.4f}"
               f"{'  ' + (OK if good else NG):>4}")
 
-    # [4] 학습기 배선
+    # [4] 몇 할만 거는 손잡이 (14.51) — `k^(e·f)` 여야 한다
+    print("[4] `--harm-vnorm-frac` (14.51): 배수가 `(V_CENTER/V_적합)^(e·f)` 인가")
+    j_ov = apps.index("oven") if "oven" in apps else 0
+    for f in (0.0, 0.5, 0.7, 1.0):
+        C = NILMLoss(**kw, harm_vnorm_vref=torch.from_numpy(vref),
+                     harm_vnorm_vref_state=torch.from_numpy(vrefs), harm_vnorm_frac=f)
+        p1 = torch.zeros(1, K); p1[0, j_ov] = 300.0
+        o1 = {"power_raw": p1, "power_mix": out["power_mix"][:1],
+              "power_states": out["power_states"][:1]}
+        A._vrel = vrel[:1]; C._vrel = vrel[:1]
+        got = float(C._harm_pred_active(o1, p1).norm()) / max(
+            float(A._harm_pred_active(o1, p1).norm()), 1e-12)
+        w = o1["power_mix"][0, j_ov].numpy().astype(np.float64)
+        ks = np.where(vrefs[j_ov] > 0,
+                      (V_CENTER / np.maximum(vrefs[j_ov], 1.0)) ** (ex[j_ov] * f), 1.0)
+        want = float((w * ks).sum() / max(w.sum(), 1e-12)) if vref[j_ov] > 0 else 1.0
+        good = abs(got - want) < 1e-4
+        bad += 0 if good else 1
+        note = "  (= 끈 것과 같아야 한다)" if f == 0.0 else ""
+        print(f"    f={f:<4.1f} 오븐 예상 {want:.4f} · 실측 {got:.4f}"
+              f"  {OK if good else NG}{note}")
+    # f=0 은 **정확히** 1.0 이어야 한다 — 부동소수 오차도 없이
+    C0 = NILMLoss(**kw, harm_vnorm_vref=torch.from_numpy(vref),
+                  harm_vnorm_vref_state=torch.from_numpy(vrefs), harm_vnorm_frac=0.0)
+    ex0 = bool(torch.all(C0.vnorm_vref_k == 1.0) and torch.all(C0.vnorm_vref_ks == 1.0))
+    print(f"[4] f=0 이면 버퍼가 **정확히** 1.0: {OK if ex0 else NG}")
+    bad += 0 if ex0 else 1
+
+    # [5] 학습기 배선 — **소스에 실제로 있는가** (983506 이 45분을 버린 자리다)
     src = open("src/run_train_cnn.py", encoding="utf-8").read()
-    w4 = "harm_vnorm_vref=" in src and "harm_vnorm_vref_state=" in src
-    print(f"[4] `run_train_cnn` 이 실제로 넘기는가: {OK if w4 else NG}")
+    w4 = ("harm_vnorm_vref=" in src and "harm_vnorm_vref_state=" in src
+          and "harm_vnorm_frac=" in src)
+    print(f"[5] `run_train_cnn` 이 실제로 넘기는가 (vref·vref_state·frac): {OK if w4 else NG}")
     bad += 0 if w4 else 1
     print("\n" + (f"관문 전부 통과 {OK}" if not bad else f"{NG} 실패 {bad}건"))
     return 1 if bad else 0

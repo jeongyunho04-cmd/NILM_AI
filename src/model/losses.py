@@ -208,6 +208,16 @@ class NILMLoss(torch.nn.Module):
         #: **비트 동일**이다 (222V 에 고정).
         harm_vnorm_vref: Optional[torch.Tensor] = None,
         harm_vnorm_vref_state: Optional[torch.Tensor] = None,
+        #: 그 옮김을 **몇 할만** 걸 것인가 (14.51). 1.0 이 온전한 보정, 0 이면 안 건 것과 같다.
+        #: `(V_CENTER/V_적합)^(e·f)` 로 들어간다 — 지수에 곱하므로 f=0 은 정확히 1.0 이다.
+        #:
+        #: ⚠ **왜 1 보다 작게 거나.** 14.51 이 3시드로 쟀다: f=1 은 실측 고전력 과소를
+        #: `핫플통전·P>1500` 잔차 중앙 **+47.5 ± 4.1W -> −16.3 ± 7.5W** 로 고치는데
+        #: **부호를 넘긴다**. 합성 편향(on)도 오븐 −21.6 -> +6.6 · 포트 +9.8 -> −20.8 로
+        #: 넘어간다. 선형이라 보면 영점은 저항 4종이 f = 0.32(포트) ~ 0.77(오븐), 실측
+        #: 고전력이 f = **0.745** 다. `L_power` 가 반대로 당기던 평형을 온전히 지우는 것이
+        #: 과했던 것이다. ⚠ 선형은 **가정**이다 — 재라.
+        harm_vnorm_frac: float = 1.0,
         harm_even_magnitude: bool = False,              # 짝수차를 크기 공간에서 잰다 (13.11)
         even_coherent: Optional[torch.Tensor] = None,   # (K,) 짝수차 위상이 기기 속성인 기기 (13.45)
         signatures_site: Optional[torch.Tensor] = None,      # (Nz,K,H,2) 자리별 지문 (13.59)
@@ -368,8 +378,12 @@ class NILMLoss(torch.nn.Module):
                 return torch.ones(shape, dtype=torch.float32)
             t = torch.as_tensor(x, dtype=torch.float32)
             return torch.where(t > 0, _VC / t.clamp(min=1.0), torch.ones_like(t))
-        self.register_buffer("vnorm_vref_k", _k(harm_vnorm_vref, (len(s_i),)))
-        self.register_buffer("vnorm_vref_ks", _k(harm_vnorm_vref_state, (len(s_i), 1)))
+        # 14.51 — 배수를 **몇 할만**. `k^(e·f) = (k^f)^e` 이므로 버퍼에 미리 얹는다.
+        #   f=1 이면 `pow(1)` 이라 **비트 동일**이고, f=0 이면 정확히 1.0 이다.
+        _vf = float(harm_vnorm_frac if harm_vnorm_frac is not None else 1.0)
+        self.register_buffer("vnorm_vref_k", _k(harm_vnorm_vref, (len(s_i),)).pow(_vf))
+        self.register_buffer("vnorm_vref_ks", _k(harm_vnorm_vref_state, (len(s_i), 1)).pow(_vf))
+        self.vnorm_frac = _vf
         self._vrel = None
         self.register_buffer("vnorm_exp",
                              (torch.as_tensor(harm_vnorm_exp, dtype=torch.float32)

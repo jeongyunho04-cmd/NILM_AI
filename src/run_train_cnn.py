@@ -470,6 +470,14 @@ def main() -> int:
                     help="광역 갈래에도 amax + 창끝 슬라이스를 준다 (12.19.4 후보 1)")
     ap.add_argument("--periodicity", action="store_true",
                     help="자기상관·교차율을 헤드 직전에 직접 준다 (12.19.4 후보 2)")
+    ap.add_argument("--harm-vnorm-frac", type=float, default=1.0, metavar="F",
+                    help="`--harm-vnorm-anchor` 의 보정을 **몇 할만** 건다 (14.51). "
+                         "1.0 이 온전한 보정(기본), 0 이면 안 건 것과 같다. "
+                         "⚠ **왜 1 보다 작게 거나**: 14.51 이 3시드로 쟀다 — f=1 은 실측 "
+                         "고전력 과소를 `핫플통전·P>1500` 잔차 중앙 **+47.5 ± 4.1W -> "
+                         "−16.3 ± 7.5W** 로 고치는데 **부호를 넘긴다**. 선형이라 보면 영점이 "
+                         "실측 고전력 f=**0.745** · 합성 오븐 0.77 · 핫플 0.60 · 드라이 0.71 · "
+                         "포트 0.32 다. ⚠ 선형은 **가정**이다 — 재라.")
     ap.add_argument("--harm-vnorm-anchor", action="store_true",
                     help="**`harm_sig_vnorm` 의 기준전압을 기기별 sig 적합값으로 옮긴다** (14.49). "
                          "지금은 `sig × (V/V_CENTER=222)^e` 인데 `sig` 는 각 기기의 격리 녹화 "
@@ -658,7 +666,7 @@ def main() -> int:
     # 14.49 — `harm_sig_vnorm` 의 기준전압. `--harm-vnorm-anchor` 가 아니면 안 넘긴다.
     _vref, _vref_st = harmonic_signature_vref(pool, apps)
     if a.harm_vnorm_anchor:
-        print("  ** 14.49 sig 기준전압을 기기별 적합값으로: "
+        print("  ** 14.49 sig 기준전압을 기기별 적합값으로 (%.2f할): " % a.harm_vnorm_frac
               + " ".join("%s=%.1fV" % (x[:4], v) for x, v in zip(apps, _vref)) + " **")
     # 상태별 지문 (13.11). `del pool` 앞에서 만들어야 한다.
     sig_state = None
@@ -694,6 +702,7 @@ def main() -> int:
         harm_scale=torch.from_numpy(h_scale),
         # 14.49 — `harm_sig_vnorm` 의 기준전압을 **기기별 sig 적합값**으로 옮긴다.
         #   None 이면 222V 고정 = 옛 경로와 **비트 동일**.
+        harm_vnorm_frac=float(a.harm_vnorm_frac),
         harm_vnorm_vref=(torch.from_numpy(_vref)
                          if (a.harm_vnorm_anchor and a.harm_sig_vnorm) else None),
         harm_vnorm_vref_state=(torch.from_numpy(_vref_st)
@@ -841,6 +850,7 @@ def main() -> int:
                     "vexp": bool(model.vexp),
                     "seg_pool": int(model.seg_pool),
                     "harm_vnorm_anchor": bool(a.harm_vnorm_anchor),
+                    "harm_vnorm_frac": float(a.harm_vnorm_frac),
                     # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)
