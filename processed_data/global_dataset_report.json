@@ -1,5 +1,5 @@
 {
-  "processed_files_count": 24,
+  "processed_files_count": 19,
   "sampling_hz": 60.0,
   "devices": {
     "air_conditioner_1": {
@@ -456,166 +456,6 @@
         }
       }
     },
-    "laptop_charger_3": {
-      "appliance_type": "laptop_charger",
-      "korean_name": "노트북충전기",
-      "file_role": "device",
-      "load_class": "smps",
-      "rows": 18690,
-      "duration_min": 5.19,
-      "p_mean": 46.01,
-      "p_max": 67.93,
-      "v_ref_v": 229.4,
-      "invalid_samples_flagged": 0,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 78.89,
-      "events_count": 10,
-      "npz_file": "processed_data\\npz\\laptop_charger_3.npz",
-      "state_distribution": {
-        "IDLE_UNPLUGGED": {
-          "state_id": 0,
-          "description": "미연결 무부하 또는 완충 대기",
-          "count": 3946,
-          "percentage": 21.11,
-          "duration_min": 1.1
-        },
-        "TRICKLE_IDLE_CHARGE": {
-          "state_id": 1,
-          "description": "저속 트리클 충전 / 유휴 상태 충전",
-          "count": 1807,
-          "percentage": 9.67,
-          "duration_min": 0.5
-        },
-        "FAST_ACTIVE_CHARGE": {
-          "state_id": 2,
-          "description": "고속 충전 / CPU 부하 동작 중 충전",
-          "count": 12937,
-          "percentage": 69.22,
-          "duration_min": 3.59
-        }
-      }
-    },
-    "laptop_charger_4": {
-      "appliance_type": "laptop_charger",
-      "korean_name": "노트북충전기",
-      "file_role": "device",
-      "load_class": "smps",
-      "rows": 10680,
-      "duration_min": 2.97,
-      "p_mean": 39.82,
-      "p_max": 67.66,
-      "v_ref_v": 229.68,
-      "invalid_samples_flagged": 30,
-      "invalid_samples_dropped": 30,
-      "sessions_detected": 1,
-      "on_percentage": 67.43,
-      "events_count": 4,
-      "npz_file": "processed_data\\npz\\laptop_charger_4.npz",
-      "state_distribution": {
-        "IDLE_UNPLUGGED": {
-          "state_id": 0,
-          "description": "미연결 무부하 또는 완충 대기",
-          "count": 3479,
-          "percentage": 32.57,
-          "duration_min": 0.97
-        },
-        "TRICKLE_IDLE_CHARGE": {
-          "state_id": 1,
-          "description": "저속 트리클 충전 / 유휴 상태 충전",
-          "count": 1020,
-          "percentage": 9.55,
-          "duration_min": 0.28
-        },
-        "FAST_ACTIVE_CHARGE": {
-          "state_id": 2,
-          "description": "고속 충전 / CPU 부하 동작 중 충전",
-          "count": 6181,
-          "percentage": 57.87,
-          "duration_min": 1.72
-        }
-      }
-    },
-    "laptop_charger_5": {
-      "appliance_type": "laptop_charger",
-      "korean_name": "노트북충전기",
-      "file_role": "device",
-      "load_class": "smps",
-      "rows": 70320,
-      "duration_min": 19.53,
-      "p_mean": 39.45,
-      "p_max": 68.8,
-      "v_ref_v": 229.55,
-      "invalid_samples_flagged": 0,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 94.93,
-      "events_count": 57,
-      "npz_file": "processed_data\\npz\\laptop_charger_5.npz",
-      "state_distribution": {
-        "IDLE_UNPLUGGED": {
-          "state_id": 0,
-          "description": "미연결 무부하 또는 완충 대기",
-          "count": 3566,
-          "percentage": 5.07,
-          "duration_min": 0.99
-        },
-        "TRICKLE_IDLE_CHARGE": {
-          "state_id": 1,
-          "description": "저속 트리클 충전 / 유휴 상태 충전",
-          "count": 23414,
-          "percentage": 33.3,
-          "duration_min": 6.5
-        },
-        "FAST_ACTIVE_CHARGE": {
-          "state_id": 2,
-          "description": "고속 충전 / CPU 부하 동작 중 충전",
-          "count": 43340,
-          "percentage": 61.63,
-          "duration_min": 12.04
-        }
-      }
-    },
-    "laptop_charger_6": {
-      "appliance_type": "laptop_charger",
-      "korean_name": "노트북충전기",
-      "file_role": "device",
-      "load_class": "smps",
-      "rows": 38100,
-      "duration_min": 10.58,
-      "p_mean": 22.42,
-      "p_max": 68.21,
-      "v_ref_v": 228.94,
-      "invalid_samples_flagged": 0,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 92.28,
-      "events_count": 8,
-      "npz_file": "processed_data\\npz\\laptop_charger_6.npz",
-      "state_distribution": {
-        "IDLE_UNPLUGGED": {
-          "state_id": 0,
-          "description": "미연결 무부하 또는 완충 대기",
-          "count": 2943,
-          "percentage": 7.72,
-          "duration_min": 0.82
-        },
-        "TRICKLE_IDLE_CHARGE": {
-          "state_id": 1,
-          "description": "저속 트리클 충전 / 유휴 상태 충전",
-          "count": 34074,
-          "percentage": 89.43,
-          "duration_min": 9.46
-        },
-        "FAST_ACTIVE_CHARGE": {
-          "state_id": 2,
-          "description": "고속 충전 / CPU 부하 동작 중 충전",
-          "count": 1083,
-          "percentage": 2.84,
-          "duration_min": 0.3
-        }
-      }
-    },
     "minipc_1": {
       "appliance_type": "minipc",
       "korean_name": "미니PC",
@@ -733,46 +573,6 @@
           "count": 14317,
           "percentage": 65.73,
           "duration_min": 3.98
-        }
-      }
-    },
-    "minipc_4": {
-      "appliance_type": "minipc",
-      "korean_name": "미니PC",
-      "file_role": "device",
-      "load_class": "smps",
-      "rows": 30870,
-      "duration_min": 8.57,
-      "p_mean": 8.51,
-      "p_max": 20.34,
-      "v_ref_v": 229.97,
-      "invalid_samples_flagged": 30,
-      "invalid_samples_dropped": 0,
-      "sessions_detected": 1,
-      "on_percentage": 87.71,
-      "events_count": 12,
-      "npz_file": "processed_data\\npz\\minipc_4.npz",
-      "state_distribution": {
-        "OFF_STANDBY": {
-          "state_id": 0,
-          "description": "전원 꺼짐 또는 절전 모드",
-          "count": 3794,
-          "percentage": 12.29,
-          "duration_min": 1.05
-        },
-        "IDLE": {
-          "state_id": 1,
-          "description": "바탕화면 대기 및 경부하 상태",
-          "count": 25975,
-          "percentage": 84.14,
-          "duration_min": 7.22
-        },
-        "ACTIVE_LOAD": {
-          "state_id": 2,
-          "description": "프로그램 실행 및 CPU 연산 부하",
-          "count": 1101,
-          "percentage": 3.57,
-          "duration_min": 0.31
         }
       }
     },
@@ -982,7 +782,7 @@
       "excluded_from_segment_pool": true
     }
   },
-  "total_cleaned_samples": 969630,
-  "total_duration_hours": 4.49,
-  "total_events_detected": 1948
+  "total_cleaned_samples": 800970,
+  "total_duration_hours": 3.71,
+  "total_events_detected": 1857
 }

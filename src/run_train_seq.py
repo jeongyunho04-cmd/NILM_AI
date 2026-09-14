@@ -183,6 +183,11 @@ def main():
     ap.add_argument("--chunk", type=int, default=64)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--lr-heads", type=float, default=3e-4)
+    ap.add_argument("--vexp", action="store_true",
+                    help="전압 지수를 구조에 박는다 (14.7). `p_raw *= (V/V_CENTER)^e_k` 로 "
+                         "저항 e=2 · SMPS 0 · 유도기 0.6. 모델은 상태 명목값은 기울기 1.00 으로 "
+                         "잘 내는데 **같은 상태 안의 V² 의존**을 0.33~0.83 로만 읽어 순 지수가 "
+                         "0.85 다(물리는 2). 저전압에서 과예측한다 (14.6). 끄면 비트 동일")
     ap.add_argument("--w-crf", type=float, default=0.3)
     ap.add_argument("--pow-sig", action="store_true",
                     help="전력 의존 지문 (13.84.38). `L_harm` 이 전력에 선형인 것을 고친다 — "
@@ -305,7 +310,9 @@ def main():
         raise SystemExit("--no-mask 는 --init scratch 에서만 쓴다 (물려받은 가중치엔 본 적 없는 입력이다)")
     model, apps_m = load_model(a.ref if scratch else a.init, dev,
                                weights=not scratch, mask=not a.no_mask,
-                               state_power_init=not a.no_state_init)[:2]
+                               state_power_init=not a.no_state_init,
+                              # 전압 지수는 **이 판의 인수**가 정한다 (14.7). 체크포인트 값을 덮는다.
+                              proj_from={"vexp": bool(a.vexp)})[:2]
     assert list(apps_m) == list(apps), "기기 열 순서가 캐시와 다르다"
     # 사영은 **매개변수가 아니라 상수**다 — `load_state_dict` 뒤에 꽂아도 안전하고,
     # `proj=0` 이면 `forward` 가 `_project` 를 아예 안 부른다 (완전한 하위호환).

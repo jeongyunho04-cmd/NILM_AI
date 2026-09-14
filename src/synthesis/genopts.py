@@ -30,6 +30,35 @@ V36: Dict[str, Any] = dict(
     sibling_rotate="smps_dev1",          # 13.84.16 형제 편차 한꺼번에
 )
 
+#: **사슬 이전 생성기** (14.4, 2026-09-13). 사용자 결정으로 본선을 창별로 되돌리면서 생성기도 같이.
+#:
+#: 사슬 커밋(`0cbf7ff`, 09-12 01:06) 직전의 캐시 sbatch 와 대 보면 v32 와 v36 이 다른 것은
+#: **`--sibling-rotate smps_dev1` 하나뿐**이고 나머지 열넷(carrier-on·couple-ext·float-fill·
+#: power-scale-std·recipe-mix·smps-focus-off-p·sp-curves·sp-per-texture·standby-jitter-cap·
+#: state-mix·steady-crop·vtail·window-cycles·windows)은 전부 같다. 그래서 되돌림은 한 플래그다.
+#:
+#: ⚠ **이득은 무승부에 가깝다.** 가림까지 맞춘 짝(`cnn_v35` 끔 대 `cnn_v37` 켬)을 같은 채점기
+#: (`run_diag_rollback.py`)로 재면 SMPS 신원 +0.008 · on/off **−0.023** · 잔차 −0.3W 다.
+#: 판정 줄(on/off)로는 오히려 손해다. 그래도 되돌리는 것은 **사용자 결정**이다 (14.4).
+#: ⚠ 되돌리면 13.83.25 가 잡은 **합성 전용 단서**가 되살아난다 — `sibling_rotate` 는 그것을
+#: 원천에서 없애려고 넣은 것이었다 (13.84.16). 실패 ③(미니PC 미탐)이 다시 나오면 여기를 의심하라.
+V32: Dict[str, Any] = {k: v for k, v in V36.items() if k != "sibling_rotate"}
+
+#: V32 + **텍스처 표집 간격을 20초로** (14.12). 형제 편차를 *더하지* 않고, 이미 있는 기전의
+#: **구동이 뭉개진 것**을 푼다.
+#:
+#: 14.11 이 잰 것: 표류는 계통 전압에 대한 회로 응답이고 자유도 0 의 야코비(h15 까지)가
+#: 분산의 65%를 계산한다. 생성기는 그 응답을 13.2 부터 넣고 있었다 (텍스처 델타).
+#: 14.12 가 잰 것: **자를 맞추면** 합성 표류가 이미 실측의 0.75배(녹화 안)·0.92배(녹화 사이)이고
+#: 방향도 맞다 (실측 3차원 기저와 주각 1°·20°·45° · 그 안에 85.5%, 무작위는 18.8%).
+#: 모자란 몫의 정체는 `DEFAULT_STEP_S=60` 이다 — 텍스처가 60초 **중앙값**이라 파일 안 전압
+#: 산포가 원시 10초 블록의 0.73배로 뭉개져 있었다. 20초면 0.95 다.
+#:
+#: ⚠ **`sibling_rotate` 를 켜지 않는다.** 0.75배 위에 `smps_drift`(1.0)를 더하면 1.25배가 된다 —
+#:   `smps_dev1` 이 "실측의 12~42배" 가 된 것이 이 덧셈이다 ([[augmentation-can-erase-the-discriminant]]).
+#: ⚠ 텍스처가 280 -> 819개라 `SmpsCircuit` 캐시 키 공간이 2.9배다. 굽기가 느려질 수 있다 (13.10.5).
+V32T: Dict[str, Any] = dict(V32, vtex_step_s=20.0)
+
 #: V36 + **녹화별 대기 지문을 기록당 하나씩** (13.84.40).
 #: 실측 전부-OFF 배경의 파일 간 편차에서 꽂힌 기기 대기로 설명되는 몫을 빼면
 #: h9~h15 에 4.7~7.0mA 가 남는데 V36 은 1.3~1.5mA 밖에 안 준다 (계측계 잡음 참조 3개).
@@ -52,17 +81,28 @@ V36DP: Dict[str, Any] = dict(V36, sibling_rotate="smps_driftp")
 #: `seqraw_v1` 을 그대로 다시 만드는 설정 (대조군용).
 LEGACY: Dict[str, Any] = dict(carrier_apps=("oven",))
 
-PRESETS: Dict[str, Dict[str, Any]] = {"v36": V36, "v36r": V36R, "v36p": V36P,
+PRESETS: Dict[str, Dict[str, Any]] = {"v32": V32, "v32t": V32T, "v36": V36, "v36r": V36R, "v36p": V36P,
                                       "v36d": V36D, "v36d47": V36D47, "v36dp": V36DP,
                                       "legacy": LEGACY}
 
 
 def resolve(spec: str) -> Dict[str, Any]:
-    """프리셋 이름이나 JSON 을 설정 딕셔너리로."""
+    """프리셋 이름이나 JSON 을 설정 딕셔너리로.
+
+    ⚠ **모르는 이름을 JSON 으로 읽으려 하지 않는다** (14.8). HPC 는 git repo 가 아니라
+    파일을 손으로 골라 올리는데, `genopts.py` 를 빼먹고 올리면 `resolve('v32')` 가
+    `json.loads('v32')` 로 가서 `JSONDecodeError: Expecting value` 로 죽었다 — 진짜 원인
+    ("그 프리셋이 없다")이 메시지 어디에도 안 나온다. 979780 이 그렇게 날아갔다.
+    """
     if not spec:
         return dict(LEGACY)
     if spec in PRESETS:
         return dict(PRESETS[spec])
+    if not spec.lstrip().startswith(("{", "[")):
+        raise SystemExit(
+            "[genopts] 모르는 생성기 프리셋 %r — 있는 것: %s\n"
+            "  (JSON 을 주려면 '{' 로 시작해야 한다. 코드를 다 올렸는지 확인하라)"
+            % (spec, " ".join(sorted(PRESETS))))
     return json.loads(spec)
 
 
@@ -74,7 +114,8 @@ def build_synthesizer(opts: Dict[str, Any], npz_dir: str, time_split: str,
                                          STATE_MIX_PRESETS, STEADY_CROP_PRESETS)
     from src.synthesis.segment_pool import SegmentPool
     from src.synthesis.synthesizer import LoadSynthesizer
-    from src.synthesis.vtexture import DEFAULT_VTAIL_NPZ, set_default_vtail
+    from src.synthesis.vtexture import (DEFAULT_VTAIL_NPZ, set_default_step_s,
+                                        set_default_vtail)
 
     def _p(table, v):
         if not v:
@@ -100,6 +141,9 @@ def build_synthesizer(opts: Dict[str, Any], npz_dir: str, time_split: str,
         steady_crop=_p(STEADY_CROP_PRESETS, opts.get("steady_crop")),
         sibling_rotate=_p(SIBLING_ROTATE_PRESETS, opts.get("sibling_rotate")))
     set_default_vtail(DEFAULT_VTAIL_NPZ if opts.get("vtail") else None)
+    # 14.12 — 텍스처 표집 간격. 60초 중앙값이면 그보다 짧은 전압 변동이 뭉개져
+    # 합성 표류가 실측의 0.75배가 된다. `set_default_step_s` 주석에 측정표가 있다.
+    set_default_step_s(opts.get("vtex_step_s"))
     return LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=compute_gt_harmonics,
                            augmentor=aug, background=bool(opts.get("background")),
                            couple_ext=bool(opts.get("couple_ext")))
@@ -115,6 +159,20 @@ def check(opts: Dict[str, Any], gen) -> Sequence[str]:
     a = gen.augmentor
     if opts.get("sibling_rotate") and not getattr(a, "sibling_rotate", None):
         bad.append("sibling_rotate 가 안 걸렸다")
+    # ⚠ **끈 것도 확인한다** (14.4). v32 로 되돌릴 때 어딘가에서 형제 편차가 살아 있으면
+    #   되돌린 줄 알고 안 되돌린 캐시를 굽는다 ([[verify-the-gate-runs-that-path]] 의 반대 방향).
+    if not opts.get("sibling_rotate") and getattr(a, "sibling_rotate", None):
+        bad.append("sibling_rotate 를 안 걸었는데 증강기에 남아 있다")
+    # 14.12 — 텍스처 표집 간격이 실제로 걸렸는지. 이 상수가 합성 표류의 크기를 정한다.
+    want = opts.get("vtex_step_s")
+    if want:
+        try:
+            from src.synthesis.vtexture import default_library
+            n = len(default_library())
+        except Exception:
+            n = -1
+        if 0 <= n <= 400:
+            bad.append("vtex_step_s=%s 인데 텍스처가 %d개다 (60초면 280개) — 안 걸렸다" % (want, n))
     if opts.get("sp_curves") and not getattr(a, "_sp", None):
         bad.append("sp_curves 가 안 걸렸다 (processed_data/sp_curves.npz)")
     if opts.get("sp_per_texture") and not getattr(a, "_sp_tex", None):

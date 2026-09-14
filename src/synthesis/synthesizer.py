@@ -586,8 +586,9 @@ class LoadSynthesizer:
                         coupled_c[a] = layer_c[a]
                         continue
                     kappa = (v_true / v_ref_series[a]).astype(np.float32)
+                    # 14.25: 전력 쪽과 **반드시 같이** 상태를 넘긴다 — 안 그러면 P = V·I 가 깨진다.
                     coupled_c[a] = self.grid_sim.apply_cross_appliance_coupling(
-                        a, layer_c[a], kappa
+                        a, layer_c[a], kappa, gt_state_id[a]
                     )
                     # 저항 부하는 그 세션의 전압 텍스처를 차수마다 그대로 비춘다 (13.69).
                     # 배율(kappa) 뒤에 건다 — 텍스처는 전압 크기가 아니라 파형의 성질이다.
@@ -609,7 +610,10 @@ class LoadSynthesizer:
             #   저항성 P∝V^2 / SMPS P=일정 / 모터 P∝V^0.7
             for a in self.known_appliances:
                 kappa = (v_true / v_ref_series[a]).astype(np.float32)
-                gt_active_p[a] = self.grid_sim.apply_power_voltage_response(a, gt_active_p[a], kappa)
+                # 14.25: 상태별 지수 덮어쓰기를 위해 `gt_state_id` 를 넘긴다. 표가 비면 항등이다.
+                gt_active_p[a] = self.grid_sim.apply_power_voltage_response(
+                    a, gt_active_p[a], kappa, gt_state_id[a])
+                # 대기는 상태가 0 이라 덮어쓰기가 안 걸린다 — 옛 경로 그대로.
                 gt_standby_p[a] = self.grid_sim.apply_power_voltage_response(a, gt_standby_p[a], kappa)
                 # 정답 고조파는 '활성 구간만' 담는다. 꺼진 구간은 0 이어야
                 # gt_is_on / gt_target_power_w 와 모순이 생기지 않는다.

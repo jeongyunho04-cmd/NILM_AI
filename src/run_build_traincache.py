@@ -21,6 +21,10 @@ def main() -> int:
     ap.add_argument("--window-cycles", type=int, default=3600)
     ap.add_argument("--split", default="train", choices=["train", "holdout", "all"])
     ap.add_argument("--workers", type=int, default=11)
+    ap.add_argument("--shard", default="", metavar="K/N",
+                    help="청크 목록의 K/N 번째 토막만 굽는다 (14.13). 노드 여러 대로 나눠 굽고 "
+                         "run_merge_traincache 로 이어붙이면 단일 노드와 비트 동일하다. "
+                         "⚠ --windows/--chunk/--seed 는 **전체 기준** 그대로 줘야 번호가 안 밀린다")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--exclude-activation-files", default="",
                     help='녹화 단위 홀드아웃 (12.18절). JSON 딕셔너리, {가전: [녹화 stem]}')
@@ -188,8 +192,15 @@ def main() -> int:
         print(f"  ** 형제 전용 편차 '{a.sibling_rotate}' (13.84.8 ② · 13.84.16): "
               + ", ".join(f"{k}={{{', '.join(f'{kk}={vv}' for kk, vv in sorted(d.items()))}}}"
                           for k, d in sorted(srot.items())) + " **")
+    shard = None
+    if a.shard:
+        try:
+            k, n = (int(x) for x in a.shard.replace(":", "/").split("/"))
+        except Exception:
+            raise SystemExit("[traincache] --shard 는 K/N 꼴이어야 한다 (예: 0/2). 받은 값 %r" % a.shard)
+        shard = (k, n)
     build_cache(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
-                time_split=a.split, seed=a.seed, n_workers=a.workers,
+                time_split=a.split, seed=a.seed, n_workers=a.workers, shard=shard,
                 exclude_activation_files=excl,
                 dither_amp=a.dither_amp, dither_phase_deg=a.dither_phase_deg,
                 recipe_mix=mix,

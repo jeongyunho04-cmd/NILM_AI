@@ -39,8 +39,9 @@ from src.evaluation import (
     score_appliances, summarize, total_power_residual,
 )
 from src.model.inputs import (ZERO_EVEN_HARMONICS, FINE_CYCLES, FINE_LAYOUT,
-                             FINE_VOLT0, TARGET_LOOKAHEAD, VOLT_ORDERS, WIDE_CHANNELS,
-                             WIDE_VOLT0, build_inputs)
+                             FINE_VOLT0, TARGET_LOOKAHEAD, V_CENTER, V_SPAN,
+                             VOLT_ORDERS, WIDE_CHANNELS,
+                             WIDE_VOLT0, build_inputs, RAW_CHANNELS)
 from src.synthesis.dataset import chunk_seed
 from src.model.traincache import CachedWindows
 from src.model.losses import (LossWeights, NILMLoss, PHASE_COHERENT_EVEN,
@@ -56,7 +57,21 @@ HOLDOUT_DIR = "processed_data/holdout60"
 
 
 class SynthBatchDataset(Dataset):
-    """실시간 합성. 12.1절 측정대로 캐시보다 워커가 낫다 (창 재사용 0).
+    """실시간 합성 (창 재사용 0).
+
+    ⚠⚠ **본선 학습에 쓰지 마라 — 캐시보다 50배 느리다** (14.9, 2026-09-13).
+    여기 원래 "12.1절 측정대로 캐시보다 워커가 낫다" 고 적혀 있었는데 **13.10.5 가 그것을
+    이미 뒤집었다.** 13.2 의 회로모델 델타(`SmpsCircuit`, `randomize_r=True` 라 창마다
+    캐시 미스)가 생성기를 430 -> 56창/초로 **10배** 늦췄다. 12.1 은 그 전 세대 숫자다.
+    ```
+    캐시    30만창 한 번 굽기 + 에폭당 5만창 x 300에폭 = 창 재사용 50.0회
+            HPC 64코어 굽기 19분 + 학습 19분          = ~40분
+    실시간  5만창 x 300에폭 = 1,500만창을 매번 새로    = 캐시의 50배 = 16시간+
+    ```
+    979793 이 이 경로로 나갔다가 **14분에 1에폭도 못 끝내고** 취소됐다.
+    쿼터(79.5G/100G) 때문에 GPFS 에 캐시를 못 두면 `/dev/shm` 에 굽는다
+    (`patches/cnn_vexp2.sbatch`). 이 경로는 **작은 진단·항등검정 전용**이다.
+    [[derived-limits-outlive-their-reason]] [[legacy-artifacts-shadow-new-files]]
 
     **배치 단위로 돌려준다** (`DataLoader(batch_size=None)`). 창 1개씩 변환하면
     numpy 호출 오버헤드가 지배해 261 win/s 까지 떨어진다 — 생성기 자체(2,700 win/s)의
@@ -65,10 +80,22 @@ class SynthBatchDataset(Dataset):
     넘으므로 IPC 도 5배 가볍다.
     """
 
-    def __init__(self, n_batches: int, batch_size: int, seed: int):
+    def __init__(self, n_batches: int, batch_size: int, seed: int,
+                 gen_spec: str = "v32", recipe_mix: str = "steady2",
+                 smps_focus_off_p: float = 0.4):
         self.n_batches = n_batches
         self.bs = batch_size
         self.seed = seed
+        #: 생성기 설정 (14.8). ⚠ **이 경로는 오래 맨몸이었다** — `LoadSynthesizer(segment_pool=pool)`
+        #: 만 만들어 `cache_v32.sbatch` 가 캐시에 건 설정 **열하나가 빠져 있었다**
+        #: (couple_ext · sp_curves · sp_per_texture · vtail · float_fill · steady_crop ·
+        #:  standby_jitter_cap · state_mix · power_scale_std, 그리고 창 층의 recipe_mix ·
+        #:  smps_focus_off_p). 13.84.27 이 `run_build_seqraw` 의 **같은 결함**을 찾아
+        #: `genopts.py` 를 만들었는데 여기는 안 고쳐져 있었다.
+        #: [[derive-commands-from-config-not-prose]] [[verify-the-gate-runs-that-path]]
+        self.gen_spec = gen_spec
+        self.recipe_mix = recipe_mix
+        self.smps_focus_off_p = float(smps_focus_off_p)
         self.gen = None
 
     def __len__(self) -> int:
@@ -77,15 +104,27 @@ class SynthBatchDataset(Dataset):
     def _ensure(self):
         if self.gen is not None:
             return
+        import json as _json
         from src.synthesis.dataset import NILMBatchGenerator
-        from src.synthesis.segment_pool import SegmentPool
-        from src.synthesis.synthesizer import LoadSynthesizer
+        from src.synthesis.genopts import build_synthesizer, check, describe, resolve
         # 시드는 여기서 걸지 않는다 - `__getitem__` 이 배치 번호로 건다.
-        pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
+        opts = resolve(self.gen_spec)
+        syn = build_synthesizer(opts, "processed_data/npz", "train")
+        bad = check(opts, syn)
+        if bad:
+            raise SystemExit("[train_cnn] 생성기 설정이 안 걸렸다: " + " / ".join(bad))
+        mix = None
+        if self.recipe_mix:
+            from src.run_recipe_mix_probe import PRESETS
+            mix = (PRESETS[self.recipe_mix] if self.recipe_mix in PRESETS
+                   else _json.loads(self.recipe_mix))
         self.gen = NILMBatchGenerator(
-            segment_pool=pool, window_size_cycles=WINDOW_CYCLES,
-            synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False),
-            compute_gt_harmonics=False)
+            segment_pool=syn.pool, window_size_cycles=WINDOW_CYCLES,
+            synthesizer=syn, compute_gt_harmonics=False,
+            recipe_mix=mix, smps_focus_off_p=self.smps_focus_off_p)
+        print("[train_cnn] 실시간 합성 생성기 '%s': %s · recipe_mix=%s · smps_focus_off_p=%.2f"
+              % (self.gen_spec, describe(opts), self.recipe_mix, self.smps_focus_off_p),
+              flush=True)
 
     def __getitem__(self, i: int):
         self._ensure()
@@ -95,7 +134,10 @@ class SynthBatchDataset(Dataset):
         g, n = self.gen, self.bs
         k = len(g.appliance_list)
         ti = g.target_index
-        xs = np.empty((n, 33, WINDOW_CYCLES), np.float32)
+        # ⚠ **33 이 박혀 있었다** (14.8). 13.26 이 전압 고조파 12채널을 더해 `RAW_CHANNELS`
+        #   가 45 가 됐는데 이 경로만 안 따라왔다 — 그 뒤로 한 번도 안 돌았다는 뜻이다.
+        #   상수를 박지 말고 `inputs.RAW_CHANNELS` 를 쓴다.
+        xs = np.empty((n, RAW_CHANNELS, WINDOW_CYCLES), np.float32)
         yp = np.empty((n, k), np.float32); yo = np.empty((n, k), np.float32)
         ypl = np.empty((n, k), np.float32); ys = np.empty((n, k), np.float32)
         yst = np.empty((n, k), np.int64)
@@ -193,12 +235,28 @@ def vswap(fine: torch.Tensor, wide: torch.Tensor, p: float) -> None:
     wide[:, WIDE_VOLT0:WIDE_VOLT0 + nv] = wide[sel][:, WIDE_VOLT0:WIDE_VOLT0 + nv]
 
 
+def _vnorm_exp(apps):
+    """기기별 `I/P` 의 전압 지수 `(i_exp − p_exp)` (K,) — 14.28.
+
+    저항 `(1.0, 2.0)` · SMPS `(−1.0, 0.0)` 은 둘 다 **−1**, 모터 `(0.7, 0.7)` 과
+    수동 `(1.0, 1.0)` 은 **0** 이다. 균일 −1 을 걸면 모터에 틀린 물리를 가르친다.
+    """
+    from src.preprocessing.file_registry import get_load_class
+    from src.synthesis.grid_simulator import GridSimulator
+    t = GridSimulator()._LOAD_EXPONENTS
+    return torch.tensor([float(t[get_load_class(a)][0] - t[get_load_class(a)][1])
+                         for a in apps], dtype=torch.float32)
+
+
 def to_targets(batch, dev):
     (fine, wide, yp, yo, ypl, ys, yst, oh, pn, pobs, zg) = [
         b.to(dev, non_blocking=True) for b in batch]
     return fine, wide, {
         "y_power": yp, "y_on": yo, "y_plugged": ypl, "y_standby": ys, "y_state": yst,
         "obs_harm": oh, "p_noise": pn, "p_observed": pobs, "harm_offset": None,
+        # 14.26 — 창 전압비 V/V_CENTER. `L_harm` 의 지문을 이것으로 나눈다 (`--harm-sig-vnorm`).
+        #   세밀 채널 25 가 `(v − V_CENTER)/V_SPAN` 이다 (`net.V_CH_FINE`).
+        "vrel": (fine[:, 25].mean(-1) * V_SPAN + V_CENTER) / V_CENTER,
         # 13.55 — 이 창의 선로 저항 [Ω]. 옛 캐시면 NaN 이고 손실이 알아서 건너뛴다.
         "log_z": torch.log(zg[:, 0].clamp(min=1e-3)),
     }
@@ -263,7 +321,20 @@ def main() -> int:
     ap.add_argument("--width", type=float, default=1.0, help="채널 폭 배수 (용량 부족 시 2)")
     ap.add_argument("--workers", type=int, default=11)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--vexp", action="store_true",
+                    help="전압 지수를 구조에 박는다 (14.7). `p_raw *= (V/V_CENTER)^e_k` 로 "
+                         "저항 e=2 · SMPS 0 · 유도기 0.6. 모델은 상태 명목값은 기울기 1.00 으로 "
+                         "잘 내는데 **같은 상태 안의 V² 의존**을 0.33~0.83 로만 읽어 순 지수가 "
+                         "0.85 다(물리는 2). 저전압에서 과예측한다 (14.6). 끄면 비트 동일")
     ap.add_argument("--w-harm", type=float, default=0.1)
+    ap.add_argument("--harm-sig-vnorm", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="**기본 켜짐 (14.29 에서 채택).** L_harm 의 지문에 창 전압비를 "
+                         "기기별 지수로 건다 (14.26·14.28). sig=median(I/P) 인데 I=P/V 라 "
+                         "I/P ∝ V^(i_exp−p_exp) 다 — 상수 sig 는 저항·SMPS 에 power ∝ V¹ 을 "
+                         "밀어 모델 지수를 1 에 앉힌다 (물리 2). 켜면 3/3 시드에서 지수가 "
+                         "2 로 가고 실측 절대잔차가 41->24W 로 준다. 모터는 지수 0 이라 "
+                         "보정이 안 걸린다. `--no-harm-sig-vnorm` 이면 옛 판과 비트 동일")
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
     ap.add_argument("--w-state-power", type=float, default=0.0, metavar="W",
                     help="상태별 전력 출력을 그 상태의 실제 전력에 묶는 항 (12.35). "
@@ -361,6 +432,15 @@ def main() -> int:
     ap.add_argument("--holdout", default=HOLDOUT_DIR, metavar="DIR",
                     help="합성 홀드아웃 디렉터리. TARGET_LOOKAHEAD 를 바꾸면 라벨 시점이 "
                          "달라지므로 홀드아웃도 그 값으로 다시 만들어야 한다 (12.45)")
+    ap.add_argument("--gen", default="v32", metavar="NAME|JSON",
+                    help="**실시간 합성**(`--cache none`)일 때의 생성기 설정 (14.8). "
+                         "`genopts.PRESETS` 의 이름이나 JSON. 기본 'v32' = 사슬 이전 판 "
+                         "(= v36 − sibling_rotate). ⚠ 캐시를 쓰면 이 값은 무시된다 — "
+                         "그때는 캐시를 구울 때의 설정이 정본이다")
+    ap.add_argument("--recipe-mix", default="steady2", metavar="NAME|JSON",
+                    help="실시간 합성의 **창 층** 레시피 믹스. `cache_v32.sbatch` 와 같은 기본값")
+    ap.add_argument("--smps-focus-off-p", type=float, default=0.4, metavar="P",
+                    help="실시간 합성의 SMPS 집중 창 비율. `cache_v32.sbatch` 와 같은 기본값")
     ap.add_argument("--cache", default="cache/train60",
                     help="학습 캐시 경로. 'none' 이면 실시간 합성 (12.8.2절 참조)")
     ap.add_argument("--zero-wide-channels", default="", metavar="LIST",
@@ -478,7 +558,8 @@ def main() -> int:
                     fine_dropout=a.fine_dropout,
                     prior_kappa=a.prior_kappa, prior_beta=a.prior_beta,
                     fine_channels=a.fine_channels,
-                    aux_z=(a.w_z > 0)).to(dev)
+                    aux_z=(a.w_z > 0),
+                    vexp=a.vexp).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
     crit = NILMLoss(
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
@@ -490,6 +571,9 @@ def main() -> int:
         off_detach_praw=a.off_detach_praw,
         signatures_state=(torch.from_numpy(sig_state) if a.state_signatures else None),
         harm_even_magnitude=a.harm_even_magnitude,
+        harm_sig_vnorm=a.harm_sig_vnorm,
+        # 14.28 — 기기별 `I/P` 전압 지수. 모터는 0 이라 보정이 안 걸린다.
+        harm_vnorm_exp=(_vnorm_exp(apps) if a.harm_sig_vnorm else None),
         even_coherent=(torch.tensor(
             [1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
             dtype=torch.float32) if a.harm_even_by_class else None),
@@ -539,7 +623,9 @@ def main() -> int:
         dl = None
     else:
         print(f"학습 데이터: 실시간 합성 (워커 {a.workers}) — 창 재사용 0")
-        dl = DataLoader(SynthBatchDataset(n_batches, a.batch, a.seed), batch_size=None,
+        dl = DataLoader(SynthBatchDataset(n_batches, a.batch, a.seed,
+                                          gen_spec=a.gen, recipe_mix=a.recipe_mix,
+                                          smps_focus_off_p=a.smps_focus_off_p), batch_size=None,
                         num_workers=a.workers, persistent_workers=a.workers > 0,
                         prefetch_factor=2 if a.workers else None,
                         pin_memory=(dev == "cuda"))
@@ -607,6 +693,8 @@ def main() -> int:
                     # `net.py` 가 conv 입력 채널로 직결한다.
                     "wide_channels": WIDE_CHANNELS,
                     "aux_z": bool(model.aux_z),
+                    # ⚠ **추론에도 써야 한다** — 지수를 박고 배운 모델이다 (14.7).
+                    "vexp": bool(model.vexp),
                     # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)

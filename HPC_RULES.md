@@ -136,6 +136,70 @@ sinfo -N -h -o '%P|%n|%C|%t' -p gpu1,gpu2,gpu3,gpu4,gpu5,gpu6 | awk -F'|' '
 ⇒ 실제로 그날 `-c 48` 세 작업 중 둘은 100초 안에 gpu2(n057)·gpu3(n071)에 잡혔고,
   셋째는 `QOSMaxCpuPerNode` 로 멈췄다. **40 으로 고쳐 내리자 2분 만에 n017(gpu6)** 에 잡혔다.
 
+### ⚠⚠ GPU 작업이면 **코어로 세지 마라 — GPU 로 세라** (2026-09-13)
+
+위 awk 는 **코어만 센다.** GPU 를 쓰는 작업에서 그것으로 판단하면 틀린다.
+2026-09-13 에 `>=48코어 6노드, 그중 셋이 gpu3(A6000 Ada)` 를 보고 "자리 있다" 고 판단해
+`-p gpu3,gpu4,gpu5 -c 48 --gres=gpu:2` 로 냈더니 **내일 00:05 시작**으로 잡혔다. 이유:
+```
+n066  CfgTRES  cpu=56 gres/gpu:a6000ada=4
+      AllocTRES cpu=4  gres/gpu=4            <- 코어 4개만 쓰면서 GPU 4장을 다 잡았다
+n068 · n070 도 같다. gpu3 10노드 전부 GPU 4/4 사용중.
+```
+**코어 4개짜리 GPU 작업들이 클러스터의 GPU 를 다 쥐고 있다.** 그래서 코어 여유와 GPU 여유가
+**반대로 움직인다** — 그날 실측:
+```
+GPU 4장 비었는데 코어 4~8 :  n093~n100 · n102~n106 (a6000 13노드)
+코어 40~52 비었는데 GPU 0 :  n066 · n068 · n070 (a6000ada)
+둘 다 있는 곳            :  n059(gpu2 a10, GPU4 · 코어48) · n091(gpu4 a6000, GPU2 · 코어40)
+```
+
+**GPU 여유까지 세는 질의** (`%G` 는 설정값이라 쓸 수 없다 — `AllocTRES` 를 봐야 한다):
+```bash
+NODES=$(sinfo -h -N -o '%n %t' -p gpu1,gpu2,gpu3,gpu4,gpu5,gpu6 | awk '$2=="mix"||$2=="idle"{print $1}' | sort -u)
+for N in $NODES; do
+  S=$(scontrol show node $N)
+  T=$(echo "$S" | grep -oE 'gres/gpu:[a-z0-9]+=[0-9]+' | head -1)
+  CG=$(echo "$T" | cut -d= -f2); GT=$(echo "$T" | sed 's|gres/gpu:||;s|=.*||')
+  AG=$(echo "$S" | grep -oE 'AllocTRES=[^ ]*' | grep -oE 'gres/gpu=[0-9]+' | cut -d= -f2)
+  C=$(echo "$S" | grep -oE 'CPUAlloc=[0-9]+' | cut -d= -f2)
+  CT=$(echo "$S" | grep -oE 'CPUTot=[0-9]+' | cut -d= -f2)
+  P=$(echo "$S" | grep -oE 'Partitions=[^ ]*' | cut -d= -f2)
+  F=$((CG-${AG:-0}))
+  FMT='  %-6s %-6s %-10s GPU여유 %d/%d · 코어여유 %d\n'
+  [ "$F" -ge 2 ] && printf "$FMT" "$N" "$P" "$GT" $F $CG $((CT-C))
+done | sort -k3
+```
+⇒ **GPU 작업의 backfill 확률은 `min(GPU 여유 충족 노드, 코어 상한 충족 노드)` 다.**
+
+### GPU 노드에서 캐시를 굽지 마라 — CPU 가 다르다 (2026-09-13)
+
+경합이 아니라 **CPU 자체가 다르다.** n037 은 우리 40코어 말고 8코어만 남았는데도(= 다른 부하
+거의 없음) 절반 속도였다:
+```
+963826  cpu2 노드(256코어)  64코어  213 win/s  = 3.33 win/s/코어   30만창 23분 30초
+979865  gpu6 노드( 48코어)  40코어   78 win/s  = 1.95 win/s/코어   30만창 ~70분
+```
+그래서 GPU 노드 안에서 코어를 40 -> 48 로 늘려봐야 1.2배다. **굽기는 cpu2 에서** 하는 것이
+옳다 — 다만 `/dev/shm` 은 노드 국소라 그러려면 캐시를 GPFS 에 둘 자리(22.8G)가 있어야 한다.
+
+### 자원은 실측으로 잡아라 — 예상시간의 1.5배, 램은 잰 값 (2026-09-13, 사용자 지시)
+
+```
+-t     예상의 **1.5배**. 짧을수록 backfill 이 잘 문다. 2.5시간을 부르면 그만큼 늦게 잡힌다
+--mem  **실측 MaxRSS** 로. 캐시 크기가 아니라 **굽기 워커**가 진짜 소비자다
+-c     파티션 상한표(위)를 보고 고르되, GPU 작업이면 GPU 여유부터 센다
+```
+실측 (`sacct -j <id> --format=JobID,AllocCPUS,ReqMem,MaxRSS,Elapsed`, `.batch` 단계에 있다):
+```
+963826 굽기 64코어  ReqMem 100G  MaxRSS 113GB  23:30  완료
+963828 학습 16코어  ReqMem  96G  MaxRSS 104GB  32:06  완료
+979865 굽기 40코어  ReqMem 200G  MaxRSS  54GB          <- 200G 는 과했다
+```
+⚠ **MaxRSS 는 공유 페이지를 프로세스마다 세서 부풀려진다** — 113GB 가 `--mem=100G` 안에서
+완료된 것이 증거다. 상한이 아니라 **순위**로 읽어라. 굽기+학습 한 작업이면 **100G** 면 된다.
+워커당 RSS 는 13.2 이후 330MB 가 아니라 **~1.4GB** 다.
+
 **한계는 노드 크기 *와* 노드당 QOS 상한 둘이다.** `-N 1` 이면 둘 중 작은 쪽을 못 넘고,
 더 쓰려면 **노드를 늘리거나 작업을 나눠야 한다**.
 
@@ -359,12 +423,27 @@ tar czf - src patches | ssh gate1_External 'cd ~/NILM_AI && tar xzf -'     # 8MB
 4. **⚠ 관문으로 작업을 죽이지 마라 — 그 관문이 없어도 되는 것이라면.**
    쿼터 관문이 n055 에서 `mmlsquota: GPFS is down on this node` 로 실패해 `set -e` 가
    작업을 6초 만에 죽였다. 파일 읽기는 멀쩡했고 우리가 쓰는 건 10MB 였다. 비치명으로 바꿨다.
-5. **⚠⚠ 스크립트 **끝**에서 `mmlsquota` 를 부르지 마라 — 세 번 같은 자리에서 당했다.**
+5. **⚠⚠ 계산 노드 스크립트에서 `mmlsquota` 를 **어디서도** 부르지 마라 — 네 번 당했다.**
    969002 는 앞의 관문에서(위 4번), **969137·969590 은 끝단의 정보용 한 줄**에서 `FAILED` 로 찍혔다.
    셋 다 계산은 멀쩡히 끝나고 체크포인트도 다 저장된 뒤였다. 노드의 GPFS 클라이언트 데몬이
    작업 끝 무렵 무응답이 되면(`Failed to connect to file system daemon`) `set -euo pipefail` 아래에서
    그 한 줄이 종료코드를 바꾼다. **쿼터는 로그인 노드에서 따로 본다.** 계산 노드 스크립트에는 넣지 않는다.
    `|| echo` 로 감싸는 것으로는 부족했다 — 파일시스템이 죽으면 그 뒤 줄의 기록 자체가 안 남는다.
+
+   **⚠ 2026-09-14 네 번째 (980508 의 앞판 980495).** 내가 이 규칙을 *"**끝단**에 안 두면 된다"* 로
+   읽고 **관문 자리(스크립트 중간)** 에 넣었다. 배열 작업 두 판이 **1초 만에 종료코드 50** 으로
+   죽었고 **stderr 에 아무것도 안 남았다** (`.out` 66바이트 = 머리줄뿐).
+   ```bash
+   USED=$(/usr/lpp/mmfs/bin/mmlsquota --block-size auto 2>/dev/null | awk ... | tr ...)
+   ```
+   `set -euo pipefail` 아래에서 **죽는 것은 대입문 자체**라 `2>/dev/null` 도 `${USED:-?}` 도
+   소용이 없다. 로그인 노드에서 같은 줄을 돌리면 rc=0 이라 **재현도 안 된다** —
+   계산 노드에서만 죽는다.
+
+   ⇒ 자리(끝/중간/앞)의 문제가 아니라 **계산 노드에서 부르는 것** 자체가 문제다.
+   쿼터는 **제출 전에 로그인 노드에서** 보고, sbatch 주석에 필요한 용량을 적어 둔다.
+   ⚠ 종료코드 **50** 을 보면 이것부터 의심하라. [[verify-the-gate-runs-that-path]] 의 반대편 —
+   **관문이 작업을 죽이는 경우**다 (§7-4 와 같은 계열).
 6. **epoch 마다 체크포인트를 덮어쓴다.** 짧은 시간을 걸어 backfill 에 끼는 대가다.
 7. **`trap ... EXIT` 로 램을 반납한다.**
 8. **끝나면 `sacct` 의 `State` 만 보고 판정하지 마라.** 위 이유로 `FAILED` 인데 결과가 온전할 수 있다.
@@ -501,3 +580,35 @@ TryConn '140.83.83.165' 8000 8000
 curl -s https://www.cloudflare.com/cdn-cgi/trace | grep -E '^(ip|warp)='   # warp=off 여야 한다
 ```
 우리 쪽이 그 포트를 못 내보내는 것인지 목적지 문제인지는 `portquiz.net` 이 가른다 (어느 포트로든 받아 준다).
+
+---
+
+## 9. 대기열이 막히면 **기다리지 말고 파티션을 넓혀라** (2026-09-13)
+
+978829 가 `Reason=Resources` 로 **52분을 섰다.** 그동안 gpu2 의 `n059` 는
+`CPUAlloc=0 · FreeMem=867GB · Gres=gpu:a10:4` 로 **통째로 놀고 있었다.**
+막은 것은 자원이 아니라 `#SBATCH -p gpu3,gpu4` 였다.
+
+```bash
+scontrol update JobId=<id> Partition=gpu2,gpu3,gpu4     # 대기 0초 만에 잡혔다
+```
+`scontrol update` 는 **대기 나이를 안 잃는다** — 취소 후 재제출보다 낫다.
+
+**진단은 두 줄이다.**
+```bash
+squeue -u $USER -o '%.8i %.2t %.10M %.16R %.14P'        # Reason=Resources 인가
+sinfo -h -N -o '%n|%P|%C|%t' | while IFS='|' read n p c t; do \
+  echo "$(echo $c|cut -d/ -f2) $n $p $t"; done | sort -rn | head    # 빈 코어가 어디 있나
+```
+`%C` 는 `할당/유휴/기타/전체` 다. **두 번째 칸이 유휴 코어**다.
+`sinfo -o %F` 의 `NODES(A/I/O/T)` 만 보면 안 된다 — 코어가 남아도 **노드에 무엇이든
+하나 올라가 있으면 A(allocated) 로 센다.** gpu3 가 `10/0/0/10` 인데 노드마다
+유휴 코어가 52개였다.
+
+**고른 뒤 확인할 것:** 그 파티션의 `MaxTRESPerNode` 코어 상한이 우리 `-c` 이상인가
+(§2). gpu2 48 · gpu3 48 · gpu4 52 는 `-c 48` 이 서고, **gpu1·gpu6 은 40 이 끝**이라
+`-c 48` 이면 영원히 안 잡힌다 — 그 경우 `-c 40` 으로 같이 낮춰야 한다.
+
+⚠ **속도 때문에 좁히지 마라.** `gpu3,gpu4`(A6000)가 gpu6(A10)보다 1.36배 빠르지만
+한 판이 ~50분이다. 1.5시간을 기다려 1.36배를 얻는 것은 손해다. **빠른 칸을
+선호하되 느린 칸도 후보에 둔다** — SLURM 이 알아서 먼저 나는 자리에 넣는다.

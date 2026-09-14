@@ -26,6 +26,30 @@ SEQ_MIX: Dict[str, float] = {
 }
 
 
+#: **고전력 판** (13.84.39). 열 캐시가 창 캐시보다 고전력을 절반만 보여준다 — 재서 맞춘 값이다.
+#:
+#: 전체 창 중 그 상태를 모델이 실제로 보는 비율 (창 캐시 `train60_v25` 대 열 캐시 `seqraw_v1`):
+#:     오븐 500W+   15.57% -> 7.64%  (0.5배)   ·  주전자 800W+  18.71% -> 9.65%  (0.5배)
+#:     핫플 200W+   16.98% -> 9.64%  (0.6배)   ·  드라이기 400W+ 17.70% -> 10.79% (0.6배)
+#:     에어컨 200W+  2.01% -> 13.30% (**6.6배**)
+#: 총전력도 1500W 넘는 창이 20.5% -> 6.6% 로 3.1배 얇고, 동시 3~5대가 51.2% -> 27.0% 다.
+#: 그래서 **저항 기기 넷만** 올려 노출을 되돌리고 SMPS 넷(가르는 것이 목표)은 **그대로 둔다**.
+#: 에어컨은 반만 내린다 — 창 캐시의 2.01% 는 [[optimizing-a-mix-can-starve-a-class]] 가
+#: 경고한 굶은 쪽이라 거기까지 갈 이유가 없다.
+#:
+#: ⚠ 이것은 **듀티를 되돌리는 것이 아니다.** 열 캐시의 핫플 휴지 52.6% · 오븐 팬조명 60.4% 는
+#: 등록부 실측(핫플 통전 23.3% · 오븐 히터 31.3%)에 **창 캐시보다 가깝다** — 창 캐시는 핫플
+#: 휴지가 0.0% 였다 ([[hotplate-duty-pause-is-on]] 가 적어둔 생성기 결함). 그건 건드리지 않는다.
+SEQ_MIX_HP: Dict[str, float] = {
+    "laptop_charger": 0.55, "minipc": 0.55, "beam_projector": 0.45, "fan": 0.35,   # 그대로
+    "hotplate": 0.60, "oven": 0.70, "electiric_kettle": 0.55, "hair_dryer": 0.50,  # 노출 x1.6~2.0
+    "air_conditioner": 0.15,                                                        # 6.6배 -> 3.3배
+}
+
+#: 이름으로 고르는 판. `run_build_seqraw --mix` 가 쓴다.
+MIXES: Dict[str, Dict[str, float]] = {"seq": SEQ_MIX, "hp": SEQ_MIX_HP}
+
+
 def random_schedules(apps: Sequence[str], n_cycles: int, rng: np.random.RandomState,
                      min_on_s: float = 20.0, max_on_s: float = 240.0,
                      min_off_s: float = 15.0, max_off_s: float = 180.0,

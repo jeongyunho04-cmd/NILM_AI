@@ -15,31 +15,6 @@ fcm12.py — v12g 회로 모델의 시뮬레이터/생성기 (fcm.py 대체, 202
 - 결합: V_term = V_src − (R_line + jωL_line)·I_tot 을 참전류로 2~3회 고정점. 선형화(Y 행렬)는 쓰지 않는다 (h9+ 발산, §11.5).
 """
 import numpy as np, pickle
-
-
-def _numpy2_shim():
-    """이 피클들은 **numpy 2.x 로 절였다.** 여기는 1.24 라 `numpy._core` 가 없다.
-
-    순수 재명명이라 값은 안 변한다 — `numpy._core.multiarray` 는 1.x 의
-    `numpy.core.multiarray` 와 같은 것이고 2.0 에서 비공개로 옮기며 이름만 바뀌었다.
-    이미 있으면 아무것도 안 한다 (numpy 2.x 에서 진짜 모듈을 덮으면 안 된다).
-
-    ⚠ 이것이 없으면 `ModuleNotFoundError: No module named 'numpy._core'` 로
-      **합성·홀드아웃 생성과 테스트 44개가 통째로 죽는다.** 같은 shim 의 사본이
-      `run_diag_driftcirc12.load12` 에 있었는데, 원인이 여기이므로 읽는 자리로 옮긴다.
-    """
-    import sys
-    try:
-        import numpy._core  # noqa: F401
-        return
-    except ImportError:
-        pass
-    for sub in ("", ".multiarray", ".umath", "._multiarray_umath", ".numeric"):
-        try:
-            sys.modules["numpy._core" + sub] = __import__(
-                "numpy.core" + sub, fromlist=["x"])
-        except Exception:
-            pass
 try:                                   # 패키지(circuit_model.fcm12)로도, 단독 실행으로도 되게
     from .circuit12 import sim_harmonics, F
 except ImportError:
@@ -61,7 +36,6 @@ class FCM:
 
     @classmethod
     def from_pickle(cls, path):
-        _numpy2_shim()
         d = pickle.load(open(path, 'rb'))
         Rs = list(d.get('R_files', {}).values()) or [d['params'][1]]
         # 'R_range' 가 있으면 그것이 우선 — 2Hz 녹화에서 본 NTC 상태 범위(워밍업 R_cold → R_hot)까지 넓힌 값 (2026-09-06, 설계 13.3)

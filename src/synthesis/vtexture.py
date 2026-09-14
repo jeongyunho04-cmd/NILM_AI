@@ -344,15 +344,44 @@ def set_default_vtail(path: Union[str, Path, None]) -> None:
     _DEFAULT = None
 
 
+#: 이 프로세스의 `default_library()` 표집 간격. `set_default_step_s` 로 바꾼다.
+_DEFAULT_STEP_S: float = DEFAULT_STEP_S
+
+
+def set_default_step_s(step_s: Union[float, None]) -> None:
+    """`default_library()` 의 텍스처 표집 간격 (14.12). 이미 만든 라이브러리는 버린다.
+
+    ⚠ **이 상수가 합성 표류의 크기를 정한다.** 텍스처는 `step_s` 구간의 **중앙값**이라
+    그보다 짧은 전압 변동이 뭉개진다. 표류는 회로의 전압 응답이므로(14.11, 자유도 0 에서
+    R^2 0.654) 전압이 뭉개진 만큼 표류도 작아진다. 충전기 녹화에서 잰 값:
+    ```
+    step_s   텍스처   파일 안 전압 산포 / 원시 10초 블록
+      60     280           **0.73**   <- 예전 기본값. 합성 표류도 실측의 0.75배였다
+      30     551             0.88
+      20     819             0.95
+      10    1628             1.04
+    ```
+    13.84.52 계열이 "생성기가 표류를 못 만든다" 고 본 것의 상당 부분이 이것이다 —
+    기전은 13.2 부터 있었고 **구동이 뭉개져 있었다**. [[check-the-generator-can-make-the-failing-window]]
+    """
+    global _DEFAULT_STEP_S, _DEFAULT
+    v = DEFAULT_STEP_S if step_s is None else float(step_s)
+    if v != _DEFAULT_STEP_S:
+        _DEFAULT = None
+    _DEFAULT_STEP_S = v
+
+
 def default_library(npz_dir: Union[str, Path] = DEFAULT_NPZ_DIR,
-                    vtail: Union[str, Path, None] = None) -> VoltageTextureLibrary:
+                    vtail: Union[str, Path, None] = None,
+                    step_s: Union[float, None] = None) -> VoltageTextureLibrary:
     """프로세스 안에서 한 번만 읽는다 (워커마다 한 번).
 
     `vtail` 은 `from_npz_dir` 과 같다 — **기본은 꺼짐**. 첫 호출이 캐시를 굳히므로 켜려면
-    프로세스에서 처음 부를 때 넘겨야 한다.
+    프로세스에서 처음 부를 때 넘겨야 한다. `step_s` 도 같다 (`set_default_step_s`).
     """
     global _DEFAULT
     if _DEFAULT is None:
         _DEFAULT = VoltageTextureLibrary.from_npz_dir(
-            npz_dir, vtail=_DEFAULT_VTAIL if vtail is None else vtail)
+            npz_dir, step_s=_DEFAULT_STEP_S if step_s is None else float(step_s),
+            vtail=_DEFAULT_VTAIL if vtail is None else vtail)
     return _DEFAULT
