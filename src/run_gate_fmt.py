@@ -150,6 +150,21 @@ def free_names(src):
     return out
 
 
+# ── 14.70: sbatch 의 `$PY -c "..."` 블록 안 **백틱** ──────────────────────────
+#   큰따옴표 안의 백틱은 **셸이 명령으로 실행한다.** 2026-09-14 에 파이썬 주석에 적은
+#   마크다운 백틱이 그대로 실행돼 `train60_v32: command not found` 가 찍혔다. 이번엔
+#   빈 문자열이 되어 무해했지만, 백틱 안이 진짜 명령이면 **굽기 노드에서 실행된다.**
+def backticks_in_py(src):
+    """[(줄, 개수)] — `-c "` 로 여는 파이썬 블록 안에 백틱이 있는 자리."""
+    out = []
+    pat = '-c "' + chr(10) + '(.*?)' + chr(10) + '"' + chr(10)
+    for m in re.finditer(pat, src, re.S):
+        k = m.group(1).count(chr(96))
+        if k:
+            out.append((src[:m.start(1)].count(chr(10)) + 1, k))
+    return out
+
+
 def ck(name, ok, note=""):
     print("  [" + (OK if ok else NG) + "] " + name + (("   " + note) if note else ""))
     if not ok:
@@ -166,7 +181,7 @@ _GOOD = ('print("a %s b %s" % (x, y))' + chr(10)
 
 
 def main() -> int:
-    print("정적 관문 — `%` 형식 자리 수 (14.66) · 안 묶인 이름 (14.67)")
+    print("정적 관문 — `%` 자리 수 (14.66) · 안 묶인 이름 (14.67) · sbatch 백틱 (14.70)")
     print()
     ck("음성 대조 — 2026-09-14 에 학습을 죽인 그 꼴을 잡는다",
        len(bad_formats(_BROKEN)) == 1, str(bad_formats(_BROKEN)))
@@ -212,6 +227,18 @@ def main() -> int:
        ("  ".join(nbad[:6]) if nbad else "검사 통과"))
     ck("src 전체 — 자리 수가 안 맞는 `%` 가 없다", not bad,
        ("  ".join(bad[:6]) if bad else "검사 통과"))
+
+    _TBROKEN = '$PY -c "' + chr(10) + 'print(1)  # ' + chr(96) + 'ls' + chr(96) + chr(10) + '"' + chr(10)
+    _TGOOD = '$PY -c "' + chr(10) + "print(1)  # 'ls'" + chr(10) + '"' + chr(10)
+    ck("음성 대조 — 파이썬 블록 안 백틱을 잡는다", len(backticks_in_py(_TBROKEN)) == 1,
+       str(backticks_in_py(_TBROKEN)))
+    ck("음성 대조 — 백틱 없는 블록은 안 잡는다", not backticks_in_py(_TGOOD))
+    tick = []
+    for f in sorted(Path("patches").glob("*.sbatch")):
+        for ln, k in backticks_in_py(f.read_text(encoding="utf-8")):
+            tick.append("%s:%d 백틱 %d개" % (f.as_posix(), ln, k))
+    ck("patches 전체 — `$PY -c \"...\"` 안에 백틱이 없다 (셸이 실행해 버린다)", not tick,
+       ("  ".join(tick[:4]) if tick else "sbatch 검사 통과"))
     if skipped:
         print("  (문법이 깨져 건너뛴 파일 %d개: %s)" % (len(skipped), " ".join(skipped)))
 
