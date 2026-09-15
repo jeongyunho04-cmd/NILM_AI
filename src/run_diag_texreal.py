@@ -78,9 +78,14 @@ def from_cache(path: Path, n: int):
 
 
 def from_real(npz_dir: Path, n: int):
+    """⚠ **파일마다 고르게** 모은다. 처음엔 정렬 순서로 돌며 n 개를 채웠는데, 파일 하나가
+    60~90창이라 **앞쪽 5~7개 파일만** 보고 끝났다. 텍스처 라이브러리는 24파일 전부에서
+    뽑으므로 두 population 이 달라지고, 그 차이가 '합성이 과하다' 로 둔갑한다
+    ([[count-how-many-things-differ-before-attributing]])."""
     from src.preprocessing import load_nilm_npz
     out = []
     files = sorted(npz_dir.glob("*.npz"))
+    per = max(1, n // max(len(files), 1))                   # 파일당 할당량
     for p in files:
         try:
             r = load_nilm_npz(str(p))
@@ -96,14 +101,16 @@ def from_real(npz_dir: Path, n: int):
         v1 = np.abs(vh[:, 0])
         rel = vh[:, col] / np.maximum(v1, 1e-9)[:, None]
         ok = np.isfinite(rel).all(1) & (v1 > 100.0)
+        got = 0
         for i in range(0, len(rel) - W, W):
             s = slice(i, i + W)
             if ok[s].mean() < 0.99:
                 continue
             out.append(std_of(rel[s]))
-            if len(out) >= n:
-                return np.stack(out), len(files)
-    return (np.stack(out) if out else np.zeros((0, NH, 2))), len(files)
+            got += 1
+            if got >= per:                                  # 이 파일 몫만 채우고 넘어간다
+                break
+    return (np.stack(out) if out else np.zeros((0, NH, 3))), len(files)
 
 
 def main() -> int:
