@@ -122,34 +122,13 @@ rm -rf "$REPRO"
 time $PY -X utf8 -m src.run_build_traincache     --out "$OUT" --shard "${SLURM_ARRAY_TASK_ID}/${NSHARD}"     $COMMON --workers "${SLURM_CPUS_PER_TASK}"     $TREAT
 
 du -sh "$OUT"
-$PY -X utf8 -c "
-import json, sys
-d = json.load(open('$OUT/meta.json', encoding='utf-8'))
-a = json.load(open('cache/_v32_head512/meta.json', encoding='utf-8'))
-print('  토막 %s · 청크 %s · 창 %d (전체 기준 %d)'
-      % (d['shard'], d['shard_chunks'], d['n_windows'], d['n_windows_total']))
-if not d.get('harmonic_z'): sys.exit('❌ meta 에 harmonic_z 가 안 적혔다')
-if float(d.get('vtex_step_s') or 0) != 1.25 or float(d.get('vtex_seg_s') or 0) != 1.25:
-    sys.exit('meta 의 vtex_step_s/seg_s 가 1.25 가 아니다: %r / %r'
-             % (d.get('vtex_step_s'), d.get('vtex_seg_s')))
-if float(d.get('vtex_coarse_s') or 0) != 25.0:
-    sys.exit('meta 의 vtex_coarse_s 가 25 가 아니다: %r' % d.get('vtex_coarse_s'))
-skip = {'harmonic_z', 'shard', 'shard_chunks', 'n_windows', 'build_seconds', 'bytes',
-        'merged_from', 'merged_partial', 'positive_rate', 'recipe_counts', 'built_at',
-        'content_sha256'}
-# ⚠ '키 없음' 과 '0/False' 는 **같은 뜻**이다 — 'train60_v32' 는 'vtex_step_s' 가 생기기
-#   전에 구운 캐시라 키가 아예 없고, 새 캐시는 0.0 으로 적는다. 그대로 견주면 983992 처럼
-#   자료가 멀쩡한데 관문이 운다 (자료 비트 동일은 굽기 관문 ③이 이미 증명했다).
-def nz(v):
-    return None if v is None or v == 0 or v == '' or v is False else v
-diff = [k for k in set(a) | set(d) if k not in skip
-        and json.dumps(nz(a.get(k)), sort_keys=True, default=str)
-        != json.dumps(nz(d.get(k)), sort_keys=True, default=str)]
-skip |= {'vtex_step_s', 'vtex_seg_s', 'vtex_coarse_s'}
-diff = [k for k in diff if k not in skip]
-if diff: sys.exit('❌ 처치 셋 말고도 v32 와 다르다: %s' % diff)
-print('  관문 ④ v32 와 harmonic_z · vtex_step_s · vtex_seg_s · vtex_coarse_s 넷만 다르다')
-"
+# ── 관문 ④ meta — **도구로 뺐다** (14.107) ──────────────────────────────────
+#   여기 박혀 있던 `$PY -c "..."` 가 984540 에서 토막 여덟을 전부 죽였다. 자료는
+#   멀쩡했는데(`y_on` 이 v32h 와 비트 동일 · `fine`/`wide` 만 다름 = 처치가 정확히
+#   들어간 꼴) 기준 슬라이스의 장부 키(`_slice_of`·`_slice_rows`·`_why`)와 14.93 이
+#   새로 적는 `wide_shape` 를 몰라서 울었다. 22분 구운 뒤에.
+#   도구는 새 키를 **무시하지 않고 값을 검사한 뒤** 뺀다.
+$PY -X utf8 src/run_gate_cachemeta.py --ref cache/_v32_head512     --expect harmonic_z=True vtex_step_s=1.25 vtex_seg_s=1.25 vtex_coarse_s=25     --new wide_shape=47,120 -- "$OUT"
 echo "끝 $(date '+%F %H:%M:%S')"
 echo
 SHARDS=""
