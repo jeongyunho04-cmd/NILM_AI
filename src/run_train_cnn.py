@@ -504,6 +504,19 @@ def main() -> int:
                          "오븐 팬·조명 창을 '통전' 으로 세어 `L_on` 과 싸운다 — 실측에서 "
                          "오븐 게이트가 켜진 창의 전력 중앙이 16.0W 인데 σ·V²/R 은 "
                          "1094W 를 요구한다. 빈 문자열이면 옛 동작(켜짐=통전).")
+    ap.add_argument("--w-gate-cond", type=float, default=0.0, metavar="W",
+                    help="게이트를 **통전**에 묶는 항 `L_gcond` (14.106). "
+                         "`--res-cond-state` 가 지정한 기기에만, `on_logit` 을 "
+                         "`1{y_state == 통전상태}` 에 맞추는 BCE 를 더한다. "
+                         "까닭: 학습 자료에서 **오븐만** `on=1` 인데 전력 <50W 인 창이 "
+                         "35.3% 다 (포트·드라이·핫플 0.0%, 그 창 p10 전력 14W). "
+                         "`power = σ(on_logit)·p_raw` 라 게이트가 서면 전력 통로가 "
+                         "열리고, 실측에서 오븐 헛게이트가 10.1% 로 저항 4종 중 "
+                         "압도적이다 (14.105). 팬·조명 창의 최적 게이트는 "
+                         "`w_on/(w_on+W)` — `w_on=0.3` 이므로 0.3->0.50 · 0.9->0.25 · "
+                         "2.7->0.10. **0 이면 항이 아예 안 생긴다** (비트 동일). "
+                         "⚠ 실측 라벨은 팬·조명도 오븐 ON 이라 오븐 재현율이 떨어진다 "
+                         "— 판정 줄에서 짝으로 본다.")
     ap.add_argument("--w-state-power", type=float, default=0.0, metavar="W",
                     help="상태별 전력 출력을 그 상태의 실제 전력에 묶는 항 (12.35). "
                          "0 이면 끈다 - 그러면 전력 손실이 섞인 뒤에만 걸려 "
@@ -888,7 +901,8 @@ def main() -> int:
         smps_group=[apps.index(x) for x in
                     ("beam_projector", "laptop_charger", "minipc") if x in apps],
         weights=LossWeights(harm=a.w_harm, cons=a.w_cons, over=a.w_over,
-                            state_power=a.w_state_power, z=a.w_z, swap=a.w_swap),
+                            state_power=a.w_state_power, z=a.w_z, swap=a.w_swap,
+                            gate_cond=a.w_gate_cond),
         s_state=(build_state_scales(apps, [S_I[x] for x in apps])
                  if a.per_state_scale else None),
         # ── 저항 조합 맞바꿈 (14.32). `--w-swap 0` 이면 버퍼만 생기고 안 걸린다 ──

@@ -145,9 +145,27 @@ class LossWeights:
     # ⚠ `L_res`(2단계) 가 아니라 이 항이다 — `L_res` 는 비저항 일곱의 게이트로
     #   기울기가 샌다 (`run_gate_swap1.py` [1] 이 둘을 나란히 찍는다).
     swap: float = 0.0
+    # ── 게이트를 **통전**에 묶는다 `L_gcond` (14.106) ─────────────────────────
+    # 왜: 학습 자료에서 **오븐만** `on=1` 인데 전력이 없는 창이 35.3% 다
+    #   (포트·드라이·핫플은 0.0%, 오븐의 그 창 p10 전력은 **14W**). `L_on` 은
+    #   그 35% 에서 "증거 없이 게이트를 세라" 고 가르치고, `power =
+    #   σ(on_logit)·p_raw` 이므로 **게이트가 서는 순간 전력 통로가 열린다.**
+    #   실측에서 오븐 헛게이트가 10.1% 로 저항 4종 중 압도적이고(포트 0.2 ·
+    #   핫플 0.3 · 드라이 1.1), 그 4분의 3이 전력 없는 "팬·조명" 이다 (14.105).
+    # 무엇: `res_cond_state > 0` 인 기기에만, `on_logit` 을 **통전 상태 라벨**
+    #   `1{y_state == res_cond_state}` 에 맞추는 BCE 를 더한다.
+    # 눈금: `L_on`(가중 `on`)과 팬·조명 창에서 **서로 반대 방향**이라, 그 창의
+    #   최적 게이트는 `on / (on + gate_cond)` 다. `on=0.3` 이므로
+    #       gate_cond 0.3 -> 0.50 · 0.9 -> 0.25 · **2.7 -> 0.10**
+    #   0 이면 항 자체가 `parts` 에 안 생긴다 (옛 경로와 비트 동일).
+    # ⚠ 값: 실측 라벨은 팬·조명도 오븐 ON 으로 적는다. 이 항을 올리면 그 창을
+    #   놓치므로 **오븐 재현율이 떨어진다** — 판정 줄에서 반드시 짝으로 본다.
+    gate_cond: float = 0.0
     # 진단용 (가중 0). `total` 이 getattr 로 도는 구조라 이름이 있어야 한다.
     swap_frac: float = 0.0
     swap_ties: float = 0.0
+    #: 진단용 — 팬·조명 창에서 실제로 게이트가 얼마나 내려갔나 (가중 0).
+    gate_cond_p: float = 0.0
 
 
 def _huber(pred: torch.Tensor, tgt: torch.Tensor, delta: float) -> torch.Tensor:
@@ -887,6 +905,24 @@ class NILMLoss(torch.nn.Module):
             parts["on"] = bce_on.mean()
         else:
             parts["on"] = F.binary_cross_entropy_with_logits(out["on_logit"], tgt["y_on"])
+        # ── `L_gcond` — 게이트를 **통전**에 묶는다 (14.106) ────────────────────
+        #   `res_cond_state` 가 0 인 기기는 손대지 않는다 (가면). `y_state` 가
+        #   없는 입구(2단계 실측)에서는 생기지 않는다. 가중 0 이면 `parts` 에
+        #   키 자체가 안 생겨 옛 경로와 **비트 동일**하다.
+        if (self.w.gate_cond > 0 and tgt.get("y_state") is not None
+                and int(self.res_cond_state.abs().sum()) > 0):
+            cs = self.res_cond_state                                   # (K,) long
+            gm = (cs > 0).to(out["on_logit"].dtype)[None]              # (1,K) 가면
+            t_cond = (tgt["y_state"].long() == cs[None]).to(out["on_logit"].dtype)
+            bce_c = F.binary_cross_entropy_with_logits(
+                out["on_logit"], t_cond, reduction="none")
+            den = gm.expand_as(bce_c).sum().clamp(min=1.0)
+            parts["gate_cond"] = (bce_c * gm).sum() / den
+            with torch.no_grad():
+                # 팬·조명 창(켜짐이나 통전 아님)에서의 평균 게이트 — 진단용
+                fl = ((tgt["y_on"] > 0.5) & (t_cond < 0.5)) * (gm > 0)
+                parts["gate_cond_p"] = ((torch.sigmoid(out["on_logit"]) * fl).sum()
+                                        / fl.sum().clamp(min=1))
         parts["plugged"] = F.binary_cross_entropy_with_logits(out["plugged_logit"], tgt["y_plugged"])
         parts["standby"] = _huber(out["standby"], tgt["y_standby"], self.standby_delta).mean()
 

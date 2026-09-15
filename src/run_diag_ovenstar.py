@@ -65,6 +65,41 @@ def _fwd(path, cache, dev):
     return out
 
 
+def f1_two_ways(path, cache, apps, dev, app="oven"):
+    """오븐 검출을 **두 자로** 잰다 — 현행 라벨과 물리 마스크 (12.162).
+
+    12.162.3 이 확정한 것: 라벨 ON 인데 **관측 총전력이 `V²/R` 의 절반 미만**인
+    창이 오븐은 52.9% 고, 모델은 그 창에서 **한 번도 안 켠다**. 물리를 지키는데
+    F1 은 미검출로 센다 (오븐 F1 0.530 -> 마스크 0.867).
+
+    `L_gcond` 는 그 어긋남을 손실로 옮기는 손잡이라, **현행 F1 은 내려가는 것이
+    정상**이고 마스크 F1 이 내려가면 진짜 악화다. 한 자로만 보면 12.162 의 결론을
+    잊고 "손잡이가 오븐을 망쳤다" 로 읽는다 ([[check-the-label-and-the-shape-before-reading-a-confusion-table]]).
+    """
+    from src.model.postproc import RESISTIVE_OHM
+    k = apps.index(app)
+    ohm = RESISTIVE_OHM[app]
+    pr = _fwd(path, cache, dev)
+    acc = {}
+    for nm in ("현행", "마스크"):
+        tp = fp = fn = 0
+        for stem, d in cache.items():
+            y = d["y"].astype(bool)[:, k]
+            g = pr[stem][1][:, k] > 0
+            keep = np.ones(len(y), bool)
+            if nm == "마스크":
+                # 통전이 **물리적으로 불가능한** 창을 뺀다 (라벨 ON 쪽만)
+                need = 0.5 * np.asarray(d["v_obs"], float) ** 2 / ohm
+                keep = ~(y & (np.asarray(d["p_obs"], float) < need))
+            tp += int((y & g & keep).sum())
+            fp += int((~y & g & keep).sum())
+            fn += int((y & ~g & keep).sum())
+        rec = tp / max(tp + fn, 1)
+        pre = tp / max(tp + fp, 1)
+        acc[nm] = (2 * rec * pre / max(rec + pre, 1e-9), rec, pre)
+    return acc
+
+
 def stars(path, cache, apps, dev):
     """(★1 면적, ★2 축퇴 %, 축퇴 창 수)."""
     i_ov, i_ke = apps.index("oven"), apps.index("electiric_kettle")
@@ -95,6 +130,9 @@ def main() -> int:
     ap.add_argument("ckpt", nargs="*", help="처치 체크포인트 (시드 순서대로)")
     ap.add_argument("--control", nargs="*", default=[], help="대조 (짝차의 기준)")
     ap.add_argument("--arm", default="처치", help="처치 이름")
+    ap.add_argument("--f1", action="store_true",
+                    help="★3/★4 — 오븐 검출을 현행 라벨과 **물리 마스크** 두 자로 "
+                         "(12.162). `L_gcond` 판정에는 반드시 켠다.")
     a = ap.parse_args()
     paths = list(a.control) + list(a.ckpt)
     if not paths:
@@ -137,6 +175,27 @@ def main() -> int:
             print("    짝차 %-8s %s | %+7.3f ± %-6.3f  (%d/%d %s)"
                   % (nm, " ".join("%+7.3f" % x for x in d), d.mean(), d.std(),
                      sgn, len(d), "개선" if lo_better else "악화"))
+
+    # ── ★3/★4 오븐 검출을 두 자로 (12.162) ──────────────────────────────
+    if a.f1:
+        print("")
+        print("  ★3/★4 오븐 검출 — **두 자로** (12.162: 채점기가 두 정의를 섞어 잰다)")
+        print("    %-11s %-22s %-22s" % ("", "★3 현행 라벨 F1(재현/정밀)",
+                                         "★4 물리마스크 F1(재현/정밀)"))
+        for tag, ps in (("대조", a.control), (a.arm, a.ckpt)):
+            if not ps:
+                continue
+            r = [f1_two_ways(p, cache, apps, dev) for p in ps]
+            c = np.asarray([x["현행"][0] for x in r])
+            m = np.asarray([x["마스크"][0] for x in r])
+            print("    %-11s %.3f ± %.3f (%.3f/%.3f)   %.3f ± %.3f (%.3f/%.3f)"
+                  % (tag, c.mean(), c.std(),
+                     np.mean([x["현행"][1] for x in r]), np.mean([x["현행"][2] for x in r]),
+                     m.mean(), m.std(),
+                     np.mean([x["마스크"][1] for x in r]),
+                     np.mean([x["마스크"][2] for x in r])))
+        print("    ⚠ ★3 은 **내려가는 것이 정상**이다 (라벨이 팬·조명도 ON 으로 적는다). "
+              "★4 가 내려가면 진짜 악화다.")
 
     # ── 자 검정 — 미리 적은 값과 맞나 ────────────────────────────────────
     for key, (a1, s1, a2, s2) in PINNED.items():
