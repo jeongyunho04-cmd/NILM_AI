@@ -5,7 +5,14 @@
 **두 학습기가 같은 순방향 모형을 쓰게** 하려고 함수로 뺀다 — 한쪽만 바뀌면 두 판을 못 견준다
 ([[match-the-scoring-convention-before-comparing]]).
 
-`run_train_cnn` 의 조립과 **같은 순서·같은 값**이어야 한다. 옮길 때 뺀 것 없음:
+`run_train_cnn` 의 조립과 **같은 순서·같은 값**이어야 한다.
+
+⚠⚠ **그 약속이 한 번 깨졌다 (14.171).** 1단계가 `NILMLoss` 에 넘기는 인자가 34개인데
+여기는 19개뿐이었다 — 18개가 어긋나 있었고 그중 둘은 **지금 조리법이 켜는 것**이었다:
+`harm_sig_vnorm`(argparse 기본 True 대 NILMLoss 기본 False) 와 `cons_deadzone`.
+`run_train_seq`(2단계)가 이것으로 경사를 받으므로 **1단계가 배운 물리와 다른 물리로
+미세조정**하고 있었다. 이제 `src/run_gate_lossparity.py` 가 AST 로 두 호출의 인자
+집합을 대조하고, 어긋나면 **sbatch 가 멈춘다**. 옮길 때 뺀 것 없음:
 지문 · 대기 지문(동작 중 휴지 포함) · 잡음 지문(상시 배경 포함) · 차수 척도 · 상태별 지문 · 상태별 척도.
 """
 from typing import Optional, Sequence
@@ -38,6 +45,27 @@ def build_loss(apps: Sequence[str], dev: str, *,
                drift_basis: str = "",
                drift_k: int = 1,
                weights: Optional[LossWeights] = None,
+               #: ── 14.171 — 1단계(`run_train_cnn`)가 `NILMLoss` 에 넘기던 손잡이들.
+               #  여기 없어서 **2단계와 진단이 다른 순방향 모형을 쓰고 있었다.**
+               #  기본값은 전부 **지금 동작과 비트 동일**이다 — 값은 부르는 쪽이 넣는다.
+               harm_sig_vnorm: bool = False,
+               harm_vnorm_exp=None,
+               harm_vnorm_frac: float = 1.0,
+               harm_vnorm_vref=None,
+               harm_vnorm_vref_state=None,
+               harm_vhrel_rec=None,
+               harm_vhrel_frac: float = 0.0,
+               harm_vhrel_on=None,
+               cons_deadzone: float = -1.0,
+               res_ohm=None,
+               res_ohm_half=None,
+               res_cond_state=None,
+               swap_tol: float = 0.02,
+               swap_slack: float = 0.0,
+               swap_tiebreak: float = 0.0,
+               swap_tb_orders: str = "",
+               on_detach_gate: bool = False,
+               on_power_praw: bool = False,
                verbose: bool = True) -> NILMLoss:
     """`run_train_cnn` 과 같은 `NILMLoss` 를 만든다."""
 
@@ -108,6 +136,25 @@ def build_loss(apps: Sequence[str], dev: str, *,
                     ("beam_projector", "laptop_charger", "minipc") if x in apps],
         weights=weights or LossWeights(),
         s_state=(build_state_scales(apps, [S_I[x] for x in apps]) if per_state_scale else None),
+        #: 14.171 — 아래는 전부 **기본값이면 옛 동작과 비트 동일**이다.
+        harm_sig_vnorm=harm_sig_vnorm,
+        harm_vnorm_exp=harm_vnorm_exp,
+        harm_vnorm_frac=harm_vnorm_frac,
+        harm_vnorm_vref=harm_vnorm_vref,
+        harm_vnorm_vref_state=harm_vnorm_vref_state,
+        harm_vhrel_rec=harm_vhrel_rec,
+        harm_vhrel_frac=harm_vhrel_frac,
+        harm_vhrel_on=harm_vhrel_on,
+        cons_deadzone=cons_deadzone,
+        res_ohm=res_ohm,
+        res_ohm_half=res_ohm_half,
+        res_cond_state=res_cond_state,
+        swap_tol=swap_tol,
+        swap_slack=swap_slack,
+        swap_tiebreak=swap_tiebreak,
+        swap_tb_orders=swap_tb_orders,
+        on_detach_gate=on_detach_gate,
+        on_power_praw=on_power_praw,
     ).to(dev)
 
 

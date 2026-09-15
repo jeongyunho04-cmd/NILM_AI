@@ -1177,6 +1177,14 @@ def main() -> int:
                     "wide_seg_pool": int(model.wide_seg_pool),
                     "wide_extra_dilations": list(model.wide_extra_dilations),
                     "harm_vnorm_anchor": bool(a.harm_vnorm_anchor),
+                    #: 14.171 — 2단계가 **같은 순방향 모형**을 지으려면 이 둘이 필요하다.
+                    #  없어서 `run_train_seq` 가 전압 앵커를 못 켜고 있었다.
+                    "harm_sig_vnorm": bool(a.harm_sig_vnorm),
+                    "harm_vnorm_classes": str(a.harm_vnorm_classes),
+                    "res_apps": str(a.res_apps),
+                    "res_cond_state": str(a.res_cond_state),
+                    "swap_tol": float(a.swap_tol),
+
                     "harm_vnorm_frac": float(a.harm_vnorm_frac),
                     "vrel_target": bool(a.vrel_target),
                     "harm_vhrel_anchor": bool(a.harm_vhrel_anchor),

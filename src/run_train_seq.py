@@ -167,6 +167,37 @@ def real_windows(apps, grid_s, dev):
     return out
 
 
+def _stage1_physics(a, apps):
+    """1단계 체크포인트가 적어 둔 손실 물리를 `build_loss` 인자로 바꾼다 (14.171).
+
+    ⚠ **옛 체크포인트에는 키가 없다.** 그때는 빈 dict 를 내어 **옛 동작과 비트 동일**로
+    둔다 — 없는 값을 지어내면 지난 판과 비교가 끊긴다.
+    """
+    import torch as _T
+    path = getattr(a, "init", "") or getattr(a, "ref", "") or getattr(a, "ckpt", "")
+    if not path:
+        return {}
+    try:
+        ck = _T.load(path, map_location="cpu", weights_only=False)
+    except Exception:
+        return {}
+    out = {}
+    if ck.get("harm_sig_vnorm") is not None and ck.get("harm_vnorm_anchor"):
+        from src.run_train_cnn import _vnorm_exp
+        out["harm_sig_vnorm"] = bool(ck["harm_sig_vnorm"])
+        out["harm_vnorm_exp"] = _vnorm_exp(apps, ck.get("harm_vnorm_classes", ""))
+        out["harm_vnorm_frac"] = float(ck.get("harm_vnorm_frac", 1.0))
+    if ck.get("cons_deadzone") is not None:
+        out["cons_deadzone"] = float(ck["cons_deadzone"])
+    if ck.get("res_apps") is not None:
+        from src.run_train_cnn import _res_cond, _res_ohm
+        out["res_ohm"] = _res_ohm(apps, ck["res_apps"], half=False)
+        out["res_ohm_half"] = _res_ohm(apps, ck["res_apps"], half=True)
+        out["res_cond_state"] = _res_cond(apps, ck.get("res_cond_state", ""))
+        out["swap_tol"] = float(ck.get("swap_tol", 0.02))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", default="cache/seqraw_v1")
@@ -475,11 +506,21 @@ def main():
         print("[seq] CRF 를 **CPU** 에서 센다 (13.84.63 — 값은 같고 4~4.8배 빠르다)", flush=True)
     crit = None
     if not a.no_window_loss:
+        #: ── 14.171 — **1단계가 쓴 물리를 체크포인트에서 읽어 온다** ──────────
+        #  여기 없던 18개 때문에 2단계가 1단계와 **다른 순방향 모형**으로 경사를 받고
+        #  있었다. 살아 있던 갈라짐은 둘이다: `harm_sig_vnorm`(전압 크기 앵커) 과
+        #  `cons_deadzone`. 플래그로 받으면 또 잊으므로 **체크포인트가 기준**이다.
+        #  관문: `src/run_gate_lossparity.py`.
+        _phys = _stage1_physics(a, apps)
         crit = build_loss(apps, dev, weights=LossWeights(
             harm=a.w_harm, cons=a.w_cons, over=a.w_over, z=a.w_z,
             state_power=a.w_state_power),
             power_signatures=a.pow_sig,
-            drift_basis=a.drift_proj, drift_k=a.drift_k)
+            drift_basis=a.drift_proj, drift_k=a.drift_k, **_phys)
+        if _phys:
+            print("[seq] 1단계 물리를 이어받았다: "
+                  + " · ".join("%s=%s" % (k, (v if not hasattr(v, "shape") else "(K,)"))
+                               for k, v in sorted(_phys.items())), flush=True)
         print("[seq] 창 단위 손실 조립 · 켜짐 가중 %.2f 를 CRF %.2f 로 갈아 끼운다"
               % (crit.w.on, a.w_crf), flush=True)
 
