@@ -79,6 +79,7 @@ nvidia-smi --query-gpu=index,name --format=csv,noheader
 
 echo "=== 관문 ==="
 $PY -X utf8 src/run_gate_fmt.py
+$PY -X utf8 -m src.run_gate_lossparity
 $PY -X utf8 src/run_gate_gatecond.py
 # `run_gate_swap1` 은 뺐다 — 체크포인트(results/cnn_sigc_vn_s0.pt)를 요구하는데 HPC 에
 #   없고, 이 판은 `L_swap` 을 안 건드린다 (BASE 에 --w-swap 이 없다). 984620 이 여기서 죽었다.

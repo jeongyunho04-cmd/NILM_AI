@@ -784,6 +784,21 @@ def main() -> int:
                     help="L_harm 에서 **짝수차만 크기 공간**으로 잰다 (13.11). 플러그를 "
                          "반대로 꽂으면 짝수차가 180° 도므로(홀수차는 안 돈다) 짝수차 위상은 "
                          "기기 속성이 아니다 — 드라이기 약풍에서 격리 대 복합이 179° 어긋났다.")
+    ap.add_argument("--pow-sig", action="store_true",
+                    help="`L_harm` 의 사전을 기기당 하나에서 **기기x전력대**로 바꾼다 "
+                         "(13.84.38). `L_harm` 은 `Σ sig_k·power_k` 라 **전력에 선형**인데 "
+                         "와트당 고차 함량이 동작점에 따라 47~109%% 변한다 (충전기 h11 이 "
+                         "15~28W 에서 2.31, 63~65W 에서 1.10 mA/W). **지문을 갈아 끼우지 "
+                         "않고 비 `g[k,b,h] = sig_대역/sig` 를 낸다** — 상태별 지문과 곱해서 "
+                         "같이 쓸 수 있고, 표본이 얇은 칸은 g=1 이라 **끄면 비트 동일**이다. "
+                         "⚠ 2단계(`run_train_seq --pow-sig`)에만 달려 있어 1단계에서는 "
+                         "한 번도 안 켜졌다 (14.172). 겨냥은 **② SMPS 표류** 다 — "
+                         "오늘 잰 보정 크기(대표전력·mA): 에어컨 1,714 · 충전기 517 · "
+                         "미니PC 94 인데 저항은 모양 차수가 2~15 뿐이다.")
+    ap.add_argument("--pow-bands", type=int, default=3, metavar="N",
+                    help="전력대 개수. 경계는 그 기기 통전 전력의 분위수다")
+    ap.add_argument("--pow-tau", type=float, default=0.15, metavar="T",
+                    help="대역 경계의 **부드러움**. `u=σ((p−e)/(τ·e))` — 계단이 아니다")
     ap.add_argument("--state-signatures", action="store_true",
                     help="**상태별 고조파 지문** (13.11). 기기당 페이저 하나로는 "
                          "한 기기의 상태들이 고조파 모양이 다를 때 못 담는다 — 드라이기 "
@@ -936,6 +951,30 @@ def main() -> int:
               + " ".join("%s=%.1fV" % (x[:4], v) for x, v in zip(apps, _vref)) + " **")
     # 상태별 지문 (13.11). `del pool` 앞에서 만들어야 한다.
     sig_state = None
+    pow_gain = pow_edges = None
+    #: ⚠⚠ 14.172 — **`--state-signatures` 와 같이 쓰면 안 된다.** 둘이 같은 축을 잰다.
+    #  대역 경계는 **통전 전력의 분위수**이고 상태 전력은 **그 통전 전력 자체**다:
+    #      드라이 대역 487·963W  대  상태 {1:529W, 2:1022W}
+    #      충전   대역  48· 63W  대  상태 {1: 36W, 2:  68W}
+    #  손실은 `sig_state x pow_gain` 으로 **곱하므로** 같은 보정이 두 번 걸린다.
+    #  실측 (`run_gate_powsig`): 드라이 s2 의 h2/h1 이 0.00018 -> **0.00000 (x0.000)**.
+    #  반파 억제가 소멸한다 — ③ 스위칭 과도 유령이 기대는 바로 그 신호다.
+    #  충전기도 x1.339 / x0.684 로 어긋난다.
+    #  ⇒ 고치려면 대역을 **상태 안에서** 잡아야 한다 (`sig_state` 를 분모로).
+    #    상태로 가른 뒤 남는 전력 의존은 SMPS 무리에서 7~23% 다 (저항은 <1.6%).
+    if a.pow_sig and a.state_signatures:
+        _nl = chr(10)
+        raise SystemExit(
+            "\u2716 --pow-sig 와 --state-signatures 는 **같은 축**을 잰다 (14.172)." + _nl
+            + "  대역 경계 = 통전 전력의 분위수 = 상태 전력. 곱하면 제곱이 된다." + _nl
+            + "  재현: python -X utf8 -m src.run_gate_powsig   (드라이 s2 h2/h1 x0.000)" + _nl
+            + "  둘 중 하나만 쓰거나, 대역을 **상태 안에서** 잡는 판을 지어라.")
+    if a.pow_sig:
+        #: 14.172 — 13.84.38 의 전력대 사전. 2단계에만 달려 있었다.
+        from src.model.net import harmonic_signatures_by_power
+        pow_gain, pow_edges, _pu = harmonic_signatures_by_power(
+            pool, apps, n_bands=a.pow_bands)
+        print('  ** 전력 의존 지문 (13.84.38): %d/%d 칸을 따로 맞췄다 (나머지는 보정비 1) **' % (int(_pu.sum()), _pu.size))
     if a.state_signatures:
         from src.model.net import harmonic_signatures_by_state
         sig_state, _used = harmonic_signatures_by_state(pool, apps)
@@ -1006,6 +1045,9 @@ def main() -> int:
         on_power_praw=a.on_power_praw,
         signatures_state=(torch.from_numpy(sig_state) if a.state_signatures else None),
         harm_even_magnitude=a.harm_even_magnitude,
+        power_gain=(torch.from_numpy(pow_gain) if pow_gain is not None else None),
+        power_edges=(torch.from_numpy(pow_edges) if pow_edges is not None else None),
+        power_tau=a.pow_tau,
         harm_sig_vnorm=a.harm_sig_vnorm,
         # 14.28 — 기기별 `I/P` 전압 지수. 모터는 0 이라 보정이 안 걸린다.
         harm_vnorm_exp=(_vnorm_exp(apps, a.harm_vnorm_classes)
@@ -1179,6 +1221,9 @@ def main() -> int:
                     "harm_vnorm_anchor": bool(a.harm_vnorm_anchor),
                     #: 14.171 — 2단계가 **같은 순방향 모형**을 지으려면 이 둘이 필요하다.
                     #  없어서 `run_train_seq` 가 전압 앵커를 못 켜고 있었다.
+                    "pow_sig": bool(a.pow_sig),
+                    "pow_bands": int(a.pow_bands),
+                    "pow_tau": float(a.pow_tau),
                     "harm_sig_vnorm": bool(a.harm_sig_vnorm),
                     "harm_vnorm_classes": str(a.harm_vnorm_classes),
                     "res_apps": str(a.res_apps),

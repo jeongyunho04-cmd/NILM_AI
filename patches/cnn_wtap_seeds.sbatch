@@ -58,6 +58,7 @@ nvidia-smi --query-gpu=index,name --format=csv,noheader
 
 echo "=== 관문 ==="
 $PY -X utf8 src/run_gate_fmt.py
+$PY -X utf8 -m src.run_gate_lossparity
 $PY -X utf8 src/run_gate_finerf.py
 test -d "$CACHE" || { echo "캐시가 없다: $CACHE"; exit 1; }
 test -d "$HOLDOUT" || { echo "홀드아웃이 없다: $HOLDOUT"; exit 1; }

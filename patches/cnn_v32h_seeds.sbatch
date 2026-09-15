@@ -51,6 +51,7 @@ echo "=== 관문 ==="
 # 14.66 — `%` 형식 자리 수. 983771 이 이 버그로 **1분 만에** 죽었다 (`run_gate_help` 는
 #   argparse help 만 보고 런타임 print 는 안 본다). 1초짜리라 여기 건다.
 $PY -X utf8 src/run_gate_fmt.py
+$PY -X utf8 -m src.run_gate_lossparity
 for d in "$CACHE_OFF" "$CACHE_ON" "$HO_OFF" "$HO_ON"; do
   test -d "$d" || { echo "없다: $d"; exit 1; }
 done

@@ -26,6 +26,64 @@ from src.model.net import (harmonic_scales, harmonic_signatures, harmonic_signat
 from src.run_baseline import S_I
 
 
+#: `stage1_physics` 가 낼 수 있는 `NILMLoss` 인자 이름 (14.171).
+#: ⚠ **관문(`run_gate_lossparity`)이 이 상수를 읽는다.** `**stage1_physics(...)` 로 뚫은
+#: 자리는 AST 로 안 보이므로, 이 목록이 그 자리의 "명시 인자" 구실을 한다.
+#: 여기에 이름을 더하면 아래 함수도 같이 고쳐라 — 관문이 둘의 일치를 확인한다.
+STAGE1_PHYSICS_KEYS = (
+    "harm_sig_vnorm", "harm_vnorm_exp", "harm_vnorm_frac",
+    "cons_deadzone",
+    "res_ohm", "res_ohm_half", "res_cond_state", "swap_tol",
+    "on_detach_gate", "on_power_praw", "off_detach_praw",
+)
+#: 아직 **못 잇는** 것 — 체크포인트가 이 값을 안 적는다. 관문이 빚으로 찍는다.
+#:   harm_vnorm_vref · harm_vnorm_vref_state : 풀에서 계산하는 텐서 (체크포인트에 없다)
+#:   harm_vhrel_rec · _frac · _on             : 위와 같음. 지금은 frac 0 이라 무력
+#:   swap_slack · swap_tiebreak · swap_tb_orders : `--w-swap` 이 0 이라 무력
+
+
+def stage1_physics(ck, apps, skip=()):
+    """1단계 체크포인트가 적어 둔 **손실 물리**를 `NILMLoss` 인자로 바꾼다 (14.171).
+
+    왜 이것이 필요한가 — 손실을 짓는 자리가 **셋**이고 셋이 다 달랐다:
+
+    ```
+      1단계 run_train_cnn  34개 · 공용 lossbuild 19개 · 2단계 run_adapt 29개
+      합집합 49개 중 **셋 다 가진 것은 17개뿐**
+    ```
+
+    그래서 2단계가 1단계와 **다른 순방향 모형**으로 경사를 받고 있었다. 손잡이를
+    자리마다 따로 받으면 또 갈라지므로, **체크포인트가 유일한 기준**이다.
+
+    ⚠ 키가 없는 **옛 체크포인트**는 그 항목을 안 낸다 — 없는 값을 지어내면 지난 판과
+    비교가 끊긴다. 부르는 쪽은 기본값(= 옛 동작, 비트 동일)을 그대로 쓰게 된다.
+    """
+    skip = set(skip)
+    out = {}
+
+    def put(k, v):
+        if k not in skip:
+            out[k] = v
+
+    if ck.get("harm_sig_vnorm") is not None and ck.get("harm_vnorm_anchor"):
+        from src.run_train_cnn import _vnorm_exp
+        put("harm_sig_vnorm", bool(ck["harm_sig_vnorm"]))
+        put("harm_vnorm_exp", _vnorm_exp(apps, ck.get("harm_vnorm_classes", "")))
+        put("harm_vnorm_frac", float(ck.get("harm_vnorm_frac", 1.0)))
+    if ck.get("cons_deadzone") is not None:
+        put("cons_deadzone", float(ck["cons_deadzone"]))
+    if ck.get("res_apps") is not None:
+        from src.run_train_cnn import _res_cond, _res_ohm
+        put("res_ohm", _res_ohm(apps, ck["res_apps"], half=False))
+        put("res_ohm_half", _res_ohm(apps, ck["res_apps"], half=True))
+        put("res_cond_state", _res_cond(apps, ck.get("res_cond_state", "")))
+        put("swap_tol", float(ck.get("swap_tol", 0.02)))
+    for k in ("on_detach_gate", "on_power_praw", "off_detach_praw"):
+        if ck.get(k) is not None:
+            put(k, bool(ck[k]))
+    return out
+
+
 def build_loss(apps: Sequence[str], dev: str, *,
                npz_dir: str = "processed_data/npz",
                time_split: str = "train",
@@ -34,6 +92,7 @@ def build_loss(apps: Sequence[str], dev: str, *,
                state_signatures: bool = True,
                power_signatures: bool = False,
                power_bands: int = 3,
+               power_tau: float = 0.15,
                harm_even_magnitude: bool = True,
                harm_odd_only: bool = False,
                harm_even_by_class: bool = False,
@@ -127,6 +186,7 @@ def build_loss(apps: Sequence[str], dev: str, *,
         signatures_state=(torch.from_numpy(sig_state) if state_signatures else None),
         power_gain=(torch.from_numpy(pow_gain) if pow_gain is not None else None),
         power_edges=(torch.from_numpy(pow_edges) if pow_edges is not None else None),
+        power_tau=power_tau,
         harm_even_magnitude=harm_even_magnitude,
         even_coherent=(torch.tensor([1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
                                     dtype=torch.float32) if harm_even_by_class else None),
