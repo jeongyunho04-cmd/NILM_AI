@@ -120,6 +120,10 @@ def sync_even_median(ckpts, force=None):
     `force` 를 주면 그 값을 강제한다 — 분포 밖 시험용이다.
     """
     from src.model import inputs as _I
+    #: 홈 문자열 하나를 받아도 돌아가게 한다 — `--ckpt` 가 `nargs="+"` 인 도구와
+    #  아닌 도구가 섮여 있다 (`finesweep`). 안 그러면 글자를 돌며 파일을 찾는다.
+    if isinstance(ckpts, str):
+        ckpts = [ckpts]
     if force is not None and int(force) > 1:
         _I.EVEN_MEDIAN = int(force)
         print("⚠ 짝수차 이동중앙값 k=%d 를 **강제**한다 — 그것으로 학습되지 않은 판은 "

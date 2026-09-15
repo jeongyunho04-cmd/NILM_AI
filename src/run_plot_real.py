@@ -284,6 +284,8 @@ def main() -> int:
     _font()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     outd = Path(a.out); outd.mkdir(parents=True, exist_ok=True)
+    from src.run_gate_check import sync_even_median
+    sync_even_median([a.ckpt])   #: 14.164 — 체크포인트의 짝수차 규약으로 그린다
     model, apps, ck = load_model(a.ckpt, dev)
     ev = load_events()
     name = a.tag or Path(a.ckpt).stem
