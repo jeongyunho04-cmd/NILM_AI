@@ -124,7 +124,9 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
     # 들고 있다. `proj_resp="head"` 는 `proj_head.*` 키를 만들므로 **`load_state_dict`
     # 전에** 그 설정이 반영돼야 한다 — 안 그러면 "unexpected key" 로 죽는다.
     pk = dict(ck) if proj_from is None else {**ck, **proj_from}
-    model = NILMNet(apps, appliance_state_counts(apps), width=ck.get("width", 1.0),
+    #: 인자를 **먼저 dict 로** 모은다 — 옛 체크포인트를 다시 지어야 할 때
+    #: 같은 인자를 두 번 적지 않기 위해서다.
+    nkw = dict(width=ck.get("width", 1.0),
                     wide_summary=ck.get("wide_summary", False),
                     wide_target=ck.get("wide_target", False),
                     periodicity=ck.get("periodicity", False),
@@ -161,8 +163,28 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
                     # 덧붙인 블록·탭 (14.80). 없으면 옛 기본이라 비트 동일.
                     fine_extra_dilations=pk.get("fine_extra_dilations", None),
                     tap_layers=pk.get("tap_layers", None),
-                    fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS)).to(dev)
+                    # 세밀 몸통 시간 분할 (14.116). 없으면 False 라 **비트 동일**이다.
+                    # ⚠ 14.116 이전에 구운 tsp 체크포인트에는 이 키가 없다 — 아래에서
+                    #   `trunk.0` 모양으로 유추하되 **맞는지 확인하고** 쓴다.
+                    fine_time_split=bool(pk.get("fine_time_split", False)),
+                    fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS))
+    model = NILMNet(apps, appliance_state_counts(apps), **nkw).to(dev)
     if weights:
+        # ⚠ 14.116 직후에 구운 `cnn_tsp_*` 는 `fine_time_split` 키를 **안 적었다**
+        #   (학습은 됐는데 채점 경로가 모델을 못 지어 `trunk.0` 이 1021 대 765 로
+        #   어긋난다). 키가 없을 때만, **모양이 맞는지 확인하고** 켬으로 다시 짓는다.
+        #   유추가 틀리면 아래 `load_state_dict` 가 그대로 터진다 — 조용히 안 넘어간다.
+        want = ck["model"].get("trunk.0.weight")
+        if (want is not None and "fine_time_split" not in ck
+                and tuple(model.trunk[0].weight.shape) != tuple(want.shape)):
+            m2 = NILMNet(apps, appliance_state_counts(apps),
+                         **{**nkw, "fine_time_split": True}).to(dev)
+            if tuple(m2.trunk[0].weight.shape) == tuple(want.shape):
+                print("  ⚠ %s 에 `fine_time_split` 키가 없다 — `trunk.0` %s 가 맞아 "
+                      "**켬**으로 지었다 (끔이면 %s)."
+                      % (ckpt_path, tuple(want.shape),
+                         tuple(model.trunk[0].weight.shape)))
+                model = m2
         model.load_state_dict(ck["model"])
     model.eval()
     # 체크포인트가 자기 입력 프레임을 안다 (12.181). `forward_file` 이 기본으로 쓴다.

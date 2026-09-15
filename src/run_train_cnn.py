@@ -1030,6 +1030,11 @@ def main() -> int:
                     "fine_pool": model.fine_pool,
                     "fine_extra_dilations": list(model.fine_extra_dilations),
                     "tap_layers": list(model.tap_layers),
+                    # 세밀 몸통 시간 분할 (14.116). **이 키를 안 적어서** 학습은 됐는데
+                    # 채점 경로가 모델을 못 지었다 — `trunk.0` 이 1021 대 765 로 어긋난다.
+                    # 구조를 바꾸는 손잡이는 전부 여기 적혀야 한다
+                    # ([[verify-the-input-path-not-just-the-model]]).
+                    "fine_time_split": bool(model.fine_time_split),
                     # 타깃 시점 구성 (12.45). 채널 수와 달리 슬라이스로 못 맞춘다 —
                     # 어긋나면 입력과 라벨이 다른 순간을 가리켜 조용히 틀린다.
                     "target_lookahead": TARGET_LOOKAHEAD,
