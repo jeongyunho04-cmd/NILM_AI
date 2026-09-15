@@ -38,7 +38,7 @@ import torch  # noqa: E402
 
 from src.evaluation.holdout import load_holdout  # noqa: E402
 from src.model.inputs import build_inputs  # noqa: E402
-from src.run_gate_check import load_model  # noqa: E402
+from src.run_gate_check import load_model, sync_even_median  # noqa: E402
 
 ON_STATE = 2
 
@@ -49,6 +49,10 @@ def main() -> int:
     ap.add_argument("--holdout", default="processed_data/holdout60_v32h")
     a = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
+    #: 14.190 — 창을 짓기 **전에** 짝수차 규약을 체크포인트에 맞춘다.
+    #  이 도구는 14.140 (EVEN_MEDIAN=0) 때 지었는데 지금 팔들은 `--even-median 5`
+    #  로 굽는다. 안 맞추면 `load_model` 의 관문이 멈춘다 (985321 이 그렇게 죽었다).
+    sync_even_median(a.ckpt, 0)
     hs = load_holdout(a.holdout)
     apps = list(hs.appliances)
     jo, jk, jd, jh = (apps.index(x) for x in
