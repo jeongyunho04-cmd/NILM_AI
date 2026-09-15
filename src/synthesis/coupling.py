@@ -30,6 +30,8 @@
 텍스처는 파일당 60초에 하나라 수십~수백 개뿐이고, 몇천 창 뒤에는 거의 전부 적중한다.
 """
 from typing import Dict, Optional, Tuple
+import os
+
 import numpy as np
 
 from src.synthesis import fcm
@@ -91,6 +93,14 @@ def _join_tail(V15: np.ndarray, tail: np.ndarray) -> np.ndarray:
 #   (`AttributeError: no attribute _compute_coupling`). `run_gate_zharm` 은 `zline` 을
 #   모듈에서 직접 부르기만 해서 통과했다 — **관문이 타는 배선이 진짜 배선이어야 한다.**
 #   ⇒ 클래스 **앞**에 둔다. `run_gate_zharm` ⑦ 이 세 메서드가 클래스에 붙어 있는지 본다.
+#: 14.99 — 관문이 **끄고 켜서 바이트 동일**을 증명할 수 있게 하는 스위치.
+#: 수입 시점에 한 번 읽는다 (한 프로세스 안에서는 안 바뀐다 — 관문은 두 프로세스로 돈다).
+CUR_CACHE_OFF = bool(os.environ.get("NILM_NO_CUR_CACHE"))
+
+#: `_cur_cache` 의 '없음' 감시값 — `None`(회로 실패)도 캐시하기 때문이다 (14.99).
+_MISS = object()
+
+
 def zline(r_line: float, l_line: float, zk=()) -> np.ndarray:
     """(H,) 선로 임피던스. `zk` 가 비면 `r + j·2πF·h·L` — **옛 경로와 비트 동일**.
 
@@ -132,6 +142,11 @@ class SmpsCircuit:
         self.extrapolate = bool(extrapolate)
         self._tex_cache: Dict[tuple, np.ndarray] = {}
         self._cpl_cache: Dict[tuple, Dict[str, np.ndarray]] = {}
+        #: 14.99 — `current()` 자체의 메모이즈. 토막 굽기에서 같은 회로 해를
+        #: 토막 수만큼 다시 푸는 것을 막는다. 키는 호출부가 이미 양자화한 값이다.
+        self._cur_cache: Dict[tuple, object] = {}
+        self.cur_hits = 0
+        self.cur_misses = 0
         self.hits = 0
         self.misses = 0
         self.failures = 0
@@ -150,6 +165,37 @@ class SmpsCircuit:
         return None if m is None or not hasattr(m, "sample_R") else float(m.sample_R(rng))
 
     # ── 원시 호출 ─────────────────────────────────────────────────────────
+    def current_id(self, device: str, pb: int, pq: float, rel: np.ndarray, rel_id,
+                   vb: int, vq: float, rb: int, rq: Optional[float]) -> Optional[np.ndarray]:
+        """`current` 를 **양자화 키로 메모이즈**한 것 (14.99).
+
+        왜: `texture_delta` 는 `a = current(..., rel_env)` 와 `b = current(..., rel_rec)` 를
+        부르는데 캐시 키가 **쌍**(`env_id`,`rec_id`)이라, 창을 토막 낼 때(`vtex_seg_s>0`)
+        토막마다 통째로 미스가 난다. 그런데 `b` 의 입력(`rel_rec`,`p`,`v1`,`R`)은
+        **토막 내내 완전히 같다** — 20토막이면 19번이 순수 낭비다.
+        `_compute_coupling` 의 `b`(=그 토막의 텍스처)는 `texture_delta` 의 `a` 와
+        **같은 계산**이라 교차 적중까지 얻는다.
+
+        ⚠ **수치가 안 변한다.** 키에 쓰는 값(`pb`·`vb`·`rb`)은 호출부가 이미 양자화한
+          바로 그 값이고, 계산에 넘기는 것도 그 대표값(`pq`·`vq`·`rq`)이다.
+        ⚠ `rel_id` 는 **이름 공간을 붙여서** 받는다 — 텍스처 id 와 녹화 id 가 같은 정수일
+          수 있어 안 붙이면 서로 덮어쓴다.
+        ⚠ `None`(실패)도 캐시한다. `.get(key)` 로 하면 캐시된 `None` 이 미스로 보이므로
+          **감시값**을 쓴다.
+        """
+        if CUR_CACHE_OFF:                      # 관문용 — 옛 경로 그대로
+            return self.current(device, pq, rel, vq, rq)
+        key = ("cur", device, int(pb), rel_id, int(vb), int(rb))
+        got = self._cur_cache.get(key, _MISS)
+        if got is not _MISS:
+            self.cur_hits += 1
+            return got
+        self.cur_misses += 1
+        out = self.current(device, pq, rel, vq, rq)
+        if len(self._cur_cache) < self.max_cache:
+            self._cur_cache[key] = out
+        return out
+
     def current(self, device: str, p: float, rel: np.ndarray, v1: float,
                 R: Optional[float] = None) -> Optional[np.ndarray]:
         """(15,) complex 계측 영역 전류. 실패하면 None.
@@ -190,8 +236,9 @@ class SmpsCircuit:
             return got
         self.misses += 1
         pq = max(pb * P_BIN_W, P_BIN_W); vq = vb * V_BIN_V; rq = None if R is None else rb * R_BIN_OHM
-        a = self.current(device, pq, rel_env, vq, rq)
-        b = self.current(device, pq, rel_rec, vq, rq)
+        # 14.99 — `b` 는 토막 내내 같은 계산이다. 메모이즈하면 20토막에서 19번이 빠진다.
+        a = self.current_id(device, pb, pq, rel_env, ("env", int(env_id)), vb, vq, rb, rq)
+        b = self.current_id(device, pb, pq, rel_rec, ("rec", int(rec_id)), vb, vq, rb, rq)
         out = None if (a is None or b is None) else (a - b).astype(np.complex64)
         if len(self._tex_cache) < self.max_cache:
             self._tex_cache[key] = out
@@ -241,7 +288,8 @@ class SmpsCircuit:
         vq = int(round(v1 / V_BIN_V)) * V_BIN_V
         zr = int(round(r_line / Z_BIN_OHM)) * Z_BIN_OHM
         zl = int(round(l_line / L_BIN_H)) * L_BIN_H
-        out = self._compute_coupling(pq, rel_env, vq, zr, zl, rq, iq, zk)
+        out = self._compute_coupling(pq, rel_env, vq, zr, zl, rq, iq, zk,
+                                     env_id=int(env_id), vb=int(round(v1 / V_BIN_V)))
         if len(self._cpl_cache) < self.max_cache:
             self._cpl_cache[key] = out
         return out
@@ -307,7 +355,9 @@ class SmpsCircuit:
 
     def _compute_coupling(self, powers: Dict[str, float], rel_env: np.ndarray, v1: float,
                           r_line: float, l_line: float, R: Dict[str, Optional[float]],
-                          i_ext: Optional[np.ndarray] = None, zk=()) -> Dict[str, np.ndarray]:
+                          i_ext: Optional[np.ndarray] = None, zk=(),
+                          env_id: Optional[int] = None,
+                          vb: Optional[int] = None) -> Dict[str, np.ndarray]:
         Z = zline(r_line, l_line, zk)
         # 13.73: 꼬리(h17~h31)는 **강하 없이 통과**시킨다. 고정점은 h1~h15 그대로다 —
         # 꼬리의 부하 전류가 mA 라 Z·I 가 1~2mV(기본파의 0.001%)이고, 늘리면 고정점이
@@ -336,8 +386,17 @@ class SmpsCircuit:
             V_term = _join_tail(self._solve_vterm(total_true, V_src, Z), tail)
             out = {}
             for d, p in powers.items():
+                # `a` 는 `V_term` 이 창·토막마다 달라 캐시할 안정된 id 가 없다.
+                # `b` 는 **그 토막의 텍스처** 라 `texture_delta` 의 `a` 와 같은 계산이다 (14.99).
                 a = self.current(d, p, V_term / float(v1), v1, R.get(d))
-                b = self.current(d, p, rel_env, v1, R.get(d))
+                if env_id is None or vb is None:
+                    b = self.current(d, p, rel_env, v1, R.get(d))
+                else:
+                    _pb = _pbin(p)
+                    _rr = R.get(d)
+                    _rb = -1 if _rr is None else int(round(_rr / R_BIN_OHM))
+                    b = self.current_id(d, _pb, p, rel_env, ("env", int(env_id)),
+                                        vb, v1, _rb, _rr)
                 if a is None or b is None:
                     raise RuntimeError(d)
                 out[d] = (a - b).astype(np.complex64)
@@ -348,7 +407,11 @@ class SmpsCircuit:
 
     def stats(self) -> Dict[str, float]:
         n = self.hits + self.misses
+        cn = self.cur_hits + self.cur_misses
         return {"hits": self.hits, "misses": self.misses, "failures": self.failures,
+                "cur_hits": self.cur_hits, "cur_misses": self.cur_misses,
+                "cur_hit_rate": (self.cur_hits / cn) if cn else 0.0,
+                "cur_size": len(self._cur_cache),
                 "hit_rate": (self.hits / n) if n else 0.0,
                 "size": len(self._tex_cache) + len(self._cpl_cache)}
 
