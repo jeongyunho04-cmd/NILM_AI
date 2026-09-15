@@ -34,8 +34,16 @@
 #        -c 40 -> 13노드 · -c 48 -> 3노드 · -c 56 -> 1노드 · **-c 64 -> 0노드**
 #     그래서 cpu2 큰 노드(256코어) 안은 못 쓴다 — 유휴가 노드당 8~28 뿐이다.
 #
-#   20토막 x 40코어, 동시 10 (QOS node=10):  토막당 15,000창 -> **3.4시간/토막** · 총 6.8시간
-#   10토막으로 하면 총 시간은 같은데 한 토막이 6.8시간이라, 죽으면 손실이 두 배다.
+#   **8토막 x 40코어 = 320코어, 한 파도.** 두 노드는 학습 실험용으로 비워 둔다.
+#   ⚠⚠ **토막 수는 반드시 노드 수로 나누어떨어져야 한다.** 10토막을 9칸으로 돌리면
+#     마지막 하나가 **두 번째 파도를 통째로** 써서 6.8시간이 **13.6시간**이 된다.
+#     (처음에 10토막/9노드를 7.6시간으로 적었는데 틀렸다 — 파도를 안 셌다.)
+#        10토막/9노드  6.8h x 2파도 = **13.6h**
+#         8토막/8노드  8.5h x 1파도 = ** 8.5h**   <- 이것
+#     그리고 14.99 의 `current()` 메모이즈가 서면 **~4.3h** 가 된다.
+#   ⚠ 20토막이 더 안전하지만(한 토막 3.4시간) **QOS MaxSubmit=20** 에 걸린다 —
+#     배열 20 + 돌고 있는 작업 4 = 24 > 20 으로 제출이 거부됐다 (AssocMaxSubmitJobLimit).
+#     총 시간은 어차피 **총 코어(400)** 가 정하므로 토막 수로는 안 줄어든다.
 #
 #SBATCH -J nilm_hs3
 #SBATCH -p cpu1,gpu6,cpu2,gpu3,gpu4,gpu5
@@ -43,8 +51,8 @@
 #SBATCH -n 1
 #SBATCH -c 40
 #SBATCH --mem=160G
-#SBATCH -t 06:00:00   # 14.96 실측 3.4시간 x 1.76 (HPC_RULES 2 는 1.5 이상)
-#SBATCH -a 0-19%10
+#SBATCH -t 10:00:00   # 14.96 실측 6.8시간 x 1.47, 넉넉히 (MaxTime 은 UNLIMITED)
+#SBATCH -a 0-7     # 14.100 — **8토막/8노드 한 파도**. 두 노드는 학습 실험용으로 비워 둔다
 #SBATCH -o %x_%A_%a.out
 #SBATCH -e %x_%A_%a.out
 set -euo pipefail
@@ -53,7 +61,7 @@ PY=./env/bin/python
 
 WINDOWS=${WINDOWS:-300000}
 GEN=${GEN:-v32hs3}
-NSHARD=${SLURM_ARRAY_TASK_COUNT:-20}
+NSHARD=${SLURM_ARRAY_TASK_COUNT:-8}
 OUT="$HOME/NILM_AI/cache/train60_${GEN}_s${SLURM_ARRAY_TASK_ID}"
 
 echo "노드 $(hostname) · 토막 ${SLURM_ARRAY_TASK_ID}/${NSHARD} · 코어 ${SLURM_CPUS_PER_TASK} · $(date '+%F %H:%M:%S')"

@@ -4,9 +4,9 @@
 #SBATCH -p gpu4,gpu3,gpu6,cpu1,cpu2,gpu5
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -c 16
+#SBATCH -c 40
 #SBATCH --mem=60G
-#SBATCH -t 00:40:00
+#SBATCH -t 01:00:00
 #SBATCH -o %x_%j.out
 #SBATCH -e %x_%j.out
 set -euo pipefail

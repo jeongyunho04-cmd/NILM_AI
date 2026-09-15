@@ -52,10 +52,14 @@ COMMON = [
     "--standby-jitter-cap", "95", "--harmonic-z",
     "--vtex-step-s", "3", "--vtex-seg-s", "3",
 ]
-#: 관문 크기 — 100창(0/3000)에 워커 16개면 한 판 ~5분이다. 워커 수는 산출물을 안 바꾼다
+#: 관문 크기 — **분모는 청크 수(1200)를 넘을 수 없다** (`0/3000` 은 "토막에 청크가
+#: 없다" 로 죽는다). `0/1200` = **250창이 최소**다 — `chunk=250` 이 `build_cache` 에
+#: 박혀 있고 CLI 로 못 바꾼다. 검정 자체는 25창이면 충분한데 그게 한계다.
+#: 시간은 `고정 시작부하 115초 x 2판` + `창수 x 한계비용 / 워커 x 2판`. 워커 40이면 ~10분.
+#: 워커 수는 산출물을 안 바꾼다
 #: (`test_worker_count_does_not_change_the_generated_training_set`).
-SHARD = os.environ.get("GATE_SHARD", "0/3000")
-WORKERS = os.environ.get("GATE_WORKERS", "16")
+SHARD = os.environ.get("GATE_SHARD", "0/1200")
+WORKERS = os.environ.get("GATE_WORKERS", "40")
 ARRS = ("fine", "wide", "y_power", "y_on", "y_plugged", "y_standby",
         "y_state", "obs_harm", "p_noise", "p_observed")
 
