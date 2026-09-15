@@ -121,6 +121,8 @@ def main() -> int:
     ap.add_argument("--app", default="", help="[2][3] 을 걸 기기")
     ap.add_argument("--at", type=float, default=np.nan, help="[2][3] 을 걸 경계 시각(초)")
     ap.add_argument("--gap", type=float, default=1.0, help="경계 앞/뒤로 몇 초를 짝지을까")
+    ap.add_argument("--big", type=float, default=300.0,
+                    help="이 와트 이상인 띠를 **수백 W**(① 치환)로 따로 합친다")
     ap.add_argument("--even-median", type=int, default=0,
                     help="짝수차 중앙값을 **강제**한다 (14.160) — 분포 밖 시험용. "
                          "안 주면 체크포인트가 적어 둔 값을 따라간다")
@@ -184,6 +186,9 @@ def main() -> int:
             print("    (없음)")
         # 그 구간의 헛ON 지속 구간도 같이
         print("  **헛ON 이 서 있는 구간** (연속)")
+        #: `--big` 위/아래로 **갈라서 합친다**. ① 수백 W 치환과 ② 수십 W 표류는
+        #  같은 줄에 섞이면 안 된다 ([[split-the-metric-before-sizing-the-disease]]).
+        tot = {}
         for v in pres:
             k = apps.index(v)
             bad = (~ON[v]) & (~UN[v]) & (G[:, k] > 0.5)
@@ -192,9 +197,20 @@ def main() -> int:
             d = np.diff(np.r_[0, bad.astype(int), 0])
             for s_, e_ in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1) - 1):
                 if tt[e_] - tt[s_] >= 0.3:
+                    w_ = float(np.median(PW[s_:e_ + 1, k]))
+                    t_ = float(tt[e_] - tt[s_])
+                    g_ = tot.setdefault(v, [0.0, 0.0])
+                    g_[0 if w_ >= a.big else 1] += t_
                     print("    %-8s %7.2f ~ %7.2f초 (%.1f초) 게이트 중앙 %.3f · 전력 중앙 %4.0fW"
-                          % (SH.get(v, v), tt[s_], tt[e_], tt[e_] - tt[s_],
-                             np.median(G[s_:e_ + 1, k]), np.median(PW[s_:e_ + 1, k])))
+                          % (SH.get(v, v), tt[s_], tt[e_], t_,
+                             np.median(G[s_:e_ + 1, k]), w_))
+        if tot:
+            b = sum(x[0] for x in tot.values())
+            sm = sum(x[1] for x in tot.values())
+            print("  ** 합 ** 수백 W 띠(>=%.0fW) **%.1f초** · 수십 W 띠 %.1f초   |   %s"
+                  % (a.big, b, sm,
+                     " · ".join("%s %.1f+%.1f" % (SH.get(v, v), x[0], x[1])
+                                for v, x in sorted(tot.items(), key=lambda r: -r[1][0]))))
 
         # ── [2][3] 한 경계를 편다 ────────────────────────────────────────
         if not a.app or not np.isfinite(a.at):
