@@ -504,6 +504,21 @@ def main() -> int:
                          "덩이를 죽이면 오븐 헛게이트가 10.8%% -> **23.0%%** 로 두 배가 된다 "
                          "(= 미래는 순이득이다. 없애지 말고 시간 해상도를 줘라). "
                          "K=3 이면 2.0초 · K=6 이면 1.0초 해상도.")
+    #: 14.160 — 짝수차 **크기**에 k탭 이동중앙값. 0/1 이면 **비트 동일**이다.
+    #:   릴레이가 반주기에서 끊기면 그 **한 사이클이 물리적으로 반파**라 |I2| 가 100배
+    #:   튀고(h2/h1 0.0018 -> 0.27, 최대 0.96), 사전에서 반파는 드라이기 s1(0.4326)
+    #:   하나뿐이라 **드라이기가 없는 파일에 208~402W 유령**이 선다 (14.159).
+    #:   추론에만 k=5 를 걸어 재 본 짝비교 (`cnn_pcap` 3시드, 학습은 안 한 상태):
+    #:       드라이 유령 스파이크 **7개 -> 0개** · 절대 잔차 21.3 -> **18.5W** (3/3)
+    #:       판정줄 .8820 -> .8774 · SMPS .9807 -> .9693   <- 분포 밖이라 생긴 손해로 본다
+    #:   ⚠ ch43/44 는 이미 61주기 **평균**인데 그쪽을 되돌려도 유령이 안 죽는다
+    #:     (402 -> 398.6W). 모델이 읽는 것은 평활 없는 **ch16~22** 다 (402 -> 67.5W).
+    #: 14.162 — 보존 손실의 **죽은구역**(W). 음수면 옛 절대 와트 식이라 **비트 동일**.
+    #:   `--w-cons` 가 0 이면 항 자체가 안 걸린다. δ 는 14.161 에서 재서 정했다.
+    ap.add_argument("--cons-deadzone", type=float, default=-1.0, metavar="W",
+                    help="보존 손실 죽은구역 (14.162). 음수면 옛 식과 비트 동일")
+    ap.add_argument("--even-median", type=int, default=0, metavar="K",
+                    help="짝수차 크기에 K탭 이동중앙값 (14.160). 0/1 이면 비트 동일")
     ap.add_argument("--p-state-cap", type=float, default=0.0,
                     help="상태 전력 슬롯의 **상한 배수** R — `p_states <= R x S_STATE` "
                          "(14.121). **0 이면 상한 없음 = 비트 동일.** 13.84.68 은 슬롯이 "
@@ -825,6 +840,12 @@ def main() -> int:
     ap.add_argument("--tag", default="cnn")
     ap.add_argument("--out", default="results")
     a = ap.parse_args()
+    if a.even_median > 1:
+        from src.model import inputs as _I
+        _I.EVEN_MEDIAN = int(a.even_median)
+        print("** 14.160 짝수차 이동중앙값 k=%d — ch16~22·28·39·43·44 가 robust 해진다 **"
+              % a.even_median)
+
 
     #: 14.150 — 반쪽 처치와 같이 못 쓴다. `gate_free_power` 가 그것들을 포함한다.
     if a.gate_free_power and (a.on_power_praw or a.on_detach_gate
@@ -974,6 +995,7 @@ def main() -> int:
         harm_vnorm_vref_state=(torch.from_numpy(_vref_st)
                                if (a.harm_vnorm_anchor and a.harm_sig_vnorm) else None),
         harm_odd_only=a.harm_odd_only,
+        cons_deadzone=a.cons_deadzone,
         off_detach_praw=a.off_detach_praw,
         on_detach_gate=a.on_detach_gate,
         on_power_praw=a.on_power_praw,
@@ -1098,6 +1120,8 @@ def main() -> int:
                     "on_detach_gate": a.on_detach_gate,
                     "on_power_praw": a.on_power_praw,
                     "gate_free_power": a.gate_free_power,
+                    "even_median": int(a.even_median),
+                    "cons_deadzone": float(a.cons_deadzone),
                     "off_detach_praw": a.off_detach_praw,
                     "wide_summary": a.wide_summary, "wide_target": a.wide_target,
                     "periodicity": a.periodicity,

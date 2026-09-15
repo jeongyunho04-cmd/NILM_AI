@@ -119,6 +119,14 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
     """
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     assert_target_config(ck, ckpt_path)
+    #: 14.160 — 입력 파이프라인 설정은 **모델이 아니라 자의 규약**이다. 어긋나면
+    #: 채점이 학습과 다른 입력을 보게 되므로 크게 경고한다
+    #: ([[match-the-scoring-convention-before-comparing]]).
+    from src.model import inputs as _I
+    _em = int(ck.get("even_median", 0) or 0)
+    if max(_em, 1) != max(int(_I.EVEN_MEDIAN), 1):
+        print("⚠⚠ 짝수차 이동중앙값이 어긋난다 — 체크포인트 k=%d 인데 지금 입력은 k=%d 다 (%s)"
+              % (_em, int(_I.EVEN_MEDIAN), ckpt_path))
     apps = ck["appliances"]
     # 시퀀스 체크포인트는 **구조를 `ref`(cnn_v37)에서** 가져오는데 사영 설정은 자기가
     # 들고 있다. `proj_resp="head"` 는 `proj_head.*` 키를 만들므로 **`load_state_dict`

@@ -1,24 +1,41 @@
 # -*- coding: utf-8 -*-
-"""실패 ② (유령) — 잔차의 **크기·전력·정렬도** 축을 잰다 (13.84.58).
+"""**유령 채점** — 그 파일에 **없는 기기**에 모델이 무엇을 주는가 (14.159).
 
-13.84.53 의 자기보정은 실패 ③ 을 열었지만 유령(test_3·test_4)은 **원리적으로** 못 연다:
-보정이 서려면 "미니PC 가 꺼진 구간" 이 필요한데 유령의 정의가 모델이 그 구간을 못 알아보는
-것이다 (13.84.55). 그래서 다른 축이 필요하다. 아직 안 본 것이 있다 —
+사용자: *"유령 채점 고치고 wh03 판정해줘"*
 
-자기보정은 잔차를 미니PC 지문에 사영해 **와트**를 쓴다. 그런데 사영은 **정렬도를 버린다.**
-진짜 미니PC 가 켜지면 잔차가 지문 **방향**을 가리켜야 하고, 유령은 "어쩌다 그 방향 성분이
-있는 잔차" 이므로 정렬도가 낮아야 한다. 크기가 같아도 방향이 다르면 갈린다.
+자에 구멍이 있었다. `run_baseline_nilmtk.score_arm` 은
 
-    resid(t) = obs(t) − 잡음 − Σ_{j≠미니PC} P̂_j·sig_j
-    w(t)   = <resid, sig_미니PC> / |sig_미니PC|²        [W]   <- 지금 쓰는 것
-    cos(t) = <resid, sig_미니PC> / (|resid|·|sig_미니PC|)     <- **안 쓰는 것**
+```python
+    for k in np.nonzero(d["present"])[0]:        # <- 없는 기기는 **한 칸도 안 센다**
+```
 
-재는 것: 참ON · 유령(참OFF인데 모델 ON) · 참OFF 세 무리에서 w 와 cos 의 분포와 AUC.
-⚠ 라벨은 **채점에만** 쓴다. 판별기를 라벨로 맞추지 않는다.
+라서 **그 파일에 안 꽂힌 기기의 유령이 판정 줄에 전혀 안 나타난다.** 실제로 잡힌 것:
 
-    python -X utf8 src/run_diag_ghost.py [results/seq_h38_base.pt]
+```
+  test_2  오븐 유령 **46초 연속 · 1,254W**   (test_2 에 오븐은 없다)
+  test_1  드라이 유령 스파이크 208~402W      (test_1 에 드라이기는 없다)
+```
+
+둘 다 그림(5번 칸)에만 보이고 숫자에는 없었다.
+
+⚠ **`score_arm` 은 안 건드린다.** 그 줄은 로그의 모든 옛 숫자와 이어져 있다
+([[match-the-scoring-convention-before-comparing]]). 대신 **독립된 자**를 하나 더 세운다.
+
+없는 기기는 참값이 **OFF 확정 · 0W 확정**이라 라벨 애매함이 전혀 없다 — 가장 깨끗한
+모집단이다.
+
+```
+  유령 게이트율   없는 기기 칸 중 σ(on_logit) > 0.5 인 비율
+  유령 전력      그 칸들의 평균 예측 W
+  유령 에너지 몫  Σ(없는 기기 W) / Σ(모든 기기 W)
+  유령 최장      가장 긴 연속 유령 구간 (초)
+  (곁들임) 있는데 꺼진 기기의 헛ON율 — `score_arm` 의 정확도가 이미 섞어 보던 것
+```
+
+    python -X utf8 -m src.run_diag_ghost --ckpt results/cnn_pcap_s0.pt results/cnn_wh03_s0.pt
 """
 import argparse
+import json
 import sys
 
 import numpy as np
@@ -27,126 +44,125 @@ sys.path.insert(0, ".")
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from src import env_guard  # noqa: F401
+from src import env_guard  # noqa: F401,E402
 
-import torch
+import torch  # noqa: E402
 
-from src.model.chain import ChainHeads, viterbi
-from src.model.lossbuild import build_loss
-from src.preprocessing import load_nilm_npz
-from src.run_gate_check import load_model
-from src.run_train_seq import FILES, real_windows
+from src.run_gate_check import load_model  # noqa: E402
 
-FS = 60
-ORD = [1, 3, 5, 7, 9, 11, 13, 15]
-OI = [o - 1 for o in ORD]
+SH = {"oven": "오븐", "electiric_kettle": "포트", "hotplate": "핫플", "hair_dryer": "드라이",
+      "beam_projector": "빔", "laptop_charger": "충전", "minipc": "미니PC",
+      "fan": "선풍", "air_conditioner": "에어컨"}
 
 
-def auc(pos, neg):
-    """순위 통계 AUC (sklearn 없이)."""
-    if len(pos) == 0 or len(neg) == 0:
-        return float("nan")
-    a = np.concatenate([pos, neg])
-    r = np.empty(len(a), float)
-    r[np.argsort(a, kind="mergesort")] = np.arange(len(a))
-    # 동점 평균순위
-    s = np.sort(a); i = 0
-    while i < len(s):
-        j = i
-        while j + 1 < len(s) and s[j + 1] == s[i]:
-            j += 1
-        if j > i:
-            m = np.nonzero(a == s[i])[0]
-            r[m] = r[m].mean()
-        i = j + 1
-    return float((r[:len(pos)].sum() - len(pos) * (len(pos) - 1) / 2) / (len(pos) * len(neg)))
-
-
-def q(x, *ps):
-    return "  ".join("%7.2f" % np.quantile(x, p) for p in ps) if len(x) else "      —" * len(ps)
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("ck", nargs="?", default="results/seq_h38_base.pt")
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--ckpt", nargs="+", required=True)
+    ap.add_argument("--grid-s", type=float, default=2.0)
+    ap.add_argument("--thr", type=float, default=0.5)
+    ap.add_argument("--per-app", action="store_true", help="기기별 표도 찍는다")
+    ap.add_argument("--even-median", type=int, default=0,
+                    help="짝수차 크기에 k탭 이동중앙값 (14.160). 0/1 이면 비트 동일")
     a = ap.parse_args()
 
+    if a.even_median > 1:
+        from src.model import inputs as _I
+        _I.EVEN_MEDIAN = int(a.even_median)
+        print("⚠ 짝수차 이동중앙값 k=%d 를 **추론에만** 건다 "
+              "(모델은 이것 없이 학습됐다 — 분포 밖 시험이다)" % a.even_median)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    ck = torch.load(a.ck, map_location=dev, weights_only=False)
-    apps = list(ck["appliances"])
-    model = load_model(ck.get("ref", "results/cnn_v37.pt"), dev, weights=False,
-                       mask=not bool(ck.get("no_mask", False)))[0]
-    model.load_state_dict(ck["model"]); model.eval()
-    heads = ChainHeads(ck["zdim"], ck["ddim"], len(apps), hidden=ck["hidden"],
-                       score_norm=int(ck.get("score_norm", 0))).to(dev)
-    heads.load_state_dict(ck["heads"]); heads.eval()
-    crit = build_loss(apps, "cpu", verbose=False)
-    sg = crit.sig.numpy(); sigc = sg[..., 0] + 1j * sg[..., 1]
-    nzc = crit.noise_sig.numpy()[:, 0] + 1j * crit.noise_sig.numpy()[:, 1]
-    km = apps.index("minipc")
-    sm = sigc[km][OI]
-    cache = real_windows(apps, ck["meta"]["grid_s"], dev)
+    apps = list(torch.load(a.ckpt[0], map_location="cpu",
+                           weights_only=False)["appliances"])
+    from src.run_train_seq import real_windows
+    cache = real_windows(apps, a.grid_s, dev)
+    ev = json.load(open("processed_data/real_events.json", encoding="utf-8"))["files"]
 
-    print("미니PC 지문 |sig| %.1f mA/W · 잡음 |noise| %.1f mA"
-          % (1000 * np.abs(sm).sum() / len(sm) * len(sm) / len(sm) * np.linalg.norm(sm) / np.linalg.norm(sm)
-             * 1000 / 1000 * np.linalg.norm(sm), 1000 * np.linalg.norm(nzc[OI])))
-    print("\n   %-8s %8s %8s %8s | %-24s | %-24s"
-          % ("파일", "참ON", "유령", "참OFF", "w [W] 25/50/75 분위", "cos 25/50/75 분위"))
+    # 없는 기기 / 있는데 꺼진 칸
+    ABS, OFFP, STEM, DT = [], [], [], []
+    for stem, d in cache.items():
+        n = len(d["t"])
+        pres = np.array([v in ev[stem]["appliances_present"] for v in apps])
+        unc = np.zeros((n, len(apps)), bool)
+        t = np.asarray(d["t"], float)
+        for k, v in enumerate(apps):
+            for t0, t1 in ev[stem]["intervals"].get(v, {}).get("uncertain", []):
+                unc[(t >= t0) & (t <= t1), k] = True
+        y = d["y"].astype(bool)
+        ABS.append(np.tile(~pres, (n, 1)))
+        OFFP.append(pres[None] & (~y) & (~unc))
+        STEM += [stem] * n
+        DT.append(np.r_[a.grid_s, np.diff(t)])
+    ABS, OFFP = np.concatenate(ABS), np.concatenate(OFFP)
+    DT = np.concatenate(DT)
+    STEM = np.array(STEM)
+    print("실측 5파일 · 창 %d · 격자 %.1fs" % (len(ABS), a.grid_s))
+    print("  파일별 **없는** 기기 (참 OFF·0W 확정)")
+    for stem in cache:
+        miss = [SH.get(v, v) for v in apps if v not in ev[stem]["appliances_present"]]
+        print("    %-8s %d종: %s" % (stem, len(miss), " · ".join(miss)))
+    print("  없는 기기 칸 **%d개** · 있는데 꺼진 칸 %d개" % (ABS.sum(), OFFP.sum()))
 
-    POS, GH, NEG = {"w": [], "c": []}, {"w": [], "c": []}, {"w": [], "c": []}
-    with torch.no_grad():
-        for stem in FILES:
-            d = cache.get(stem)
-            if d is None or not d["present"][km]:
-                continue
-            Z, GL, PW = [], [], []
-            for i in range(0, len(d["t"]), 512):
-                o = model(torch.from_numpy(d["fine"][i:i + 512]).to(dev),
-                          torch.from_numpy(d["wide"][i:i + 512]).to(dev))
-                Z.append(o["z"].float()); GL.append(o["on_logit"].float()); PW.append(o["power"].float())
-            em, on, off, ini = heads(torch.cat(Z)[None],
-                                     torch.from_numpy(d["dfeat"]).float()[None].to(dev),
-                                     torch.cat(GL)[None])
-            pw = torch.cat(PW).cpu().numpy()
-            path = viterbi(em, on, off, ini)[0].cpu().numpy()
-            y = d["y"].astype(bool)
-            r = load_nilm_npz("processed_data/composite_eval/%s.npz" % stem)
-            Hh = np.asarray(r["harmonics_complex"])
-            ti = np.clip((d["t"] * FS).astype(int), 0, len(Hh) - 1)
-            obs = Hh[ti][:, OI]
-
-            rest = np.zeros_like(obs)
-            for j in range(len(apps)):
-                if j == km:
+    rows = []
+    for ck in a.ckpt:
+        m = load_model(ck, dev)[0]
+        m.eval()
+        G, PW = [], []
+        with torch.no_grad():
+            for stem, d in cache.items():
+                for i in range(0, len(d["t"]), 256):
+                    o = m(torch.from_numpy(np.ascontiguousarray(d["fine"][i:i + 256])).to(dev),
+                          torch.from_numpy(np.ascontiguousarray(d["wide"][i:i + 256])).to(dev))
+                    G.append(torch.sigmoid(o["on_logit"]).float().cpu().numpy())
+                    PW.append(o["power"].float().cpu().numpy())
+        G, PW = np.concatenate(G), np.concatenate(PW)
+        gon = G > a.thr
+        # 최장 연속 유령 (기기별로 파일 안에서)
+        longest, who = 0.0, ""
+        for stem in cache:
+            sel = STEM == stem
+            for k in range(len(apps)):
+                if not ABS[sel, k].any():
                     continue
-                rest += pw[:, j, None] * sigc[j][OI][None, :]
-            resid = obs - rest - nzc[OI][None, :]
-            ip = (resid @ np.conj(sm)).real
-            w = ip / (np.abs(sm) ** 2).sum()
-            cs = ip / np.maximum(np.linalg.norm(resid, axis=1) * np.linalg.norm(sm), 1e-12)
+                b = gon[sel, k]
+                if not b.any():
+                    continue
+                dd = np.diff(np.r_[0, b.astype(int), 0])
+                for s_, e_ in zip(np.flatnonzero(dd == 1), np.flatnonzero(dd == -1) - 1):
+                    L = (e_ - s_ + 1) * a.grid_s
+                    if L > longest:
+                        longest, who = L, "%s·%s" % (stem, SH.get(apps[k], apps[k]))
+        rows.append((ck.split("/")[-1].replace(".pt", ""),
+                     100 * gon[ABS].mean(),
+                     float(PW[ABS].mean()),
+                     100 * PW[ABS].sum() / max(PW.sum(), 1e-9),
+                     float(np.percentile(PW[ABS], 99)),
+                     longest, who,
+                     100 * gon[OFFP].mean(),
+                     float(PW[OFFP].mean())))
+        if a.per_app:
+            print("\n  ■ %s 기기별 (없는 기기만)" % rows[-1][0])
+            for k, v in enumerate(apps):
+                if not ABS[:, k].any():
+                    continue
+                s = ABS[:, k]
+                print("     %-18s 칸 %5d · 게이트>%.1f %5.1f%% · 평균 %6.1fW · p99 %7.1fW"
+                      % (SH.get(v, v), s.sum(), a.thr, 100 * gon[s, k].mean(),
+                         PW[s, k].mean(), np.percentile(PW[s, k], 99)))
+        del m
+        if dev == "cuda":
+            torch.cuda.empty_cache()
 
-            mon, mgh = y[:, km], (~y[:, km]) & path[:, km]
-            mof = (~y[:, km]) & (~path[:, km])
-            for M, S in ((mon, POS), (mgh, GH), (mof, NEG)):
-                S["w"].append(w[M]); S["c"].append(cs[M])
-            print("   %-8s %8d %8d %8d | %s | %s"
-                  % (stem, mon.sum(), mgh.sum(), mof.sum(),
-                     q(w[mgh], .25, .5, .75), q(cs[mgh], .25, .5, .75)))
-            print("   %-8s %8s %8s %8s |   참ON %s |   참ON %s"
-                  % ("", "", "", "", q(w[mon], .25, .5, .75), q(cs[mon], .25, .5, .75)))
-
-    for S in (POS, GH, NEG):
-        for k in S:
-            S[k] = np.concatenate(S[k]) if S[k] else np.zeros(0)
-    print("\n   전체 무리별 (참ON %d · 유령 %d · 참OFF %d 단계)"
-          % (len(POS["w"]), len(GH["w"]), len(NEG["w"])))
-    print("   %-8s %-28s %-28s" % ("", "w [W]  25 / 50 / 75", "cos  25 / 50 / 75"))
-    for nm, S in (("참ON", POS), ("유령", GH), ("참OFF", NEG)):
-        print("   %-8s %-28s %-28s" % (nm, q(S["w"], .25, .5, .75), q(S["c"], .25, .5, .75)))
-    print("\n   AUC 참ON 대 유령   w %.3f   cos %.3f" % (auc(POS["w"], GH["w"]), auc(POS["c"], GH["c"])))
-    print("   AUC 참ON 대 참OFF   w %.3f   cos %.3f" % (auc(POS["w"], NEG["w"]), auc(POS["c"], NEG["c"])))
-    print("\n   읽는 법 — cos 의 AUC 가 w 보다 뚜렷이 높으면 **정렬도가 안 쓰인 축**이고")
-    print("   방출이나 사슬에 넣을 값어치가 있다. 둘 다 0.5 근처면 이 축으로는 못 연다.")
+    print("\n★ **유령 채점** — 없는 기기(참 OFF·0W 확정)")
+    print("  %-16s %9s %9s %9s %9s %9s  %s"
+          % ("판", "게이트율", "평균W", "에너지몫", "p99 W", "최장초", "최장 자리"))
+    for r in rows:
+        print("  %-16s %8.2f%% %9.2f %8.2f%% %9.1f %9.1f  %s"
+              % (r[0], r[1], r[2], r[3], r[4], r[5], r[6]))
+    print("\n  (곁들임) 있는데 꺼진 칸 — `score_arm` 의 정확도가 섞어 보던 것")
+    print("  %-16s %9s %9s" % ("판", "헛ON율", "평균W"))
+    for r in rows:
+        print("  %-16s %8.2f%% %9.2f" % (r[0], r[7], r[8]))
     return 0
 
 

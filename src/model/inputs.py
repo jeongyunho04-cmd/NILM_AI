@@ -219,6 +219,23 @@ CURRENT_SCALE = 20.0         # 절대 고조파 전류
 # 포트·오븐·선풍기·에어컨·프로젝터·충전기·미니PC 도 전부 0.00% 다.
 # 드라이기 약풍은 평균에서 오히려 더 잘 산다 (99.68 -> 100.00%).
 HALFWAVE_HALF = 30
+#: ── 짝수차 크기에 **짧은 이동중앙값** (14.160) ────────────────────────────
+#: 0/1 이면 **비트 동일**이다 (아래 `if k > 1` 가 막는다).
+#:
+#: 왜: 릴레이가 반주기에서 끊기면 **그 한 사이클이 물리적으로 반파**다. test_1 핫플
+#:   듀티에서 |I2| 가 4.9mA -> **483mA** (h2/h1 0.0018 -> 0.27, 구간 최대 0.96)로 튄다.
+#:   사전에서 반파는 **드라이기 s1 (h2/h1 0.4326)** 하나뿐이라 모델이 그리로 간다 —
+#:   드라이기가 **없는 파일**에서 208~402W 유령이 선다 (14.159).
+#: 왜 ch43/44 로는 안 되나: 그쪽은 이미 61주기 **평균**인데, 되돌려 봐도 유령이
+#:   402 -> 398.6W 로 **꿈쩍도 안 한다**. 모델은 평활 없는 **ch16~22 를 읽는다**
+#:   (그것만 되돌리면 402 -> 67.5W · pcap 316 -> 45.8W).
+#: 왜 k=5 인가: 과도는 **1사이클**이다. 실측에서
+#:     |I2| 최대   과도 1176.7 -> **12.8mA** (92배) · 진짜 반파 891.5 -> 884.4 (**0.8% 손실**)
+#:     h2/h1 최대  0.9637 -> **0.0699**        · 진짜 반파 0.3488 -> 0.3467
+#:   순시값에서는 과도가 진짜보다 **커서** 분리가 아예 안 된다. k=5 에서 **69배** 갈린다.
+#: 비용: 250창 x 3600 x 7채널에 **0.2초** (k=61 이면 3.9초 — 옛 주석의 "25분" 이 그것이다).
+#: ⚠ 광역 갈래는 이미 30주기 **블록 중앙값**이라 손댈 필요가 없다 (`build_wide` 의 `med`).
+EVEN_MEDIAN = 0
 POWER_SCALE = 100.0          # P, Q
 # ⚠ 2026-09-06: 새 계측기 자료의 vrms 는 D 210.7~219.4 / E 227.5~231.0V 다. 정규화 중심 222 는
 #   그 사이에 있어 그대로 둔다 (값을 바꾸면 모든 체크포인트·캐시의 입력 프레임이 갈린다).
@@ -323,7 +340,7 @@ def _shift_fwd(a: np.ndarray, n: int) -> np.ndarray:
     return np.concatenate([a[:, n:], np.repeat(a[:, -1:], n, axis=1)], axis=1)
 
 
-def build_fine(x: np.ndarray) -> np.ndarray:
+def build_fine(x: np.ndarray, even_median=None) -> np.ndarray:
     """(B, 33, W) -> (B, 45, 600). 창의 **뒤 10초**만 쓴다. 배치 v2 (13.12).
 
     ```
@@ -363,6 +380,15 @@ def build_fine(x: np.ndarray) -> np.ndarray:
     re, im = seg[:, 0:N_HARM], seg[:, N_HARM:2 * N_HARM]
     p, q, v = seg[:, 30], seg[:, 31], seg[:, 32]
     mag = np.hypot(re, im)
+    # 14.160 — 짝수차 **크기**에만 짧은 이동중앙값. 0/1 이면 **비트 동일**이다.
+    #   한 자리에서 걸면 ch16~22 · ch28(|I2|/|I1|) · ch43 · ch44 가 **한꺼번에** robust 해진다.
+    #   홀수차 Re/Im(0~15)은 안 건드린다 — 거기서는 되돌려도 유령이 안 죽었다(402 -> 392W).
+    _k = int(even_median if even_median is not None else EVEN_MEDIAN)
+    if _k > 1:
+        from scipy.ndimage import median_filter
+        _e = [h - 1 for h in range(2, N_HARM + 1, 2)]
+        mag = mag.copy()
+        mag[:, _e] = median_filter(mag[:, _e], size=(1, 1, _k), mode="nearest")
     i1 = mag[:, 0] + 1e-9
 
     b = seg.shape[0]
@@ -561,6 +587,10 @@ def build_wide(x: np.ndarray) -> np.ndarray:
     return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
 
-def build_inputs(x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """(B, 33, W) -> ((B, 36, 600), (B, 12, W/30))."""
-    return build_fine(x), build_wide(x)
+def build_inputs(x: np.ndarray, even_median=None) -> Tuple[np.ndarray, np.ndarray]:
+    """(B, 33, W) -> ((B, 36, 600), (B, 12, W/30)).
+
+    `even_median` 은 짝수차 크기에 거는 이동중앙값 탭 수다 (14.160). `None` 이면
+    모듈 기본 `EVEN_MEDIAN`(0 = 끔)을 쓰고, 0/1 이면 **비트 동일**이다.
+    """
+    return build_fine(x, even_median), build_wide(x)

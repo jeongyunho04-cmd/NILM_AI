@@ -210,6 +210,9 @@ class NILMLoss(torch.nn.Module):
         swap_slack: int = 0,
         swap_tiebreak: str = "off",
         swap_tb_orders: Sequence[int] = (3, 5, 7),
+        #: 14.162 — 보존 손실의 **죽은구역**(W). 음수면 옛 절대 와트 식 그대로라
+        #: **비트 동일**이다. 0 이상이면 `relu(|r| − δ)/max(P관측,10W)` 로 바뀐다.
+        cons_deadzone: float = -1.0,
         off_detach_praw: bool = False,
         #: 14.147 — **켜진 창에서 게이트에 경사를 주지 않는다.** `off_detach_praw`
         #: 의 짝이다. 기본 꺼짐 = 항등.
@@ -387,6 +390,7 @@ class NILMLoss(torch.nn.Module):
         self.swap_tiebreak_fwd = str(swap_tiebreak)
         self.swap_tb_orders_fwd = tuple(swap_tb_orders)
         # `L_swap`(12.158) 이 셀 조합. 저항 열의 on/off 전수다 (4종이면 16개).
+        self.cons_deadzone = float(cons_deadzone)
         self.off_detach_praw = bool(off_detach_praw)
         self.on_detach_gate = bool(on_detach_gate)
         self.on_power_praw = bool(on_power_praw)
@@ -1021,7 +1025,30 @@ class NILMLoss(torch.nn.Module):
 
         if self.w.cons > 0:
             recon = out["power"].sum(1) + out["standby"].sum(1) + tgt["p_noise"]
-            parts["cons"] = (recon - tgt["p_observed"]).abs().mean()
+            if self.cons_deadzone >= 0.0:
+                # ── 14.162 **죽은구역 보존.** `relu(|r| − δ) / max(P관측, 10W)` ──────
+                #   12.9 가 1단계 `L_cons` 를 막은 논리는 두 가지였다:
+                #     (가) 합성에서 `P관측 ≡ Σ라벨` 은 항등식이라 정보를 안 더한다
+                #     (나) 경사가 개별 전력 감독보다 **35~3000배** 세서 "배분이
+                #          미결정인 채 합만 맞추는 해" 로 끈다 (w_cons 0.05 에서 붕괴)
+                #   둘 다 지금은 안 선다:
+                #     (가) 는 **배분이 자유롭다**는 전제 위에 있는데, 12.9 **이후**
+                #          `state_power_init`(13.84.68)과 `--p-state-cap`(14.121)이
+                #          기기별 전력을 거의 고정된 몇 값으로 묶었다. 그러면 합을
+                #          맞추는 것이 곧 **배분을 고르는 것**이다. 실측 반사실:
+                #          맞춘 창에서 포트<->오븐을 바꾸면 |r| 27.8 -> **150.0W** 다.
+                #     (나) 는 **절대 와트**(`|r|.mean()`)라서 생긴 것이다. 여기서는
+                #          `L_over` 와 같은 상대 규약을 쓰고, 그 위에 죽은구역을 둔다.
+                #   δ 는 재서 정했다 (14.161): δ=100W 에서 정상 창의 **96.9%(합성)
+                #   / 96.5%(실측)** 가 죽은구역 안이라 기울기가 **정확히 0** 이고,
+                #   가장 싼 치환(포트<->오븐, 최소 **139W**)은 **100%** 걸린다.
+                #   ⚠ 양방향이라야 한다 — 치환 방향에 따라 잔차 부호가 뒤집힌다
+                #     (test_5 +97W 과잉 · test_2 −174W 과소). `L_over` 로는 못 잡는다.
+                d = (recon - tgt["p_observed"]).abs() - self.cons_deadzone
+                parts["cons"] = (torch.relu(d)
+                                 / tgt["p_observed"].clamp(min=10.0)).mean()
+            else:
+                parts["cons"] = (recon - tgt["p_observed"]).abs().mean()
         else:
             parts["cons"] = out["power"].sum() * 0.0
 
