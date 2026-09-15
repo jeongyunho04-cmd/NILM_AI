@@ -117,15 +117,24 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", default="cache/train60_v32hs3")
     ap.add_argument("--ref", default="cache/train60_v32h", help="seg 끔 대조")
-    ap.add_argument("--npz-dir", default="processed_data/npz")
+    ap.add_argument("--npz-dir", default="processed_data/npz",
+                    help="실측 기준선. `processed_data/npz` 는 **기기 하나씩** 녹화한 "
+                         "것이고 `processed_data/composite_eval` 은 **여러 기기가 동시에 "
+                         "켜지고 꺼지는 복합** 녹화다. 합성 창이 복합이므로 부하 유래 "
+                         "변동은 복합 쪽과 견줘야 맞다 (단일기기 쪽은 텍스처 성분 대조용).")
     ap.add_argument("--n", type=int, default=400, help="양쪽에서 볼 창 수")
     a = ap.parse_args()
 
     real, nf = from_real(Path(a.npz_dir), a.n)
     if not len(real):
         raise SystemExit("실측 창을 못 모았다 — %s 를 봐라" % a.npz_dir)
-    trt = from_cache(Path(a.cache), a.n)
+    has = (Path(a.cache) / "fine.npy").exists()
+    trt = from_cache(Path(a.cache), a.n) if has else np.full((1, NH, 3), np.nan)
     ref = from_cache(Path(a.ref), a.n) if (Path(a.ref) / "fine.npy").exists() else None
+    if not has:
+        print("⚠ 캐시 %s 에 fine.npy 가 없다 — **실측 쪽만** 찍는다 "
+              "(캐시는 HPC 에 있고 composite_eval 은 로컬에만 있다)" % a.cache)
+        print("")
 
     print("창-안 전압 텍스처 변동 — 캐시 대 실측 (14.110)")
     print("  창 %d사이클(10초) · 실측 파일 %d개 · 창 실측 %d / 처치 %d%s\n"
