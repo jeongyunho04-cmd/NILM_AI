@@ -237,6 +237,7 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
                     head_layout=str(pk.get("head_layout", "v1") or "v1"),
                     # 세밀 패딩 (14.131). 없으면 zeros 라 **비트 동일**이다.
                     #: 14.183 — 없으면 옛 동작(비트 동일)이라 옛 체크포인트가 그대로 실린다.
+                    state_power_src=str(pk.get("state_power_src", "table") or "table"),
                     fine_norm=str(pk.get("fine_norm", "window") or "window"),
                     fine_conv=str(pk.get("fine_conv", "sym") or "sym"),
                     fine_tpool=str(pk.get("fine_tpool", "whole") or "whole"),

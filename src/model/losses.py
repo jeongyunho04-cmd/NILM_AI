@@ -87,6 +87,51 @@ S_STATE: Dict[str, Dict[int, float]] = {
     "oven": {1: 16.8, 2: 1357.1},
 }
 
+#: ── 14.186 **초기값용 표** — 큰 슬롯(>=300W)만 라벨 중앙값으로 ─────────────────
+#
+# 위 `S_STATE` 는 12.9.9 의 **`L_power` Huber 척도**다. 척도로는 p90 이 맞다.
+# 그런데 13.84.68 이 같은 값을 **머리 바이어스 초기값**으로 재사용했고, 듀티 기기는
+# p90 과 중앙이 20% 넘게 벌어진다. 그 결과 초기값이 라벨에서 Huber δ(=0.1) **밖**에
+# 떨어져 기울기가 포화되고, 300에포크로 못 도착한다 (14.186 측정):
+#
+#   기기  상태   S_STATE   라벨 중앙   학습값   | 표->라벨 경로의 %  · 남은 오차(Huber 눈금)
+#   포트  s1    1534.5    1456.8   1468.9 |   **84%**        0.008
+#   드라이 s2   1022.5     964.1    978.6 |   **75%**        0.014
+#   드라이 s1    529.2     486.9    506.3 |   **54%**        0.037
+#   핫플  s2     549.6     454.8    525.6 |   **25%**      **0.129**
+#   오븐  s2    1357.1    1100.6   1298.9 |   **23%**      **0.146**
+#
+# 결과: 오븐 통전 슬롯이 1298.9W(참 1100.6) 라 오븐과 포트 간격이 **170W(11.6%)** 로
+# 눌린다 — **실측은 352W(24.6%)** 다. 두 순저항의 고조파 사이각이 **0.30~1.91도**라
+# 가를 것이 없고, 그 동률을 창 안의 계단이 기울인다 (§7 의 구멍 넷).
+#
+# ⚠ **작은 슬롯은 안 건드린다.** 오븐 s1(FAN_LIGHT)은 라벨이 `is_on=0` 이라 0 으로
+#   적히고(13.40 · 14.167) 라벨 중앙 <10W 대 실측 14.6W 로 **어긋난다**. 큰 슬롯은
+#   라벨과 실측이 **0.1W 안에서 일치**한다 — 거기만 바꾼다.
+# ⚠ 이 표는 **초기값 전용**이다. `build_state_scales`(척도)와 `p_state_cap`(상한)은
+#   `S_STATE` 를 그대로 쓴다 — 한 번에 하나만 바꾼다.
+#
+# 출처: 세그먼트 풀 train 의 상태별 `target_power_w` 중앙값 (n 은 사이클 수).
+S_STATE_INIT_LABEL: Dict[str, Dict[int, float]] = {
+    "air_conditioner": {3: 473.5, 4: 624.4},      # 549.6 −13.9% (n=26,722) · 794.0 −21.4% (n=15,632)
+    "electiric_kettle": {1: 1456.8},              # 1534.5 −5.1% (n=14,239)
+    "hair_dryer": {1: 486.9, 2: 964.1},           # 529.2 −8.0% (n=8,982) · 1022.5 −5.7% (n=8,494)
+    "hotplate": {2: 454.8},                       # 549.6 **−17.3%** (n=35,324)
+    "oven": {2: 1100.6},                          # 1357.1 **−18.9%** (n=27,569)
+}
+
+
+def state_power_init_table(src: str = "table") -> Dict[str, Dict[int, float]]:
+    """머리 바이어스 초기값으로 쓸 슬롯표. `"table"` 이면 `S_STATE` **그대로**다."""
+    if src == "table":
+        return S_STATE
+    if src != "label":
+        raise ValueError("state_power_src 는 table/label: %r" % (src,))
+    out = {a: dict(d) for a, d in S_STATE.items()}
+    for a, d in S_STATE_INIT_LABEL.items():
+        out.setdefault(a, {}).update(d)
+    return out
+
 
 def build_state_scales(appliances: Sequence[str], s_i: Sequence[float],
                        max_states: int = 5) -> torch.Tensor:

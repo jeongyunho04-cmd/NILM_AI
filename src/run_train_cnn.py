@@ -468,6 +468,14 @@ def main() -> int:
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
     # ── 14.183 **미래가 새는 구멍 넷** (14.182). 넷 다 기본이 옛 동작 = 비트 동일 ──
     #   관문 `run_gate_leaks` 가 막힌 것과 **일부러 남긴 것**을 둘 다 못 박는다.
+    ap.add_argument("--state-power-src", default="table", choices=("table", "label"),
+                    help="머리 바이어스 **초기값** 슬롯표 (14.186). `table` 이면 "
+                         "`S_STATE` 그대로라 **비트 동일**. `label` 은 큰 슬롯(>=300W)만 "
+                         "세그먼트 풀 **라벨 중앙값**으로 — 오븐 1357.1 -> **1100.6** · "
+                         "핫플 549.6 -> 454.8 · 포트 1534.5 -> 1456.8. 표는 `L_power` 의 "
+                         "**척도**(p90)였는데 13.84.68 이 초기값으로 재사용했고, 듀티 기기는 "
+                         "초기값이 Huber δ **밖**이라 300에포크로 못 도착한다 (오븐 23%%만 이동). "
+                         "⚠ 척도와 `p_state_cap` 은 **안 바꾼다** — 한 번에 하나만.")
     ap.add_argument("--fine-norm", default="window", choices=("window", "causal"),
                     help="ⓑ GroupNorm 통계를 **0..타깃**에서만 (14.183). 지금은 "
                          "(C_g, **T 전체**) 라 수용영역과 무관하게 미래가 기준선에 "
@@ -1031,6 +1039,7 @@ def main() -> int:
                     p_state_cap=a.p_state_cap,
                     head_drop=a.head_drop,
                     head_layout=a.head_layout,
+                    state_power_src=a.state_power_src,
                     fine_norm=a.fine_norm, fine_conv=a.fine_conv,
                     fine_tpool=a.fine_tpool, fine_derive=a.fine_derive,
                     fine_pad=a.fine_pad,
@@ -1219,6 +1228,7 @@ def main() -> int:
                     # 머리 배치 (14.130). v1 이면 비트 동일.
                     "head_layout": str(model.head_layout),
                     # 세밀 패딩 (14.131). zeros 면 비트 동일.
+                    "state_power_src": str(model.state_power_src),
                     "fine_norm": str(model.fine_norm),
                     "fine_conv": str(model.fine_conv),
                     "fine_tpool": str(model.fine_tpool),

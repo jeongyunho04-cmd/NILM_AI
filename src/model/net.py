@@ -239,6 +239,12 @@ class NILMNet(nn.Module):
         #: 체크포인트는 `load_state_dict` 가 덮으므로 **영향 없다** — 새 판에만 듣는다.
         #: `False` 로 두면 옛 초기화(전부 0)로 돌아간다.
         state_power_init: bool = True,
+        #: 14.186 — 초기값으로 쓸 슬롯표. `"table"` 이면 `S_STATE` 그대로라 **비트 동일**.
+        #: `"label"` 은 큰 슬롯(>=300W)만 **세그먼트 풀의 라벨 중앙값**으로 바꾼다.
+        #: 까닭: 12.9.9 의 표는 `L_power` **척도**(p90)인데 13.84.68 이 그것을 **초기값**으로
+        #: 재사용했다. 듀티 기기는 p90 과 중앙이 20%+ 벌어져 초기값이 Huber δ **밖**에 놓이고,
+        #: 기울기가 포화돼 300에포크로 못 도착한다 (오븐 표->라벨 경로의 **23%**만 이동).
+        state_power_src: str = "table",
         #: 세밀 몸통 conv 의 패딩 방식 (14.131). **`"zeros"` 가 기본이라 비트 동일.**
         #: `"replicate"` 는 창 밖을 **경계값으로** 채운다 — 14.116 의 진단 개입이 한 것이
         #: 정확히 이것이다. 광역에는 안 건다 (14.94 가 그 축을 닫았다).
@@ -678,11 +684,13 @@ class NILMNet(nn.Module):
         # ⚠ **이미 학습된 체크포인트에는 영향이 없다** — `load_state_dict` 가 바이어스를
         #   덮어쓴다. 관문 `src/run_gate_states.py` [1] 이 그것을 확인한다.
         self.state_power_init = bool(state_power_init)
+        self.state_power_src = str(state_power_src)
         if self.state_power_init:
-            from src.model.losses import S_STATE
+            from src.model.losses import state_power_init_table
+            _tbl = state_power_init_table(self.state_power_src)
             with torch.no_grad():
                 for j, a in enumerate(self.appliances):
-                    for sid, w in S_STATE.get(a, {}).items():
+                    for sid, w in _tbl.get(a, {}).items():
                         if 0 <= sid < self.n_pow and w > 0 and sid < n_states[j]:
                             self.heads[j].bias[sid] = (
                                 float(w) if w > 20.0 else float(np.log(np.expm1(w))))
