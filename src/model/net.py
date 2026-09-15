@@ -171,6 +171,23 @@ class NILMNet(nn.Module):
         #: 체크포인트는 `load_state_dict` 가 덮으므로 **영향 없다** — 새 판에만 듣는다.
         #: `False` 로 두면 옛 초기화(전부 0)로 돌아간다.
         state_power_init: bool = True,
+        #: 상태 전력 슬롯의 **상한 배수** (14.121). `p_states[j,s] <= R·S_STATE[a][s]`.
+        #: **0 이면 상한이 없어 지금과 비트 동일**이다.
+        #:
+        #: 왜 필요한가 — 13.84.68 이 막은 것은 **아래로** 죽는 슬롯이었다. 위로 가는
+        #: 쪽은 안 막혀 있었고, 실제로 갔다. 9개 체크포인트에서 잰 `max(p_states)/초기값`:
+        #: ```
+        #:   beam_projector s1  초기 10.0W  ->  **83.6배**   (자리채움 슬롯, p90 4.5W)
+        #:   laptop_charger s1  초기 36.4W  ->    4.31배
+        #:   minipc         s1  초기 10.7W  ->    2.17배
+        #:   그 밖 17개 슬롯                ->    1.52배 이하 (대부분 0.8~0.9배)
+        #: ```
+        #: 기전은 13.84.68 주석의 거울상이다 — 혼합이 **거의** 안 고르는 슬롯은 기울기가
+        #: `mix[s]·∂L/∂p_raw` 로 작지만 **부호가 일정**하고 `softplus` 에 상한이 없어서
+        #: 300에포크 동안 쌓인다. 그러고 나면 상태 머리가 6%만 그쪽을 골라도
+        #: `p_raw` 가 33W 튄다 (test_4 310~371초에서 빔 `p_raw` 가 **99.2W** 였다).
+        #: R 은 위 측정에서 온다 — 3.0 이면 병적인 둘만 걸리고 나머지는 안 건드린다.
+        p_state_cap: float = 0.0,
         # ── 합 정합성 사영 (계획 A, 14.3) ────────────────────────────────────
         #: 사영 강도 [0,1]. **0 이면 정확히 지금과 같다** (`run_gate_proj.py` [1] 이 확인).
         proj: float = 0.0,
@@ -493,6 +510,18 @@ class NILMNet(nn.Module):
         on_states = self.state_mask.clone()
         on_states[:, 0] = 0.0
         self.register_buffer("power_mix_mask", on_states)
+        # ── 상태 전력 상한 (14.121) ─────────────────────────────────────────
+        # ⚠ `persistent=False` — `S_STATE` 와 R 에서 **유도되는 상수**다. state_dict 에
+        #   넣으면 옛 체크포인트가 "unexpected key" 로 죽는다.
+        self.p_state_cap = float(p_state_cap)
+        if self.p_state_cap > 0:
+            from src.model.losses import S_STATE
+            cap = torch.full((len(self.appliances), self.n_pow), float("inf"))
+            for j, a in enumerate(self.appliances):
+                for sid, w in S_STATE.get(a, {}).items():
+                    if 0 <= sid < self.n_pow and w > 0:
+                        cap[j, sid] = self.p_state_cap * float(w)
+            self.register_buffer("p_state_cap_w", cap, persistent=False)
         # ── 전압 지수 (14.7) ────────────────────────────────────────────────
         # `p_raw` 는 **V_CENTER 에서의** 상태 명목값이 되고 전압 의존은 구조가 낸다.
         # ⚠ 꺼지면 지수가 전부 0 이라 `vrel**0 = 1` — 옛 동작과 **비트 동일**이다.
@@ -640,6 +669,11 @@ class NILMNet(nn.Module):
 
         # 상태별 전력을 상태 확률로 섞는다. 켜진 상태들만 대상이라 OFF 는 빠진다.
         p_states = F.softplus(o[..., 0:MAX_STATES])                     # (B,K,S)
+        if self.p_state_cap > 0:
+            # 상한 밑에서는 **손도 안 댄다** (`minimum` 은 그 아래에서 항등이다).
+            # 위에서는 기울기가 0 이라 표류가 거기서 멈춘다 — 되돌리지는 못하지만
+            # `p_raw` 가 물리적으로 묶인다. 이것이 사려던 전부다.
+            p_states = torch.minimum(p_states, self.p_state_cap_w[None])
         mix = state.masked_fill(self.power_mix_mask[None] == 0, -1e4).softmax(-1)
         p_raw = (mix * p_states).sum(-1)                                 # (B,K)
         if self.vexp:

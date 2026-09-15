@@ -466,6 +466,14 @@ def main() -> int:
                          "아니며, 실측 차수별 지수가 녹화 사이에 재현되지 않는다 "
                          "(충전기 h11 폭 79.5). 분류: RESISTIVE·SMPS·MOTOR·PASSIVE.")
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
+    ap.add_argument("--p-state-cap", type=float, default=0.0,
+                    help="상태 전력 슬롯의 **상한 배수** R — `p_states <= R x S_STATE` "
+                         "(14.121). **0 이면 상한 없음 = 비트 동일.** 13.84.68 은 슬롯이 "
+                         "아래로 죽는 것을 막았는데 위로 가는 쪽이 안 막혀 있었다. "
+                         "9개 체크포인트에서 잰 max(p_states)/초기값: 빔 s1 **83.6배**"
+                         "(자리채움 슬롯 10W -> 550W) · 충전기 s1 4.31배 · 미니PC s1 "
+                         "2.17배 · 나머지 17개는 1.52배 이하. test_4 310~371초에서 "
+                         "빔 p_raw 가 **99.2W** 로 튄 자리다. R=3 이면 병적인 둘만 걸린다.")
     # ── 저항 조합 맞바꿈 `L_swap` 을 1단계에 (14.32) ──────────────────────────
     ap.add_argument("--w-swap", type=float, default=0.0, metavar="W",
                     help="**저항 조합 맞바꿈** `L_swap` (12.158 을 1단계로, 14.32). "
@@ -872,6 +880,7 @@ def main() -> int:
                     fine_pool=a.fine_pool,
                     fine_extra_dilations=(tuple(int(x) for x in a.fine_extra_dilations.split(","))
                                           if a.fine_extra_dilations else None),
+                    p_state_cap=a.p_state_cap,
                     tap_layers=(tuple(int(x) for x in a.tap_layers.split(","))
                                 if a.tap_layers else None),
                     fine_time_split=a.fine_time_split,
@@ -1035,6 +1044,8 @@ def main() -> int:
                     # 구조를 바꾸는 손잡이는 전부 여기 적혀야 한다
                     # ([[verify-the-input-path-not-just-the-model]]).
                     "fine_time_split": bool(model.fine_time_split),
+                    # 상태 전력 상한 (14.121). 0 이면 상한 없음 -> 비트 동일.
+                    "p_state_cap": float(model.p_state_cap),
                     # 타깃 시점 구성 (12.45). 채널 수와 달리 슬라이스로 못 맞춘다 —
                     # 어긋나면 입력과 라벨이 다른 순간을 가리켜 조용히 틀린다.
                     "target_lookahead": TARGET_LOOKAHEAD,
