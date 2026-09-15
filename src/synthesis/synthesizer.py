@@ -254,6 +254,7 @@ class LoadSynthesizer:
         background_w_range: Tuple[float, float] = BACKGROUND_W_RANGE,
         #: 14.51 — 텍스처 한 장이 덮는 합성 시간 (초). 0 이면 창 전체 하나(옛 경로, 비트 동일).
         vtex_seg_s: float = 0.0,
+        vtex_coarse_s: float = 0.0,
     ):
         self.pool = segment_pool
         # 상시 배경 부하 (12.166). 기본은 꺼 둔다 — 켜면 합성 분포가 바뀌므로
@@ -273,6 +274,9 @@ class LoadSynthesizer:
         # 14.51: 주입된 시뮬레이터에도 건다 (`couple_ext` 와 같은 자리·같은 이유).
         if vtex_seg_s:
             self.grid_sim.vtex_seg_s = float(vtex_seg_s)
+        # 14.103 — 세밀 창 **바깥**의 토막 길이. 0 이면 균일 = 옛 경로다.
+        if vtex_coarse_s:
+            self.grid_sim.vtex_coarse_s = float(vtex_coarse_s)
         self.augmentor = augmentor or DataAugmentor()
         self.known_appliances = self.pool.get_appliance_types()
         # 지속 부하 상한. None 이면 제한하지 않는다.

@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
+from src.model.inputs import FINE_CYCLES
 from src.preprocessing.file_registry import LoadClass, get_load_class
 
 
@@ -163,6 +164,10 @@ class VoltageEnvironment:
     #:   세밀 창(마지막 600사이클)에도 늘 같은 오프셋으로 들어간다. **합성에만 있는
     #:   단서**라 실측에서는 아무 뜻이 없다.
     texture_offset: int = 0
+    #: 14.103 — 토막 경계를 **창 길이의 비율**로 (0.0 ~ 1.0, 길이 = 토막수+1).
+    #: 비어 있으면 옛 균일 경계를 쓴다 (`texture_offset` 포함). 비율이라 창 길이에 안 매인다.
+    #: ⚠ **비균일**이다: 세밀 갈래가 보는 창 끝(`FINE_CYCLES`)은 촘촘히, 그 앞은 성기게.
+    texture_edges: Tuple[float, ...] = ()
     #: 이 세션의 **전압 텍스처** — 원시 전압 파형의 stem (①b, 12.185.22).
     #: SMPS 전류를 여기에 반응시킨다. `""` 면 아무것도 안 한다.
     texture_stem: str = ""
@@ -259,6 +264,15 @@ def texture_segments(env, n_cycles: int) -> List[Tuple[int, int, object]]:
     k = len(seq)
     if k == 1:
         return [(0, n, seq[0])]
+    # 14.103 — 비율 경계가 있으면 그대로 쓴다 (비균일). 세 호출부가 **같은 목록**을 받으므로
+    #   "전압만 흔들고 전류는 안 흔든다" 는 13.69 의 사고가 생기지 않는다.
+    ed = tuple(getattr(env, "texture_edges", ()) or ())
+    if len(ed) == k + 1:
+        e = [int(round(float(f) * n)) for f in ed]
+        e[0], e[-1] = 0, n
+        for i in range(1, len(e)):
+            e[i] = max(e[i], e[i - 1])            # 단조 보장 (반올림 역전 방지)
+        return [(e[i], e[i + 1], seq[i]) for i in range(k) if e[i + 1] > e[i]]
     off = int(getattr(env, "texture_offset", 0) or 0)
     if off <= 0:
         return [(i * n // k, (i + 1) * n // k, seq[i]) for i in range(k)]
@@ -358,9 +372,18 @@ class GridSimulator:
         #: ⚠ `vtexture` 의 `step_s` 와 **같은 값**이어야 한다 — 텍스처는 그 녹화의 `step_s`
         #:   구간 중앙값이라, 20초 중앙값을 10초씩 틀면 변화를 2배로 빨리 감는 것이 된다.
         vtex_seg_s: float = 0.0,
+        vtex_coarse_s: float = 0.0,
     ):
         self._texture_library = texture_library
         self.vtex_seg_s = float(vtex_seg_s or 0.0)
+        #: 14.103 — **세밀 창 바깥**(창 끝 `FINE_CYCLES` 를 뺀 앞부분)의 토막 길이 (초).
+        #:   0 이면 창 전체를 `vtex_seg_s` 로 균일하게 — **옛 경로와 비트 동일**이다.
+        #:   왜 나누나: 세밀 갈래는 창 3600사이클 중 **마지막 600(10초)** 만 본다. 병이
+        #:   있는 곳이 거기고(14.90), 텍스처를 흔들어 사려는 것도 거기다(14.84). 그런데
+        #:   균일 3초면 세밀 창 안에 토막이 **3개뿐**이고 나머지 17개는 광역만 본다 —
+        #:   광역은 저항 판정 기여가 0.0~0.2%% 다. 뒤집으면 **비용은 절반, 세밀 해상도는
+        #:   2.7배** 가 된다 (세밀 1.25초 + 바깥 25초 = 10토막 대 지금 20토막).
+        self.vtex_coarse_s = float(vtex_coarse_s or 0.0)
         #: 차수별 `Z_h` 표 (14.59). `None` 이면 `r + j·h·x` — **옛 경로와 비트 동일**.
         #: 켜려면 `HARMONIC_Z_K` 를 넣는다. ⚠ 켜면 **캐시를 다시 구워야 한다**
         #: (`vtexture` 의 de-embed 가 바뀌어 텍스처 자신이 달라진다).
@@ -410,6 +433,51 @@ class GridSimulator:
             return 1
         return max(1, int(round(int(n_cycles) / float(self.sampling_hz) / self.vtex_seg_s)))
 
+    def _texture_plan(self, n_cycles, rng):
+        """(토막 수, 경계 비율) — 14.103. `vtex_coarse_s` 가 0 이면 `(nseg, ())` 로 옛 경로다.
+
+        **세밀 갈래가 보는 창 끝 `FINE_CYCLES` 는 촘촘히, 그 앞은 성기게** 나눈다.
+        위상은 두 구역 **모두** 무작위로 민다 (14.102) — 안 그러면 경계가 늘 같은 자리다.
+        세밀 구역의 시작도 `FINE_CYCLES` 정확히가 아니라 조금 앞으로 흔든다: 그래야
+        성긴 구역과 촘촘한 구역의 **이음매**도 창마다 다른 자리에 온다.
+        """
+        n = int(n_cycles or 0)
+        seg = self.vtex_seg_s
+        if seg <= 0 or n <= 0:
+            return 1, ()
+        co = self.vtex_coarse_s
+        if co <= 0:
+            return self.n_texture_segments(n), ()          # 옛 균일 경로
+        fs = float(self.sampling_hz)
+        lf = max(1, int(round(seg * fs)))                  # 세밀 토막 길이 (사이클)
+        lc = max(1, int(round(co * fs)))                   # 성긴 토막 길이
+        f0 = min(int(FINE_CYCLES), n)
+        start = n - f0
+        # 이음매를 흔든다 — **세밀 토막 길이(lf) 만큼만**. 성긴 길이(lc)로 흔들면
+        # 촘촘한 구역이 그만큼 부풀어 토막 수가 폭발한다 (관문 [5] 가 21개로 잡았다).
+        if start > 0 and lf > 1:
+            start = max(0, start - int(rng.integers(0, min(lf, start + 1))))
+        cuts = set()
+        if start > 0:
+            oc = int(rng.integers(0, lc)) if lc > 1 else 0
+            x = oc
+            while x < start:
+                if x > 0:
+                    cuts.add(x)
+                x += lc
+            cuts.add(start)
+        of = int(rng.integers(0, lf)) if lf > 1 else 0
+        x = start + of
+        while x < n:
+            if x > 0:
+                cuts.add(x)
+            x += lf
+        e = [0] + sorted(cuts) + [n]
+        e = [e[i] for i in range(len(e)) if i == 0 or e[i] > e[i - 1]]
+        if e[-1] != n:
+            e.append(n)
+        return len(e) - 1, tuple(float(x) / n for x in e)
+
     def sample_environment(self, n_cycles: Optional[int] = None) -> VoltageEnvironment:
         """이번 합성이 놓일 배전 환경 하나를 뽑는다.
 
@@ -433,7 +501,11 @@ class GridSimulator:
         # 14.102 — 토막을 쓸 때는 **한 장 더** 뽑아 앞뒤 잘린 토막을 채우고, 경계 위상을
         #   무작위로 민다. `nseg <= 1` 이면 뽑는 수도 난수 호출도 그대로라 **비트 동일**이다.
         _tex_off = 0
-        if nseg > 1:
+        _edges = ()
+        if nseg > 1 and self.vtex_coarse_s > 0:
+            nseg, _edges = self._texture_plan(n_cycles, _rng)     # 14.103 비균일
+            seq = self._sample_texture_run(base_v, _rng, site, nseg)
+        elif nseg > 1:
             seq = self._sample_texture_run(base_v, _rng, site, nseg + 1)
             _L = max(1, int(n_cycles) // nseg)
             _tex_off = int(_rng.integers(0, _L)) if _L > 1 else 0
@@ -460,6 +532,7 @@ class GridSimulator:
             background_w_range=cluster_bg,
             v_distortion_h3=d3,
             texture_offset=int(_tex_off),
+            texture_edges=tuple(_edges),
             texture_stem=(tex.stem if tex is not None else ""),
             texture=tex,
             texture_id=(tex.id if tex is not None else -1),

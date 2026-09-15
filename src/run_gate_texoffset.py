@@ -49,9 +49,10 @@ class _Tex:
 
 
 class _Env:
-    def __init__(self, k, off):
+    def __init__(self, k, off, edges=()):
         self.texture_seq = tuple(_Tex(i) for i in range(k))
         self.texture_offset = int(off)
+        self.texture_edges = tuple(edges)
         self.texture = self.texture_seq[0] if k else None
 
 
@@ -112,6 +113,51 @@ def main() -> int:
         h, _ = np.histogram(fe - FINE0, bins=10, range=(0, 600))
         print("      세밀 창 안 위치 분포(60사이클 칸): %s" % " ".join("%d" % x for x in h))
         print("      -> 고치기 전에는 **60·240·420 세 자리에만** 몰렸다")
+
+    # ── 14.103 비균일: 세밀 창은 촘촘히, 그 앞은 성기게 ───────────────────
+    print("")
+    print("  [5] ★ **비균일** (14.103) — 세밀 1.25초 + 바깥 25초")
+    from src.synthesis.grid_simulator import GridSimulator
+    g = GridSimulator(vtex_seg_s=1.25, vtex_coarse_s=25.0)
+    r2 = np.random.default_rng(1)
+    ns, fine_in, edge_in_fine, lens2 = [], [], [], []
+    for _ in range(300):
+        k, ed = g._texture_plan(N, r2)
+        seg = texture_segments(_Env(k, 0, ed), N)
+        e = [a for a, _b, _t in seg] + [N]
+        if not (e[0] == 0 and e[-1] == N and all(e[i + 1] > e[i] for i in range(len(e) - 1))):
+            ok = False
+            print("      ** 빈틈/겹침 **")
+            break
+        ns.append(len(seg))
+        fine_in.append(sum(1 for a, b, _ in seg if b > FINE0))
+        edge_in_fine.extend([a for a, _b, _t in seg if FINE0 < a < N])
+        lens2.extend([b - a for a, b, _ in seg])
+    if ns:
+        na, fa2 = np.asarray(ns), np.asarray(fine_in)
+        good = na.mean() < 14 and fa2.mean() >= 7
+        ok &= good
+        print("      총 토막 중앙 **%d** (균일 3초면 20) · **세밀 창 안 토막 중앙 %d** (균일이면 3)   %s"
+              % (int(np.median(na)), int(np.median(fa2)), "OK" if good else "** 기대와 다르다 **"))
+        print("      비용비 20/%.1f = **%.2f배** · 세밀 해상도 %.2f초 (균일 3.33초)"
+              % (na.mean(), 20.0 / na.mean(), 600.0 / 60.0 / max(fa2.mean(), 1)))
+        fe2 = np.asarray(edge_in_fine)
+        uq = len(np.unique(fe2))
+        good2 = uq >= 100
+        ok &= good2
+        print("      세밀 창 안 경계 %d개 · 서로 다른 자리 **%d개**   %s"
+              % (len(fe2), uq, "OK" if good2 else "** 몰려 있다 **"))
+        s2 = np.asarray(lens2).sum()
+        good3 = s2 == 300 * N
+        ok &= good3
+        print("      창을 정확히 덮는다 — 길이 합 %d (기대 %d)   %s"
+              % (s2, 300 * N, "OK" if good3 else "** 안 맞다 **"))
+        g0 = GridSimulator(vtex_seg_s=3.0, vtex_coarse_s=0.0)
+        k0, ed0 = g0._texture_plan(N, np.random.default_rng(1))
+        good4 = (k0 == 20 and ed0 == ())
+        ok &= good4
+        print("  [6] `--vtex-coarse-s 0` 이면 **옛 균일 경로** (토막 %d · 비율경계 없음)   %s"
+              % (k0, "OK" if good4 else "** 다르다 **"))
 
     print("")
     print("관문 전부 통과" if ok else "** 관문 실패 **")

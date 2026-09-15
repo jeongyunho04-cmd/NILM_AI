@@ -225,6 +225,18 @@ def check(opts: Dict[str, Any], gen) -> Sequence[str]:
         if abs(step - seg) > 1e-6:
             bad.append("vtex_seg_s=%s 인데 vtex_step_s=%s 다 — 텍스처는 step_s 구간의 "
                        "중앙값이라 둘이 같아야 감는 속도가 맞는다 (14.51)" % (seg, step))
+        # 14.103 — **성긴 구역**(세밀 창 바깥). 배선을 재고, `seg_s` 보다 길어야 한다.
+        #   ⚠ 여기는 `step_s` 와 같을 필요가 **없다**: 짧은 중앙값 텍스처로 긴 구간을 덮는
+        #   것은 "스냅샷으로 대표시키는 것" 이라 변화를 **빨리 감지 않는다** (반대 방향의
+        #   불일치만 14.51 이 막는 것이다). 그리고 이 구역은 광역 갈래만 본다.
+        co = float(opts.get("vtex_coarse_s") or 0.0)
+        if co:
+            gotc = float(getattr(gen.grid_sim, "vtex_coarse_s", 0.0) or 0.0)
+            if gotc != co:
+                bad.append("vtex_coarse_s=%s 인데 시뮬레이터는 %s 다 — 안 걸렸다" % (co, gotc))
+            if co < seg - 1e-9:
+                bad.append("vtex_coarse_s=%s 가 vtex_seg_s=%s 보다 짧다 — 바깥이 더 촘촘하면 "
+                           "겨냥이 뒤집힌다 (14.103)" % (co, seg))
         try:
             from src.synthesis.vtexture import default_library
             n = min(default_library().run_lengths().values())

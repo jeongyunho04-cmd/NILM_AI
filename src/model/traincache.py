@@ -76,6 +76,7 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           sp_curves: bool = False,
           sp_per_texture: bool = False, vtail: bool = False,
           vtex_step_s: float = 0.0, vtex_seg_s: float = 0.0,
+          vtex_coarse_s: float = 0.0,
           harmonic_z: bool = False,
           background: bool = False,
           level_scramble: Optional[Dict[str, tuple]] = None,
@@ -149,7 +150,8 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
                                     augmentor=aug, background=bool(background),
                                     couple_ext=bool(couple_ext),
                                     # 14.51 — 창 안에서 텍스처 갈아 끼우기. 0 이면 옛 경로.
-                                    vtex_seg_s=float(vtex_seg_s or 0.0)),
+                                    vtex_seg_s=float(vtex_seg_s or 0.0),
+                                    vtex_coarse_s=float(vtex_coarse_s or 0.0)),
         recipe_mix=mix, compute_gt_harmonics=False,
         smps_focus_off_p=smps_focus_off_p)
     # 14.62 ⚠⚠ **굽기 경로가 반쪽이었다.** 위의 `set_default_harmonic_z` 는 텍스처를 **새 Z 로
@@ -238,6 +240,14 @@ def build_cache(
     #: ⚠ **`vtex_step_s` 와 같은 값**이어야 한다 — 텍스처는 그 구간의 중앙값이라
     #:   20초 중앙값을 10초씩 틀면 변화를 2배로 빨리 감는 것이 된다.
     vtex_seg_s: float = 0.0,
+    #: 14.103 — **세밀 창 바깥**(창 끝 `FINE_CYCLES` 를 뺀 앞부분)의 토막 길이 (초).
+    #: 0 이면 창 전체를 `vtex_seg_s` 로 균일하게 — **옛 경로와 비트 동일**이다.
+    #: 세밀 갈래는 창 3600사이클 중 **마지막 600(10초)** 만 본다. 균일 3초면 거기 토막이
+    #: 3개뿐이고 나머지 17개는 광역만 보는데, 광역은 저항 판정 기여가 0.0~0.2% 다.
+    #: `seg_s 1.25 + coarse 25` 면 총 12토막으로 **비용 1.61배 절감 · 세밀 해상도 3배**다.
+    #: ⚠ 여기는 `vtex_step_s` 와 같을 필요가 **없다** — 짧은 중앙값으로 긴 구간을 덮는 것은
+    #:   스냅샷 대표라 변화를 빨리 감지 않는다 (14.51 이 막는 것은 반대 방향이다).
+    vtex_coarse_s: float = 0.0,
     #: 차수별 `Z_h` 표 (14.59). `False` 면 `r + j·h·x` — 옛 경로와 **비트 동일**.
     #: ⚠⚠ 켜면 **텍스처 자신이 달라진다** (`rel_open` de-embed) — 홀드아웃도 같이 켜야 한다.
     harmonic_z: bool = False,
@@ -319,6 +329,12 @@ def build_cache(
                             dither_even_amp, dither_even_phase_deg, pss_json,
                             bool(sp_curves), bool(sp_per_texture), bool(vtail),
                             float(vtex_step_s or 0.0), float(vtex_seg_s or 0.0),
+                            # ⚠⚠ 14.103 — `initargs` 는 **위치 인자**다. `_init` 의 서명에
+                            #   인자를 끼워 넣으면 여기에도 **같은 자리**에 넣어야 한다.
+                            #   안 넣으면 뒤엣것이 한 칸씩 밀려 `harmonic_z` 가
+                            #   `vtex_coarse_s` 자리로 들어간다 — 문법 오류가 안 나고
+                            #   **조용히 다른 캐시를 굽는다** (14.62 와 같은 부류).
+                            float(vtex_coarse_s or 0.0),
                             bool(harmonic_z),
                             bool(background), level_scramble,
                             smx_json, tuple(carrier_apps or ()),
@@ -378,6 +394,8 @@ def build_cache(
             "vtail": bool(vtail),
             # 14.51 — 텍스처 **한 장이 덮는 시간**. (`vtex_step_s` 는 위에 이미 있다.)
             "vtex_seg_s": float(vtex_seg_s or 0.0),
+            # 14.103 — 세밀 창 **바깥**의 토막 길이. 0 이면 균일(옛 경로).
+            "vtex_coarse_s": float(vtex_coarse_s or 0.0),
             "harmonic_z": bool(harmonic_z),          # 14.59
             "background": bool(background),
             "fine_shape": [FINE_CHANNELS, FINE_CYCLES], "bytes": int(total),

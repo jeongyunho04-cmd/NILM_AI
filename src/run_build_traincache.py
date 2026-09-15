@@ -71,6 +71,13 @@ def main() -> int:
                          "20 이 `genopts.V32T` 다 — 14.12 가 **표류의 모자란 몫이 이 상수**라고 "
                          "쟀다 (파일 안 전압 산포 원시 대비 0.73 -> 0.95, 합성 표류가 실측의 "
                          "0.75 -> 0.80배 = 이론 √0.654). ⚠ 텍스처가 280 -> 819개가 된다.")
+    ap.add_argument("--vtex-coarse-s", type=float, default=0.0, metavar="S",
+                    help="**세밀 창 바깥**의 텍스처 토막 길이 (초). 0 이면 창 전체를 "
+                         "`--vtex-seg-s` 로 균일하게 — **옛 경로와 비트 동일**이다 (14.103). "
+                         "세밀 갈래는 창 3600사이클 중 **마지막 600(10초)** 만 보는데 균일 3초면 "
+                         "거기 토막이 3개뿐이고 나머지 17개는 광역만 본다 — 광역은 저항 판정 "
+                         "기여가 0.0~0.2%% 다. `--vtex-seg-s 1.25 --vtex-coarse-s 25` 면 "
+                         "총 10토막으로 **비용 절반, 세밀 해상도 2.7배** 다.")
     ap.add_argument("--vtex-seg-s", type=float, default=0.0, metavar="S",
                     help="텍스처 **한 장이 덮는 합성 시간** (초). 0 이면 창 전체에 한 장 = "
                          "옛 경로다 (14.51). 14.50 이 남긴 구멍을 메운다: 정적 텍스처면 "
@@ -222,6 +229,7 @@ def main() -> int:
         shard = (k, n)
     build_cache(out_dir=a.out, n_windows=a.windows, window_cycles=a.window_cycles,
                 vtex_step_s=a.vtex_step_s, vtex_seg_s=a.vtex_seg_s,
+                vtex_coarse_s=a.vtex_coarse_s,
                 harmonic_z=a.harmonic_z,
                 time_split=a.split, seed=a.seed, n_workers=a.workers, shard=shard,
                 exclude_activation_files=excl,

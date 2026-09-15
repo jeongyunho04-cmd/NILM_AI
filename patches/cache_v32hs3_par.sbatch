@@ -76,10 +76,10 @@ COMMON="--windows $WINDOWS --window-cycles 3600 --seed 0
         --steady-crop smps_steady --standby-jitter-cap 95"
 
 # 이 판의 **처치** — 한 군데에만 적는다
-TREAT="--harmonic-z --vtex-step-s 3 --vtex-seg-s 3"
+TREAT="--harmonic-z --vtex-step-s 1.25 --vtex-seg-s 1.25 --vtex-coarse-s 25"
 echo "  처치: $TREAT"
-case "$TREAT" in *"--vtex-step-s 3"*"--vtex-seg-s 3"*) ;; *)
-  echo "step_s 와 seg_s 가 안 맞는다 (genopts.check 가 요구한다)"; exit 1;; esac
+case "$TREAT" in *"--vtex-step-s 1.25"*"--vtex-seg-s 1.25"*"--vtex-coarse-s 25"*) ;; *)
+  echo "처치가 기대와 다르다 (step_s=seg_s=1.25 · coarse=25)"; exit 1;; esac
 case "$COMMON" in *--vtex*|*--harmonic-z*) echo "COMMON 에 처치가 섞였다"; exit 1;; esac
 
 echo "=== 관문 ① Z 표 배선 (네 소비처 + 흘러나온 메서드) ==="
@@ -88,6 +88,8 @@ echo "=== 관문 ② **굽기가 타는 그 경로** (traincache._init) ==="
 $PY -X utf8 src/run_gate_hzwire.py
 echo "=== 관문 ①-b 캐시 모양 (14.93) ==="
 $PY -X utf8 src/run_gate_cacheshape.py
+echo "=== 관문 ①-c 텍스처 경계 (14.102/14.103) ==="
+$PY -X utf8 src/run_gate_texoffset.py
 
 # ── 관문 ③ 표를 끄면 `train60_v32` 를 **비트 그대로** 되만든다 ────────────────
 #   함수 수준이 아니라 **자료 수준**의 항등 검정이다. 14.59 의 `zline` 이동, 14.51 의 토막
@@ -127,9 +129,11 @@ a = json.load(open('cache/_v32_head512/meta.json', encoding='utf-8'))
 print('  토막 %s · 청크 %s · 창 %d (전체 기준 %d)'
       % (d['shard'], d['shard_chunks'], d['n_windows'], d['n_windows_total']))
 if not d.get('harmonic_z'): sys.exit('❌ meta 에 harmonic_z 가 안 적혔다')
-if float(d.get('vtex_step_s') or 0) != 3.0 or float(d.get('vtex_seg_s') or 0) != 3.0:
-    sys.exit('❌ meta 의 vtex_step_s/seg_s 가 3.0 이 아니다: %r / %r'
+if float(d.get('vtex_step_s') or 0) != 1.25 or float(d.get('vtex_seg_s') or 0) != 1.25:
+    sys.exit('meta 의 vtex_step_s/seg_s 가 1.25 가 아니다: %r / %r'
              % (d.get('vtex_step_s'), d.get('vtex_seg_s')))
+if float(d.get('vtex_coarse_s') or 0) != 25.0:
+    sys.exit('meta 의 vtex_coarse_s 가 25 가 아니다: %r' % d.get('vtex_coarse_s'))
 skip = {'harmonic_z', 'shard', 'shard_chunks', 'n_windows', 'build_seconds', 'bytes',
         'merged_from', 'merged_partial', 'positive_rate', 'recipe_counts', 'built_at',
         'content_sha256'}
@@ -141,10 +145,10 @@ def nz(v):
 diff = [k for k in set(a) | set(d) if k not in skip
         and json.dumps(nz(a.get(k)), sort_keys=True, default=str)
         != json.dumps(nz(d.get(k)), sort_keys=True, default=str)]
-skip |= {'vtex_step_s', 'vtex_seg_s'}
+skip |= {'vtex_step_s', 'vtex_seg_s', 'vtex_coarse_s'}
 diff = [k for k in diff if k not in skip]
 if diff: sys.exit('❌ 처치 셋 말고도 v32 와 다르다: %s' % diff)
-print('  관문 ④ ✅ v32 와 **harmonic_z · vtex_step_s · vtex_seg_s 셋만** 다르다')
+print('  관문 ④ v32 와 harmonic_z · vtex_step_s · vtex_seg_s · vtex_coarse_s 넷만 다르다')
 "
 echo "끝 $(date '+%F %H:%M:%S')"
 echo
