@@ -157,6 +157,12 @@ class VoltageEnvironment:
     background_w_range: Optional[Tuple[float, float]] = None
     #: 이 콘센트의 h3 전압 왜곡 (저항 부하가 보는 값). `VoltageCluster.v_distortion_h3` 참조.
     v_distortion_h3: float = 0.0
+    #: 14.102 — 텍스처 토막 경계의 **위상 오프셋** (사이클). 0 이면 옛 경로와 비트 동일.
+    #: ⚠ 이것이 없으면 경계가 창마다 **정확히 같은 자리**(i·n//k)에 온다 — 사이클
+    #:   180·360·540… 이 늘 바뀌는 자리라 모델이 그 위치를 외울 수 있다.
+    #:   세밀 창(마지막 600사이클)에도 늘 같은 오프셋으로 들어간다. **합성에만 있는
+    #:   단서**라 실측에서는 아무 뜻이 없다.
+    texture_offset: int = 0
     #: 이 세션의 **전압 텍스처** — 원시 전압 파형의 stem (①b, 12.185.22).
     #: SMPS 전류를 여기에 반응시킨다. `""` 면 아무것도 안 한다.
     texture_stem: str = ""
@@ -253,7 +259,19 @@ def texture_segments(env, n_cycles: int) -> List[Tuple[int, int, object]]:
     k = len(seq)
     if k == 1:
         return [(0, n, seq[0])]
-    return [(i * n // k, (i + 1) * n // k, seq[i]) for i in range(k)]
+    off = int(getattr(env, "texture_offset", 0) or 0)
+    if off <= 0:
+        return [(i * n // k, (i + 1) * n // k, seq[i]) for i in range(k)]
+    # 14.102 — 위상을 민다. 텍스처가 k 장이면 토막 길이는 `n//(k-1)` 이고 앞뒤가 잘린다:
+    #   [0, off) [off, off+L) ... [마지막, n).  경계가 창마다 다른 자리에 온다.
+    L = max(1, n // (k - 1))
+    edges = [0] + [min(off + i * L, n) for i in range(k - 1)] + [n]
+    out = []
+    for i in range(len(edges) - 1):
+        a_, b_ = edges[i], edges[i + 1]
+        if b_ > a_:
+            out.append((a_, b_, seq[min(i, k - 1)]))
+    return out
 
 
 class GridSimulator:
@@ -412,7 +430,15 @@ class GridSimulator:
         _key = np.array([base_v, r, x], dtype=np.float64).view(np.uint64)
         _rng = np.random.default_rng(int(np.bitwise_xor.reduce(_key) & np.uint64(0x7FFFFFFF)))
         nseg = self.n_texture_segments(n_cycles)
-        seq = self._sample_texture_run(base_v, _rng, site, nseg)
+        # 14.102 — 토막을 쓸 때는 **한 장 더** 뽑아 앞뒤 잘린 토막을 채우고, 경계 위상을
+        #   무작위로 민다. `nseg <= 1` 이면 뽑는 수도 난수 호출도 그대로라 **비트 동일**이다.
+        _tex_off = 0
+        if nseg > 1:
+            seq = self._sample_texture_run(base_v, _rng, site, nseg + 1)
+            _L = max(1, int(n_cycles) // nseg)
+            _tex_off = int(_rng.integers(0, _L)) if _L > 1 else 0
+        else:
+            seq = self._sample_texture_run(base_v, _rng, site, nseg)
         # 대표 텍스처는 **가운데** 장이다 — `sample_run` 이 뽑은 장을 가운데 두므로
         # 이 손잡이를 꺼도 `env.texture` 가 옛 경로와 같은 텍스처다 (14.51).
         tex = seq[len(seq) // 2] if seq else None
@@ -433,6 +459,7 @@ class GridSimulator:
             source=source,
             background_w_range=cluster_bg,
             v_distortion_h3=d3,
+            texture_offset=int(_tex_off),
             texture_stem=(tex.stem if tex is not None else ""),
             texture=tex,
             texture_id=(tex.id if tex is not None else -1),
