@@ -158,51 +158,84 @@ def main():
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     apps0 = list(torch.load(a.ckpt[0], map_location="cpu",
                             weights_only=False)["appliances"])
-    cache = real_windows(apps0, a.grid_s, dev)
-    if a.mask_future != "off":
-        # 14.45 — 미래가 값을 하는가. **모든 체크포인트가 같은 가려진 입력을 본다.**
-        from src.model.inputs import fine_target_index
-        _t = fine_target_index()
-        _sl = (slice(None) if a.mask_future == "all" else slice(16, 23))
-        _n = 0
-        for _d in cache.values():
-            f = _d["fine"]
-            f[:, _sl, _t + 1:] = f[:, _sl, :_t + 1].mean(-1, keepdims=True)
-            if a.mask_future == "even":
-                f[:, 43:45, _t + 1:] = f[:, 43:45, :_t + 1].mean(-1, keepdims=True)
-            _n += len(f)
-        print("  ** 미래 가림 '%s': 타깃 %d 이후 %d사이클(%.1f초)을 이전 평균으로 · %d창 **"
-              % (a.mask_future, _t, 599 - _t, (599 - _t) / 60.0, _n), flush=True)
+    #: ⚠ `EVEN_MEDIAN` 은 **모듈 전역**이고 `build_inputs` 때 쓰인다 (14.160). 한 표에
+    #  `--even-median 0` 판과 `5` 판을 같이 놓으면 한쪽이 **조용히 분포 밖**으로 간다.
+    #  그래서 체크포인트가 적어 둔 값으로 **무리를 갈라 창을 다시 짓는다**
+    #  ([[verify-the-input-path-not-just-the-model]]).
+    _em_of = {}
+    for _p in a.ckpt:
+        _em_of[_p] = int(torch.load(_p, map_location="cpu",
+                                    weights_only=False).get("even_median", 0) or 0)
+    groups = []
+    for _p in a.ckpt:
+        _k = max(_em_of[_p], 1)
+        for g in groups:
+            if g[0] == _k:
+                g[1].append(_p)
+                break
+        else:
+            groups.append((_k, [_p]))
+    if len(groups) > 1:
+        print("  ** 짝수차 중앙값이 갈린다 — 무리마다 창을 **다시 짓는다**: "
+              + " · ".join("k=%d(%d판)" % (k, len(v)) for k, v in groups), flush=True)
+    cache = {}
+
+    def _build_cache(k):
+        """짝수차 중앙값 k 로 **창을 다시 짓는다**. `build_inputs` 가 전역을 읽으므로
+        모델을 올리기 **전에** 불러야 한다."""
+        from src.model import inputs as _I
+        nonlocal cache
+        _I.EVEN_MEDIAN = int(k)
+        cache = real_windows(apps0, a.grid_s, dev)
+        if len(groups) > 1:
+            print("  -- 창 다시 지음: 짝수차 중앙값 k=%d --" % k, flush=True)
+        if a.mask_future != "off":
+            # 14.45 — 미래가 값을 하는가. **모든 체크포인트가 같은 가려진 입력을 본다.**
+            from src.model.inputs import fine_target_index
+            _t = fine_target_index()
+            _sl = (slice(None) if a.mask_future == "all" else slice(16, 23))
+            _n = 0
+            for _d in cache.values():
+                f = _d["fine"]
+                f[:, _sl, _t + 1:] = f[:, _sl, :_t + 1].mean(-1, keepdims=True)
+                if a.mask_future == "even":
+                    f[:, 43:45, _t + 1:] = f[:, 43:45, :_t + 1].mean(-1, keepdims=True)
+                _n += len(f)
+            print("  ** 미래 가림 '%s': 타깃 %d 이후 %d사이클(%.1f초)을 이전 평균으로 · %d창 **"
+                  % (a.mask_future, _t, 599 - _t, (599 - _t) / 60.0, _n), flush=True)
+
 
     print("사슬을 버리면 — **같은 채점기**로 나란히 (score_arm)  후처리 %s%s"
           % (a.postproc, " (반파 비율판)" if a.half_ratio else ""), flush=True)
     print("=" * 78)
     res = {}
-    for path in a.ckpt:
-        apps, pr = predict(path, cache, dev, no_chain=(path in a.no_chain),
-                           postproc=a.postproc, half_abs=not a.half_ratio,
-                           res_drop=a.res_drop)
-        assert apps == apps0, "기기 순서가 다르다 — 비교가 안 선다"
-        acc, idn, pwr, rec, cf = {}, {}, [], {}, {}
-        for stem, d in cache.items():
-            on, pw = pr[stem]
-            ac, id_, p_, rc, cn = score_arm(on, pw, d, apps)
-            for k, v in ac.items():
-                acc.setdefault(k, []).append(v)
-            for k, v in cn.items():                       # 파일을 가로질러 **합산**
-                cf[k] = tuple(x + y for x, y in zip(cf.get(k, (0,) * 4), v))
-            pwr += [x[0] for x in p_.values()]
-            for k, v in id_.items():
-                idn.setdefault(k, ([], []))[0].append(v[0])
-                idn[k][1].append(v[1])
-            for k, v in rc.items():
-                rec.setdefault(k, []).append(v)
-            if rc:
-                r = pw.sum(1) + float(d["p_base"]) - d["p_obs"]
-                rec.setdefault("rel", []).append(
-                    float(np.median(np.abs(r) / np.maximum(d["p_obs"], 10.0))))
-        res[path] = (acc, idn, pwr, rec, cf)
-        print("  %s 끝" % path.split("/")[-1], flush=True)
+    for _k, _paths in groups:
+      _build_cache(_k)
+      for path in _paths:
+          apps, pr = predict(path, cache, dev, no_chain=(path in a.no_chain),
+                             postproc=a.postproc, half_abs=not a.half_ratio,
+                             res_drop=a.res_drop)
+          assert apps == apps0, "기기 순서가 다르다 — 비교가 안 선다"
+          acc, idn, pwr, rec, cf = {}, {}, [], {}, {}
+          for stem, d in cache.items():
+              on, pw = pr[stem]
+              ac, id_, p_, rc, cn = score_arm(on, pw, d, apps)
+              for k, v in ac.items():
+                  acc.setdefault(k, []).append(v)
+              for k, v in cn.items():                       # 파일을 가로질러 **합산**
+                  cf[k] = tuple(x + y for x, y in zip(cf.get(k, (0,) * 4), v))
+              pwr += [x[0] for x in p_.values()]
+              for k, v in id_.items():
+                  idn.setdefault(k, ([], []))[0].append(v[0])
+                  idn[k][1].append(v[1])
+              for k, v in rc.items():
+                  rec.setdefault(k, []).append(v)
+              if rc:
+                  r = pw.sum(1) + float(d["p_base"]) - d["p_obs"]
+                  rec.setdefault("rel", []).append(
+                      float(np.median(np.abs(r) / np.maximum(d["p_obs"], 10.0))))
+          res[path] = (acc, idn, pwr, rec, cf)
+          print("  %s 끝" % path.split("/")[-1], flush=True)
 
     tags = [(p.split("/")[-1][:-3][:11] + ("-창별" if p in a.no_chain else ""))
             for p in a.ckpt]

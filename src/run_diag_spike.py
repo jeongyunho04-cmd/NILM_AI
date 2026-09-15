@@ -66,12 +66,19 @@ def main() -> int:
                     help="짝수차 크기 k탭 중앙값 (14.160). 0/1 이면 비트 동일")
     a = ap.parse_args()
 
+    from src.model import inputs as _I
     if a.even_median > 1:
-        from src.model import inputs as _I
         _I.EVEN_MEDIAN = int(a.even_median)
-        print("⚠ 짝수차 이동중앙값 k=%d — 체크포인트가 그것으로 학습되지 않았다면 "
+        print("⚠ 짝수차 이동중앙값 k=%d 를 **강제**한다 — 그것으로 학습되지 않은 판은 "
               "**분포 밖 시험**이다" % a.even_median)
     from src.model.inputs import build_inputs
+    #: ⚠ `EVEN_MEDIAN` 은 모듈 전역이다. 안 주면 **판마다 그 판이 적어 둔 값**을 따라간다
+    #  ([[verify-the-input-path-not-just-the-model]]).
+    _em = {p_: max(int(torch.load(p_, map_location="cpu",
+                                  weights_only=False).get("even_median", 0) or 0), 1)
+           for p_ in a.ckpt}
+    if a.even_median > 1:
+        _em = {p_: int(a.even_median) for p_ in a.ckpt}
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     apps = list(torch.load(a.ckpt[0], map_location="cpu",
@@ -103,6 +110,7 @@ def main() -> int:
               + " · ".join(SH.get(v, v) for v in sorted(absent)))
 
     for ck in a.ckpt:
+        _I.EVEN_MEDIAN = _em[ck]        # 이 판의 짝수차 규약으로 입력을 짓는다
         m = load_model(ck, dev)[0]
         m.eval()
         G, PW = [], []
@@ -118,7 +126,8 @@ def main() -> int:
         S = PW.sum(1)
         res = S - (P[tc] - base)
         print("\n" + "=" * 96)
-        print("■ %s" % ck.split("/")[-1].replace(".pt", ""))
+        print("■ %s   (짝수차 중앙값 k=%d)"
+              % (ck.split("/")[-1].replace(".pt", ""), _em[ck]))
         print("=" * 96)
         print("[1] **합 잔차** (Σ예측 − (P관측−기준선)) 가 큰 자리 %d" % a.top)
         for j in np.argsort(-np.abs(res))[:a.top]:

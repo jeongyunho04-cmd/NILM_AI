@@ -63,19 +63,45 @@ def main() -> int:
     ap.add_argument("--thr", type=float, default=0.5)
     ap.add_argument("--per-app", action="store_true", help="기기별 표도 찍는다")
     ap.add_argument("--even-median", type=int, default=0,
-                    help="짝수차 크기에 k탭 이동중앙값 (14.160). 0/1 이면 비트 동일")
+                    help="짝수차 크기에 k탭 이동중앙값 (14.160)을 **강제**한다 — 분포 밖 시험용. "
+                         "안 주면 체크포인트가 적어 둔 값을 **판마다 따라간다**")
     a = ap.parse_args()
 
+    from src.model import inputs as _I
     if a.even_median > 1:
-        from src.model import inputs as _I
         _I.EVEN_MEDIAN = int(a.even_median)
-        print("⚠ 짝수차 이동중앙값 k=%d 를 **추론에만** 건다 "
-              "(모델은 이것 없이 학습됐다 — 분포 밖 시험이다)" % a.even_median)
+        print("⚠ 짝수차 이동중앙값 k=%d 를 **강제**한다 — 그것으로 학습되지 않은 판은 "
+              "**분포 밖 시험**이다" % a.even_median)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     apps = list(torch.load(a.ckpt[0], map_location="cpu",
                            weights_only=False)["appliances"])
+    #: ⚠ `EVEN_MEDIAN` 은 모듈 전역이라 한 표에 k=0 판과 k=5 판을 같이 놓으면 한쪽이
+    #  **조용히 분포 밖**으로 간다. 판마다 그 판의 값으로 **창을 다시 짓는다**
+    #  ([[verify-the-input-path-not-just-the-model]]).
+    _em = {p_: max(int(torch.load(p_, map_location="cpu",
+                                  weights_only=False).get("even_median", 0) or 0), 1)
+           for p_ in a.ckpt}
+    if a.even_median > 1:
+        _em = {p_: int(a.even_median) for p_ in a.ckpt}
     from src.run_train_seq import real_windows
-    cache = real_windows(apps, a.grid_s, dev)
+    _cur = [None]
+
+    def _need(k):
+        if _cur[0] == k:
+            return
+        _I.EVEN_MEDIAN = int(k)
+        cache.clear()
+        cache.update(real_windows(apps, a.grid_s, dev))
+        _cur[0] = k
+        if len(set(_em.values())) > 1:
+            print("  -- 창 다시 지음: 짝수차 중앙값 k=%d --" % k, flush=True)
+
+    cache = {}
+    _need(_em[a.ckpt[0]])
+    if len(set(_em.values())) > 1:
+        print("  ** 짝수차 중앙값이 갈린다: "
+              + " · ".join("%s k=%d" % (p_.split("/")[-1][:-3], v)
+                           for p_, v in _em.items()))
     ev = json.load(open("processed_data/real_events.json", encoding="utf-8"))["files"]
 
     # 없는 기기 / 있는데 꺼진 칸
@@ -105,6 +131,7 @@ def main() -> int:
 
     rows = []
     for ck in a.ckpt:
+        _need(_em[ck])                 # 이 판의 짝수차 규약으로 창을 맞춘다
         m = load_model(ck, dev)[0]
         m.eval()
         G, PW = [], []
