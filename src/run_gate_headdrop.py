@@ -55,7 +55,10 @@ from src.model.net import NILMNet, appliance_state_counts  # noqa: E402
 
 APPS = ["air_conditioner", "beam_projector", "electiric_kettle", "fan", "hair_dryer",
         "hotplate", "laptop_charger", "minipc", "oven"]
-BASE = dict(fine_extra_dilations=(32, 64), tap_layers=(0, 1, 4))
+#: ⚠ 14.138 — `prior_kappa` 를 **여기서 켠다**. `NILMNet` 기본은 0.0 인데
+#:   트레이너 기본은 **8.0** 이라, 안 켜면 관문이 물리 프라이어 블록을
+#:   **한 번도 안 태운다**. 984924 가 그래서 통과하고 학습에서 48초에 죽었다.
+BASE = dict(fine_extra_dilations=(32, 64), tap_layers=(0, 1, 4), prior_kappa=8.0)
 #: 덩이 경계 (ns=wns=1 일 때). 14.128 이 실측 체크포인트에서 확인한 배치다.
 SPAN = {"rawtgt": (0, 57), "tap0": (57, 121), "tap1": (121, 185), "tap4": (185, 313),
         "pastmean": (313, 441), "pastmax": (441, 569), "wide": (697, 761),

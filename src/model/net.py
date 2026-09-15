@@ -758,6 +758,15 @@ class NILMNet(nn.Module):
                 f"세밀 입력 채널이 모자랍니다: {fine.shape[1]} < {self.fine_channels}")
         if fine.shape[1] > self.fine_channels:
             fine = fine[:, :self.fine_channels]
+        # ⚠ 14.138 — **분기보다 위**에 둔다. 물리 프라이어(12.9.8)가 이 둘을 쓰는데
+        #   v1 분기 안에만 있어서 `--head-layout v2` 가 `UnboundLocalError` 로 죽었다
+        #   (984924, 48초). 관문 넷이 못 잡은 까닭은 `NILMNet` 의 `prior_kappa` 기본이
+        #   **0.0** 이라(트레이너는 **8.0**) 관문이 지은 물건에서 그 블록이 아예 안
+        #   돌았기 때문이다 — "관문은 진짜 객체를 지어야 한다".
+        # ⚠⚠ 이 둘은 **창 전체(600 · 120)의 최대**다. 미래 6.0초가 그대로 들어간다.
+        #   `--fine-time-split` 은 몸통만 쪼개고 이 줄은 **안 끊는다** (14.138 참조).
+        fp, wp = fine[:, P_CH_FINE], wide[:, P_CH_WIDE]            # asinh(P/100)
+        fp_max, wp_max = fp.amax(-1), wp.amax(-1)
         # 원본 입력의 타깃 샘플. 수용영역 1 - 어떤 conv 로도 뭉갤 수 없는 순시 값이다.
         if self.head_layout == "v2":
             feats = self._feats_v2(fine, wide, t)
@@ -847,10 +856,9 @@ class NILMNet(nn.Module):
             # 지금까지 헤드가 받는 원시 값은 타깃 시점(fine[:,:,t]) 하나뿐이었고,
             # 창 전체의 최대/최소는 *학습된 특징* 의 amax 로만 있었다(h.amax(-1)).
             # 12.9.8절 측정: 총전력을 1/10 로 줄여도 핫플 on 로짓이 0.09 밖에 안 움직였다.
-            fp, wp = fine[:, P_CH_FINE], wide[:, P_CH_WIDE]        # asinh(P/100)
-            # ⚠ `fp_max`/`wp_max` 는 **물리 프라이어(12.9.8)가 전역으로** 쓴다 — 그것은 그대로 두고,
+            # ⚠ `fp`/`wp`/`fp_max`/`wp_max` 는 **분기 위로 올라갔다** (14.138) — v2 에도
+            #   물리 프라이어가 필요한데 v1 분기 안에만 있어서 984924 가 죽었다.
             #   머리에 주는 통계만 구간별로 쪼갠다 (14.46).
-            fp_max, wp_max = fp.amax(-1), wp.amax(-1)
             _st = []
             for _a, _b in fsegs:
                 _st += [fp[:, _a:_b].amax(-1), fp[:, _a:_b].amin(-1)]
