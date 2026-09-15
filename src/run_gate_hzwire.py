@@ -65,8 +65,12 @@ def _build(entry, hz):
     """세 입구를 **그 입구의 진짜 함수로** 짓는다. 대역 생성기를 쓰지 않는다."""
     if entry == "traincache":
         from src.model import traincache as tc
-        tc._init(NPZ, WCY, "train", 0, "", 0.0, 0.0, "", 0.0, 0.0, "",
-                 True, True, True, 10.0, 10.0, bool(hz))
+        # ⚠ **이름으로 넘긴다.** 2026-09-15 에 `_init` 서명에 `vtex_coarse_s` 가
+        #   끼어들면서 위치로 넘기던 `bool(hz)` 가 `vtex_seg_s` 자리로 들어갔다 —
+        #   `harmonic_z` 는 기본값(끔)이 되어 관문 ①이 **굽기 판에서** 실패했다.
+        #   `initargs` 만 위치여야 하고 (Pool 이 그렇게 준다), 나머지는 전부 이름이다.
+        tc._init(NPZ, WCY, "train", 0, sp_curves=True, sp_per_texture=True,
+                 vtail=True, vtex_step_s=10.0, vtex_seg_s=10.0, harmonic_z=bool(hz))
         return tc._GEN
     if entry == "genopts":
         from src.synthesis.genopts import V32S, build_synthesizer
@@ -172,6 +176,28 @@ def main() -> int:
             bad.append(str(p).replace("\\", "/"))
     ck("⑤ 한쪽만 거는 파일이 없다", not bad,
        "반쪽인 파일: " + " ".join(bad) if bad else "검사한 입구 3곳 전부 양쪽")
+
+    # ── ⑥ `_init` 을 **위치로** 부르는 자리를 막는다 (2026-09-15) ──────────
+    #   오늘 `_init` 서명에 `vtex_coarse_s` 가 끼어들자, 위치 16개를 넘기던 이 관문
+    #   자신의 호출에서 `bool(hz)` 가 `vtex_seg_s` 자리로 밀려 **굽기 판에서** ①이
+    #   실패했다. `initargs` 만 위치여야 한다 — 그건 `Pool` 이 그렇게 주기 때문이고,
+    #   거기는 개수 대조가 따로 있다. 나머지 호출은 전부 이름이어야 한다.
+    #   앞의 넷(npz_dir·window_cycles·time_split·seed)까지는 관용으로 허용한다.
+    import ast as _ast
+    POS_OK = 4
+    loose = []
+    for p in sorted(Path("src").rglob("*.py")):
+        try:
+            tree = _ast.parse(p.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for nd in _ast.walk(tree):
+            if (isinstance(nd, _ast.Call) and isinstance(nd.func, _ast.Attribute)
+                    and nd.func.attr == "_init" and len(nd.args) > POS_OK):
+                loose.append("%s:%d (위치 %d개)"
+                             % (str(p).replace("\\", "/"), nd.lineno, len(nd.args)))
+    ck("⑥ `_init` 을 위치 %d개 넘게 부르는 자리가 없다" % POS_OK, not loose,
+       " / ".join(loose) if loose else "검사한 호출 전부 이름 인자")
 
     print()
     if FAIL:
