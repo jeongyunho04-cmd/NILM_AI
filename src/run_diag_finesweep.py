@@ -90,7 +90,12 @@ def main() -> int:
     ap.add_argument("--per-channel", action="store_true",
                     help="[B] 를 무리가 아니라 **45채널 낱개**로 (900칸)")
     ap.add_argument("--out", default="results/plots")
+    ap.add_argument("--even-median", type=int, default=0,
+                    help="짝수차 중앙값을 **강제**한다 (14.160) — 분포 밖 시험용. "
+                         "안 주면 체크포인트가 적어 둔 값을 따라간다")
     a = ap.parse_args()
+    from src.run_gate_check import sync_even_median
+    sync_even_median(a.ckpt, a.even_median)   #: 창을 짓기 **전에** 전역을 맞춘다
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     apps = list(torch.load(a.ckpt, map_location="cpu",

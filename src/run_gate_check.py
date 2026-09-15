@@ -109,6 +109,39 @@ def assert_target_config(ck: dict, ckpt_path: str) -> None:
             + chr(10) + "  (그 값으로 만든 캐시·홀드아웃도 함께 써야 합니다)")
 
 
+def sync_even_median(ckpts, force=None):
+    """체크포인트가 적어 둔 짝수차 중앙값으로 **전역을 맞춘다** (14.164).
+
+    `inputs.EVEN_MEDIAN` 은 모듈 전역이고 `build_inputs` 가 그것을 읽는다. 창을
+    한 번만 짓는 도구는 규약이 갈리는 판들을 한 번에 받으면 한쪽이 **조용히
+    분포 밖**으로 간다. 그럴 때는 통과시키지 말고 **멈춰야** 한다
+    ([[verify-the-input-path-not-just-the-model]]).
+
+    `force` 를 주면 그 값을 강제한다 — 분포 밖 시험용이다.
+    """
+    from src.model import inputs as _I
+    if force is not None and int(force) > 1:
+        _I.EVEN_MEDIAN = int(force)
+        print("⚠ 짝수차 이동중앙값 k=%d 를 **강제**한다 — 그것으로 학습되지 않은 판은 "
+              "**분포 밖 시험**이다" % int(force))
+        return int(force)
+    ks = {}
+    for p_ in ckpts:
+        ks[p_] = max(int(torch.load(p_, map_location="cpu",
+                                    weights_only=False).get("even_median", 0) or 0), 1)
+    if len(set(ks.values())) > 1:
+        raise SystemExit(
+            "✖ 짝수차 중앙값이 판마다 다르다 — 이 도구는 창을 한 번만 짓는다.\n"
+            + "\n".join("    %-34s k=%d" % (k.split("/")[-1], v) for k, v in ks.items())
+            + "\n  무리를 나눠 따로 돌려라 (아니면 `--even-median` 으로 강제해"
+              " **분포 밖 시험**임을 명시하라).")
+    k = next(iter(ks.values())) if ks else 1
+    _I.EVEN_MEDIAN = int(k)
+    if k > 1:
+        print("  ** 짝수차 이동중앙값 k=%d — 체크포인트의 규약을 따른다 **" % k)
+    return int(k)
+
+
 def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True,
                state_power_init: bool = True, proj_from: dict = None):
     """`weights=False` 면 **구조·가림만** 체크포인트에서 가져오고 가중치는 새로 뽑는다 (13.84.27).
