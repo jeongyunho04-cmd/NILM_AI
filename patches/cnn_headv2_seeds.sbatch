@@ -72,6 +72,7 @@ nvidia-smi --query-gpu=index,name --format=csv,noheader
 echo "=== 관문 ==="
 $PY -X utf8 src/run_gate_fmt.py
 $PY -X utf8 src/run_gate_headv2.py
+$PY -X utf8 src/run_gate_finepad.py
 $PY -X utf8 src/run_gate_pstatecap.py
 test -d "$CACHE" || { echo "캐시가 없다: $CACHE"; exit 1; }
 test -d "$HOLDOUT" || { echo "홀드아웃이 없다: $HOLDOUT"; exit 1; }
@@ -79,7 +80,7 @@ $PY -X utf8 -m src.run_train_cnn --help | grep -q -- "--head-layout" \
   || { echo "--head-layout 이 없다"; exit 1; }
 
 # ⚠ BASE + WTAP + CAP 이 cnn_pcap_seeds.sbatch 와 **글자 그대로 같아야** 한다 —
-#   대조를 새로 안 굽고 로컬 `cnn_pcap_s{0,1,2}` 를 짝으로 쓰기 때문이다.
+#   대조를 새로 안 굽고 로컬 `cnn_pad_s{0,1,2}` 를 짝으로 쓴다 (14.131).
 BASE="--cache $CACHE --holdout $HOLDOUT \
       --epochs $EPOCHS --epoch-windows 50000 --seed $SEED \
       --w-z 0.3 --w-over 0.0 --w-harm 0.1 --eval-every 10 --cache-workers 4 \
@@ -87,11 +88,11 @@ BASE="--cache $CACHE --holdout $HOLDOUT \
       --harm-vnorm-classes RESISTIVE --harm-vnorm-anchor"
 WTAP="--fine-extra-dilations 32,64 --tap-layers 0,1,4"
 CAP="--p-state-cap 3"
-TREAT="--head-layout v2"
+TREAT="--head-layout v2 --fine-pad replicate"
 echo "  BASE: $BASE"
 echo "  바닥(대조와 공통): $WTAP $CAP"
 echo "  처치: $TREAT"
-case "$BASE$WTAP$CAP" in *--head-layout*) echo "처치가 바닥으로 샜다"; exit 1;; esac
+case "$BASE$WTAP$CAP" in *--head-layout*|*--fine-pad*) echo "처치가 바닥으로 샜다"; exit 1;; esac
 # ⚠ 기각된 손잡이는 섞지 않는다 (14.116 · 14.122 · 14.128)
 case "$BASE$WTAP$CAP$TREAT" in *--fine-time-split*|*--fine-future-segs*|*--head-drop*|*--w-gate-cond*|*--w-swap*|*--seg-pool*)
   echo "기각된 손잡이가 섞였다"; exit 1;; esac

@@ -466,6 +466,15 @@ def main() -> int:
                          "아니며, 실측 차수별 지수가 녹화 사이에 재현되지 않는다 "
                          "(충전기 h11 폭 79.5). 분류: RESISTIVE·SMPS·MOTOR·PASSIVE.")
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
+    ap.add_argument("--fine-pad", default="zeros", choices=("zeros", "replicate"),
+                    help="세밀 몸통 conv 의 패딩 (14.131). **zeros 가 기본이라 비트 동일.** "
+                         "zeros 는 창 밖을 0 으로 채우는데 `asinh` 눈금에서 0 은 "
+                         "'고조파가 0' 이라 실측에 없는 값이다. block 6(d=64)은 600칸에서 "
+                         "탭의 18.3%%, 240칸 조각에서 **45.7%%** 가 패딩이다. "
+                         "★ 그리고 14.116 의 **진단 개입**이 한 것이 정확히 replicate 다 "
+                         "(미래를 타깃값으로 덮었다) — 학습 처치(0 패딩)와 **같은 처치가 "
+                         "아니었고**, 타깃 특징이 block 0(RF 7)에서 이미 cos **0.825** 로 "
+                         "갈린다. 개입은 고쳤고(포트 0.003 -> 0.938) 처치는 악화시켰다.")
     ap.add_argument("--head-layout", default="v1", choices=("v1", "v2"),
                     help="머리 배치 (14.130). **v1 이 기본이고 비트 동일.** "
                          "v2 = *모든 요약을 타깃 기준 2.0초 격자로 낸다* — 세밀 600 = "
@@ -912,6 +921,7 @@ def main() -> int:
                     p_state_cap=a.p_state_cap,
                     head_drop=a.head_drop,
                     head_layout=a.head_layout,
+                    fine_pad=a.fine_pad,
                     fine_future_segs=a.fine_future_segs,
                     tap_layers=(tuple(int(x) for x in a.tap_layers.split(","))
                                 if a.tap_layers else None),
@@ -1084,6 +1094,8 @@ def main() -> int:
                     "head_drop": ",".join(model.head_drop),
                     # 머리 배치 (14.130). v1 이면 비트 동일.
                     "head_layout": str(model.head_layout),
+                    # 세밀 패딩 (14.131). zeros 면 비트 동일.
+                    "fine_pad": str(model.fine_pad),
                     # 어느 캐시·홀드아웃으로 배웠나 (14.126). 판정할 때 "이 팔이 어느
                     # 캐시였지" 를 체크포인트에서 못 읽어 sbatch 를 뒤져야 했다.
                     # 처치가 **깃발이 아니라 캐시**인 판이 있으므로 반드시 남긴다.

@@ -140,9 +140,22 @@ MIN_ON_W: Dict[str, float] = {
 }
 
 
-def _blk(cin: int, cout: int, k: int, d: int, groups: int = 8) -> nn.Sequential:
+def _blk(cin: int, cout: int, k: int, d: int, groups: int = 8,
+         pad_mode: str = "zeros") -> nn.Sequential:
+    """⚠ `pad_mode="replicate"` 는 **경계값을 늘린다** (14.131).
+
+    기본 `zeros` 는 창 밖을 **0** 으로 채우는데, `asinh` 눈금에서 0 은 *"고조파가 0"*
+    이라 실측 창에 없는 값이다. 창을 조각내 태울수록 그 비중이 커진다 —
+    block 6(d=64)은 600칸에서 탭의 18.3%, 240칸 조각에서 **45.7%** 가 패딩이다.
+
+    그리고 14.116 의 **진단 개입**이 한 것이 정확히 replicate 다 (미래를 타깃값으로
+    덮었다). 학습 처치(`--fine-time-split`, 0 패딩)와 **같은 처치가 아니었다** —
+    타깃 위치에서 두 특징이 block 0(RF 7)에서 이미 cos **0.825** 로 갈린다.
+    개입은 답을 고쳤고(포트 0.003 -> 0.938) 학습 처치는 ★2 를 악화시켰다(+7.10).
+    """
     return nn.Sequential(
-        nn.Conv1d(cin, cout, k, dilation=d, padding=d * (k - 1) // 2),
+        nn.Conv1d(cin, cout, k, dilation=d, padding=d * (k - 1) // 2,
+                  padding_mode=pad_mode),
         nn.GroupNorm(min(groups, cout), cout),
         nn.GELU(),
     )
@@ -171,6 +184,10 @@ class NILMNet(nn.Module):
         #: 체크포인트는 `load_state_dict` 가 덮으므로 **영향 없다** — 새 판에만 듣는다.
         #: `False` 로 두면 옛 초기화(전부 0)로 돌아간다.
         state_power_init: bool = True,
+        #: 세밀 몸통 conv 의 패딩 방식 (14.131). **`"zeros"` 가 기본이라 비트 동일.**
+        #: `"replicate"` 는 창 밖을 **경계값으로** 채운다 — 14.116 의 진단 개입이 한 것이
+        #: 정확히 이것이다. 광역에는 안 건다 (14.94 가 그 축을 닫았다).
+        fine_pad: str = "zeros",
         #: 머리 배치 (14.130). `"v1"` 이 지금까지의 것이고 **기본이라 비트 동일**이다.
         #:
         #: `"v2"` — 사용자: *"지금 너무 많은 요소가 있어서 너도 나도 모델 구조를 완벽히
@@ -397,10 +414,16 @@ class NILMNet(nn.Module):
         self.fine_time_split = bool(fine_time_split)
         _extra = tuple(int(x) for x in (fine_extra_dilations or ()))
         self.fine_extra_dilations = _extra
-        _blocks = [_blk(self.fine_channels, c1, 7, dil[0]), _blk(c1, c1, 7, dil[1]),
-                   _blk(c1, c2, 7, dil[2]), _blk(c2, c2, 7, dil[3]),
-                   _blk(c2, c2, 7, dil[4])]
-        _blocks += [_blk(c2, c2, 7, d) for d in _extra]          # 14.80 — **더한다**
+        self.fine_pad = str(fine_pad)
+        if self.fine_pad not in ("zeros", "replicate"):
+            raise ValueError("fine_pad 는 zeros/replicate: %r" % (fine_pad,))
+        _pm = self.fine_pad
+        _blocks = [_blk(self.fine_channels, c1, 7, dil[0], pad_mode=_pm),
+                   _blk(c1, c1, 7, dil[1], pad_mode=_pm),
+                   _blk(c1, c2, 7, dil[2], pad_mode=_pm),
+                   _blk(c2, c2, 7, dil[3], pad_mode=_pm),
+                   _blk(c2, c2, 7, dil[4], pad_mode=_pm)]
+        _blocks += [_blk(c2, c2, 7, d, pad_mode=_pm) for d in _extra]   # 14.80 — **더한다**
         self.fine = nn.ModuleList(_blocks)
         #: 블록별 출력 채널 수 (탭 차원을 세는 데 쓴다)
         _chans = [c1, c1, c2, c2, c2] + [c2] * len(_extra)
