@@ -41,6 +41,10 @@
 #      ★4 는 **안 내려가야 한다** (0.879 밑이면 진짜 악화). 정밀 0.796 이 올라야 성공이다.
 #   ④ B(W=2.7)가 A(W=0.9)보다 ①은 세고, ③의 ★3 은 더 많이 내려간다. ②에서 B>A 이면
 #      "게이트 비용" 가설이 맞고, A~B 로 평평하면 문턱 효과다.
+#   ⑤ **표류 검사** — 이 판 안에서 새로 구운 대조(`cnn_gcctl`)가 어제의
+#      `cnn_v32h_on` 과 씨앗 바닥 안에 있어야 한다. ★1 의 씨앗 sd 가 1.005 이므로
+#      **평균 차가 1.0 안**이면 코드가 안 움직인 것이다. 벗어나면 그 자체가 발견이고
+#      14.89/14.94/14.95 판정을 **전부 다시 봐야 한다**.
 #
 # ⚠⚠ 지킴 (v32h_on 과 **짝으로**): 저항 4종 신원 0.97 (한 시드도 밑이면 안 된다) ·
 #     SMPS 3종 · 판정 줄 · 절대 잔차
@@ -53,7 +57,8 @@
 #SBATCH --gres=gpu:2
 #SBATCH --mem=64G
 # 984489 가 A6000 에서 25분이었다. 손잡이는 BCE 한 줄이라 비용이 안 는다.
-#SBATCH -t 01:00:00
+# 물결 둘(대조+A, 그다음 B)이라 **두 배**다. HPC_RULES 2: -t 는 잰 값의 1.5배.
+#SBATCH -t 02:00:00
 #SBATCH -a 0-2
 #SBATCH -o %x_%A_%a.out
 #SBATCH -e %x_%A_%a.out
@@ -76,8 +81,9 @@ test -d "$HOLDOUT" || { echo "홀드아웃이 없다: $HOLDOUT"; exit 1; }
 $PY -X utf8 -m src.run_train_cnn --help | grep -q -- "--w-gate-cond" \
   || { echo "--w-gate-cond 가 없다"; exit 1; }
 
-# ⚠ BASE 는 cnn_v32h_seeds.sbatch 와 **글자 그대로 같아야** 한다 — 대조를 새로 안 굽고
-#   로컬의 cnn_v32h_on_s{0,1,2} 를 그대로 짝으로 쓰기 때문이다.
+# ⚠ BASE 는 cnn_v32h_seeds.sbatch 와 **글자 그대로 같아야** 한다. 대조는 이 판 안에서
+#   새로 굽지만(아래 물결 1), 옛 `cnn_v32h_on_s{0,1,2}` 를 **표류 검사**로 쓰려면
+#   BASE 가 한 글자도 달라선 안 된다. 확인: `' '.join(BASE.split())` 가 같다.
 BASE="--cache $CACHE --holdout $HOLDOUT \
       --epochs $EPOCHS --epoch-windows 50000 --seed $SEED \
       --w-z 0.3 --w-over 0.0 --w-harm 0.1 --eval-every 10 --cache-workers 4 \
@@ -94,16 +100,31 @@ case "$BASE" in *--w-gate-cond*) echo "BASE 에 처치가 섞였다"; exit 1;; e
 case "$BASE" in *--res-cond-state*) echo "BASE 가 res-cond-state 를 덮어쓴다"; exit 1;; esac
 
 echo "=== 학습 시작 $(date '+%F %H:%M:%S')"
-CUDA_VISIBLE_DEVICES=0 $PY -X utf8 -m src.run_train_cnn $BASE $A_FLAGS \
+# ── 물결 1: **대조를 이 판 안에서 새로 굽는다** + 갈래 A ────────────────────
+#   ⚠ 왜 대조를 다시 굽나 — 로컬 `cnn_v32h_on_s*` 는 **2026-09-14 21:54** 것이다.
+#     그 뒤 `net.py`(14.88 광역 풀링 · 14.91 광역 dilation) · `losses.py`(오늘) ·
+#     `run_train_cnn.py` 가 바뀌었다. 손잡이마다 "기본값이면 비트 동일" 관문이 있지만
+#     **다섯이 쌓인 뒤 학습 전체가 같은가는 아무도 안 쟀다.**
+#     [[count-how-many-things-differ-before-attributing]] — 짝차를 읽으려면 대조가
+#     **오늘 코드**여야 한다. 옛 체크포인트는 버리지 않고 **표류 검사**로 쓴다:
+#     새 대조가 옛 대조와 씨앗 바닥 안에 있으면 코드가 안 움직인 것이고,
+#     벗어나면 그 자체가 발견이다 (그리고 14.89/14.94/14.95 판정을 다시 봐야 한다).
+CUDA_VISIBLE_DEVICES=0 $PY -X utf8 -m src.run_train_cnn $BASE \
+    --tag cnn_gcctl_s${SEED} > "results/cnn_gcctl_s${SEED}.log" 2>&1 &
+C=$!
+CUDA_VISIBLE_DEVICES=1 $PY -X utf8 -m src.run_train_cnn $BASE $A_FLAGS \
     --tag cnn_gc09_s${SEED} > "results/cnn_gc09_s${SEED}.log" 2>&1 &
 A=$!
-CUDA_VISIBLE_DEVICES=1 $PY -X utf8 -m src.run_train_cnn $BASE $B_FLAGS \
-    --tag cnn_gc27_s${SEED} > "results/cnn_gc27_s${SEED}.log" 2>&1 &
-B=$!
-RC=0; wait $A || RC=1; wait $B || RC=1
+RC=0; wait $C || RC=1; wait $A || RC=1
+# ── 물결 2: 갈래 B ──────────────────────────────────────────────────────────
+CUDA_VISIBLE_DEVICES=0 $PY -X utf8 -m src.run_train_cnn $BASE $B_FLAGS \
+    --tag cnn_gc27_s${SEED} > "results/cnn_gc27_s${SEED}.log" 2>&1 || RC=1
+echo "=== 대조: 처치 없음 (오늘 코드) ==="; tail -32 "results/cnn_gcctl_s${SEED}.log"
+echo "===================================================================================="
 echo "=== A: --w-gate-cond 0.9 ==="; tail -32 "results/cnn_gc09_s${SEED}.log"
 echo "===================================================================================="
 echo "=== B: --w-gate-cond 2.7 ==="; tail -32 "results/cnn_gc27_s${SEED}.log"
-ls -la results/cnn_gc09_s${SEED}.pt results/cnn_gc27_s${SEED}.pt || true
+ls -la results/cnn_gcctl_s${SEED}.pt results/cnn_gc09_s${SEED}.pt \
+       results/cnn_gc27_s${SEED}.pt || true
 echo "끝 $(date '+%F %H:%M:%S') · rc=$RC"
 exit $RC
