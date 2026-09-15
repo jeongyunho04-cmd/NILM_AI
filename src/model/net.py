@@ -171,6 +171,27 @@ class NILMNet(nn.Module):
         #: 체크포인트는 `load_state_dict` 가 덮으므로 **영향 없다** — 새 판에만 듣는다.
         #: `False` 로 두면 옛 초기화(전부 0)로 돌아간다.
         state_power_init: bool = True,
+        #: 머리 배치 (14.130). `"v1"` 이 지금까지의 것이고 **기본이라 비트 동일**이다.
+        #:
+        #: `"v2"` — 사용자: *"지금 너무 많은 요소가 있어서 너도 나도 모델 구조를 완벽히
+        #: 파악을 못하고 있잖아. 기존 구조 백업해 두고 한번 깔끔하게 처음부터 해 보자."*
+        #:
+        #: **규칙 하나로 머리를 설명한다 — "모든 요약은 타깃 기준 2.0초 격자로 낸다.
+        #: 전역 요약은 없다."** 세밀 600 = **정확히 5 x 120** 이고 타깃 239 가 두 번째
+        #: 토막의 끝이라 격자 경계가 타깃과 맞는다 (K=4·6 은 안 맞는다 — K=5 가 유일하다).
+        #: ```
+        #:   v1 (765칸 · 아홉 가지)            v2 (다섯 가지)
+        #:   원시타깃57 · 탭0 64 · 탭1 64      [1] 타깃 순간  원시 57 · 얕은탭 64 · 깊은탭 128
+        #:   탭4 128 · h.mean 128(불변)        [2] 세밀 5토막 얕은탭(RF 19) mean+amax
+        #:   h.amax 128(불변) · 깊은탭 128     [3] 깊은 요약  과거 mean+amax · 미래 mean+amax
+        #:   hw.mean 64(불변) · 창통계 4(불변) [4] 광역 4토막 타깃에서 갈라 과거 3 · 미래 1
+        #:                                     [5] 원시 5토막 P 채널 max/min
+        #: ```
+        #: 얕은 탭은 `tap_layers` 의 **두 번째**를 쓴다 (기본 배치에서 층 1, RF **19**).
+        #: 14.127 의 선형 탐침에서 파일 간 일반화가 가장 나았다 — 최악 파일 AUC
+        #: 원시 0.346 · 깊은 hf 0.496 · **탭1 0.613**.
+        #: ⚠ `head_drop` 과 같이 못 쓴다 (덩이 경계가 다르다).
+        head_layout: str = "v1",
         #: 머리 입력에서 **빼는 덩이** (14.128). 쉼표로 여러 개. **빈 값이면 비트 동일.**
         #:
         #: 왜 — 사용자: *"너무 많은 정보가 헤드에 덕지덕지 붙어 있는 모양새인데."*
@@ -389,6 +410,9 @@ class NILMNet(nn.Module):
         if any(not (0 <= i < len(_blocks)) for i in self.tap_layers):
             raise ValueError("tap_layers 가 블록 범위를 벗어난다: %r (블록 %d개)"
                              % (self.tap_layers, len(_blocks)))
+        self.head_layout = str(head_layout)
+        if self.head_layout not in ("v1", "v2"):
+            raise ValueError("head_layout 은 v1/v2: %r" % (head_layout,))
         # 14.128 — 머리에서 뺄 덩이. 이름이 틀리면 **조용히 무시하지 않고 터뜨린다.**
         self.head_drop = tuple(sorted(x.strip() for x in str(head_drop or "").split(",")
                                       if x.strip()))
@@ -431,24 +455,49 @@ class NILMNet(nn.Module):
         if self.fine_pool not in ("both", "amax", "mean"):
             raise ValueError("fine_pool 은 both/amax/mean: %r" % (fine_pool,))
         _npool = 2 if self.fine_pool == "both" else 1
+        if self.head_layout == "v2":
+            if self.head_drop:
+                raise ValueError("head_layout=v2 는 head_drop 과 같이 못 쓴다 "
+                                 "— 덩이 경계가 다르다")
+            #: 세밀 5토막(각 120사이클 = 2.0초). 경계가 타깃 239 직후와 맞는다.
+            #: 세밀 5토막. 광역은 **토막내지 않는다** — 14.94 가 광역 축을 닫았다
+            #: (손잡이 셋 전부 실패 · 광역을 통째로 지워도 저항 넷 게이트가 0.0~0.2%만
+            #: 바뀐다 · *"신호가 없는 갈래에 용량을 주면 해가 여러 개 생긴다"*).
+            self.h2_fseg, self.h2_wseg = 5, 1
+            #: 얕은 탭 — `tap_layers` 의 두 번째 (기본 배치에서 층 1, RF 19)
+            self.h2_tap = int(self.tap_layers[1] if len(self.tap_layers) > 1
+                              else self.tap_layers[0])
+            _csh = _chans[self.h2_tap]
+            self.h2_csh = int(_csh)
         _npool_keep = sum(1 for _p, _n in (("mean", "pastmean"), ("amax", "pastmax"))
                           if self.fine_pool in ("both", _p) and _n not in self.head_drop)
         self._pool_keep = tuple(_p for _p, _n in (("mean", "pastmean"), ("amax", "pastmax"))
                                 if self.fine_pool in ("both", _p) and _n not in self.head_drop)
-        trunk_in = (c2 * _npool_keep * ns + c2 + _tap_dim
-                    + (0 if "rawtgt" in self.head_drop else self.fine_channels)
-                    # 14.88 — 원시 창 통계는 **세밀 2개 + 광역 2개**라 각자의 구간 수를
-                    #   따른다 (`forward` 의 `_st` 참조). `wns == ns` 면 `WINDOW_STATS*ns`
-                    #   와 **정확히 같은 값**이라 옛 경로와 비트 동일이다.
-                    + (0 if "wide" in self.head_drop else w2 * wns)
-                    + (0 if "rawstat" in self.head_drop
-                       else (WINDOW_STATS // 2) * (ns + wns)))
+        if self.head_layout == "v2":
+            trunk_in = (self.fine_channels + self.h2_csh + c2      # [1] 타깃 순간
+                        + 2 * self.h2_fseg * self.h2_csh           # [2] 세밀 5토막
+                        + 4 * c2                                   # [3] 깊은 과거/미래
+                        + w2                                       # [4] 광역 전역 평균
+                        + 2 * self.h2_fseg)                        # [5] 원시 5토막 max/min
+        else:
+            trunk_in = (c2 * _npool_keep * ns + c2 + _tap_dim
+                        + (0 if "rawtgt" in self.head_drop else self.fine_channels)
+                        # 14.88 — 원시 창 통계는 **세밀 2개 + 광역 2개**라 각자의 구간
+                        #   수를 따른다. `wns == ns` 면 옛 경로와 비트 동일이다.
+                        + (0 if "wide" in self.head_drop else w2 * wns)
+                        + (0 if "rawstat" in self.head_drop
+                           else (WINDOW_STATS // 2) * (ns + wns)))
         # 14.122 — 미래 토막 수. 1 이면 14.116 과 같은 2 덩이라 비트 동일이다.
         self.fine_future_segs = max(1, int(fine_future_segs))
+        if self.fine_future_segs > 1 and self.head_layout == "v2":
+            raise ValueError("head_layout=v2 는 fine_future_segs 와 같이 못 쓴다 "
+                             "— v2 가 이미 미래를 격자로 준다")
         if self.fine_future_segs > 1 and not self.fine_time_split:
             raise ValueError("`fine_future_segs > 1` 은 `fine_time_split` 이 켜져야 한다 "
                              "— 미래 조각 자체가 시간분할에서만 생긴다")
-        if self.fine_time_split:
+        # ⚠ v2 는 미래 요약을 **자기 배치 안에** 이미 담고 있다 ([3]). 여기서 또 더하면
+        #   차원이 어긋난다 (1667 대 1923 으로 처음에 터졌다).
+        if self.fine_time_split and self.head_layout != "v2":
             trunk_in += 2 * c2                           # 14.116 — 미래 전체 mean/amax
             if self.fine_future_segs > 1:
                 # 14.122 — 원시 미래를 토막낸 mean/amax (수용영역 1 이라 토막이 구별된다)
@@ -508,6 +557,16 @@ class NILMNet(nn.Module):
                                 float(w) if w > 20.0 else float(np.log(np.expm1(w))))
         # 세밀 유래 차원 표식. **연결 순서를 바꾸지 않고** 마스킹만 한다.
         # 순서를 바꾸면 이전 체크포인트가 뒤섞인 입력을 받는다 (실제로 한 번 겪었다).
+        if self.head_layout == "v2":
+            fine_flags = ([1] * (self.fine_channels + self.h2_csh + c2)
+                          + [1] * (2 * self.h2_fseg * self.h2_csh)
+                          + [1] * (4 * c2)
+                          + [0] * w2                           # 광역 유래
+                          + [1] * (2 * self.h2_fseg))
+            assert len(fine_flags) == trunk_in, (len(fine_flags), trunk_in)
+            self.register_buffer("fine_dim_mask",
+                                 torch.tensor(fine_flags, dtype=torch.float32),
+                                 persistent=False)
         fine_flags: List[int] = (
             ([] if "rawtgt" in self.head_drop else [1] * self.fine_channels) + [1] * _tap_dim
             # 14.79 — `fine_pool` 이 `both` 면 두 무리, 아니면 한 무리다 (순서는 그대로).
@@ -528,11 +587,12 @@ class NILMNet(nn.Module):
         if self.periodicity:
             fine_flags += ([1] * len(PERIOD_LAGS_FINE) + [0] * len(PERIOD_LAGS_WIDE)
                            + [1, 0])                          # 교차율 세밀/광역
-        assert len(fine_flags) == trunk_in, (len(fine_flags), trunk_in)
-        # persistent=False — 옛 체크포인트에 없는 키라 state_dict 호환을 깨면 안 된다.
-        self.register_buffer("fine_dim_mask",
-                             torch.tensor(fine_flags, dtype=torch.float32),
-                             persistent=False)
+        if self.head_layout != "v2":
+            assert len(fine_flags) == trunk_in, (len(fine_flags), trunk_in)
+            # persistent=False — 옛 체크포인트에 없는 키라 state_dict 호환을 깨면 안 된다.
+            self.register_buffer("fine_dim_mask",
+                                 torch.tensor(fine_flags, dtype=torch.float32),
+                                 persistent=False)
 
         # 몸통 -> log(r_grid) 보조 헤드 (13.55). **입력 배치도 trunk_in 도 안 바꾼다** —
         # 파라미터 257개가 z 뒤에 붙을 뿐이라 옛 체크포인트와 모양이 어긋나지 않는다
@@ -612,6 +672,61 @@ class NILMNet(nn.Module):
             [V_EXP.get(a, 0.0) if vexp else 0.0 for a in self.appliances], dtype=torch.float32),
             persistent=False)
 
+    def _feats_v2(self, fine, wide, t):
+        """머리 배치 v2 (14.130) — **시간 부호를 주려면 그 조각을 따로 태운다.**
+
+        14.130 이 잰 것: `_block` 은 `Conv1d -> GroupNorm(C, T 전체) -> GELU` 라
+        **수용영역과 무관하게** 통계가 창 전체에서 나온다. 그래서 풀링만 토막내면
+        토막이 안 갈린다 — 한 토막을 흔들면 다섯 토막이 다 움직였다
+        (대각 1.435 대 비대각 0.830, **1.73배**뿐). `--seg-pool`(14.72) ·
+        `--fine-future-segs`(14.122) · v2 의 첫 판이 전부 같은 이유로 떨어졌다.
+        반대로 `--fine-time-split` 이 통한 까닭도 여기 있다 — 풀링을 쪼갠 게 아니라
+        **몸통을 따로 태워 GroupNorm 을 따로 돌린 것**이다 (과거↔미래 Δ가 **0.000**).
+
+        ⇒ 그 처방을 **2조각에서 5조각으로 일반화**한다.
+        ```
+          세밀 600 = 5 x 120 (타깃 239 가 두 번째 토막의 끝 — K=5 만 경계가 맞는다)
+          얕은 스택 (층 0..h2_tap, RF 19 < 120)  토막 **5개를 각각 따로** 태운다
+          깊은 스택 (전 층, RF 763)             **과거/미래 둘로만** 태운다
+                                                (120칸에 dilation 64 는 거의 패딩이다)
+        ```
+        ⚠ 광역은 **토막내지 않는다.** 14.94 가 그 축을 닫았다 — 손잡이 셋이 전부
+          실패했고 광역을 통째로 지워도 저항 넷 게이트가 0.0~0.2%만 바뀐다.
+          규칙의 **명시적 예외**다.
+        """
+        F, TAP = self.h2_fseg, self.h2_tap
+        n = fine.shape[-1]
+        segs = [(n * k // F, n if k == F - 1 else n * (k + 1) // F) for k in range(F)]
+
+        # ── 깊은 경로 — 타깃에서 둘로 (GroupNorm 도 따로 돈다) ──────────────
+        hp, hf = fine[:, :, :t + 1], fine[:, :, t + 1:]
+        sh_t = None
+        for i, blk in enumerate(self.fine):
+            hp, hf = blk(hp), blk(hf)
+            if i == TAP:
+                sh_t = hp[:, :, -1]                      # 얕은 탭의 **타깃** 값
+        dp_t = hp[:, :, -1]
+        self._tap_now = dp_t
+
+        # ── 얕은 경로 — 토막 **5개를 각각 따로** 태운다 (가중치 공유) ───────
+        seg_feats = []
+        for a, b in segs:
+            z = fine[:, :, a:b]
+            for i, blk in enumerate(self.fine):
+                if i > TAP:
+                    break
+                z = blk(z)
+            seg_feats += [z.mean(-1), z.amax(-1)]
+
+        feats = [fine[:, :, t], sh_t, dp_t]              # [1] 타깃 순간
+        feats += seg_feats                               # [2] 세밀 5토막
+        feats += [hp.mean(-1), hp.amax(-1), hf.mean(-1), hf.amax(-1)]   # [3] 깊은 과거/미래
+        feats.append(self.wide(wide).mean(-1))           # [4] 광역 (14.94 로 닫힌 축)
+        fp = fine[:, P_CH_FINE]                          # [5] 원시 5토막
+        feats.append(torch.stack([v for a, b in segs
+                                  for v in (fp[:, a:b].amax(-1), fp[:, a:b].amin(-1))], 1))
+        return feats
+
     def forward(self, fine: torch.Tensor, wide: torch.Tensor) -> Dict[str, torch.Tensor]:
         t = self.target_pos
         # 이 체크포인트가 학습된 채널 수만 쓴다 (`self.fine_channels` 주석 참조).
@@ -621,109 +736,112 @@ class NILMNet(nn.Module):
         if fine.shape[1] > self.fine_channels:
             fine = fine[:, :self.fine_channels]
         # 원본 입력의 타깃 샘플. 수용영역 1 - 어떤 conv 로도 뭉갤 수 없는 순시 값이다.
-        feats = [] if "rawtgt" in self.head_drop else [fine[:, :, t]]
-        if self.fine_time_split:
-            # ── 14.116 — 몸통을 **타깃에서 둘로** (같은 가중치) ─────────────
-            #   까닭: `--fine-extra-dilations 32,64` 를 켜면 깊은 탭의 수용영역이
-            #   763사이클(타깃 좌우 ±6.36초)이라 **창 전체**를 덮는다. 그래서
-            #   `h[:, :, t]` 라는 "지금의 특징" 안에 **미래 6.02초가 이미 섞여**
-            #   들어간다. 모델은 그것을 미래라고 부를 길이 없으므로 무시할 수도 없다.
-            #   실측 개입으로 확인: 미래를 타깃값으로 덮으면 핫플 헛게이트가
-            #   0.878 -> 0.004 로 사라진다 (test_5 260.0초).
-            #   고침은 정보를 **버리는 것이 아니라 시간 부호를 붙이는 것**이다 —
-            #   과거 조각과 미래 조각을 따로 통과시켜 머리에 **따로** 준다.
-            #   ⚠ `--seg-pool` 과 다르다. 저쪽은 **전역 풀링**을 쪼개는데, 지금
-            #     새는 길은 탭 **안**이라 풀링을 쪼개도 못 막는다 (14.42 의 처방은
-            #     wtap 이 없던 RF 187 짜리 몸통에 맞춘 것이었다).
-            hp, hf = fine[:, :, :t + 1], fine[:, :, t + 1:]
-            for i, blk in enumerate(self.fine):
-                hp, hf = blk(hp), blk(hf)
-                if i in self._keep_tap:
-                    feats.append(hp[:, :, -1])      # 얕은 탭도 **과거만** 본다
-            h = hp                                  # 아래 타깃 탭·풀링은 과거 쪽
-            self._h_fut = hf
+        if self.head_layout == "v2":
+            feats = self._feats_v2(fine, wide, t)
         else:
-            h = fine
-            for i, blk in enumerate(self.fine):
-                h = blk(h)
-                if i in self._keep_tap:             # 얕은 층의 타깃 슬라이스
-                    feats.append(h[:, :, t])
-            self._h_fut = None
-        # 14.46 — 구간별 요약. `seg_pool` 이 0/1 이면 구간이 창 전체 하나라
-        #   `h[:, :, 0:n].mean(-1)` == `h.mean(-1)` 이고 **옛 경로와 비트 동일**이다.
-        fsegs = pool_segments(h.shape[-1], min(t, h.shape[-1] - 1),
-                              max(self.seg_pool, 1))
-        for _a, _b in fsegs:
-            # 14.79 — `both` 면 순서까지 옛 경로 그대로라 **비트 동일**이다.
-            if "mean" in self._pool_keep:
-                feats.append(h[:, :, _a:_b].mean(-1))
-            if "amax" in self._pool_keep:
-                feats.append(h[:, :, _a:_b].amax(-1))
-        _tap = h[:, :, min(t, h.shape[-1] - 1)]         # 깊은 층 타깃
-        #: 진단용 — 관문이 "이 탭이 미래를 보나" 를 **실제 forward 경로에서** 잰다.
-        #: 학습에는 안 쓴다 (`feats` 에 들어가는 것은 `_tap` 자신이다).
-        self._tap_now = _tap
-        feats.append(_tap)
-        if self.fine_time_split:
-            # 미래 조각의 요약 — 정보는 그대로 주되 **과거와 섞지 않는다**
-            # 14.122 — 그리고 **언제냐**도 준다. 토막마다 mean/amax 를 따로 낸다.
-            #   `K=1` 이면 토막이 미래 전체 하나라 `hf[:, :, 0:n]` == `hf` 이고
-            #   순서도 mean, amax 그대로다 -> **비트 동일**이다.
-            hf = self._h_fut
-            feats.append(hf.mean(-1))
-            feats.append(hf.amax(-1))
-            # 14.122 — **언제냐**. 깊은 `hf` 는 수용영역 763 이라 토막내도 전부 같이
-            #   움직인다 (관문 [4] 가 잡았다). **원시 미래 입력**을 토막낸다 —
-            #   수용영역이 정의상 1 이라 +0.2초 계단과 +5.9초 계단이 다른 자리에 간다.
-            K = self.fine_future_segs
-            if K > 1:
-                raw_f = fine[:, :, t + 1:]
-                nfu = raw_f.shape[-1]
-                for _k in range(K):
-                    _a = (nfu * _k) // K
-                    _b = nfu if _k == K - 1 else (nfu * (_k + 1)) // K
-                    _b = max(_b, _a + 1)
-                    feats.append(raw_f[:, :, _a:_b].mean(-1))
-                    feats.append(raw_f[:, :, _a:_b].amax(-1))
-        hw = self.wide(wide)
-        wsegs = pool_segments(hw.shape[-1], wide_target_index(hw.shape[-1]),
-                              max(self.wide_seg_pool or self.seg_pool, 1))
-        if "wide" not in self.head_drop:
-            for _a, _b in wsegs:
-                feats.append(hw[:, :, _a:_b].mean(-1))
-        if self.wide_target:
-            # **평균에 더한다. 대체하지 않는다** (13.44) — 미니PC 는 60초 문맥이
-            # 순시값보다 낫다(0.795 대 0.680). 둘 다여야 0.937 로 최고다.
-            feats.append(hw[:, :, wide_target_index(hw.shape[-1])])
-        if self.wide_summary:
-            # 세밀은 전역평균·전역최대·타깃슬라이스 세 갈래로 오는데 광역은 평균
-            # 하나뿐이었다 (12.19.1절). 비대칭을 없앤다.
-            for _a, _b in wsegs:
-                feats.append(hw[:, :, _a:_b].amax(-1))
-            feats.append(hw[:, :, -1])
+            feats = [] if "rawtgt" in self.head_drop else [fine[:, :, t]]
+            if self.fine_time_split:
+                # ── 14.116 — 몸통을 **타깃에서 둘로** (같은 가중치) ─────────────
+                #   까닭: `--fine-extra-dilations 32,64` 를 켜면 깊은 탭의 수용영역이
+                #   763사이클(타깃 좌우 ±6.36초)이라 **창 전체**를 덮는다. 그래서
+                #   `h[:, :, t]` 라는 "지금의 특징" 안에 **미래 6.02초가 이미 섞여**
+                #   들어간다. 모델은 그것을 미래라고 부를 길이 없으므로 무시할 수도 없다.
+                #   실측 개입으로 확인: 미래를 타깃값으로 덮으면 핫플 헛게이트가
+                #   0.878 -> 0.004 로 사라진다 (test_5 260.0초).
+                #   고침은 정보를 **버리는 것이 아니라 시간 부호를 붙이는 것**이다 —
+                #   과거 조각과 미래 조각을 따로 통과시켜 머리에 **따로** 준다.
+                #   ⚠ `--seg-pool` 과 다르다. 저쪽은 **전역 풀링**을 쪼개는데, 지금
+                #     새는 길은 탭 **안**이라 풀링을 쪼개도 못 막는다 (14.42 의 처방은
+                #     wtap 이 없던 RF 187 짜리 몸통에 맞춘 것이었다).
+                hp, hf = fine[:, :, :t + 1], fine[:, :, t + 1:]
+                for i, blk in enumerate(self.fine):
+                    hp, hf = blk(hp), blk(hf)
+                    if i in self._keep_tap:
+                        feats.append(hp[:, :, -1])      # 얕은 탭도 **과거만** 본다
+                h = hp                                  # 아래 타깃 탭·풀링은 과거 쪽
+                self._h_fut = hf
+            else:
+                h = fine
+                for i, blk in enumerate(self.fine):
+                    h = blk(h)
+                    if i in self._keep_tap:             # 얕은 층의 타깃 슬라이스
+                        feats.append(h[:, :, t])
+                self._h_fut = None
+            # 14.46 — 구간별 요약. `seg_pool` 이 0/1 이면 구간이 창 전체 하나라
+            #   `h[:, :, 0:n].mean(-1)` == `h.mean(-1)` 이고 **옛 경로와 비트 동일**이다.
+            fsegs = pool_segments(h.shape[-1], min(t, h.shape[-1] - 1),
+                                  max(self.seg_pool, 1))
+            for _a, _b in fsegs:
+                # 14.79 — `both` 면 순서까지 옛 경로 그대로라 **비트 동일**이다.
+                if "mean" in self._pool_keep:
+                    feats.append(h[:, :, _a:_b].mean(-1))
+                if "amax" in self._pool_keep:
+                    feats.append(h[:, :, _a:_b].amax(-1))
+            _tap = h[:, :, min(t, h.shape[-1] - 1)]         # 깊은 층 타깃
+            #: 진단용 — 관문이 "이 탭이 미래를 보나" 를 **실제 forward 경로에서** 잰다.
+            #: 학습에는 안 쓴다 (`feats` 에 들어가는 것은 `_tap` 자신이다).
+            self._tap_now = _tap
+            feats.append(_tap)
+            if self.fine_time_split:
+                # 미래 조각의 요약 — 정보는 그대로 주되 **과거와 섞지 않는다**
+                # 14.122 — 그리고 **언제냐**도 준다. 토막마다 mean/amax 를 따로 낸다.
+                #   `K=1` 이면 토막이 미래 전체 하나라 `hf[:, :, 0:n]` == `hf` 이고
+                #   순서도 mean, amax 그대로다 -> **비트 동일**이다.
+                hf = self._h_fut
+                feats.append(hf.mean(-1))
+                feats.append(hf.amax(-1))
+                # 14.122 — **언제냐**. 깊은 `hf` 는 수용영역 763 이라 토막내도 전부 같이
+                #   움직인다 (관문 [4] 가 잡았다). **원시 미래 입력**을 토막낸다 —
+                #   수용영역이 정의상 1 이라 +0.2초 계단과 +5.9초 계단이 다른 자리에 간다.
+                K = self.fine_future_segs
+                if K > 1:
+                    raw_f = fine[:, :, t + 1:]
+                    nfu = raw_f.shape[-1]
+                    for _k in range(K):
+                        _a = (nfu * _k) // K
+                        _b = nfu if _k == K - 1 else (nfu * (_k + 1)) // K
+                        _b = max(_b, _a + 1)
+                        feats.append(raw_f[:, :, _a:_b].mean(-1))
+                        feats.append(raw_f[:, :, _a:_b].amax(-1))
+            hw = self.wide(wide)
+            wsegs = pool_segments(hw.shape[-1], wide_target_index(hw.shape[-1]),
+                                  max(self.wide_seg_pool or self.seg_pool, 1))
+            if "wide" not in self.head_drop:
+                for _a, _b in wsegs:
+                    feats.append(hw[:, :, _a:_b].mean(-1))
+            if self.wide_target:
+                # **평균에 더한다. 대체하지 않는다** (13.44) — 미니PC 는 60초 문맥이
+                # 순시값보다 낫다(0.795 대 0.680). 둘 다여야 0.937 로 최고다.
+                feats.append(hw[:, :, wide_target_index(hw.shape[-1])])
+            if self.wide_summary:
+                # 세밀은 전역평균·전역최대·타깃슬라이스 세 갈래로 오는데 광역은 평균
+                # 하나뿐이었다 (12.19.1절). 비대칭을 없앤다.
+                for _a, _b in wsegs:
+                    feats.append(hw[:, :, _a:_b].amax(-1))
+                feats.append(hw[:, :, -1])
 
-        # 원시 창 전력 통계. **conv 도 GroupNorm 도 거치지 않는다.**
-        # 지금까지 헤드가 받는 원시 값은 타깃 시점(fine[:,:,t]) 하나뿐이었고,
-        # 창 전체의 최대/최소는 *학습된 특징* 의 amax 로만 있었다(h.amax(-1)).
-        # 12.9.8절 측정: 총전력을 1/10 로 줄여도 핫플 on 로짓이 0.09 밖에 안 움직였다.
-        fp, wp = fine[:, P_CH_FINE], wide[:, P_CH_WIDE]        # asinh(P/100)
-        # ⚠ `fp_max`/`wp_max` 는 **물리 프라이어(12.9.8)가 전역으로** 쓴다 — 그것은 그대로 두고,
-        #   머리에 주는 통계만 구간별로 쪼갠다 (14.46).
-        fp_max, wp_max = fp.amax(-1), wp.amax(-1)
-        _st = []
-        for _a, _b in fsegs:
-            _st += [fp[:, _a:_b].amax(-1), fp[:, _a:_b].amin(-1)]
-        for _a, _b in wsegs:
-            _st += [wp[:, _a:_b].amax(-1), wp[:, _a:_b].mean(-1)]
-        if "rawstat" not in self.head_drop:
-            feats.append(torch.stack(_st, dim=1))
+            # 원시 창 전력 통계. **conv 도 GroupNorm 도 거치지 않는다.**
+            # 지금까지 헤드가 받는 원시 값은 타깃 시점(fine[:,:,t]) 하나뿐이었고,
+            # 창 전체의 최대/최소는 *학습된 특징* 의 amax 로만 있었다(h.amax(-1)).
+            # 12.9.8절 측정: 총전력을 1/10 로 줄여도 핫플 on 로짓이 0.09 밖에 안 움직였다.
+            fp, wp = fine[:, P_CH_FINE], wide[:, P_CH_WIDE]        # asinh(P/100)
+            # ⚠ `fp_max`/`wp_max` 는 **물리 프라이어(12.9.8)가 전역으로** 쓴다 — 그것은 그대로 두고,
+            #   머리에 주는 통계만 구간별로 쪼갠다 (14.46).
+            fp_max, wp_max = fp.amax(-1), wp.amax(-1)
+            _st = []
+            for _a, _b in fsegs:
+                _st += [fp[:, _a:_b].amax(-1), fp[:, _a:_b].amin(-1)]
+            for _a, _b in wsegs:
+                _st += [wp[:, _a:_b].amax(-1), wp[:, _a:_b].mean(-1)]
+            if "rawstat" not in self.head_drop:
+                feats.append(torch.stack(_st, dim=1))
 
-        if self.periodicity:
-            # 시간 구조를 **직접** 준다 (`_autocorr` 주석). conv 를 안 거친다.
-            feats.append(torch.cat([
-                _autocorr(fp, PERIOD_LAGS_FINE), _autocorr(wp, PERIOD_LAGS_WIDE),
-                _crossing_rate(fp)[:, None], _crossing_rate(wp)[:, None],
-            ], dim=1))
+            if self.periodicity:
+                # 시간 구조를 **직접** 준다 (`_autocorr` 주석). conv 를 안 거친다.
+                feats.append(torch.cat([
+                    _autocorr(fp, PERIOD_LAGS_FINE), _autocorr(wp, PERIOD_LAGS_WIDE),
+                    _crossing_rate(fp)[:, None], _crossing_rate(wp)[:, None],
+                ], dim=1))
         x = torch.cat(feats, dim=1)
         if self.training and self.fine_dropout > 0:
             # 창 단위로 세밀 갈래를 통째로 가린다. 부분 드롭아웃이 아니라 **갈래

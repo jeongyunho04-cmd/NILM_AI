@@ -466,6 +466,16 @@ def main() -> int:
                          "아니며, 실측 차수별 지수가 녹화 사이에 재현되지 않는다 "
                          "(충전기 h11 폭 79.5). 분류: RESISTIVE·SMPS·MOTOR·PASSIVE.")
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
+    ap.add_argument("--head-layout", default="v1", choices=("v1", "v2"),
+                    help="머리 배치 (14.130). **v1 이 기본이고 비트 동일.** "
+                         "v2 = *모든 요약을 타깃 기준 2.0초 격자로 낸다* — 세밀 600 = "
+                         "**5x120** 이고 타깃 239 가 두 번째 토막의 끝이라 경계가 맞는다 "
+                         "(K=4·6 은 안 맞는다). ★ 핵심은 풀링이 아니라 **정규화**다 — "
+                         "`Conv1d -> GroupNorm(C,T 전체)` 라 수용영역과 무관하게 통계가 "
+                         "창 전체에서 나와서, 풀링만 토막내면 대각/비대각이 **1.73배**밖에 "
+                         "안 된다. v2 는 얕은 스택(RF 19)을 **토막마다 따로 태워** "
+                         "비대각을 **0.0000** 으로 만든다. 광역은 14.94 가 닫은 축이라 "
+                         "전역 평균 그대로 둔다. 머리 입력 765 -> 1475.")
     ap.add_argument("--head-drop", default="",
                     help="머리 입력에서 **빼는 덩이** (14.128). 쉼표로 여러 개. "
                          "**빈 값이면 비트 동일.** 이름: rawtgt · tap0/tap1/tap4 · "
@@ -901,6 +911,7 @@ def main() -> int:
                                           if a.fine_extra_dilations else None),
                     p_state_cap=a.p_state_cap,
                     head_drop=a.head_drop,
+                    head_layout=a.head_layout,
                     fine_future_segs=a.fine_future_segs,
                     tap_layers=(tuple(int(x) for x in a.tap_layers.split(","))
                                 if a.tap_layers else None),
@@ -1071,6 +1082,8 @@ def main() -> int:
                     "fine_future_segs": int(model.fine_future_segs),
                     # 머리에서 뺀 덩이 (14.128). 빈 값이면 비트 동일.
                     "head_drop": ",".join(model.head_drop),
+                    # 머리 배치 (14.130). v1 이면 비트 동일.
+                    "head_layout": str(model.head_layout),
                     # 어느 캐시·홀드아웃으로 배웠나 (14.126). 판정할 때 "이 팔이 어느
                     # 캐시였지" 를 체크포인트에서 못 읽어 sbatch 를 뒤져야 했다.
                     # 처치가 **깃발이 아니라 캐시**인 판이 있으므로 반드시 남긴다.
