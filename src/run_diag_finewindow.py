@@ -164,8 +164,13 @@ def main() -> int:
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
-            from src.plotting.style import use_korean_font  # noqa
-            use_korean_font()
+            #: 14.178 — `src.plotting` 은 **없는 모듈**이었다. 그래서 [C] 의 한글이
+            #  늘 깨져 나왔다 (except 로 삼켜져서 안 보였다). 다른 그림 도구와 같은 길로.
+            for _f in ("Malgun Gothic", "AppleGothic", "NanumGothic", "DejaVu Sans"):
+                if any(_f == x.name for x in matplotlib.font_manager.fontManager.ttflist):
+                    matplotlib.rcParams["font.family"] = _f
+                    break
+            matplotlib.rcParams["axes.unicode_minus"] = False
         except Exception:
             try:
                 import matplotlib
