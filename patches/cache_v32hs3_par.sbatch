@@ -21,17 +21,30 @@
 #
 # 병렬 (14.96 에서 한도를 확인했다):
 #   QOS node10_cpu640_gpu12  ->  **노드 10 · 코어 640 · 동시작업 10**  ("3" 제한은 없었다)
-#   기존 8토막 x 24코어 = 192코어(한도의 30%)  ->  **10토막 x 48코어 = 480코어**
-#   48 인 이유: 여섯 파티션이 **전부** 받는다 (cpu1·gpu6 이 48코어 노드).
+#   ⚠⚠ 14.96 이 **재서** 정한 값이다 (짐작이 두 번 틀렸다):
+#     탐침 (고정 시작부하 115초를 뺀 한계비용, 250창 x 24코어)
+#        seg_s=0   토막  1 ·  0.96 core-s/window
+#        seg_s=10  토막  6 ·  9.79 core-s/window   <- seg0 의 **10.2배**
+#        seg_s=5   토막 12 · 19.4  core-s/window   <- 외삽 19.6 과 일치 (모델 확인)
+#        seg_s=3   토막 20 · **32.6** (외삽)
+#     토막 수에 **거의 정비례**한다 — 문서가 이미 적어 뒀다: "토막마다 회로를 다시
+#     부르는데 texture_delta/coupling_delta 캐시 키에 v1 이 있어 창 사이 적중이 없다".
+#
+#   `-c` 는 **지금 잡히는 노드 수**로 정했다 (-c 40 이 단맛 자리다):
+#        -c 40 -> 13노드 · -c 48 -> 3노드 · -c 56 -> 1노드 · **-c 64 -> 0노드**
+#     그래서 cpu2 큰 노드(256코어) 안은 못 쓴다 — 유휴가 노드당 8~28 뿐이다.
+#
+#   20토막 x 40코어, 동시 10 (QOS node=10):  토막당 15,000창 -> **3.4시간/토막** · 총 6.8시간
+#   10토막으로 하면 총 시간은 같은데 한 토막이 6.8시간이라, 죽으면 손실이 두 배다.
 #
 #SBATCH -J nilm_hs3
 #SBATCH -p cpu1,gpu6,cpu2,gpu3,gpu4,gpu5
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -c 48
-#SBATCH --mem=100G
-#SBATCH -t 02:00:00   # 14.96 측정 x 1.5 (HPC_RULES 2)
-#SBATCH -a 0-9
+#SBATCH -c 40
+#SBATCH --mem=160G
+#SBATCH -t 06:00:00   # 14.96 실측 3.4시간 x 1.76 (HPC_RULES 2 는 1.5 이상)
+#SBATCH -a 0-19%10
 #SBATCH -o %x_%A_%a.out
 #SBATCH -e %x_%A_%a.out
 set -euo pipefail
@@ -40,7 +53,7 @@ PY=./env/bin/python
 
 WINDOWS=${WINDOWS:-300000}
 GEN=${GEN:-v32hs3}
-NSHARD=${SLURM_ARRAY_TASK_COUNT:-10}
+NSHARD=${SLURM_ARRAY_TASK_COUNT:-20}
 OUT="$HOME/NILM_AI/cache/train60_${GEN}_s${SLURM_ARRAY_TASK_ID}"
 
 echo "노드 $(hostname) · 토막 ${SLURM_ARRAY_TASK_ID}/${NSHARD} · 코어 ${SLURM_CPUS_PER_TASK} · $(date '+%F %H:%M:%S')"
@@ -73,6 +86,9 @@ $PY -X utf8 src/run_gate_cacheshape.py
 #   배선, 14.62 의 표 배선 — 그동안 합성 사슬을 여러 번 건드렸다. 그 전부가 `harmonic_z=끔`
 #   에서 옛 캐시와 한 바이트도 안 다름을 여기서 증명한다. 청크 0(250창)만 구워 1~2분이다.
 #   ⚠ 이게 깨지면 v32h 대 v32 비교는 **손잡이 하나짜리가 아니다** — 굽지 마라.
+#   ⚠⚠ 14.98 — `cache/train60_v32` 본체(23G)는 쿼터 때문에 지웠다. 이 관문이 읽는 것은
+#      코드상 **앞 250행뿐**이라(`b[:n]`), 앞 512행 슬라이스 `cache/_v32_head512`(39MB)로
+#      바꿨다. 지우기 **전에** 여섯 배열이 앞 250행 비트 동일임을 확인했다.
 REPRO="$HOME/NILM_AI/cache/_repro_${SLURM_ARRAY_TASK_ID}"
 rm -rf "$REPRO"
 echo "=== 관문 ③ 표 끔 = train60_v32 비트 동일 (청크 0) ==="
@@ -82,7 +98,7 @@ import numpy as np, sys
 bad = []
 for nm in ('fine', 'wide', 'y_power', 'y_on', 'y_state', 'obs_harm'):
     a = np.load('$REPRO/%s.npy' % nm, mmap_mode='r')
-    b = np.load('cache/train60_v32/%s.npy' % nm, mmap_mode='r')
+    b = np.load('cache/_v32_head512/%s.npy' % nm, mmap_mode='r')
     n = len(a)
     same = np.array_equal(np.asarray(a), np.asarray(b[:n]))
     print('    %-9s %6d창  %s' % (nm, n, '비트 동일 ✅' if same else '**다르다** ❌'))
@@ -99,7 +115,7 @@ du -sh "$OUT"
 $PY -X utf8 -c "
 import json, sys
 d = json.load(open('$OUT/meta.json', encoding='utf-8'))
-a = json.load(open('cache/train60_v32/meta.json', encoding='utf-8'))
+a = json.load(open('cache/_v32_head512/meta.json', encoding='utf-8'))
 print('  토막 %s · 청크 %s · 창 %d (전체 기준 %d)'
       % (d['shard'], d['shard_chunks'], d['n_windows'], d['n_windows_total']))
 if not d.get('harmonic_z'): sys.exit('❌ meta 에 harmonic_z 가 안 적혔다')
