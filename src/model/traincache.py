@@ -353,6 +353,8 @@ def build_cache(
             "shard_chunks": (None if shard is None else [tasks[0][0], tasks[-1][0]]),
             "n_windows_total": int(n_windows), "chunk": int(chunk),
             "time_split": time_split, "seed": seed, "n_wide": n_wide,
+            # 14.93 — 세밀은 `fine_shape` 로 막혀 있었는데 광역은 아무것도 없었다.
+            "wide_shape": [int(WIDE_CHANNELS), int(n_wide)],
             "exclude_activation_files": exclude_activation_files,
             "dither_amp": float(dither_amp), "dither_phase_deg": float(dither_phase_deg),
             "dither_min_order": int(dither_min_order),
@@ -423,6 +425,26 @@ class CachedWindows:
             p = d / f"{name}.npy"
             self.arr[name] = np.load(p, mmap_mode="r") if p.exists() else None
         self.has_z = self.arr["z_grid"] is not None
+        # ── 14.93 배열의 **실제 모양**을 본다 ────────────────────────────────
+        # 위 `fine_shape` 검사는 **meta 를 믿는다**. 광역은 meta 에 모양 키가
+        # 아예 없었고(`n_wide` 만 있다) 검사도 없었다 — `WIDE_CHANNELS` 를 바꾸면
+        # memmap 이 **조용히 엉뚱한 축으로 reshape** 된다. 세밀 쪽 주석이 12.34 에서
+        # 그 사고를 이미 적어 뒀는데 광역만 안 막혀 있었다.
+        # `np.load(mmap_mode="r")` 은 `.npy` 헤더의 모양을 그대로 주므로, 이 검사는
+        # **`wide_shape` 가 없는 옛 캐시에도 통한다.**
+        _nw = int(self.meta.get("n_wide", 0))
+        for _nm, _want in (("fine", (int(FINE_CHANNELS), int(FINE_CYCLES))),
+                           ("wide", (int(WIDE_CHANNELS), _nw) if _nw else None)):
+            if _want is None:
+                continue
+            _got = tuple(int(x) for x in self.arr[_nm].shape[1:])
+            if _got != _want:
+                raise ValueError(
+                    "학습 캐시의 %s 배열 모양이 다릅니다: 캐시 %s vs 기대 %s  (%s). "
+                    "채널 수가 바뀌었으면 python -m src.run_build_traincache 로 "
+                    "다시 만드십시오 (memmap 은 모양을 안 검사해 그냥 두면 "
+                    "**조용히 틀립니다**)."
+                    % (_nm, _got, _want, d.resolve()))
 
     def __len__(self) -> int:
         return self.n
