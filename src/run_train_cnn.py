@@ -466,6 +466,15 @@ def main() -> int:
                          "아니며, 실측 차수별 지수가 녹화 사이에 재현되지 않는다 "
                          "(충전기 h11 폭 79.5). 분류: RESISTIVE·SMPS·MOTOR·PASSIVE.")
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
+    ap.add_argument("--head-drop", default="",
+                    help="머리 입력에서 **빼는 덩이** (14.128). 쉼표로 여러 개. "
+                         "**빈 값이면 비트 동일.** 이름: rawtgt · tap0/tap1/tap4 · "
+                         "pastmean/pastmax · wide · rawstat. "
+                         "왜 — 머리 입력 765칸의 유효 차원이 참여비 **20.2** 뿐이고 "
+                         "(분산 90%%까지 79칸), 어느 덩이든 **나머지 전부로** R^2 "
+                         "0.905~0.982 로 복원된다. 다만 3시드 판정 일치가 0.94~0.95 라 "
+                         "**불안정의 원인이라는 증거는 없다** — 그래서 통과 조건은 "
+                         "'좋아진다' 가 아니라 **'안 나빠진다'** 다.")
     ap.add_argument("--fine-future-segs", type=int, default=1,
                     help="미래 조각을 **몇 토막으로 나눠** 요약할지 (14.122). "
                          "`--fine-time-split` 전용. **1 이면 비트 동일.** "
@@ -891,6 +900,7 @@ def main() -> int:
                     fine_extra_dilations=(tuple(int(x) for x in a.fine_extra_dilations.split(","))
                                           if a.fine_extra_dilations else None),
                     p_state_cap=a.p_state_cap,
+                    head_drop=a.head_drop,
                     fine_future_segs=a.fine_future_segs,
                     tap_layers=(tuple(int(x) for x in a.tap_layers.split(","))
                                 if a.tap_layers else None),
@@ -1059,6 +1069,12 @@ def main() -> int:
                     "p_state_cap": float(model.p_state_cap),
                     # 미래 토막 수 (14.122). 1 이면 비트 동일.
                     "fine_future_segs": int(model.fine_future_segs),
+                    # 머리에서 뺀 덩이 (14.128). 빈 값이면 비트 동일.
+                    "head_drop": ",".join(model.head_drop),
+                    # 어느 캐시·홀드아웃으로 배웠나 (14.126). 판정할 때 "이 팔이 어느
+                    # 캐시였지" 를 체크포인트에서 못 읽어 sbatch 를 뒤져야 했다.
+                    # 처치가 **깃발이 아니라 캐시**인 판이 있으므로 반드시 남긴다.
+                    "cache": str(a.cache), "holdout": str(a.holdout),
                     # 타깃 시점 구성 (12.45). 채널 수와 달리 슬라이스로 못 맞춘다 —
                     # 어긋나면 입력과 라벨이 다른 순간을 가리켜 조용히 틀린다.
                     "target_lookahead": TARGET_LOOKAHEAD,

@@ -171,6 +171,28 @@ class NILMNet(nn.Module):
         #: 체크포인트는 `load_state_dict` 가 덮으므로 **영향 없다** — 새 판에만 듣는다.
         #: `False` 로 두면 옛 초기화(전부 0)로 돌아간다.
         state_power_init: bool = True,
+        #: 머리 입력에서 **빼는 덩이** (14.128). 쉼표로 여러 개. **빈 값이면 비트 동일.**
+        #:
+        #: 왜 — 사용자: *"너무 많은 정보가 헤드에 덕지덕지 붙어 있는 모양새인데."*
+        #: 재 봤더니 맞다. 실측 2753창에서 머리 입력 765칸의
+        #: ```
+        #:   유효 차원  분산 90%까지 79칸 · 99%까지 339칸 · 참여비 **20.2**
+        #:   덩이별 중복 — 그 덩이를 **나머지 전부**로 맞힌 R^2
+        #:     과거평균 0.982 · 원시창통계 0.982 · 탭0 0.980 · 탭1 0.976
+        #:     원시타깃 0.968 · 과거최대 0.947 · 광역평균 0.929 · 탭4 0.925 · 깊은탭 0.905
+        #: ```
+        #: **어느 덩이를 빼도 나머지로 90~98% 복원된다.**
+        #: ⚠ 다만 **불안정의 원인이라는 증거는 없다** — 같은 팔 3시드의 오븐 on_logit
+        #:   상관이 0.945~0.960, 판정 일치 0.94~0.95 로 거의 같은 함수를 배운다.
+        #:   그래서 이건 "고침" 이 아니라 **"빼도 되나" 를 묻는 실험**이다.
+        #: ⚠⚠ 추론에서 0 으로 죽여 보는 것으로는 못 묻는다 — `asinh(P/100)=0` 같은
+        #:   실측에 없는 입력이 되어 **분포 이탈**을 재게 된다 (14.123 에서 당했다).
+        #:   빼고 **다시 학습**해야 한다.
+        #:
+        #: 이름: `rawtgt`(원시 타깃 57) · `tap0/tap1/tap4`(얕은 탭) ·
+        #:       `pastmean`/`pastmax`(세밀 구간 풀링) · `wide`(광역 평균) ·
+        #:       `rawstat`(원시 창통계 4)
+        head_drop: str = "",
         #: 미래 조각을 **몇 토막으로 나눠** 요약할지 (14.122). `--fine-time-split` 전용.
         #: **1 이면 지금과 비트 동일** (토막 하나 = 미래 전체).
         #:
@@ -367,7 +389,17 @@ class NILMNet(nn.Module):
         if any(not (0 <= i < len(_blocks)) for i in self.tap_layers):
             raise ValueError("tap_layers 가 블록 범위를 벗어난다: %r (블록 %d개)"
                              % (self.tap_layers, len(_blocks)))
-        _tap_dim = sum(_chans[i] for i in self.tap_layers)
+        # 14.128 — 머리에서 뺄 덩이. 이름이 틀리면 **조용히 무시하지 않고 터뜨린다.**
+        self.head_drop = tuple(sorted(x.strip() for x in str(head_drop or "").split(",")
+                                      if x.strip()))
+        _ok = {"rawtgt", "pastmean", "pastmax", "wide", "rawstat"} |               {"tap%d" % i for i in self.tap_layers}
+        for _d in self.head_drop:
+            if _d not in _ok:
+                raise ValueError("head_drop 이름이 틀렸다: %r (가능: %s)"
+                                 % (_d, ",".join(sorted(_ok))))
+        _keep_tap = [i for i in self.tap_layers if ("tap%d" % i) not in self.head_drop]
+        _tap_dim = sum(_chans[i] for i in _keep_tap)
+        self._keep_tap = tuple(_keep_tap)
         w1, w2 = int(32 * width), int(64 * width)
         # 14.91 — 광역 몸통의 **수용영역**. 기본 (1,2,4) 는 전폭 1+4x7 = 29블록,
         #   즉 타깃에서 **±7초**뿐인데 창은 ±30초다 (**24%**). 머리는 그 ±7초 짜리 유닛을
@@ -399,11 +431,18 @@ class NILMNet(nn.Module):
         if self.fine_pool not in ("both", "amax", "mean"):
             raise ValueError("fine_pool 은 both/amax/mean: %r" % (fine_pool,))
         _npool = 2 if self.fine_pool == "both" else 1
-        trunk_in = (c2 * _npool * ns + c2 + _tap_dim + self.fine_channels
+        _npool_keep = sum(1 for _p, _n in (("mean", "pastmean"), ("amax", "pastmax"))
+                          if self.fine_pool in ("both", _p) and _n not in self.head_drop)
+        self._pool_keep = tuple(_p for _p, _n in (("mean", "pastmean"), ("amax", "pastmax"))
+                                if self.fine_pool in ("both", _p) and _n not in self.head_drop)
+        trunk_in = (c2 * _npool_keep * ns + c2 + _tap_dim
+                    + (0 if "rawtgt" in self.head_drop else self.fine_channels)
                     # 14.88 — 원시 창 통계는 **세밀 2개 + 광역 2개**라 각자의 구간 수를
                     #   따른다 (`forward` 의 `_st` 참조). `wns == ns` 면 `WINDOW_STATS*ns`
                     #   와 **정확히 같은 값**이라 옛 경로와 비트 동일이다.
-                    + w2 * wns + (WINDOW_STATS // 2) * (ns + wns))
+                    + (0 if "wide" in self.head_drop else w2 * wns)
+                    + (0 if "rawstat" in self.head_drop
+                       else (WINDOW_STATS // 2) * (ns + wns)))
         # 14.122 — 미래 토막 수. 1 이면 14.116 과 같은 2 덩이라 비트 동일이다.
         self.fine_future_segs = max(1, int(fine_future_segs))
         if self.fine_future_segs > 1 and not self.fine_time_split:
@@ -470,9 +509,9 @@ class NILMNet(nn.Module):
         # 세밀 유래 차원 표식. **연결 순서를 바꾸지 않고** 마스킹만 한다.
         # 순서를 바꾸면 이전 체크포인트가 뒤섞인 입력을 받는다 (실제로 한 번 겪었다).
         fine_flags: List[int] = (
-            [1] * self.fine_channels + [1] * _tap_dim
+            ([] if "rawtgt" in self.head_drop else [1] * self.fine_channels) + [1] * _tap_dim
             # 14.79 — `fine_pool` 이 `both` 면 두 무리, 아니면 한 무리다 (순서는 그대로).
-            + [1] * (c2 * _npool * ns) + [1] * c2            # 구간별 풀링 + 깊은 타깃
+            + [1] * (c2 * _npool_keep * ns) + [1] * c2       # 구간별 풀링 + 깊은 타깃
             # 14.116 — 미래 조각의 mean/amax. **세밀 유래**라 1 이다. `forward` 가
             #   깊은 타깃 바로 뒤에 붙이므로 여기도 같은 자리여야 한다.
             + ([1] * (2 * c2) if self.fine_time_split else [])
@@ -480,10 +519,11 @@ class NILMNet(nn.Module):
             #   요약 **바로 뒤**에 붙이므로 여기도 같은 자리여야 한다.
             + ([1] * (2 * self.fine_future_segs * self.fine_channels)
                if (self.fine_time_split and self.fine_future_segs > 1) else [])
-            + [0] * (w2 * wns)                                # 광역 평균 (구간별)
+            + ([] if "wide" in self.head_drop else [0] * (w2 * wns))   # 광역 평균 (구간별)
             + ([0] * w2 if self.wide_target else [])           # 광역 타깃 블록 (13.44)
             + ([0] * (w2 * wns) + [0] * w2 if self.wide_summary else [])  # 광역 amax + 창끝
-            + [1, 1] * ns + [0, 0] * wns  # 구간별 fp(max,min) 그리고 wp(max,mean)
+            + ([] if "rawstat" in self.head_drop
+               else [1, 1] * ns + [0, 0] * wns)  # 구간별 fp(max,min) 그리고 wp(max,mean)
         )
         if self.periodicity:
             fine_flags += ([1] * len(PERIOD_LAGS_FINE) + [0] * len(PERIOD_LAGS_WIDE)
@@ -581,7 +621,7 @@ class NILMNet(nn.Module):
         if fine.shape[1] > self.fine_channels:
             fine = fine[:, :self.fine_channels]
         # 원본 입력의 타깃 샘플. 수용영역 1 - 어떤 conv 로도 뭉갤 수 없는 순시 값이다.
-        feats = [fine[:, :, t]]
+        feats = [] if "rawtgt" in self.head_drop else [fine[:, :, t]]
         if self.fine_time_split:
             # ── 14.116 — 몸통을 **타깃에서 둘로** (같은 가중치) ─────────────
             #   까닭: `--fine-extra-dilations 32,64` 를 켜면 깊은 탭의 수용영역이
@@ -598,7 +638,7 @@ class NILMNet(nn.Module):
             hp, hf = fine[:, :, :t + 1], fine[:, :, t + 1:]
             for i, blk in enumerate(self.fine):
                 hp, hf = blk(hp), blk(hf)
-                if i in self.tap_layers:
+                if i in self._keep_tap:
                     feats.append(hp[:, :, -1])      # 얕은 탭도 **과거만** 본다
             h = hp                                  # 아래 타깃 탭·풀링은 과거 쪽
             self._h_fut = hf
@@ -606,7 +646,7 @@ class NILMNet(nn.Module):
             h = fine
             for i, blk in enumerate(self.fine):
                 h = blk(h)
-                if i in self.tap_layers:            # 얕은 층의 타깃 슬라이스
+                if i in self._keep_tap:             # 얕은 층의 타깃 슬라이스
                     feats.append(h[:, :, t])
             self._h_fut = None
         # 14.46 — 구간별 요약. `seg_pool` 이 0/1 이면 구간이 창 전체 하나라
@@ -615,9 +655,9 @@ class NILMNet(nn.Module):
                               max(self.seg_pool, 1))
         for _a, _b in fsegs:
             # 14.79 — `both` 면 순서까지 옛 경로 그대로라 **비트 동일**이다.
-            if self.fine_pool in ("both", "mean"):
+            if "mean" in self._pool_keep:
                 feats.append(h[:, :, _a:_b].mean(-1))
-            if self.fine_pool in ("both", "amax"):
+            if "amax" in self._pool_keep:
                 feats.append(h[:, :, _a:_b].amax(-1))
         _tap = h[:, :, min(t, h.shape[-1] - 1)]         # 깊은 층 타깃
         #: 진단용 — 관문이 "이 탭이 미래를 보나" 를 **실제 forward 경로에서** 잰다.
@@ -648,8 +688,9 @@ class NILMNet(nn.Module):
         hw = self.wide(wide)
         wsegs = pool_segments(hw.shape[-1], wide_target_index(hw.shape[-1]),
                               max(self.wide_seg_pool or self.seg_pool, 1))
-        for _a, _b in wsegs:
-            feats.append(hw[:, :, _a:_b].mean(-1))
+        if "wide" not in self.head_drop:
+            for _a, _b in wsegs:
+                feats.append(hw[:, :, _a:_b].mean(-1))
         if self.wide_target:
             # **평균에 더한다. 대체하지 않는다** (13.44) — 미니PC 는 60초 문맥이
             # 순시값보다 낫다(0.795 대 0.680). 둘 다여야 0.937 로 최고다.
@@ -674,7 +715,8 @@ class NILMNet(nn.Module):
             _st += [fp[:, _a:_b].amax(-1), fp[:, _a:_b].amin(-1)]
         for _a, _b in wsegs:
             _st += [wp[:, _a:_b].amax(-1), wp[:, _a:_b].mean(-1)]
-        feats.append(torch.stack(_st, dim=1))
+        if "rawstat" not in self.head_drop:
+            feats.append(torch.stack(_st, dim=1))
 
         if self.periodicity:
             # 시간 구조를 **직접** 준다 (`_autocorr` 주석). conv 를 안 거친다.
