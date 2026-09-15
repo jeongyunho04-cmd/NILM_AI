@@ -38,6 +38,7 @@ from src.model.inputs import (  # noqa: E402
     PHI0, PHI_ORDERS, VOLT_ORDERS, build_inputs, fine_target_index,
 )
 
+DRYER_STATE = 1          #: 0 이면 안 맞춘다 (옛 경로)
 FILES = ["test_1", "test_2", "test_3", "test_4", "test_5"]
 STATS = ("타깃", "평균", "최대", "최소")
 
@@ -126,6 +127,12 @@ def collect_synth(path):
     on = hs.y_on.astype(bool)
     yst = np.asarray(hs.y_state)
     keep = on[:, jk] & on[:, jd] & ~(on[:, jo] & (yst[:, jo] == 2))
+    #: ⚠ 14.143 — **드라이기 상태를 맞춘다.** 안 맞추면 s1(반파)/s2(전파)가 70:30 으로
+    #:   섞여 |I2| 중앙값이 절반으로 눌리고, 그 혼합이 **모든 마진널 비교를 오염**시킨다.
+    #:   실측 포트+드라이 창은 사실상 전부 반파다 (|I2| 0.844A · 사전 0.4326x2.07=0.90A).
+    #:   맞춘 뒤 합성 276창 |I2| 0.876A 로 실측과 같아진다 — 그런데 헛율은 0~3.3% 대 30~66%.
+    if DRYER_STATE:
+        keep &= (yst[:, jd] == DRYER_STATE)
     idx = np.flatnonzero(keep)
     F, W = [], []
     for i in range(0, len(idx), 256):
