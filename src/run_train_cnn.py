@@ -504,6 +504,18 @@ def main() -> int:
                          "오븐 팬·조명 창을 '통전' 으로 세어 `L_on` 과 싸운다 — 실측에서 "
                          "오븐 게이트가 켜진 창의 전력 중앙이 16.0W 인데 σ·V²/R 은 "
                          "1094W 를 요구한다. 빈 문자열이면 옛 동작(켜짐=통전).")
+    ap.add_argument("--fine-time-split", action="store_true",
+                    help="세밀 몸통을 **타깃에서 둘로** 쪼갠다 (14.116). 까닭: "
+                         "`--fine-extra-dilations 32,64` 를 켜면 깊은 탭의 수용영역이 "
+                         "763사이클(타깃 좌우 +-6.36초)이라 창 전체를 덮어, "
+                         "`h[:,:,t]` 안에 **미래 6.02초가 섞여** 들어간다. 모델은 그것을 "
+                         "미래라고 부를 길이 없어 무시할 수도 없다. 개입으로 확인: 미래를 "
+                         "타깃값으로 덮으면 핫플 헛게이트가 0.878 -> 0.004 로 사라진다. "
+                         "이 깃발은 정보를 **버리지 않고 시간 부호만** 준다 — 과거 조각과 "
+                         "미래 조각을 따로 통과시켜 머리에 따로 준다. 가중치는 공유라 "
+                         "**파라미터가 안 는다**. 끄면 **비트 동일**. "
+                         "⚠ `--seg-pool` 과 다르다 — 저쪽은 전역 풀링을 쪼개는데 지금 "
+                         "새는 길은 **탭 안**이라 풀링으로는 못 막는다.")
     ap.add_argument("--w-gate-cond", type=float, default=0.0, metavar="W",
                     help="게이트를 **통전**에 묶는 항 `L_gcond` (14.106). "
                          "`--res-cond-state` 가 지정한 기기에만, `on_logit` 을 "
@@ -862,6 +874,7 @@ def main() -> int:
                                           if a.fine_extra_dilations else None),
                     tap_layers=(tuple(int(x) for x in a.tap_layers.split(","))
                                 if a.tap_layers else None),
+                    fine_time_split=a.fine_time_split,
                     aux_z=(a.w_z > 0),
                     vexp=a.vexp, seg_pool=a.seg_pool,
                     wide_seg_pool=a.wide_seg_pool,

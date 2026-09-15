@@ -248,6 +248,9 @@ class NILMNet(nn.Module):
         #:   `tap_layers` 에 **4** 를 넣어 옛 마지막 블록(RF 187)의 타깃 슬라이스도 같이 뽑는다.
         #:   그러면 국소 탭(+-1.56초)과 넓은 탭(+-6.36초)이 **둘 다** 특징에 들어간다.
         fine_extra_dilations: Optional[Sequence[int]] = None,
+        #: 14.116 — 세밀 몸통을 **타깃에서 둘로** 쪼갠다 (같은 가중치, 파라미터 불변).
+        #:   0 이면 옛 경로와 **비트 동일**. `forward` 의 주석이 까닭을 적는다.
+        fine_time_split: bool = False,
         #: 타깃 슬라이스를 뽑을 블록 번호 (0-based). `None` 이면 `(0, 1)` = **비트 동일**.
         #: `fine_extra_dilations` 를 쓸 때 **4 를 꼭 넣어라** — 안 넣으면 14.78 과 같은 실수다.
         tap_layers: Optional[Sequence[int]] = None,
@@ -302,6 +305,8 @@ class NILMNet(nn.Module):
             raise ValueError("fine_dilations 는 5개여야 한다 (블록 수가 같아야 "
                              "파라미터가 안 는다): %r" % (dil,))
         self.fine_dilations = dil
+        #: 14.116 — 세밀 몸통을 타깃에서 둘로 쪼갠다. **0 이면 옛 경로와 비트 동일**.
+        self.fine_time_split = bool(fine_time_split)
         _extra = tuple(int(x) for x in (fine_extra_dilations or ()))
         self.fine_extra_dilations = _extra
         _blocks = [_blk(self.fine_channels, c1, 7, dil[0]), _blk(c1, c1, 7, dil[1]),
@@ -354,6 +359,8 @@ class NILMNet(nn.Module):
                     #   따른다 (`forward` 의 `_st` 참조). `wns == ns` 면 `WINDOW_STATS*ns`
                     #   와 **정확히 같은 값**이라 옛 경로와 비트 동일이다.
                     + w2 * wns + (WINDOW_STATS // 2) * (ns + wns))
+        if self.fine_time_split:
+            trunk_in += 2 * c2          # 14.116 — 미래 조각의 mean/amax
         if self.wide_target:
             trunk_in += w2              # 광역 타깃 블록 (13.44)
         if self.wide_summary:
@@ -413,6 +420,9 @@ class NILMNet(nn.Module):
             [1] * self.fine_channels + [1] * _tap_dim
             # 14.79 — `fine_pool` 이 `both` 면 두 무리, 아니면 한 무리다 (순서는 그대로).
             + [1] * (c2 * _npool * ns) + [1] * c2            # 구간별 풀링 + 깊은 타깃
+            # 14.116 — 미래 조각의 mean/amax. **세밀 유래**라 1 이다. `forward` 가
+            #   깊은 타깃 바로 뒤에 붙이므로 여기도 같은 자리여야 한다.
+            + ([1] * (2 * c2) if self.fine_time_split else [])
             + [0] * (w2 * wns)                                # 광역 평균 (구간별)
             + ([0] * w2 if self.wide_target else [])           # 광역 타깃 블록 (13.44)
             + ([0] * (w2 * wns) + [0] * w2 if self.wide_summary else [])  # 광역 amax + 창끝
@@ -503,21 +513,53 @@ class NILMNet(nn.Module):
             fine = fine[:, :self.fine_channels]
         # 원본 입력의 타깃 샘플. 수용영역 1 - 어떤 conv 로도 뭉갤 수 없는 순시 값이다.
         feats = [fine[:, :, t]]
-        h = fine
-        for i, blk in enumerate(self.fine):
-            h = blk(h)
-            if i in self.tap_layers:                # 얕은 층의 타깃 슬라이스
-                feats.append(h[:, :, t])
+        if self.fine_time_split:
+            # ── 14.116 — 몸통을 **타깃에서 둘로** (같은 가중치) ─────────────
+            #   까닭: `--fine-extra-dilations 32,64` 를 켜면 깊은 탭의 수용영역이
+            #   763사이클(타깃 좌우 ±6.36초)이라 **창 전체**를 덮는다. 그래서
+            #   `h[:, :, t]` 라는 "지금의 특징" 안에 **미래 6.02초가 이미 섞여**
+            #   들어간다. 모델은 그것을 미래라고 부를 길이 없으므로 무시할 수도 없다.
+            #   실측 개입으로 확인: 미래를 타깃값으로 덮으면 핫플 헛게이트가
+            #   0.878 -> 0.004 로 사라진다 (test_5 260.0초).
+            #   고침은 정보를 **버리는 것이 아니라 시간 부호를 붙이는 것**이다 —
+            #   과거 조각과 미래 조각을 따로 통과시켜 머리에 **따로** 준다.
+            #   ⚠ `--seg-pool` 과 다르다. 저쪽은 **전역 풀링**을 쪼개는데, 지금
+            #     새는 길은 탭 **안**이라 풀링을 쪼개도 못 막는다 (14.42 의 처방은
+            #     wtap 이 없던 RF 187 짜리 몸통에 맞춘 것이었다).
+            hp, hf = fine[:, :, :t + 1], fine[:, :, t + 1:]
+            for i, blk in enumerate(self.fine):
+                hp, hf = blk(hp), blk(hf)
+                if i in self.tap_layers:
+                    feats.append(hp[:, :, -1])      # 얕은 탭도 **과거만** 본다
+            h = hp                                  # 아래 타깃 탭·풀링은 과거 쪽
+            self._h_fut = hf
+        else:
+            h = fine
+            for i, blk in enumerate(self.fine):
+                h = blk(h)
+                if i in self.tap_layers:            # 얕은 층의 타깃 슬라이스
+                    feats.append(h[:, :, t])
+            self._h_fut = None
         # 14.46 — 구간별 요약. `seg_pool` 이 0/1 이면 구간이 창 전체 하나라
         #   `h[:, :, 0:n].mean(-1)` == `h.mean(-1)` 이고 **옛 경로와 비트 동일**이다.
-        fsegs = pool_segments(h.shape[-1], t, max(self.seg_pool, 1))
+        fsegs = pool_segments(h.shape[-1], min(t, h.shape[-1] - 1),
+                              max(self.seg_pool, 1))
         for _a, _b in fsegs:
             # 14.79 — `both` 면 순서까지 옛 경로 그대로라 **비트 동일**이다.
             if self.fine_pool in ("both", "mean"):
                 feats.append(h[:, :, _a:_b].mean(-1))
             if self.fine_pool in ("both", "amax"):
                 feats.append(h[:, :, _a:_b].amax(-1))
-        feats.append(h[:, :, t])                        # 깊은 층 타깃
+        _tap = h[:, :, min(t, h.shape[-1] - 1)]         # 깊은 층 타깃
+        #: 진단용 — 관문이 "이 탭이 미래를 보나" 를 **실제 forward 경로에서** 잰다.
+        #: 학습에는 안 쓴다 (`feats` 에 들어가는 것은 `_tap` 자신이다).
+        self._tap_now = _tap
+        feats.append(_tap)
+        if self.fine_time_split:
+            # 미래 조각의 요약 — 정보는 그대로 주되 **과거와 섞지 않는다**
+            hf = self._h_fut
+            feats.append(hf.mean(-1))
+            feats.append(hf.amax(-1))
         hw = self.wide(wide)
         wsegs = pool_segments(hw.shape[-1], wide_target_index(hw.shape[-1]),
                               max(self.wide_seg_pool or self.seg_pool, 1))
