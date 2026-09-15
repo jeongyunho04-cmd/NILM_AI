@@ -209,6 +209,20 @@ def plot_file(stem, apps, t_pred, pred, standby, t_obs, obs, spec, path, title,
         g = np.asarray(gate, float)
         iv = spec["intervals"]
         dt = float(np.median(np.diff(t_pred))) if len(t_pred) > 1 else 1.0
+        # ⚠ 창은 파일 처음부터 있지 않다 — 광역 갈래가 60초를 먹으므로 test_4 는
+        #   **54초**부터다. 그런데 정답 테두리는 파일 전체에 그려지니, 창이 없는
+        #   구간이 "테두리 안 빈칸" = **놓침**으로 읽힌다. 실제로 그렇게 읽을 뻔했다
+        #   ([[check-the-denominator-before-reading-a-ratio]]). 덮어서 못 읽게 한다.
+        t_lo = float(t_pred[0]) - dt / 2 if len(t_pred) else 0.0
+        t_hi = float(t_pred[-1]) + dt / 2 if len(t_pred) else 0.0
+        for axk in (ax[3], ax[4]):
+            for x0, x1 in ((t_obs[0] if len(t_obs) else 0.0, t_lo),
+                           (t_hi, t_obs[-1] if len(t_obs) else t_hi)):
+                if x1 > x0:
+                    axk.axvspan(x0, x1, color="0.82", alpha=.65, zorder=6, lw=0)
+                    axk.annotate("창 없음", ((x0 + x1) / 2, 0.5), xycoords=("data",
+                                 "axes fraction"), fontsize=7.5, color="0.25",
+                                 ha="center", va="center", rotation=90, zorder=7)
         for i, a in enumerate(apps):
             col = COL(apps.index(a) % 10)
             on = g[:, i] > gate_thr
@@ -233,8 +247,13 @@ def plot_file(stem, apps, t_pred, pred, standby, t_obs, obs, spec, path, title,
         # 기기별로 얼마나 켰다고 봤는지 — 정답과 견줄 수 있게 옆에 적는다
         for i, a in enumerate(apps):
             frac = float((g[:, i] > gate_thr).mean())
-            true_s = sum(t1 - t0 for t0, t1 in iv.get(a, {}).get("on", []))
-            span = max(t_pred[-1] - t_pred[0], 1.0) if len(t_pred) else 1.0
+            # ⚠ 모델 %는 **창**에서 세고 참 %는 **파일 전체**에서 셌다 — 분모가 달랐다.
+            #   test_4 충전기는 16.1초에 켜지는데 창은 54초부터라, 창이 없는 38초가
+            #   참 쪽 분자에만 들어가 "89% 참인데 모델은 80%" 로 보였다. 실제로는
+            #   그 구간 유지율이 **0.999** 다. 창 구간으로 자른다.
+            true_s = sum(max(0.0, min(t1, t_hi) - max(t0, t_lo))
+                         for t0, t1 in iv.get(a, {}).get("on", []))
+            span = max(t_hi - t_lo, 1.0)
             ax[4].annotate(f"{100*frac:.0f}% (참 {100*true_s/span:.0f}%)",
                            (1.002, i), xycoords=("axes fraction", "data"),
                            fontsize=7.5, va="center", color="0.25")
