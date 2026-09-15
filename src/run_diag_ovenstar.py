@@ -44,8 +44,12 @@ from src.run_train_seq import real_windows  # noqa: E402
 LO, HI = 128.0, 142.0     #: ★1 구간 (초)
 GRID_S = 2.0              #: 두 자 모두 이 격자다 — 자의 일부이지 편의가 아니다
 ON_STATE = 2              #: 오븐 통전 슬롯 (`losses.S_STATE["oven"] = {1: 16.8, 2: 1357.1}`)
-#: 미리 적은 대조값 (14.95, `cnn_v32h_on_s{0,1,2}`). 자 검정에 쓴다.
-PINNED = {"cnn_v32h_on": (4.454, 1.005, 30.6, 1.5)}
+#: 미리 적은 대조값 (★1 평균·sd, ★2 평균·sd). **자 검정**에 쓴다 — 대조가 이 값으로
+#: 되나온 뒤에야 처치를 읽는다. sd 는 모표준편차(`ddof=0`).
+PINNED = {
+    "cnn_v32h_on": (4.454, 1.005, 30.6, 1.5),    # hz 단독 (14.95 대조)
+    "cnn_hzwt": (2.908, 1.271, 33.9, 3.9),       # hz + wtap A (14.106 대조)
+}
 
 
 def _fwd(path, cache, dev):
@@ -199,7 +203,9 @@ def main() -> int:
 
     # ── 자 검정 — 미리 적은 값과 맞나 ────────────────────────────────────
     for key, (a1, s1, a2, s2) in PINNED.items():
-        ps = [p for p in paths if key in p]
+        # ⚠ `key in p` 로 고르면 `cnn_hzwt` 가 `cnn_hzwt_wt` 까지 집어 두 판을 섞는다.
+        #   씨앗 꼬리(`_s0`)까지 붙여 **정확히** 그 계열만 고른다.
+        ps = [p for p in paths if (key + "_s") in p]
         if len(ps) < 2:
             continue
         A = np.asarray([got[p][0] for p in ps]); D = np.asarray([got[p][1] for p in ps])
