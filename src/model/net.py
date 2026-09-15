@@ -47,7 +47,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.model.inputs import (
-    FINE_CHANNELS, FINE_CYCLES, LEGACY_FINE_CHANNELS, POWER_SCALE,
+    DROP_TAPS, FINE_CHANNELS, FINE_CYCLES, LEGACY_FINE_CHANNELS, POWER_SCALE,
+    RIPPLE_HALF_LONG, RIPPLE_HALF_SHORT, RIPPLE_SCALE,
     V_CENTER, V_SPAN, WIDE_CHANNELS, fine_target_index, wide_target_index)
 
 MAX_STATES = 5
@@ -141,7 +142,8 @@ MIN_ON_W: Dict[str, float] = {
 
 
 def _blk(cin: int, cout: int, k: int, d: int, groups: int = 8,
-         pad_mode: str = "zeros") -> nn.Sequential:
+         pad_mode: str = "zeros", causal: bool = False,
+         norm_t_end=None) -> nn.Sequential:
     """⚠ `pad_mode="replicate"` 는 **경계값을 늘린다** (14.131).
 
     기본 `zeros` 는 창 밖을 **0** 으로 채우는데, `asinh` 눈금에서 0 은 *"고조파가 0"*
@@ -153,12 +155,64 @@ def _blk(cin: int, cout: int, k: int, d: int, groups: int = 8,
     타깃 위치에서 두 특징이 block 0(RF 7)에서 이미 cos **0.825** 로 갈린다.
     개입은 답을 고쳤고(포트 0.003 -> 0.938) 학습 처치는 ★2 를 악화시켰다(+7.10).
     """
+    conv = (nn.Conv1d(cin, cout, k, dilation=d, padding=d * (k - 1) // 2,
+                      padding_mode=pad_mode)
+            if not causal else _CausalConv1d(cin, cout, k, d, pad_mode))
     return nn.Sequential(
-        nn.Conv1d(cin, cout, k, dilation=d, padding=d * (k - 1) // 2,
-                  padding_mode=pad_mode),
-        nn.GroupNorm(min(groups, cout), cout),
+        conv,
+        _TGroupNorm(min(groups, cout), cout, t_end=norm_t_end),
         nn.GELU(),
     )
+
+
+class _TGroupNorm(nn.GroupNorm):
+    """`t_end` 가 None 이면 `nn.GroupNorm` 과 **비트 동일**하다 (14.183).
+
+    까닭 (14.182 ⓑ): 원래 GroupNorm 은 (C_g, **T 전체**) 로 μ·σ 를 낸다. 수용영역과
+    무관하게 창을 통째로 묶으므로 **미래 6초가 기준선에 들어간다.** 경계에서 재 보니
+    범인은 σ 가 아니라 **μ** 다 — μ만 갈아끼우면 오븐 729 -> 45W, σ만은 597W.
+
+    `t_end` 를 주면 통계를 **0..t_end** 에서만 낸다 (= 인과 정규화). 적용은 전 자리에
+    한다 — 정보를 버리는 것이 아니라 **기준선만 과거로** 옮기는 것이다.
+
+    ⚠ 파라미터 이름이 `nn.GroupNorm` 과 같으므로 옛 체크포인트가 그대로 실린다.
+    """
+
+    def __init__(self, num_groups: int, num_channels: int, t_end=None, **kw):
+        super().__init__(num_groups, num_channels, **kw)
+        self.t_end = None if t_end is None else int(t_end)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.t_end is None or x.shape[-1] <= self.t_end + 1:
+            return super().forward(x)          # **비트 동일 경로**
+        b, c, t = x.shape
+        g = self.num_groups
+        xr = x.reshape(b, g, c // g, t)
+        pre = xr[..., :self.t_end + 1]
+        mu = pre.mean((2, 3), keepdim=True)
+        var = pre.var((2, 3), unbiased=False, keepdim=True)
+        y = ((xr - mu) / torch.sqrt(var + self.eps)).reshape(b, c, t)
+        return y * self.weight[None, :, None] + self.bias[None, :, None]
+
+
+class _CausalConv1d(nn.Module):
+    """왼쪽에만 패딩한다 — 타깃의 수용영역이 **미래로 못 간다** (14.183, 구멍 ⓓ).
+
+    14.182 가 잰 것: 블록5(반RF **189**자리 = 3.15초)부터 `h[:,:,239]` 가 계단(+148)을
+    문다. 대칭 패딩이라 그렇다. 인과 패딩이면 그 줄이 끊긴다.
+
+    ⚠ 파라미터 이름이 `conv.weight` 라 대칭판과 state_dict 가 **안 섞인다**. 일부러다 —
+      두 배치를 섞어 실으면 조용히 틀린다.
+    """
+
+    def __init__(self, cin: int, cout: int, k: int, d: int, pad_mode: str = "zeros"):
+        super().__init__()
+        self.pad = d * (k - 1)
+        self.pad_mode = "constant" if pad_mode == "zeros" else "replicate"
+        self.conv = nn.Conv1d(cin, cout, k, dilation=d, padding=0)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.conv(F.pad(x, (self.pad, 0), mode=self.pad_mode))
 
 
 class NILMNet(nn.Module):
@@ -189,6 +243,20 @@ class NILMNet(nn.Module):
         #: `"replicate"` 는 창 밖을 **경계값으로** 채운다 — 14.116 의 진단 개입이 한 것이
         #: 정확히 이것이다. 광역에는 안 건다 (14.94 가 그 축을 닫았다).
         fine_pad: str = "zeros",
+        #: ── 14.183 **미래가 새는 구멍 넷** (14.182 가 센 것). 넷 다 기본이 옛 동작이고
+        #:    **끄면 비트 동일**이다. 관문 `run_gate_leaks` 가 그것을 증명한다.
+        #:
+        #:    ⓑ `fine_norm="causal"`  GroupNorm 통계를 **0..타깃**에서만 낸다
+        #:       (μ만 갈아끼워 729 -> 45W · σ만은 597W — **μ 다**)
+        #:    ⓓ `fine_conv="causal"`  세밀 conv 를 **왼쪽 패딩**으로 (타깃 RF 가 미래로 못 간다)
+        #:    ⓒ `fine_tpool="split"`  `h.mean/amax` 를 **과거/미래 따로** 낸다
+        #:       (버리는 게 아니라 **시간 부호를 붙인다** — 15b 의 결론)
+        #:    ⓐ `fine_derive="both"`  파생 미래채널(41·42·29·30)의 **인과 짝 4개**를
+        #:       `ch23` 에서 되살려 몸통 입력에 **더한다** (캐시를 다시 안 구워도 된다)
+        fine_norm: str = "window",
+        fine_conv: str = "sym",
+        fine_tpool: str = "whole",
+        fine_derive: str = "window",
         #: 머리 배치 (14.130). `"v1"` 이 지금까지의 것이고 **기본이라 비트 동일**이다.
         #:
         #: `"v2"` — 사용자: *"지금 너무 많은 요소가 있어서 너도 나도 모델 구조를 완벽히
@@ -438,12 +506,30 @@ class NILMNet(nn.Module):
         if self.fine_pad not in ("zeros", "replicate"):
             raise ValueError("fine_pad 는 zeros/replicate: %r" % (fine_pad,))
         _pm = self.fine_pad
-        _blocks = [_blk(self.fine_channels, c1, 7, dil[0], pad_mode=_pm),
-                   _blk(c1, c1, 7, dil[1], pad_mode=_pm),
-                   _blk(c1, c2, 7, dil[2], pad_mode=_pm),
-                   _blk(c2, c2, 7, dil[3], pad_mode=_pm),
-                   _blk(c2, c2, 7, dil[4], pad_mode=_pm)]
-        _blocks += [_blk(c2, c2, 7, d, pad_mode=_pm) for d in _extra]   # 14.80 — **더한다**
+        # ── 14.183 구멍 넷 ────────────────────────────────────────────────
+        self.fine_norm = str(fine_norm)
+        self.fine_conv = str(fine_conv)
+        self.fine_tpool = str(fine_tpool)
+        self.fine_derive = str(fine_derive)
+        for _nm, _v, _ok2 in (("fine_norm", self.fine_norm, ("window", "causal")),
+                              ("fine_conv", self.fine_conv, ("sym", "causal")),
+                              ("fine_tpool", self.fine_tpool, ("whole", "split")),
+                              ("fine_derive", self.fine_derive, ("window", "both"))):
+            if _v not in _ok2:
+                raise ValueError("%s 는 %s 중 하나: %r" % (_nm, "/".join(_ok2), _v))
+        #: 파생 인과 짝 4개 (41·42 의 후방탭 · 29·30 의 인과 이동평균). `window` 면 0.
+        self.n_derive = 4 if self.fine_derive == "both" else 0
+        _cin0 = self.fine_channels + self.n_derive
+        _cz = bool(self.fine_conv == "causal")
+        #: 정규화 기준선의 끝. `None` 이면 **비트 동일** 경로다.
+        _nt = fine_target_index() if self.fine_norm == "causal" else None
+        _bk = lambda a, b, kk, dd: _blk(a, b, kk, dd, pad_mode=_pm, causal=_cz, norm_t_end=_nt)
+        _blocks = [_bk(_cin0, c1, 7, dil[0]),
+                   _bk(c1, c1, 7, dil[1]),
+                   _bk(c1, c2, 7, dil[2]),
+                   _bk(c2, c2, 7, dil[3]),
+                   _bk(c2, c2, 7, dil[4])]
+        _blocks += [_bk(c2, c2, 7, d) for d in _extra]                  # 14.80 — **더한다**
         self.fine = nn.ModuleList(_blocks)
         #: 블록별 출력 채널 수 (탭 차원을 세는 데 쓴다)
         _chans = [c1, c1, c2, c2, c2] + [c2] * len(_extra)
@@ -523,7 +609,9 @@ class NILMNet(nn.Module):
                         + w2                                       # [4] 광역 전역 평균
                         + 2 * self.h2_fseg)                        # [5] 원시 5토막 max/min
         else:
-            trunk_in = (c2 * _npool_keep * ns + c2 + _tap_dim
+            #: 14.183 ⓒ — `split` 이면 구간마다 **과거/미래 따로** 내므로 두 배다.
+            _tmul = 2 if self.fine_tpool == "split" else 1
+            trunk_in = (c2 * _npool_keep * ns * _tmul + c2 + _tap_dim
                         + (0 if "rawtgt" in self.head_drop else self.fine_channels)
                         # 14.88 — 원시 창 통계는 **세밀 2개 + 광역 2개**라 각자의 구간
                         #   수를 따른다. `wns == ns` 면 옛 경로와 비트 동일이다.
@@ -613,7 +701,9 @@ class NILMNet(nn.Module):
         fine_flags: List[int] = (
             ([] if "rawtgt" in self.head_drop else [1] * self.fine_channels) + [1] * _tap_dim
             # 14.79 — `fine_pool` 이 `both` 면 두 무리, 아니면 한 무리다 (순서는 그대로).
-            + [1] * (c2 * _npool_keep * ns) + [1] * c2       # 구간별 풀링 + 깊은 타깃
+            # 14.183 ⓒ — `split` 이면 과거/미래 두 배 (`forward` 와 같은 순서여야 한다)
+            + [1] * (c2 * _npool_keep * ns * (2 if self.fine_tpool == "split" else 1))
+            + [1] * c2                                      # 구간별 풀링 + 깊은 타깃
             # 14.116 — 미래 조각의 mean/amax. **세밀 유래**라 1 이다. `forward` 가
             #   깊은 타깃 바로 뒤에 붙이므로 여기도 같은 자리여야 한다.
             + ([1] * (2 * c2) if self.fine_time_split else [])
@@ -717,6 +807,33 @@ class NILMNet(nn.Module):
             [V_EXP.get(a, 0.0) if vexp else 0.0 for a in self.appliances], dtype=torch.float32),
             persistent=False)
 
+    def _conv_in(self, fine: torch.Tensor) -> torch.Tensor:
+        """14.183 ⓐ — 파생 미래채널의 **인과 짝**을 `ch23` 에서 되살려 더한다.
+
+        41·42 는 `arcsinh((p − p(t+tap))/20)` 이라 **수용영역이 1인데 미래를 담는다**
+        (타깃 자리 값이 경계에서 +0.221 -> +4.937 로 튄다). 29·30 은 대칭 이동평균이라
+        역시 미래를 섞는다. 14.182 가 dzn_s1 에서 이 넷을 닫자 **93%** 가 막혔다.
+
+        여기서 만드는 넷은 **같은 식의 과거판**이다 — 정보를 빼는 것이 아니라 **짝을
+        줘서 방향을 구별하게** 한다 (*"미래를 없애면 안 되고 시간 부호를 붙여야 한다"*,
+        인계 2026-09-15b). `p` 는 `ch23 = arcsinh(p/POWER_SCALE)` 에서 그대로 되살린다 —
+        **캐시를 다시 안 구워도 된다.**
+
+        `fine_derive="window"` 면 입력을 **그대로** 돌려준다 (비트 동일).
+        """
+        if self.n_derive == 0:
+            return fine
+        p = torch.sinh(fine[:, P_CH_FINE]) * POWER_SCALE          # (B,T) 와트
+        out = [fine]
+        for tap in DROP_TAPS:                                     # 41·42 의 **후방** 짝
+            q = F.pad(p[:, None, :-int(tap)], (int(tap), 0), mode="replicate")[:, 0]
+            out.append(torch.arcsinh((p - q) / RIPPLE_SCALE)[:, None])
+        for half in (RIPPLE_HALF_SHORT, RIPPLE_HALF_LONG):        # 29·30 의 **인과** 짝
+            k = 2 * int(half) + 1
+            q = F.avg_pool1d(F.pad(p[:, None], (k - 1, 0), mode="replicate"), k, 1)[:, 0]
+            out.append(torch.arcsinh((p - q) / RIPPLE_SCALE)[:, None])
+        return torch.cat(out, 1)
+
     def _feats_v2(self, fine, wide, t):
         """머리 배치 v2 (14.130) — **시간 부호를 주려면 그 조각을 따로 태운다.**
 
@@ -807,7 +924,8 @@ class NILMNet(nn.Module):
                 #   ⚠ `--seg-pool` 과 다르다. 저쪽은 **전역 풀링**을 쪼개는데, 지금
                 #     새는 길은 탭 **안**이라 풀링을 쪼개도 못 막는다 (14.42 의 처방은
                 #     wtap 이 없던 RF 187 짜리 몸통에 맞춘 것이었다).
-                hp, hf = fine[:, :, :t + 1], fine[:, :, t + 1:]
+                _ci = self._conv_in(fine)
+                hp, hf = _ci[:, :, :t + 1], _ci[:, :, t + 1:]
                 for i, blk in enumerate(self.fine):
                     hp, hf = blk(hp), blk(hf)
                     if i in self._keep_tap:
@@ -815,7 +933,7 @@ class NILMNet(nn.Module):
                 h = hp                                  # 아래 타깃 탭·풀링은 과거 쪽
                 self._h_fut = hf
             else:
-                h = fine
+                h = self._conv_in(fine)
                 for i, blk in enumerate(self.fine):
                     h = blk(h)
                     if i in self._keep_tap:             # 얕은 층의 타깃 슬라이스
@@ -827,10 +945,18 @@ class NILMNet(nn.Module):
                                   max(self.seg_pool, 1))
             for _a, _b in fsegs:
                 # 14.79 — `both` 면 순서까지 옛 경로 그대로라 **비트 동일**이다.
-                if "mean" in self._pool_keep:
-                    feats.append(h[:, :, _a:_b].mean(-1))
-                if "amax" in self._pool_keep:
-                    feats.append(h[:, :, _a:_b].amax(-1))
+                # 14.183 ⓒ — `split` 이면 **과거/미래를 따로** 낸다. `h.amax(-1)` 에는
+                #   위치가 없어서 오탐 창에서 argmax 가 128칸 중 104칸이 미래였다.
+                #   정보를 버리는 게 아니라 **시간 부호를 붙인다** (15b 의 결론).
+                _cut = min(max(t + 1, _a + 1), _b)
+                _rng = ((_a, _b),) if self.fine_tpool == "whole" else ((_a, _cut), (_cut, _b))
+                for _p, _q in _rng:
+                    if _q <= _p:                        # 빈 조각 — 타깃값으로 채운다
+                        _p, _q = min(_cut, _b - 1), min(_cut, _b - 1) + 1
+                    if "mean" in self._pool_keep:
+                        feats.append(h[:, :, _p:_q].mean(-1))
+                    if "amax" in self._pool_keep:
+                        feats.append(h[:, :, _p:_q].amax(-1))
             _tap = h[:, :, min(t, h.shape[-1] - 1)]         # 깊은 층 타깃
             #: 진단용 — 관문이 "이 탭이 미래를 보나" 를 **실제 forward 경로에서** 잰다.
             #: 학습에는 안 쓴다 (`feats` 에 들어가는 것은 `_tap` 자신이다).

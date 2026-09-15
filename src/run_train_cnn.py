@@ -466,6 +466,27 @@ def main() -> int:
                          "아니며, 실측 차수별 지수가 녹화 사이에 재현되지 않는다 "
                          "(충전기 h11 폭 79.5). 분류: RESISTIVE·SMPS·MOTOR·PASSIVE.")
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
+    # ── 14.183 **미래가 새는 구멍 넷** (14.182). 넷 다 기본이 옛 동작 = 비트 동일 ──
+    #   관문 `run_gate_leaks` 가 막힌 것과 **일부러 남긴 것**을 둘 다 못 박는다.
+    ap.add_argument("--fine-norm", default="window", choices=("window", "causal"),
+                    help="ⓑ GroupNorm 통계를 **0..타깃**에서만 (14.183). 지금은 "
+                         "(C_g, **T 전체**) 라 수용영역과 무관하게 미래가 기준선에 "
+                         "들어간다. 경계에서 범인은 σ 가 아니라 **μ** 다 — μ만 "
+                         "갈아끼우면 오븐 729 -> 45W, σ만은 597W. **window 면 비트 동일.**")
+    ap.add_argument("--fine-conv", default="sym", choices=("sym", "causal"),
+                    help="ⓓ 세밀 conv 를 **왼쪽 패딩**으로 (14.183). 블록5(반RF 189 "
+                         "= 3.15초)부터 타깃이 계단(+148자리)을 문다. **sym 이 비트 동일.** "
+                         "⚠ 파라미터 이름이 `conv.weight` 라 대칭판과 안 섞인다.")
+    ap.add_argument("--fine-tpool", default="whole", choices=("whole", "split"),
+                    help="ⓒ `h.mean/amax` 를 **과거/미래 따로** (14.183). `amax` 에는 "
+                         "위치가 없어서 오탐 창의 argmax 가 128칸 중 **104칸이 미래**였다. "
+                         "버리는 게 아니라 **시간 부호를 붙인다**. 머리 765 -> 1021. "
+                         "**whole 이 비트 동일.**")
+    ap.add_argument("--fine-derive", default="window", choices=("window", "both"),
+                    help="ⓐ 파생 미래채널(41·42·29·30)의 **인과 짝 4개**를 ch23 에서 "
+                         "되살려 몸통 입력에 더한다 (14.183). 41·42 는 수용영역이 1인데 "
+                         "p(t+3.0s)·p(t+5.5s) 를 담는다 — dzn_s1 에서 이 넷이 **93%%**였다. "
+                         "**캐시를 다시 안 구워도 된다.** window 면 비트 동일.")
     ap.add_argument("--fine-pad", default="zeros", choices=("zeros", "replicate"),
                     help="세밀 몸통 conv 의 패딩 (14.131). **zeros 가 기본이라 비트 동일.** "
                          "zeros 는 창 밖을 0 으로 채우는데 `asinh` 눈금에서 0 은 "
@@ -1010,6 +1031,8 @@ def main() -> int:
                     p_state_cap=a.p_state_cap,
                     head_drop=a.head_drop,
                     head_layout=a.head_layout,
+                    fine_norm=a.fine_norm, fine_conv=a.fine_conv,
+                    fine_tpool=a.fine_tpool, fine_derive=a.fine_derive,
                     fine_pad=a.fine_pad,
                     fine_future_segs=a.fine_future_segs,
                     tap_layers=(tuple(int(x) for x in a.tap_layers.split(","))
@@ -1196,6 +1219,10 @@ def main() -> int:
                     # 머리 배치 (14.130). v1 이면 비트 동일.
                     "head_layout": str(model.head_layout),
                     # 세밀 패딩 (14.131). zeros 면 비트 동일.
+                    "fine_norm": str(model.fine_norm),
+                    "fine_conv": str(model.fine_conv),
+                    "fine_tpool": str(model.fine_tpool),
+                    "fine_derive": str(model.fine_derive),
                     "fine_pad": str(model.fine_pad),
                     # 어느 캐시·홀드아웃으로 배웠나 (14.126). 판정할 때 "이 팔이 어느
                     # 캐시였지" 를 체크포인트에서 못 읽어 sbatch 를 뒤져야 했다.

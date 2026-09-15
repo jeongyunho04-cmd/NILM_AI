@@ -236,6 +236,11 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
                     # 머리 배치 (14.130). 없으면 v1 이라 **비트 동일**이다.
                     head_layout=str(pk.get("head_layout", "v1") or "v1"),
                     # 세밀 패딩 (14.131). 없으면 zeros 라 **비트 동일**이다.
+                    #: 14.183 — 없으면 옛 동작(비트 동일)이라 옛 체크포인트가 그대로 실린다.
+                    fine_norm=str(pk.get("fine_norm", "window") or "window"),
+                    fine_conv=str(pk.get("fine_conv", "sym") or "sym"),
+                    fine_tpool=str(pk.get("fine_tpool", "whole") or "whole"),
+                    fine_derive=str(pk.get("fine_derive", "window") or "window"),
                     fine_pad=str(pk.get("fine_pad", "zeros") or "zeros"),
                     # 미래 토막 수 (14.122). 없으면 1 이라 **비트 동일**이다.
                     fine_future_segs=int(pk.get("fine_future_segs", 1) or 1),
