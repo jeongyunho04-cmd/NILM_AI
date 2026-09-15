@@ -583,6 +583,12 @@ def main() -> int:
                          "어긋남 `(222/V_적합)^e` 가 기기별 상수 편향이 된다 — 오븐은 5.5%% 다. "
                          "합성 홀드아웃의 `p_states/참` 이 오븐 0.970 · 핫플 0.985 · 드라이 1.030 · "
                          "포트 1.014 로 **부호 4/4 · 순서 4/4** 맞는다. 끄면 **비트 동일**.")
+    ap.add_argument("--wide-seg-pool", type=int, default=0, metavar="N",
+                    help="**광역 갈래에만** 구간 풀링 (14.88). 0 이면 `--seg-pool` 을 따라가 "
+                         "**비트 동일**이다. 14.87 이 개입으로 잰 것 — 계단 위치를 담는 몫이 "
+                         "`mean` 22%% · seg4 67%% · **seg8 86%%** 로 N 에 단조 증가한다. "
+                         "그 정보가 필요한 곳은 광역뿐이라(세밀은 과거 3.98초 안에 계단이 "
+                         "있으면 이미 맞힌다) 여기만 키운다. 파라미터는 `w2 x N` 만 는다.")
     ap.add_argument("--seg-pool", type=int, default=0, metavar="N",
                     help="**구간별 풀링** (14.46). 전역 `mean`/`amax` 를 **타깃을 경계로 한 "
                          "N구간**으로 쪼갠다 (세밀·광역·원시 전력 통계 셋 다). "
@@ -836,7 +842,8 @@ def main() -> int:
                     tap_layers=(tuple(int(x) for x in a.tap_layers.split(","))
                                 if a.tap_layers else None),
                     aux_z=(a.w_z > 0),
-                    vexp=a.vexp, seg_pool=a.seg_pool).to(dev)
+                    vexp=a.vexp, seg_pool=a.seg_pool,
+                    wide_seg_pool=a.wide_seg_pool).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
     crit = NILMLoss(
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
@@ -1001,6 +1008,7 @@ def main() -> int:
                     # ⚠ **추론에도 써야 한다** — 지수를 박고 배운 모델이다 (14.7).
                     "vexp": bool(model.vexp),
                     "seg_pool": int(model.seg_pool),
+                    "wide_seg_pool": int(model.wide_seg_pool),
                     "harm_vnorm_anchor": bool(a.harm_vnorm_anchor),
                     "harm_vnorm_frac": float(a.harm_vnorm_frac),
                     "vrel_target": bool(a.vrel_target),

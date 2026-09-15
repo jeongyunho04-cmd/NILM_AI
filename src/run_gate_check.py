@@ -151,6 +151,7 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
                     # 구간별 풀링 (14.46). 옛 체크포인트에는 키가 없어 0 이고,
                     # 0 이면 구간이 창 전체 하나라 **비트 동일**이다.
                     seg_pool=pk.get("seg_pool", 0),
+                    wide_seg_pool=pk.get("wide_seg_pool", 0),
                     # 세밀 dilation (14.78). 옛 체크포인트에는 키가 없어 None 이고,
                     # None 이면 (1,2,4,8,16) 이라 **비트 동일**이다.
                     fine_dilations=pk.get("fine_dilations", None),

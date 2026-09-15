@@ -203,6 +203,7 @@ class NILMNet(nn.Module):
         #: **0 또는 1 이면 창 전체 한 구간 = 지금과 비트 동일**이다 (`pool_segments` 참조).
         #: 세밀·광역·원시 전력 통계 셋 다에 같은 n 을 건다.
         seg_pool: int = 0,
+        wide_seg_pool: int = 0,          # 14.88 — 광역에만. 0 이면 seg_pool 을 따른다
         # -- 세밀 갈래 dilation (14.78) ------------------------------------
         #: 세밀 conv 스택의 dilation. `None` 이면 `(1, 2, 4, 8, 16)` = **지금과 비트 동일**.
         #:
@@ -324,16 +325,27 @@ class NILMNet(nn.Module):
         # 14.46 — 구간 수. 0/1 이면 전체 한 구간이라 아래 식이 옛 값과 **정확히 같다**.
         self.seg_pool = int(seg_pool or 0)
         ns = max(self.seg_pool, 1)
+        # 14.88 — **광역에만** 거는 구간 수. 0 이면 `seg_pool` 을 따라가므로 **비트 동일**이다.
+        #   왜 따로 두나: 14.87 이 잰 것 — 위치 정보를 담는 몫이 `mean` 22% ·
+        #   seg4 67% · **seg8 86%** 로 N 에 단조 증가하는데, 그 정보가 필요한 곳은
+        #   **광역뿐**이다 (세밀 창은 과거 3.98초 안에 계단이 있으면 이미 맞힌다).
+        #   `seg_pool` 은 세밀·광역·원시전력을 한꺼번에 바꾸고 세밀 쪽은 14.74 에서
+        #   2 로 해보고 못 읽었다. 여기만 키우면 파라미터가 `w2 x N` 만 는다.
+        self.wide_seg_pool = int(wide_seg_pool or 0)
+        wns = max(self.wide_seg_pool or self.seg_pool, 1)
         self.fine_pool = str(fine_pool)
         if self.fine_pool not in ("both", "amax", "mean"):
             raise ValueError("fine_pool 은 both/amax/mean: %r" % (fine_pool,))
         _npool = 2 if self.fine_pool == "both" else 1
         trunk_in = (c2 * _npool * ns + c2 + _tap_dim + self.fine_channels
-                    + w2 * ns + WINDOW_STATS * ns)
+                    # 14.88 — 원시 창 통계는 **세밀 2개 + 광역 2개**라 각자의 구간 수를
+                    #   따른다 (`forward` 의 `_st` 참조). `wns == ns` 면 `WINDOW_STATS*ns`
+                    #   와 **정확히 같은 값**이라 옛 경로와 비트 동일이다.
+                    + w2 * wns + (WINDOW_STATS // 2) * (ns + wns))
         if self.wide_target:
             trunk_in += w2              # 광역 타깃 블록 (13.44)
         if self.wide_summary:
-            trunk_in += w2 * ns + w2    # 광역 amax(구간별) + 창 끝 슬라이스 (후보 1)
+            trunk_in += w2 * wns + w2   # 광역 amax(구간별) + 창 끝 슬라이스 (후보 1)
         if self.periodicity:
             trunk_in += N_PERIOD        # 후보 2
         h = int(256 * width)
@@ -389,10 +401,10 @@ class NILMNet(nn.Module):
             [1] * self.fine_channels + [1] * _tap_dim
             # 14.79 — `fine_pool` 이 `both` 면 두 무리, 아니면 한 무리다 (순서는 그대로).
             + [1] * (c2 * _npool * ns) + [1] * c2            # 구간별 풀링 + 깊은 타깃
-            + [0] * (w2 * ns)                                 # 광역 평균 (구간별)
+            + [0] * (w2 * wns)                                # 광역 평균 (구간별)
             + ([0] * w2 if self.wide_target else [])           # 광역 타깃 블록 (13.44)
-            + ([0] * (w2 * ns) + [0] * w2 if self.wide_summary else [])  # 광역 amax + 창끝
-            + [1, 1] * ns + [0, 0] * ns   # 구간별 fp(max,min) 그리고 wp(max,mean)
+            + ([0] * (w2 * wns) + [0] * w2 if self.wide_summary else [])  # 광역 amax + 창끝
+            + [1, 1] * ns + [0, 0] * wns  # 구간별 fp(max,min) 그리고 wp(max,mean)
         )
         if self.periodicity:
             fine_flags += ([1] * len(PERIOD_LAGS_FINE) + [0] * len(PERIOD_LAGS_WIDE)
@@ -496,7 +508,7 @@ class NILMNet(nn.Module):
         feats.append(h[:, :, t])                        # 깊은 층 타깃
         hw = self.wide(wide)
         wsegs = pool_segments(hw.shape[-1], wide_target_index(hw.shape[-1]),
-                              max(self.seg_pool, 1))
+                              max(self.wide_seg_pool or self.seg_pool, 1))
         for _a, _b in wsegs:
             feats.append(hw[:, :, _a:_b].mean(-1))
         if self.wide_target:
