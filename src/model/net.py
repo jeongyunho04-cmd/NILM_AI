@@ -204,6 +204,7 @@ class NILMNet(nn.Module):
         #: 세밀·광역·원시 전력 통계 셋 다에 같은 n 을 건다.
         seg_pool: int = 0,
         wide_seg_pool: int = 0,          # 14.88 — 광역에만. 0 이면 seg_pool 을 따른다
+        wide_extra_dilations: Optional[Sequence[int]] = None,   # 14.91 — 광역 수용영역
         # -- 세밀 갈래 dilation (14.78) ------------------------------------
         #: 세밀 conv 스택의 dilation. `None` 이면 `(1, 2, 4, 8, 16)` = **지금과 비트 동일**.
         #:
@@ -318,7 +319,18 @@ class NILMNet(nn.Module):
                              % (self.tap_layers, len(_blocks)))
         _tap_dim = sum(_chans[i] for i in self.tap_layers)
         w1, w2 = int(32 * width), int(64 * width)
-        self.wide = nn.Sequential(_blk(WIDE_CHANNELS, w1, 5, 1), _blk(w1, w1, 5, 2), _blk(w1, w2, 5, 4))
+        # 14.91 — 광역 몸통의 **수용영역**. 기본 (1,2,4) 는 전폭 1+4x7 = 29블록,
+        #   즉 타깃에서 **±7초**뿐인데 창은 ±30초다 (**24%**). 머리는 그 ±7초 짜리 유닛을
+        #   60초에 걸쳐 평균 내므로 *"지난 20초가 평평했다"* 를 만들 길이 원천적으로 없다.
+        #   14.90 이 세밀에서 쟀듯 병을 고치는 증거는 **창 전체의 평평함**이다.
+        #   ⇒ 세밀에 통한 처방(`fine_extra_dilations`)을 광역에 **그대로** 옮긴다.
+        #   `(8,16)` 이면 전폭 1+4x31 = **125블록 > 창 120** 이라 창 전체를 덮는다.
+        #   비어 있으면 블록이 안 생겨 **비트 동일**이다.
+        _wextra = tuple(int(x) for x in (wide_extra_dilations or ()))
+        self.wide_extra_dilations = _wextra
+        self.wide = nn.Sequential(
+            *([_blk(WIDE_CHANNELS, w1, 5, 1), _blk(w1, w1, 5, 2), _blk(w1, w2, 5, 4)]
+              + [_blk(w2, w2, 5, d) for d in _wextra]))
 
         # 전역 평균 + 전역 최대 + 깊은 층 타깃 + 얕은 층 타깃 2개 + 원본 타깃
         # + 광역 평균 + **원시 창 전력 통계 4개**

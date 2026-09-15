@@ -583,6 +583,14 @@ def main() -> int:
                          "어긋남 `(222/V_적합)^e` 가 기기별 상수 편향이 된다 — 오븐은 5.5%% 다. "
                          "합성 홀드아웃의 `p_states/참` 이 오븐 0.970 · 핫플 0.985 · 드라이 1.030 · "
                          "포트 1.014 로 **부호 4/4 · 순서 4/4** 맞는다. 끄면 **비트 동일**.")
+    ap.add_argument("--wide-extra-dilations", default="", metavar="LIST",
+                    help="광역 몸통 **뒤에 블록을 더한다** (14.91). 예 `8,16`. "
+                         "기본 (1,2,4) 는 전폭 29블록 = 타깃에서 **+-7초** 뿐인데 창은 "
+                         "+-30초다 (24%%). 머리는 그것을 60초에 걸쳐 평균 내므로 "
+                         "'지난 20초가 평평했다' 를 만들 길이 없다. `8,16` 이면 전폭 "
+                         "125블록 > 창 120 이라 창 전체를 덮는다. 세밀의 "
+                         "`--fine-extra-dilations` 와 **같은 처방**이고, 비우면 비트 동일. "
+                         "⚠ `--wide-target` 과 같이 써야 그 넓은 유닛을 타깃 자리에서 뽑는다.")
     ap.add_argument("--wide-seg-pool", type=int, default=0, metavar="N",
                     help="**광역 갈래에만** 구간 풀링 (14.88). 0 이면 `--seg-pool` 을 따라가 "
                          "**비트 동일**이다. 14.87 이 개입으로 잰 것 — 계단 위치를 담는 몫이 "
@@ -843,7 +851,9 @@ def main() -> int:
                                 if a.tap_layers else None),
                     aux_z=(a.w_z > 0),
                     vexp=a.vexp, seg_pool=a.seg_pool,
-                    wide_seg_pool=a.wide_seg_pool).to(dev)
+                    wide_seg_pool=a.wide_seg_pool,
+                    wide_extra_dilations=[int(x) for x in a.wide_extra_dilations.split(",")
+                                          if x.strip()]).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
     crit = NILMLoss(
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
@@ -1009,6 +1019,7 @@ def main() -> int:
                     "vexp": bool(model.vexp),
                     "seg_pool": int(model.seg_pool),
                     "wide_seg_pool": int(model.wide_seg_pool),
+                    "wide_extra_dilations": list(model.wide_extra_dilations),
                     "harm_vnorm_anchor": bool(a.harm_vnorm_anchor),
                     "harm_vnorm_frac": float(a.harm_vnorm_frac),
                     "vrel_target": bool(a.vrel_target),
