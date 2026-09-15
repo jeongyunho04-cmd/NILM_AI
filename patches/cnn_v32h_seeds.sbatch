@@ -52,6 +52,7 @@ echo "=== 관문 ==="
 #   argparse help 만 보고 런타임 print 는 안 본다). 1초짜리라 여기 건다.
 $PY -X utf8 src/run_gate_fmt.py
 $PY -X utf8 -m src.run_gate_lossparity
+$PY -X utf8 -m src.run_gate_ctordefault
 for d in "$CACHE_OFF" "$CACHE_ON" "$HO_OFF" "$HO_ON"; do
   test -d "$d" || { echo "없다: $d"; exit 1; }
 done

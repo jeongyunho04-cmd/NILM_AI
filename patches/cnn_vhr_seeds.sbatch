@@ -80,6 +80,7 @@ nvidia-smi --query-gpu=index,name --format=csv,noheader
 echo "=== 관문 ==="
 $PY -X utf8 src/run_gate_fmt.py
 $PY -X utf8 -m src.run_gate_lossparity
+$PY -X utf8 -m src.run_gate_ctordefault
 $PY -X utf8 src/run_gate_pstatecap.py
 $PY -X utf8 src/run_gate_deadzone.py
 $PY -X utf8 -m src.run_gate_statesig

@@ -171,7 +171,8 @@ class NILMNet(nn.Module):
         width: int = 1,
         dropout: float = 0.1,
         on_bias_init: float = 2.0,
-        prior_kappa: float = 0.0,
+        prior_kappa: float = 8.0,   # 14.174 — **트레이너와 같은 값**. 0.0 이면 프라이어
+                                  #   블록이 아예 안 돌아 관문 다섯이 눈이 멀었다,
         prior_beta: float = 0.5,
         wide_summary: bool = False,
         wide_target: bool = False,

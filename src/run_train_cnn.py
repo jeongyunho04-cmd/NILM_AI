@@ -1229,6 +1229,9 @@ def main() -> int:
                     "res_apps": str(a.res_apps),
                     "res_cond_state": str(a.res_cond_state),
                     "swap_tol": float(a.swap_tol),
+                    "swap_tiebreak": str(a.swap_tiebreak),
+                    "swap_slack": float(a.swap_slack),
+                    "swap_tb_orders": str(a.swap_tb_orders),
 
                     "harm_vnorm_frac": float(a.harm_vnorm_frac),
                     "vrel_target": bool(a.vrel_target),
