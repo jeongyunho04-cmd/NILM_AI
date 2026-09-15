@@ -80,7 +80,7 @@ nvidia-smi --query-gpu=index,name --format=csv,noheader
 echo "=== 관문 ==="
 $PY -X utf8 src/run_gate_fmt.py
 $PY -X utf8 src/run_gate_gatecond.py
-$PY -X utf8 src/run_gate_swap1.py
+$PY -X utf8 -m src.run_gate_swap1   # ⚠ 이 관문은 sys.path.insert 가 없어 -m 으로만 돈다 (984614 가 여기서 죽었다)
 test -d "$CACHE" || { echo "캐시가 없다: $CACHE"; exit 1; }
 test -d "$HOLDOUT" || { echo "홀드아웃이 없다: $HOLDOUT"; exit 1; }
 $PY -X utf8 -m src.run_train_cnn --help | grep -q -- "--w-gate-cond" \
