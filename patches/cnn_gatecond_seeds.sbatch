@@ -54,11 +54,16 @@
 #SBATCH -p gpu3,gpu4,gpu5
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -c 8
+# ⚠ 8 -> 4. gpu3/4/5 는 GPU 가 아니라 **CPU 로 막혀 있다** — gpu5 다섯 노드가
+#   GPU 4개를 통째로 놀리면서 CPU 는 60/64 다. -c 8 이면 못 들어가 예상 시작이
+#   3시간 뒤였다. CPU 는 데이터 공급용이고 `--cache-workers 4` 는 BASE 에 박혀
+#   있어 **산출물은 안 바뀐다** — 느려질 뿐이다. 파티션은 그대로라 하드웨어도
+#   대조(cnn_hzwt)와 같은 A6000 계열이다. [[widen-the-partition-dont-wait-the-queue]]
+#SBATCH -c 4
 #SBATCH --gres=gpu:2
 #SBATCH --mem=64G
 # 984489 가 A6000 에서 25분이었다. 손잡이는 BCE 한 줄이라 비용이 안 는다.
-#SBATCH -t 01:00:00
+#SBATCH -t 01:30:00
 #SBATCH -a 0-2
 #SBATCH -o %x_%A_%a.out
 #SBATCH -e %x_%A_%a.out
