@@ -31,6 +31,7 @@ from typing import Sequence, Dict, List, Optional, Union
 import hashlib
 import json
 import multiprocessing as mp
+import os as _os
 import time
 
 import numpy as np
@@ -158,6 +159,7 @@ def _build_generator(o: dict, quiet: bool = False):
     background = o['background']
     couple_ext = o['couple_ext']
     vtex_seg_s = o['vtex_seg_s']
+    vtex_coarse_s = o['vtex_coarse_s']          # 14.103 — 세밀 창 밖의 토막 길이
     window_cycles = o['window_cycles']
     recipe_mix = o['recipe_mix']
     smps_focus_off_p = o['smps_focus_off_p']
@@ -209,7 +211,13 @@ def _build_generator(o: dict, quiet: bool = False):
                           augmentor=aug, background=bool(background),
                           couple_ext=bool(couple_ext),
                           # 14.51 — 창 안 텍스처 교체. 학습 캐시와 짝이 맞아야 한다.
-                          vtex_seg_s=float(vtex_seg_s or 0.0))
+                          vtex_seg_s=float(vtex_seg_s or 0.0),
+                          # 14.103 — 비균일. 0 이면 균일(옛 경로)로 비트 동일.
+                          # `NILM_HO_BLIND_COARSE` 는 **관문의 음성 대조 전용**이다 —
+                          # 배선을 일부러 끊어, 아래 되짚기가 정말 잡는지 본다
+                          # (`run_gate_hocoarse` [6]). 평소엔 안 걸린다.
+                          vtex_coarse_s=(0.0 if _os.environ.get("NILM_HO_BLIND_COARSE")
+                                         else float(vtex_coarse_s or 0.0)))
     syn.grid_sim.harmonic_z_table = _hz
     if harmonic_z:
         from src.synthesis import vtexture as _vt
@@ -226,8 +234,24 @@ def _build_generator(o: dict, quiet: bool = False):
                              "step_s 구간의 중앙값이라 둘이 같아야 한다 (14.51)"
                              % (vtex_seg_s, vtex_step_s or 60.0))
         if not quiet:
-            print("  ** 창-안 텍스처 교체 %.0f초마다 (60초 창 -> %d장) (14.51) **"
+            print("  ** 창-안 텍스처 교체 %.2f초마다 (60초 창 -> %d장) (14.51) **"
                   % (float(vtex_seg_s), syn.grid_sim.n_texture_segments(3600)))
+    # 14.103 — 비균일. **배선을 여기서 되짚는다**: `vtex_seg_s` 만 걸리고 이것이 안 걸리면
+    #   조용히 균일로 구워져 학습 캐시와 홀드아웃이 갈린다 ([[verify-the-input-path-not-just-the-model]]).
+    if vtex_coarse_s and float(vtex_coarse_s) > 0:
+        _gotc = float(getattr(syn.grid_sim, "vtex_coarse_s", 0.0) or 0.0)
+        if _gotc != float(vtex_coarse_s):
+            raise SystemExit("[holdout] vtex_coarse_s=%s 인데 시뮬레이터는 %s 다 — 안 걸렸다"
+                             % (vtex_coarse_s, _gotc))
+        if float(vtex_coarse_s) < float(vtex_seg_s or 0.0):
+            raise SystemExit("[holdout] vtex_coarse_s=%s 가 vtex_seg_s=%s 보다 짧다 — "
+                             "바깥이 더 촘촘하면 비균일의 뜻이 뒤집힌다"
+                             % (vtex_coarse_s, vtex_seg_s))
+        if not quiet:
+            _rng = __import__("numpy").random.default_rng(0)
+            _k, _ = syn.grid_sim._texture_plan(3600, _rng)
+            print("  ** 비균일 토막 (14.103): 세밀 창 %.2f초 · 바깥 %.0f초 -> 창당 %d장 **"
+                  % (float(vtex_seg_s or 0.0), float(vtex_coarse_s), _k))
     gen = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
         recipe_mix=recipe_mix or DEFAULT_RECIPE_MIX, synthesizer=syn,
@@ -264,6 +288,11 @@ def build_holdout(
     #: ⚠ **학습 캐시와 같은 값이어야 한다** — 다르면 홀드아웃 창의 창-안 전압 변동이
     #:   학습 창과 달라져 전압 블록에 대한 민감도를 잘못 잰다.
     vtex_seg_s: float = 0.0,
+    #: **세밀 창 밖**에서 텍스처 한 장이 덮는 시간 (초) (14.103). 0 이면 창 전체가
+    #: `vtex_seg_s` 로 균일 = 옛 경로와 비트 동일. 세밀 창(뒤 600사이클)만 촘촘히
+    #: 하고 그 앞은 성기게 두어 토막 수를 20 -> 12 로 줄인다.
+    #: ⚠ **학습 캐시와 같은 값이어야 한다** (`train60_v32hs3` 은 25).
+    vtex_coarse_s: float = 0.0,
     #: 차수별 `Z_h` 표 (14.59). ⚠⚠ **학습 캐시와 같아야 한다.** 끄면 비트 동일.
     harmonic_z: bool = False,
     #: 병렬 워커 수 (14.51). **0 이면 옛 직렬 경로와 비트 동일**이다.
@@ -309,6 +338,7 @@ def build_holdout(
         ('background', background),
         ('couple_ext', couple_ext),
         ('vtex_seg_s', vtex_seg_s),
+        ('vtex_coarse_s', vtex_coarse_s),
         ('harmonic_z', harmonic_z),
         ('window_cycles', window_cycles),
         ('recipe_mix', recipe_mix),
@@ -408,6 +438,7 @@ def build_holdout(
         # 14.44 — 0 이면 옛 경로(기본 60초)다. 학습 캐시와 **같아야** 한다.
         "vtex_step_s": float(vtex_step_s or 0.0),
         "vtex_seg_s": float(vtex_seg_s or 0.0),          # 14.51
+        "vtex_coarse_s": float(vtex_coarse_s or 0.0),    # 14.103
         "harmonic_z": bool(harmonic_z),                  # 14.59
         # 14.51 — 병렬로 구웠는가. **0 과 1 이상은 서로 다른 홀드아웃이다** (난수를 자르는
         # 방식이 다르다). 1 이상끼리는 워커 수와 무관하게 같은 바이트다.

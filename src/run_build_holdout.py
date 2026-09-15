@@ -127,6 +127,12 @@ def main() -> int:
                     help="텍스처 한 장이 덮는 합성 시간(초). 0 이면 창 전체 하나 = 옛 경로 "
                          "(14.51). ⚠ **학습 캐시와 같은 값을 줘라** — 다르면 홀드아웃 창의 "
                          "창-안 전압 변동이 학습 창과 달라진다. --vtex-step-s 와도 같아야 한다.")
+    ap.add_argument("--vtex-coarse-s", type=float, default=0.0, metavar="S",
+                    help="**세밀 창 밖**에서 텍스처 한 장이 덮는 시간(초) (14.103). 0 이면 "
+                         "창 전체가 --vtex-seg-s 로 균일 = 옛 경로. 세밀 창(뒤 600사이클)은 "
+                         "--vtex-seg-s 로 촘촘하고 그 앞은 이 값으로 성기다 — 모델이 세밀 "
+                         "갈래로 보는 10초에만 해상도를 쓰므로 토막 수가 20 -> 12 로 준다. "
+                         "⚠ **학습 캐시와 같은 값을 줘라** (train60_v32hs3 은 25).")
     ap.add_argument("--harmonic-z", action="store_true",
                     help="차수별 선로 임피던스 표 (14.59). ⚠⚠ **학습 캐시와 같은 값을 줘라** — "
                          "다르면 홀드아웃 텍스처가 다른 Z 로 벗겨져 두 분포가 갈린다. "
@@ -218,6 +224,7 @@ def main() -> int:
                   recipe_mix=_parse_mix(a.recipe_mix),
                   smps_focus_off_p=a.smps_focus_off_p,
                   vtex_step_s=a.vtex_step_s, vtex_seg_s=a.vtex_seg_s,
+                  vtex_coarse_s=a.vtex_coarse_s,
                   harmonic_z=a.harmonic_z,
                   workers=a.workers, chunk_windows=a.chunk_windows)
     return inspect(a.out)
