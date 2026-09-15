@@ -79,14 +79,17 @@
 #      **상태별 지문**을 같이 본다.
 #
 #SBATCH -J nilm_mdv2
-#SBATCH -p gpu3,gpu4,gpu5
+#SBATCH -p gpu1,gpu2,gpu3,gpu4,gpu5,gpu6
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 3
 #SBATCH --gres=gpu:1
 #SBATCH --mem=48G
-# 984953(같은 바닥)이 45분이었다. 경사만 바뀌므로 속도는 같다.
-#SBATCH -t 01:30:00
+# 984953(같은 바닥)이 45분 20초였다. 경사만 바뀌므로 속도는 같다.
+# ⚠ **-t 를 넉넉히 잡으면 백필이 안 된다** (14.147). 90분으로 뒀더니 206개 뒤에 서서
+#   `Reason=Priority` 로 멈췄는데, HPC_RULES §2 대로 1.5배(45:20 -> 68분)에 맞춰
+#   **70분으로 줄이자 즉시 배치됐다.** 파티션을 넓히는 것(gpu1~gpu6)만으로는 안 풀렸다.
+#SBATCH -t 01:10:00
 #SBATCH -a 0-2
 #SBATCH -o %x_%A_%a.out
 #SBATCH -e %x_%A_%a.out

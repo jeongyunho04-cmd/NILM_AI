@@ -132,6 +132,7 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
                     periodicity=ck.get("periodicity", False),
                     fine_dropout=ck.get("fine_dropout", 0.0),
                     prior_kappa=ck.get("prior_kappa", 0.0),
+                    hard_gate=ck.get("hard_gate", 0.0),
                     prior_beta=ck.get("prior_beta", 0.5),
                     aux_z=ck.get("aux_z", False),
                     # 13.84.68/70 — 상태 전력 슬롯을 잰 값에서 출발시킨다. `weights=True`

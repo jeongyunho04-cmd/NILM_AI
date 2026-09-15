@@ -284,6 +284,13 @@ class NILMNet(nn.Module):
         #: 책임 분모의 하한 (W). **이것이 로버스트 슬랙이다** — 아래 forward 주석 참조.
         proj_floor: float = 5.0,
         vexp: bool = False,
+        #: 14.148 — **게이트 경화.** `power = (σ(on) > τ)·p_raw` 로 낸다. 0 이면 끈다
+        #: (= 비트 동일). `--on-power-praw`(14.147B)가 손실에서 게이트를 뺐는데 추론은
+        #: 그대로라 **학습·추론 불일치**가 생겼다 — 학습은 `p_raw -> y` 로 배우는데
+        #: 출력은 `σ(on)·p_raw` 라 게이트가 0.9 면 10%를 깎는다. 실측: 에어컨 `p_raw/y`
+        #: 가 pcap 1.146 -> mdec **1.003** 으로 정직해졌는데 출력은 0.993 -> **0.926**.
+        #: **재학습 없이** 체크포인트에 이 값만 적어 채점할 수 있다.
+        hard_gate: float = 0.0,
         #: 책임 가중.
         #:   `power`  매개변수를 안 늘린다 (Wisdom et al. 의 에너지 비례). 다만
         #:            **창별 곱셈 재조정과 같다** — 크기만 고치고 배분은 못 옮긴다
@@ -689,6 +696,7 @@ class NILMNet(nn.Module):
         # `p_raw` 는 **V_CENTER 에서의** 상태 명목값이 되고 전압 의존은 구조가 낸다.
         # ⚠ 꺼지면 지수가 전부 0 이라 `vrel**0 = 1` — 옛 동작과 **비트 동일**이다.
         self.vexp = bool(vexp)
+        self.hard_gate = float(hard_gate)
         # ⚠ `persistent=False` — **유도 상수**지 배우는 값이 아니다. state_dict 에 넣으면
         #   옛 체크포인트가 "Missing key" 로 안 실린다.
         self.register_buffer("v_exp", torch.tensor(
@@ -928,9 +936,13 @@ class NILMNet(nn.Module):
             v = fine[:, V_CH_FINE].mean(-1) * V_SPAN + V_CENTER           # (B,)
             vrel = (v / V_CENTER).clamp(*V_REL_CLAMP)[:, None]            # (B,1)
             p_raw = p_raw * vrel.pow(self.v_exp[None])                    # 기기별 지수
+        # 14.148 — `hard_gate` 가 0 이면 `_g` 가 `sigmoid` 그대로라 **비트 동일**이다.
+        _g = torch.sigmoid(on_logit)
+        if self.hard_gate > 0:
+            _g = (_g > self.hard_gate).to(_g.dtype)
         out = {
             # 전력은 on/off 로 게이팅한다. 게이팅이 없으면 꺼진 기기에도 전력이 샌다.
-            "power": torch.sigmoid(on_logit) * p_raw,
+            "power": _g * p_raw,
             "power_raw": p_raw,
             "power_states": p_states,
             # 상태 혼합 (B,K,S). 상태별 지문(13.11)이 이것을 쓴다 — 손실 쪽에서
