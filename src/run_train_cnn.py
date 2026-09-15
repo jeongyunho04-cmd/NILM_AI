@@ -940,6 +940,11 @@ def main() -> int:
         from src.model.net import harmonic_signatures_by_state
         sig_state, _used = harmonic_signatures_by_state(pool, apps)
         print(f"  ** 상태별 지문 (13.11): {int(_used.sum())}개 상태를 따로 맞췄다 **")
+        _src = getattr(harmonic_signatures_by_state, "last_source", None)
+        if _src is not None and (_src == 2).any():
+            _who = ["%s s%d" % (apps[k], s) for k, s in zip(*np.nonzero(_src == 2))]
+            print("     ** 그중 %d칸은 **실측 전력**을 분모로 맞췄다 (14.167): %s **"
+                  % (len(_who), " · ".join(_who)))
         for _j, _a in enumerate(apps):
             for _s in range(_used.shape[1]):
                 if not _used[_j, _s]:

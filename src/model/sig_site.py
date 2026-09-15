@@ -39,6 +39,7 @@ from typing import Dict, List, Sequence, Tuple
 import numpy as np
 
 from src.model.net import MAX_STATES, harmonic_signatures, harmonic_signatures_by_state
+from src.model.net import state_power_w
 from src.preprocessing.file_registry import site_of
 
 #: 자리 축. 순서가 곧 `site_index` 다.
@@ -71,17 +72,23 @@ def _per_site_cells(pool, appliances: Sequence[str], by_state: bool
         if not acts:
             continue
         thr = 1.0 if by_state else max(0.5 * pool.get_steady_power_w(app), 1.0)
+        #: 14.167 — 상태 축은 `harmonic_signatures_by_state` 와 **한 글자도 달라선 안 된다**
+        #  ([[copy-the-inclusion-rule-when-adding-an-axis]]). 저쪽이 라벨 전력으로 비는 칸을
+        #  실측 전력으로 다시 훑으므로 여기도 같은 두 번 훑기를 쓴다. 오븐 FAN_LIGHT 은
+        #  `target_power_w = 0` 이라 라벨만 보면 자리 축에서도 통째로 빈다.
         for a in acts:
             si = look.get(site_of(a.source_file), -1)
             if si < 0:
                 continue
-            m0 = a.target_power_w > thr
+            pw_lab = state_power_w(a, False)
+            pw = pw_lab if (not by_state or (pw_lab > thr).any()) else state_power_w(a, True)
+            m0 = pw > thr
             if not m0.any():
                 continue
             if not by_state:
                 d = cells.setdefault((si, j, -1), ([], []))
                 d[0].append(a.net_harmonics_complex[m0])
-                d[1].append(a.target_power_w[m0])
+                d[1].append(pw[m0])
                 continue
             st = getattr(a, "state_id", None)
             if st is None:
@@ -94,7 +101,7 @@ def _per_site_cells(pool, appliances: Sequence[str], by_state: bool
                 if m.any():
                     d = cells.setdefault((si, j, int(s)), ([], []))
                     d[0].append(a.net_harmonics_complex[m])
-                    d[1].append(a.target_power_w[m])
+                    d[1].append(pw[m])
     return {k: (np.concatenate(v[0]), np.concatenate(v[1])) for k, v in cells.items()}
 
 

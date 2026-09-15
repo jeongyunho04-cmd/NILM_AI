@@ -80,6 +80,11 @@ def build_loss(apps: Sequence[str], dev: str, *,
         sig_state, used = harmonic_signatures_by_state(pool, apps)
         if verbose:
             print("  ** 상태별 지문 (13.11): %d개 상태를 따로 맞췄다 **" % int(used.sum()))
+            _src = getattr(harmonic_signatures_by_state, "last_source", None)
+            if _src is not None and (_src == 2).any():
+                _who = ["%s s%d" % (apps[k], s) for k, s in zip(*np.nonzero(_src == 2))]
+                print("     ** 그중 %d칸은 **실측 전력**을 분모로 맞췄다 (14.167): %s **"
+                      % (len(_who), " · ".join(_who)))
     del pool
 
     return NILMLoss(

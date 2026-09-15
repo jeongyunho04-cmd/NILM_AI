@@ -1265,8 +1265,36 @@ def harmonic_signature_vhrel(pool, appliances: Sequence[str], n_harm: int = 15,
     return out
 
 
+def state_power_w(act, measured: bool = False) -> np.ndarray:
+    """상태별 지문의 **분모**로 쓸 그 기기 몫의 전력 (14.167).
+
+    `measured=False` 면 라벨 전력 `target_power_w` 다 — 옛 규약 그대로.
+
+    `measured=True` 면 **실측 전력** `net_power_features[:, 0]` 이다. 이것이 필요한
+    이유: `annotator` 가 `target_power_w = where(is_on==1, clean_p, 0)` 로 적는데
+    오븐의 `on_state_min_id = 2` 라 **FAN_LIGHT(state 1) 는 is_on=0 -> 0W** 가 된다.
+    그래서 `target_power_w > 1.0` 표본만 모으면 그 상태가 **한 사이클도 안 남고**,
+    지문이 기기 전체(= 히터)로 되돌아간다. `src/model/companion.py` 머리말이 이미
+    이 함정을 적어 두었다 ("FAN_LIGHT 은 `target_power_w = 0` 이라 애초에 안 들어간다").
+
+    ⚠ 그런데 합성기는 `carrier_apps` 로 **그 상태를 활성 전력에 넣는다**
+    (`synthesizer.py` 의 `act_p = np.where(live, net_p, 0.0)`, 13.40). 캐시 meta 의
+    `carrier_apps: ['oven']` 이 그 증거다. 즉 **자료는 FAN_LIGHT 를 켜짐·14.6W 로
+    주는데 사전은 그것을 순저항 히터로 설명**하고 있었다 — 오븐 s1 의 h2/h1 은
+    0.0667 인데 사전이 준 값은 히터의 0.0019 로 **35배** 어긋난다.
+
+    ⚠⚠ 이 분모를 **아무 상태에나 갈아 끼우면 안 된다.** 라벨 전력으로 이미 맞춘 칸은
+    그대로 두어야 지난 판과 비교가 선다. `harmonic_signatures_by_state` 는 라벨을
+    먼저 쓰고, **표본이 모자라 비는 칸에만** 이것으로 다시 시도한다.
+    """
+    if measured:
+        return np.asarray(act.net_power_features)[:, 0].astype(np.float64)
+    return np.asarray(act.target_power_w).astype(np.float64)
+
+
 def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 15,
-                                 max_states: int = MAX_STATES, min_cycles: int = 200
+                                 max_states: int = MAX_STATES, min_cycles: int = 200,
+                                 measured_fallback: bool = True
                                  ) -> Tuple[np.ndarray, np.ndarray]:
     """기기 x **상태**별 와트당 고조파 페이저 (K, S, n_harm, 2) 와 쓸 수 있는지 (K, S) bool.
 
@@ -1276,36 +1304,51 @@ def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 
 
     상태별 사이클이 `min_cycles` 미만이면 기기 전체 지문으로 되돌린다 — 표본이 얇은 상태를
     억지로 따로 맞추면 그 상태가 잡음을 배운다.
+
+    **두 번 훑는다 (14.167).** 먼저 라벨 전력(`target_power_w`)으로, 그래도 비는 칸만
+    실측 전력(`net_power_features[:,0]`)으로 다시 — `state_power_w` 의 설명 참조.
+    `measured_fallback=False` 면 옛 동작과 **비트 동일**하다.
+
+    맞춘 칸이 어느 분모에서 왔는지는 `harmonic_signatures_by_state.last_source` 에
+    (K, S) int8 로 남긴다: 0 못 맞춤 · 1 라벨 전력 · 2 실측 전력.
     """
     base = harmonic_signatures(pool, appliances, n_harm)          # (K,H,2)
     sig = np.repeat(base[:, None], max_states, axis=1)            # (K,S,H,2)
     used = np.zeros((len(appliances), max_states), dtype=bool)
+    src = np.zeros((len(appliances), max_states), dtype=np.int8)
+    passes = (False, True) if measured_fallback else (False,)
     for j, app in enumerate(appliances):
         acts = pool.appliance_activations.get(app, [])
         if not acts:
             continue
-        by: dict = {}
-        for a in acts:
-            st = getattr(a, "state_id", None)
-            if st is None:
-                continue
-            m0 = a.target_power_w > 1.0
-            for s in np.unique(np.asarray(st)[m0]).astype(int):
-                if not 0 < s < max_states:
+        for measured in passes:
+            by: dict = {}
+            for a in acts:
+                st = getattr(a, "state_id", None)
+                if st is None:
                     continue
-                m = m0 & (np.asarray(st) == s)
-                if m.any():
-                    by.setdefault(s, ([], []))
-                    by[s][0].append(a.net_harmonics_complex[m])
-                    by[s][1].append(a.target_power_w[m])
-        for s, (cs, ps) in by.items():
-            c = np.concatenate(cs); p = np.concatenate(ps)[:, None]
-            if len(c) < min_cycles:
-                continue
-            per_w = c / np.maximum(p, 1e-6)
-            sig[j, s, :, 0] = np.median(np.real(per_w), axis=0)
-            sig[j, s, :, 1] = np.median(np.imag(per_w), axis=0)
-            used[j, s] = True
+                pw = state_power_w(a, measured)
+                m0 = pw > 1.0
+                for s in np.unique(np.asarray(st)[m0]).astype(int):
+                    if not 0 < s < max_states or used[j, s]:
+                        continue                 # 이미 맞춘 칸은 **안 건드린다**
+                    m = m0 & (np.asarray(st) == s)
+                    if m.any():
+                        by.setdefault(s, ([], []))
+                        by[s][0].append(a.net_harmonics_complex[m])
+                        by[s][1].append(pw[m])
+            for s, (cs, ps) in by.items():
+                if used[j, s]:
+                    continue
+                c = np.concatenate(cs); p = np.concatenate(ps)[:, None]
+                if len(c) < min_cycles:
+                    continue
+                per_w = c / np.maximum(p, 1e-6)
+                sig[j, s, :, 0] = np.median(np.real(per_w), axis=0)
+                sig[j, s, :, 1] = np.median(np.imag(per_w), axis=0)
+                used[j, s] = True
+                src[j, s] = 2 if measured else 1
+    harmonic_signatures_by_state.last_source = src
     return sig.astype(np.float32), used
 
 
