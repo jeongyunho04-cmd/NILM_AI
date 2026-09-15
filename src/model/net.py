@@ -171,6 +171,34 @@ class NILMNet(nn.Module):
         #: 체크포인트는 `load_state_dict` 가 덮으므로 **영향 없다** — 새 판에만 듣는다.
         #: `False` 로 두면 옛 초기화(전부 0)로 돌아간다.
         state_power_init: bool = True,
+        #: 미래 조각을 **몇 토막으로 나눠** 요약할지 (14.122). `--fine-time-split` 전용.
+        #: **1 이면 지금과 비트 동일** (토막 하나 = 미래 전체).
+        #:
+        #: 왜 필요한가 — 14.116 이 머리에 준 미래는 `hf.mean(-1)` 과 `hf.amax(-1)` 둘뿐인데
+        #: **둘 다 순서에 불변**이다. "앞으로 6초 안에 큰 게 있다" 는 말하지만 **"언제"**
+        #: 는 못 말한다. +0.2초 뒤의 계단과 +5.9초 뒤의 계단이 **글자 그대로 같은 값**이다.
+        #: 그래서 "이건 미래다" 는 알려 줬는데 **"미래의 언제냐" 는 여전히 안 알려 줬다.**
+        #:
+        #: 잰 것 (cnn_tsp 3시드, 실측 5파일):
+        #: ```
+        #:   머리 첫 층의 차원당 기여 — `hf.amax` 가 **단일 덩이 1위 19.2%**
+        #:     (깊은 타깃 탭 14.9% · 과거 전역최대 15.1% 보다 크다)
+        #:   미래 덩이 둘을 죽이면 오븐 헛게이트 10.8% -> **23.0%** (두 배)
+        #: ```
+        #: ⇒ 미래는 **순이득**이다. 없애면 안 되고 **시간 해상도**를 줘야 한다.
+        #:
+        #: ⚠⚠ **깊은 `hf` 를 토막내는 것은 소용없다.** 처음에 그렇게 짰다가 관문 [4] 가
+        #: 잡았다 — 미래 몸통의 수용영역이 **763** 인데 미래는 360칸뿐이라 `hf` 의 모든
+        #: 열이 이미 미래 전체를 본다. 앞쪽만 흔들어도 토막 셋이 똑같이 움직였다
+        #: (0.397 / 0.404 / 0.360). `--seg-pool` 이 실패한 것과 **같은 이유**다
+        #: ([[a-diagnosis-expires-when-the-architecture-changes]]).
+        #:
+        #: 그래서 **원시 미래 입력**을 토막낸다 — 수용영역이 정의상 **1** 이라 토막이
+        #: 반드시 구별된다. 머리는 이미 `fine[:, :, t]`(원시 타깃 순시값)를 받고 있고
+        #: 그 덩이가 기여 3위(9.0%)다. 이건 그것의 **미래판**이다.
+        #: 깊은 `hf.mean/amax`(미래 전체)는 **그대로 둔다** — 그게 순이득이었으므로.
+        #: K=3 이면 2.01초 해상도 · K=6 이면 1.00초. 더하는 차원은 `2·K·57`.
+        fine_future_segs: int = 1,
         #: 상태 전력 슬롯의 **상한 배수** (14.121). `p_states[j,s] <= R·S_STATE[a][s]`.
         #: **0 이면 상한이 없어 지금과 비트 동일**이다.
         #:
@@ -376,8 +404,16 @@ class NILMNet(nn.Module):
                     #   따른다 (`forward` 의 `_st` 참조). `wns == ns` 면 `WINDOW_STATS*ns`
                     #   와 **정확히 같은 값**이라 옛 경로와 비트 동일이다.
                     + w2 * wns + (WINDOW_STATS // 2) * (ns + wns))
+        # 14.122 — 미래 토막 수. 1 이면 14.116 과 같은 2 덩이라 비트 동일이다.
+        self.fine_future_segs = max(1, int(fine_future_segs))
+        if self.fine_future_segs > 1 and not self.fine_time_split:
+            raise ValueError("`fine_future_segs > 1` 은 `fine_time_split` 이 켜져야 한다 "
+                             "— 미래 조각 자체가 시간분할에서만 생긴다")
         if self.fine_time_split:
-            trunk_in += 2 * c2          # 14.116 — 미래 조각의 mean/amax
+            trunk_in += 2 * c2                           # 14.116 — 미래 전체 mean/amax
+            if self.fine_future_segs > 1:
+                # 14.122 — 원시 미래를 토막낸 mean/amax (수용영역 1 이라 토막이 구별된다)
+                trunk_in += 2 * self.fine_future_segs * self.fine_channels
         if self.wide_target:
             trunk_in += w2              # 광역 타깃 블록 (13.44)
         if self.wide_summary:
@@ -440,6 +476,10 @@ class NILMNet(nn.Module):
             # 14.116 — 미래 조각의 mean/amax. **세밀 유래**라 1 이다. `forward` 가
             #   깊은 타깃 바로 뒤에 붙이므로 여기도 같은 자리여야 한다.
             + ([1] * (2 * c2) if self.fine_time_split else [])
+            # 14.122 — 원시 미래 토막. **세밀 유래**라 1 이고, `forward` 가 깊은 미래
+            #   요약 **바로 뒤**에 붙이므로 여기도 같은 자리여야 한다.
+            + ([1] * (2 * self.fine_future_segs * self.fine_channels)
+               if (self.fine_time_split and self.fine_future_segs > 1) else [])
             + [0] * (w2 * wns)                                # 광역 평균 (구간별)
             + ([0] * w2 if self.wide_target else [])           # 광역 타깃 블록 (13.44)
             + ([0] * (w2 * wns) + [0] * w2 if self.wide_summary else [])  # 광역 amax + 창끝
@@ -586,9 +626,25 @@ class NILMNet(nn.Module):
         feats.append(_tap)
         if self.fine_time_split:
             # 미래 조각의 요약 — 정보는 그대로 주되 **과거와 섞지 않는다**
+            # 14.122 — 그리고 **언제냐**도 준다. 토막마다 mean/amax 를 따로 낸다.
+            #   `K=1` 이면 토막이 미래 전체 하나라 `hf[:, :, 0:n]` == `hf` 이고
+            #   순서도 mean, amax 그대로다 -> **비트 동일**이다.
             hf = self._h_fut
             feats.append(hf.mean(-1))
             feats.append(hf.amax(-1))
+            # 14.122 — **언제냐**. 깊은 `hf` 는 수용영역 763 이라 토막내도 전부 같이
+            #   움직인다 (관문 [4] 가 잡았다). **원시 미래 입력**을 토막낸다 —
+            #   수용영역이 정의상 1 이라 +0.2초 계단과 +5.9초 계단이 다른 자리에 간다.
+            K = self.fine_future_segs
+            if K > 1:
+                raw_f = fine[:, :, t + 1:]
+                nfu = raw_f.shape[-1]
+                for _k in range(K):
+                    _a = (nfu * _k) // K
+                    _b = nfu if _k == K - 1 else (nfu * (_k + 1)) // K
+                    _b = max(_b, _a + 1)
+                    feats.append(raw_f[:, :, _a:_b].mean(-1))
+                    feats.append(raw_f[:, :, _a:_b].amax(-1))
         hw = self.wide(wide)
         wsegs = pool_segments(hw.shape[-1], wide_target_index(hw.shape[-1]),
                               max(self.wide_seg_pool or self.seg_pool, 1))

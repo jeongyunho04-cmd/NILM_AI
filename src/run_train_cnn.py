@@ -466,6 +466,16 @@ def main() -> int:
                          "아니며, 실측 차수별 지수가 녹화 사이에 재현되지 않는다 "
                          "(충전기 h11 폭 79.5). 분류: RESISTIVE·SMPS·MOTOR·PASSIVE.")
     ap.add_argument("--w-cons", type=float, default=0.0, help="1단계는 0 (3.3절)")
+    ap.add_argument("--fine-future-segs", type=int, default=1,
+                    help="미래 조각을 **몇 토막으로 나눠** 요약할지 (14.122). "
+                         "`--fine-time-split` 전용. **1 이면 비트 동일.** "
+                         "14.116 이 머리에 준 미래는 `hf.mean`/`hf.amax` 둘뿐인데 둘 다 "
+                         "**순서 불변**이라 '앞으로 6초 안에 큰 게 있다' 는 말해도 "
+                         "'**언제**' 는 못 말한다 — +0.2초 계단과 +5.9초 계단이 같은 값이다. "
+                         "잰 것: `hf.amax` 가 머리 단일 덩이 기여 **1위 19.2%%** 이고, 미래 "
+                         "덩이를 죽이면 오븐 헛게이트가 10.8%% -> **23.0%%** 로 두 배가 된다 "
+                         "(= 미래는 순이득이다. 없애지 말고 시간 해상도를 줘라). "
+                         "K=3 이면 2.0초 · K=6 이면 1.0초 해상도.")
     ap.add_argument("--p-state-cap", type=float, default=0.0,
                     help="상태 전력 슬롯의 **상한 배수** R — `p_states <= R x S_STATE` "
                          "(14.121). **0 이면 상한 없음 = 비트 동일.** 13.84.68 은 슬롯이 "
@@ -881,6 +891,7 @@ def main() -> int:
                     fine_extra_dilations=(tuple(int(x) for x in a.fine_extra_dilations.split(","))
                                           if a.fine_extra_dilations else None),
                     p_state_cap=a.p_state_cap,
+                    fine_future_segs=a.fine_future_segs,
                     tap_layers=(tuple(int(x) for x in a.tap_layers.split(","))
                                 if a.tap_layers else None),
                     fine_time_split=a.fine_time_split,
@@ -1046,6 +1057,8 @@ def main() -> int:
                     "fine_time_split": bool(model.fine_time_split),
                     # 상태 전력 상한 (14.121). 0 이면 상한 없음 -> 비트 동일.
                     "p_state_cap": float(model.p_state_cap),
+                    # 미래 토막 수 (14.122). 1 이면 비트 동일.
+                    "fine_future_segs": int(model.fine_future_segs),
                     # 타깃 시점 구성 (12.45). 채널 수와 달리 슬라이스로 못 맞춘다 —
                     # 어긋나면 입력과 라벨이 다른 순간을 가리켜 조용히 틀린다.
                     "target_lookahead": TARGET_LOOKAHEAD,

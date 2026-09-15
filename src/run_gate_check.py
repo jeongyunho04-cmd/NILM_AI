@@ -169,6 +169,8 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
                     fine_time_split=bool(pk.get("fine_time_split", False)),
                     # 상태 전력 상한 (14.121). 없으면 0 이라 **비트 동일**이다.
                     p_state_cap=float(pk.get("p_state_cap", 0.0) or 0.0),
+                    # 미래 토막 수 (14.122). 없으면 1 이라 **비트 동일**이다.
+                    fine_future_segs=int(pk.get("fine_future_segs", 1) or 1),
                     fine_channels=ck.get("fine_channels", LEGACY_FINE_CHANNELS))
     model = NILMNet(apps, appliance_state_counts(apps), **nkw).to(dev)
     if weights:
