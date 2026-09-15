@@ -7,7 +7,9 @@
 #   입구**라, 학습 쪽 관문이 전부 통과해도 홀드아웃은 조용히 **균일**로 구워진다. 그러면
 #   학습 분포와 평가 분포가 갈리고 그 차이를 모델 성능으로 읽는다.
 #   오늘만 같은 꼴을 셋 만났다(14.62 · `_init` 위치 밀림 · 이것).
-#   그래서 `run_gate_hocoarse` 가 **진짜 CLI 로 40창을 세 판 구워** 견준다.
+#   그래서 되짚기를 **production 코드 안에** 뒀다 — `holdout.py` 가 시뮬레이터에
+#   `vtex_coarse_s` 가 안 걸렸거나 coarse < seg 면 **굽기를 죽인다**. 따로 구워 보는
+#   관문은 안 만든다 (40창 x 4판 = 10분이었고, 같은 것을 두 번 재는 일이다).
 #
 #SBATCH -J nilm_ho32hs3
 #SBATCH -p cpu1,gpu6,cpu2,gpu3,gpu4,gpu5
@@ -16,8 +18,8 @@
 #SBATCH -c 24           # 노드당 상한(gpu1·gpu6 은 40)보다 아래로 — backfill 이 잘 문다
 #SBATCH --mem=64G
 # 실측 앵커: 학습 캐시가 40코어에서 1.43 코어·초/창 (14.107). 8000창 / 24워커 ≈ 8분.
-# 관문이 40창 x 4판 = 4~6분. 합 ~15분. HPC_RULES §2 로 3배.
-#SBATCH -t 00:45:00
+# 관문은 합성을 안 한다 (정적·배선 검사뿐, 1분). HPC_RULES §2 로 3배.
+#SBATCH -t 00:30:00
 #SBATCH -o %x_%j.out
 #SBATCH -e %x_%j.out
 set -euo pipefail
@@ -42,8 +44,6 @@ $PY -X utf8 src/run_gate_fmt.py
 $PY -X utf8 src/run_gate_zharm.py
 $PY -X utf8 src/run_gate_hzwire.py
 $PY -X utf8 src/run_gate_bakeseg.py
-$PY -X utf8 src/run_gate_hocoarse.py
-$PY -X utf8 src/run_gate_holdout_par.py --n 120 --tmp "${TMPDIR:-/tmp}"
 
 # ⚠⚠ 인자를 **한 곳에 모아** 굽기 **전에** 되짚는다. 984095 가 여기서 조용히 어긋났다.
 FLAGS="--windows 8000 --window-cycles 3600 --holdout-frac 0.2 --seed 20260821 \
