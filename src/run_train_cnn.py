@@ -720,6 +720,12 @@ def main() -> int:
                          "게이트를 진폭 손잡이로 쓴다 — 참ON 창에서 게이트와 (참전력/슬롯 비)의 "
                          "상관이 에어컨 0.777 오븐 0.618 이다. 끊으면 게이트는 검출만, "
                          "p_raw 가 진폭을 맡는다. **값은 비트 동일, 경사만 바뀐다.**")
+    ap.add_argument("--gate-free-power", action="store_true",
+                    help="★ **게이트와 전력을 완전히 분해한다** (14.150). state 0 을 전력 혼합에 "
+                         "넣고 그 전력을 0 으로 둬서 `p_raw` 가 OFF 를 표현할 수 있게 하고, "
+                         "`power = p_raw` 로 곱을 뗀다. OFF 일은 상태 머리가 맡고 게이트는 "
+                         "순수 검출기가 된다. `--on-power-praw`/`--on-detach-gate`/"
+                         "`--off-detach-praw` 와 같이 못 쓴다 (저쪽은 반쪽 처치다).")
     ap.add_argument("--on-power-praw", action="store_true",
                     help="**마스크 독립 손실** (14.147B). 참ON 창에서 게이트를 식에서 빼고 "
                          "`L = huber(p_raw, y)` 로 건다. `--on-detach-gate` 는 경사만 끊어 "
@@ -819,6 +825,12 @@ def main() -> int:
     ap.add_argument("--tag", default="cnn")
     ap.add_argument("--out", default="results")
     a = ap.parse_args()
+
+    #: 14.150 — 반쪽 처치와 같이 못 쓴다. `gate_free_power` 가 그것들을 포함한다.
+    if a.gate_free_power and (a.on_power_praw or a.on_detach_gate
+                              or a.off_detach_praw):
+        raise SystemExit("--gate-free-power 는 --on-power-praw/--on-detach-gate/"
+                         "--off-detach-praw 와 같이 못 씁니다 (전자가 후자를 포함합니다)")
 
     env_guard.verify_numerics()
     torch.manual_seed(a.seed); np.random.seed(a.seed)
@@ -922,6 +934,7 @@ def main() -> int:
                     wide_summary=a.wide_summary, wide_target=a.wide_target,
                     periodicity=a.periodicity,
                     fine_dropout=a.fine_dropout,
+                    gate_free_power=a.gate_free_power,
                     prior_kappa=a.prior_kappa, prior_beta=a.prior_beta,
                     fine_channels=a.fine_channels,
                     fine_dilations=(tuple(int(x) for x in a.fine_dilations.split(","))
@@ -1084,6 +1097,7 @@ def main() -> int:
                     "prior_kappa": a.prior_kappa, "prior_beta": a.prior_beta,
                     "on_detach_gate": a.on_detach_gate,
                     "on_power_praw": a.on_power_praw,
+                    "gate_free_power": a.gate_free_power,
                     "off_detach_praw": a.off_detach_praw,
                     "wide_summary": a.wide_summary, "wide_target": a.wide_target,
                     "periodicity": a.periodicity,

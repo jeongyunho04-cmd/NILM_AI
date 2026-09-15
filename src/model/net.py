@@ -291,6 +291,18 @@ class NILMNet(nn.Module):
         #: 가 pcap 1.146 -> mdec **1.003** 으로 정직해졌는데 출력은 0.993 -> **0.926**.
         #: **재학습 없이** 체크포인트에 이 값만 적어 채점할 수 있다.
         hard_gate: float = 0.0,
+        #: 14.150 — ★ **게이트와 전력을 완전히 분해한다.** 지금은 연결점이 여섯이다:
+        #:   (1) 값 `power = σ(on)·p_raw`  (2) `∂power/∂p_raw = σ(on)` **흡수 상태**(13.80)
+        #:   (3) `∂power/∂on = σ'·p_raw`   (4) 프라이어가 `on_logit` 을 밀어 전력을 민다
+        #:   (5) `on_logit`·`state`·`p_states` 가 **같은 머리**에서 나온다 (구조적)
+        #:   (6) `L_harm` 도 `out["power"]` 를 쓴다
+        #: 14.147 의 A·B 는 (2)(3)을 **참ON 창에서만** 끊었고 (1)(4)는 그대로였다.
+        #: ⚠ 곱을 그냥 떼면 안 된다 — `power_mix_mask` 가 state 0 을 빼서 `p_raw` 는
+        #:   **구조적으로 "켜졌다면 얼마"** 이고 0 이 될 수 없다. 0W 를 낼 수 있는
+        #:   유일한 장치가 게이트다. 그래서 **state 0 을 혼합에 넣고 그 전력을 0 으로**
+        #:   둔다 — OFF 일을 **상태 머리**가 맡고 게이트는 순수 검출기가 된다.
+        #:   그러면 (1)(2)(3)(4)가 한꺼번에 사라진다. (5)만 남는다 (머리를 쪼개야 없앤다).
+        gate_free_power: bool = False,
         #: 책임 가중.
         #:   `power`  매개변수를 안 늘린다 (Wisdom et al. 의 에너지 비례). 다만
         #:            **창별 곱셈 재조정과 같다** — 크기만 고치고 배분은 못 옮긴다
@@ -697,6 +709,7 @@ class NILMNet(nn.Module):
         # ⚠ 꺼지면 지수가 전부 0 이라 `vrel**0 = 1` — 옛 동작과 **비트 동일**이다.
         self.vexp = bool(vexp)
         self.hard_gate = float(hard_gate)
+        self.gate_free_power = bool(gate_free_power)
         # ⚠ `persistent=False` — **유도 상수**지 배우는 값이 아니다. state_dict 에 넣으면
         #   옛 체크포인트가 "Missing key" 로 안 실린다.
         self.register_buffer("v_exp", torch.tensor(
@@ -929,7 +942,13 @@ class NILMNet(nn.Module):
             # 위에서는 기울기가 0 이라 표류가 거기서 멈춘다 — 되돌리지는 못하지만
             # `p_raw` 가 물리적으로 묶인다. 이것이 사려던 전부다.
             p_states = torch.minimum(p_states, self.p_state_cap_w[None])
-        mix = state.masked_fill(self.power_mix_mask[None] == 0, -1e4).softmax(-1)
+        if self.gate_free_power:
+            # state 0 을 **혼합에 넣고** 그 전력을 0 으로 둔다 -> `p_raw` 가 0 이 될 수 있다.
+            # `state` 는 위에서 이미 무효 상태가 -1e4 로 막혀 있다.
+            p_states = p_states * self.power_mix_mask[None]
+            mix = state.softmax(-1)
+        else:
+            mix = state.masked_fill(self.power_mix_mask[None] == 0, -1e4).softmax(-1)
         p_raw = (mix * p_states).sum(-1)                                 # (B,K)
         if self.vexp:
             # 창의 전압을 세밀 채널에서 되살린다 (`inputs.py` 가 (v−V_CENTER)/V_SPAN 로 넣는다).
@@ -940,6 +959,9 @@ class NILMNet(nn.Module):
         _g = torch.sigmoid(on_logit)
         if self.hard_gate > 0:
             _g = (_g > self.hard_gate).to(_g.dtype)
+        if self.gate_free_power:
+            # ★ 곱을 뗀다. 게이트는 `out["on_logit"]` 로만 남아 검출·채점에 쓰인다.
+            _g = torch.ones_like(_g)
         out = {
             # 전력은 on/off 로 게이팅한다. 게이팅이 없으면 꺼진 기기에도 전력이 샌다.
             "power": _g * p_raw,
