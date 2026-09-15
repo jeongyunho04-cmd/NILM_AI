@@ -186,18 +186,29 @@ def main() -> int:
         print("  ★3/★4 오븐 검출 — **두 자로** (12.162: 채점기가 두 정의를 섞어 잰다)")
         print("    %-11s %-22s %-22s" % ("", "★3 현행 라벨 F1(재현/정밀)",
                                          "★4 물리마스크 F1(재현/정밀)"))
+        f1got = {}
         for tag, ps in (("대조", a.control), (a.arm, a.ckpt)):
             if not ps:
                 continue
             r = [f1_two_ways(p, cache, apps, dev) for p in ps]
             c = np.asarray([x["현행"][0] for x in r])
             m = np.asarray([x["마스크"][0] for x in r])
+            f1got[tag] = (c, m)
             print("    %-11s %.3f ± %.3f (%.3f/%.3f)   %.3f ± %.3f (%.3f/%.3f)"
                   % (tag, c.mean(), c.std(),
                      np.mean([x["현행"][1] for x in r]), np.mean([x["현행"][2] for x in r]),
                      m.mean(), m.std(),
                      np.mean([x["마스크"][1] for x in r]),
                      np.mean([x["마스크"][2] for x in r])))
+        # ⚠ 팔 평균만으로는 "씨앗 바닥 밖인가" 를 못 읽는다 — ★1/★2 처럼 **짝차**를 찍는다
+        #   ([[measure-the-seed-floor-before-reading-any-effect]]). 씨앗이 짝지어져 있으므로
+        #   짝차의 sd 가 진짜 바닥이고, 팔 sd 는 그보다 훨씬 크게 나온다.
+        if "대조" in f1got and a.arm in f1got and len(f1got["대조"][0]) == len(f1got[a.arm][0]):
+            for j, nm in ((0, "★3 현행"), (1, "★4 마스크")):
+                d = f1got[a.arm][j] - f1got["대조"][j]
+                print("    짝차 %-8s %s | %+.4f ± %.4f  (%d/%d 개선)"
+                      % (nm, " ".join("%+.4f" % x for x in d), d.mean(), d.std(),
+                         int((d > 0).sum()), len(d)))
         print("    ⚠ ★3 은 **내려가는 것이 정상**이다 (라벨이 팬·조명도 ON 으로 적는다). "
               "★4 가 내려가면 진짜 악화다.")
 
