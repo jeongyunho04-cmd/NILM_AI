@@ -714,6 +714,17 @@ def main() -> int:
                     help="**꺼진 창에서 `p_raw` 에 경사를 주지 않는다** (13.11). 상태 전력 머리가 "
                          "죽는 것을 막는다 — 드라이기 HIGH 가 정확히 그렇게 0W 가 됐다. "
                          "게이트가 꺼진 창을 0 으로 만드는 일을 맡는다.")
+    ap.add_argument("--on-detach-gate", action="store_true",
+                    help="**켜진 창에서 게이트에 경사를 주지 않는다** (14.147). "
+                         "`--off-detach-praw` 의 짝이다. `power = s(on)*p_raw` 라 전력 손실이 "
+                         "게이트를 진폭 손잡이로 쓴다 — 참ON 창에서 게이트와 (참전력/슬롯 비)의 "
+                         "상관이 에어컨 0.777 오븐 0.618 이다. 끊으면 게이트는 검출만, "
+                         "p_raw 가 진폭을 맡는다. **값은 비트 동일, 경사만 바뀐다.**")
+    ap.add_argument("--on-power-praw", action="store_true",
+                    help="**마스크 독립 손실** (14.147B). 참ON 창에서 게이트를 식에서 빼고 "
+                         "`L = huber(p_raw, y)` 로 건다. `--on-detach-gate` 는 경사만 끊어 "
+                         "p_raw 가 y/gate 로 밀리는 **보상 왜곡**이 남는데 이쪽은 그것까지 막는다. "
+                         "둘은 같이 못 쓴다.")
     ap.add_argument("--fine-dilations", default="",
                     help="세밀 conv 스택의 dilation 다섯 개 (쉼표). 비우면 1,2,4,8,16 = "
                          "**지금과 비트 동일**. 창은 '타깃 앞 3.98초 | 타깃 | 뒤 6.00초' 인데 "
@@ -951,6 +962,8 @@ def main() -> int:
                                if (a.harm_vnorm_anchor and a.harm_sig_vnorm) else None),
         harm_odd_only=a.harm_odd_only,
         off_detach_praw=a.off_detach_praw,
+        on_detach_gate=a.on_detach_gate,
+        on_power_praw=a.on_power_praw,
         signatures_state=(torch.from_numpy(sig_state) if a.state_signatures else None),
         harm_even_magnitude=a.harm_even_magnitude,
         harm_sig_vnorm=a.harm_sig_vnorm,
@@ -1069,6 +1082,9 @@ def main() -> int:
         torch.save({"model": model.state_dict(), "appliances": apps,
                     "width": a.width, "epoch": ep_saved,
                     "prior_kappa": a.prior_kappa, "prior_beta": a.prior_beta,
+                    "on_detach_gate": a.on_detach_gate,
+                    "on_power_praw": a.on_power_praw,
+                    "off_detach_praw": a.off_detach_praw,
                     "wide_summary": a.wide_summary, "wide_target": a.wide_target,
                     "periodicity": a.periodicity,
                     "fine_dropout": a.fine_dropout,

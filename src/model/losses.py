@@ -211,6 +211,13 @@ class NILMLoss(torch.nn.Module):
         swap_tiebreak: str = "off",
         swap_tb_orders: Sequence[int] = (3, 5, 7),
         off_detach_praw: bool = False,
+        #: 14.147 — **켜진 창에서 게이트에 경사를 주지 않는다.** `off_detach_praw`
+        #: 의 짝이다. 기본 꺼짐 = 항등.
+        on_detach_gate: bool = False,
+        #: 14.147B — **마스크 독립 손실.** 참ON 창에서 게이트를 **식에서 아예 뺀다**
+        #: (`L = 1(y_on)·huber(p_raw, y)`). `on_detach_gate` 는 경사만 끊어서 p_raw 가
+        #: **y/gate 로 밀리는 보상 왜곡**이 남는데, 이쪽은 그 길까지 막는다.
+        on_power_praw: bool = False,
         gate_smooth: float = 0.0,                    # 게이트 BCE 라벨 완화 (13.80)
         gate_focal: float = 0.0,                     # 쉬운 창 가중 낮추기 (13.80)                  # 꺼진 창에서 p_raw 를 detach (13.11)
         signatures_state: Optional[torch.Tensor] = None,  # (K,S,H,2) 상태별 지문 (13.11)
@@ -381,6 +388,10 @@ class NILMLoss(torch.nn.Module):
         self.swap_tb_orders_fwd = tuple(swap_tb_orders)
         # `L_swap`(12.158) 이 셀 조합. 저항 열의 on/off 전수다 (4종이면 16개).
         self.off_detach_praw = bool(off_detach_praw)
+        self.on_detach_gate = bool(on_detach_gate)
+        self.on_power_praw = bool(on_power_praw)
+        if on_detach_gate and on_power_praw:
+            raise ValueError('on_detach_gate 와 on_power_praw 는 같이 못 쓴다 — 후자가 전자를 포함한다')
         # ── 상태별 지문 (2026-09-06, 13.11) ────────────────────────────────
         # 기기당 페이저 하나로는 **한 기기의 상태들이 고조파 모양이 다를 때** 못 담는다.
         # 드라이기 약풍은 반파(|I2|/|I1| 0.431), 강풍은 순저항(0.0004)인데 지문 중앙값이
@@ -863,16 +874,36 @@ class NILMLoss(torch.nn.Module):
         # 꺼진 창을 0 으로 만드는 것은 **게이트의 일**이다 (`power = σ(on)·p_raw`).
         # 그 창의 상태 혼합은 뜻이 없으므로 p_raw 를 detach 해 게이트만 경사를 받게 한다.
         # 학습에만 걸린다 — 추론 경로도 저장되는 가중치의 뜻도 그대로다.
-        if (self.off_detach_praw and tgt.get("y_on") is not None
+        # ── 14.147 — **게이트가 진폭 손잡이로 쓰이는 것을 끊는다** (`on_detach_gate`)
+        #   `power = σ(on)·p_raw` 라 전력 손실의 하강 방향이 둘이다 — `p_raw` 를 낮추거나
+        #   **게이트를 닫거나**. 그래서 게이트가 검출기가 아니라 진폭 조절기가 된다.
+        #   합성 홀드아웃 8000창·3시드에서 잰 것 — **참ON 창**에서 게이트와
+        #   (참전력/슬롯 비)의 상관이 에어컨 0.777 · **오븐 0.618** · 포트 0.333 이다
+        #   (순수 검출기면 0 이어야 한다). 참OFF 게이트는 0.000~0.002 로 멀쩡하다.
+        #   ⇒ **참ON 창에서만** 게이트를 detach 해 전력 손실이 `p_raw` 로만 가게 한다.
+        #   게이트는 BCE 와 **참OFF 창의 전력 손실**로 계속 학습된다 (거기선 안 끊는다).
+        #   ⚠ 값은 **비트 동일**이다 — detach 는 경사만 끊는다. 추론도 그대로다.
+        if ((self.off_detach_praw or self.on_detach_gate or self.on_power_praw)
+                and tgt.get("y_on") is not None
                 and out.get("power_raw") is not None and out.get("on_logit") is not None):
             if float(getattr(self, "_proj_seen", 0.0)) > 0:
                 raise ValueError(
-                    "off_detach_praw 와 사영(proj>0)은 같이 못 쓴다 — 여기서 "
+                    "off_detach_praw/on_detach_gate 와 사영(proj>0)은 같이 못 쓴다 — 여기서 "
                     "out['power'] 을 다시 만들면 사영이 지워진다 (net._project 독스트링)")
             _pr = out["power_raw"]
             _on = tgt["y_on"] > 0.5
+            _g = torch.sigmoid(out["on_logit"])
+            if self.on_power_praw:
+                #: 14.147B — 참ON 창에서 게이트를 **1 로 둔다** = 식에서 빼는 것과 같다.
+                #:   `L = huber(p_raw, y)` 가 되어 `p_raw -> y` 로 곧장 간다.
+                #:   ⚠ 이건 손실 **값**을 바꾼다 (detach 와 달리). 추론은 그대로다.
+                _g = torch.where(_on, torch.ones_like(_g), _g)
+            elif self.on_detach_gate:
+                _g = torch.where(_on, _g.detach(), _g)
+            if self.off_detach_praw:
+                _pr = torch.where(_on, _pr, _pr.detach())
             out = dict(out)
-            out["power"] = torch.sigmoid(out["on_logit"]) * torch.where(_on, _pr, _pr.detach())
+            out["power"] = _g * _pr
 
         # 3.1절 — 스케일 정규화 전력 회귀. 절대 W 를 쓰면 오븐 60W 와 프로젝터 60W 가
         # 같은 벌점이 되고, 0.7절의 오차 전가 보호막(87배)이 사라진다.
