@@ -77,7 +77,11 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0, help="어느 창의 블록을 끼울지 섞는 씨앗")
     ap.add_argument("--pair", type=int, default=0, metavar="N",
                     help="앞 N 을 A팔, 뒤 N 을 B팔로 보고 짝차를 낸다")
+    ap.add_argument("--even-median", type=int, default=0,
+                    help="짝수차 중앙값을 **강제**한다 (14.160) — 분포 밖 시험용. 안 주면 체크포인트를 따라간다")
     a = ap.parse_args()
+    from src.run_gate_check import sync_even_median
+    sync_even_median(a.ckpt, a.even_median)   #: 창을 짓기 **전에** 전역을 맞춘다
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     from src.model.realdata import RealWindows

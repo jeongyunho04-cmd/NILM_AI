@@ -162,8 +162,23 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
     from src.model import inputs as _I
     _em = int(ck.get("even_median", 0) or 0)
     if max(_em, 1) != max(int(_I.EVEN_MEDIAN), 1):
-        print("⚠⚠ 짝수차 이동중앙값이 어긋난다 — 체크포인트 k=%d 인데 지금 입력은 k=%d 다 (%s)"
-              % (_em, int(_I.EVEN_MEDIAN), ckpt_path))
+        #: 14.168 — **경고가 아니라 멈춘다.** 이 어긋남의 실패 방식은 죽는 것이 아니라
+        #  *그럴듯한 틀린 수를 찍는 것*이라, 소리 없이 지나가면 판정이 통째로 무효가 된다.
+        #  오늘 하루에 세 번 잡혔다 (`run_diag_spike` · `run_diag_rollback` · `run_diag_vblock`).
+        #  분포 밖 시험을 **일부러** 하려면 `NILM_ALLOW_EVEN_MISMATCH=1` 로 명시하라.
+        import os as _os
+        _msg = ("✖ 짝수차 이동중앙값이 어긋난다 — 체크포인트 k=%d 인데 지금 입력은 k=%d 다@N@"
+                "    %s@N@"
+                "  창을 짓기 **전에** 규약을 맞춰라:@N@"
+                "      from src.run_gate_check import sync_even_median@N@"
+                "      sync_even_median(a.ckpt)        # 목록도 홑 문자열도 받는다@N@"
+                "  규약이 갈리는 판을 한 표에 놓아야 하면 무리를 나눠 창을 다시 지어라@N@"
+                "  (`run_diag_rollback` · `run_diag_ghost` 가 그렇게 한다).@N@"
+                "  일부러 분포 밖을 보려면  NILM_ALLOW_EVEN_MISMATCH=1"
+                ).replace("@N@", chr(10)) % (_em, int(_I.EVEN_MEDIAN), ckpt_path)
+        if _os.environ.get("NILM_ALLOW_EVEN_MISMATCH", "") not in ("1", "true", "True"):
+            raise SystemExit(_msg)
+        print("⚠⚠ (NILM_ALLOW_EVEN_MISMATCH) " + _msg.splitlines()[0])
     apps = ck["appliances"]
     # 시퀀스 체크포인트는 **구조를 `ref`(cnn_v37)에서** 가져오는데 사영 설정은 자기가
     # 들고 있다. `proj_resp="head"` 는 `proj_head.*` 키를 만들므로 **`load_state_dict`

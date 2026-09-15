@@ -58,7 +58,11 @@ def main() -> int:
     ap.add_argument("--stride", type=int, default=30)
     ap.add_argument("--pair", nargs=2, default=["oven", "electiric_kettle"],
                     help="몫을 훑을 두 기기")
+    ap.add_argument("--even-median", type=int, default=0,
+                    help="짝수차 중앙값을 **강제**한다 (14.160) — 분포 밖 시험용. 안 주면 체크포인트를 따라간다")
     a = ap.parse_args()
+    from src.run_gate_check import sync_even_median
+    sync_even_median(a.ckpt, a.even_median)   #: 창을 짓기 **전에** 전역을 맞춘다
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     model, apps, _ = load_model(a.ckpt, dev)
