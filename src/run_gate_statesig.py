@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""관문 — **상태별 지문의 분모** (14.167). 여덟 줄.
+"""관문 — **상태별 지문의 분모** (14.167). 아홉 줄.
 
 고친 것: `harmonic_signatures_by_state` 가 `target_power_w` 만 분모로 써서, 라벨이
 `is_on=0` 으로 적는 상태(오븐 FAN_LIGHT)를 **한 사이클도 못 모았다**. 그 칸은 조용히
@@ -52,12 +52,19 @@ def main() -> int:
 
     old, used_old = harmonic_signatures_by_state(pool, APPS, measured_fallback=False)
     src_old = harmonic_signatures_by_state.last_source.copy()
-    new, used_new = harmonic_signatures_by_state(pool, APPS)
+    #: 14.175 — 기본이 **꺼짐**으로 되돌아갔다. 기구는 **켜서** 재고,
+    #  기본이 꺼져 있다는 것은 [0] 에서 따로 확인한다.
+    dflt, _ = harmonic_signatures_by_state(pool, APPS)
+    new, used_new = harmonic_signatures_by_state(pool, APPS, measured_fallback=True)
     src_new = harmonic_signatures_by_state.last_source.copy()
     base = harmonic_signatures(pool, APPS)
 
     # [1] 끄면 옛 동작 — 기기 전체로 되돌아간 칸이 그대로 base 여야 한다
     back = np.array_equal(old[ko, 1], base[ko]) and np.array_equal(old[kh, 1], base[kh])
+    same0 = np.array_equal(dflt, old)
+    print("[0] **기본값이 꺼짐** — 안 주면 옛 동작과 비트 동일  %s"
+          % ("OK" if same0 else "**FAIL — 기본이 켜져 있다**"))
+    ok &= same0
     print("[1] measured_fallback=False -> 오븐·핫플 s1 이 **기기 전체 지문 그대로**  %s"
           % ("OK" if back else "FAIL"))
     ok &= back
@@ -134,10 +141,13 @@ def main() -> int:
     from src.model.lossbuild import build_loss
     L = build_loss(APPS, "cpu", verbose=False)
     buf = dict(L.named_buffers())["sig_state"].cpu().numpy()
-    landed = np.allclose(buf[ko, 1], new[ko, 1], atol=0, rtol=0)
+    #: 14.175 — 출하 상태는 **꺼짐**이므로 진짜 객체에는 `old`(= 히터 지문)가 실려야 한다.
+    #  켜는 길은 지금 `build_loss` 에 없다 — 다시 던질 때 손잡이부터 뚫어라.
+    landed = np.array_equal(buf[ko, 1], old[ko, 1])
     r = ratios(buf[ko, 1])
-    print("[8] 진짜 `NILMLoss.sig_state` 에 실렸다 — 오븐 s1 h2/h1 %.4f  %s"
+    print("[8] 진짜 `NILMLoss.sig_state` 에 **기본(꺼짐)** 이 실렸다 — 오븐 s1 h2/h1 %.4f  %s"
           % (r[1], "OK" if landed else "FAIL"))
+    print("      (켜면 %.4f 가 된다 — 14.175 가 그것을 되돌렸다)" % ratios(new[ko, 1])[1])
     ok &= landed
 
     print("\n%s" % ("전부 통과" if ok else "**실패한 줄이 있다**"))

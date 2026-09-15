@@ -1295,7 +1295,7 @@ def state_power_w(act, measured: bool = False) -> np.ndarray:
 
 def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 15,
                                  max_states: int = MAX_STATES, min_cycles: int = 200,
-                                 measured_fallback: bool = True
+                                 measured_fallback: bool = False
                                  ) -> Tuple[np.ndarray, np.ndarray]:
     """기기 x **상태**별 와트당 고조파 페이저 (K, S, n_harm, 2) 와 쓸 수 있는지 (K, S) bool.
 
@@ -1308,6 +1308,16 @@ def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 
 
     **두 번 훑는다 (14.167).** 먼저 라벨 전력(`target_power_w`)으로, 그래도 비는 칸만
     실측 전력(`net_power_features[:,0]`)으로 다시 — `state_power_w` 의 설명 참조.
+    ⚠⚠ **기본이 False 다 (14.175 에서 되돌렸다).** 14.167 이 이것을 켜고 3시드를 구웠더니
+    ① 오븐<->포트가 **크게 나빠졌다** — 오븐 유령 게이트율 6.8/5.0/3.4%% -> **24.2/23.9/19.7%%**,
+    수백W 유령 띠 10.4 -> **40.7초 (x3.9)**, 3/3 씨앗.
+    기전: FAN_LIGHT 지문이 **너무 특이해서**(h2/h1 0.0667 · h3/h1 0.1039, 다른 저항 상태의
+    20~35배) `L_harm` 이 *짝수차가 조금만 보여도 '오븐 휴지 15W' 로 설명하는* 싼 길을 얻는다.
+    게이트가 올라가면 상태 머리가 s1->s2 로 미끄러질 **발판**이 생겨 p99 가 1,250W 로 돌아온다.
+    ⇒ **사전이 틀렸다는 사실은 여전히 참이다** (관문 `run_gate_statesig` 가 그것을 지킨다).
+      틀린 지문이 *억제* 노릇을 하고 있었을 뿐이다. 다시 켜려면 s1 지문을 **약하게 섞거나**
+      게이트 쪽 제약(`--w-gate-cond`)과 **같이** 던져라.
+
     `measured_fallback=False` 면 옛 동작과 **비트 동일**하다.
 
     맞춘 칸이 어느 분모에서 왔는지는 `harmonic_signatures_by_state.last_source` 에
