@@ -172,8 +172,26 @@ def main():
                          int((koff & (P[:, KK] >= 300)).sum()),
                          int((kon & (P[:, KK] < 300)).sum())])
 
+    #: * 14.370 — **게이트 자** (사용자 지적). A/C 는 전력 **300W 문턱**이라
+    #  "게이트는 켜졌는데 전력은 그 아래" 인 창을 **원리상 못 센다**
+    #  ([[score-what-you-excluded]]). test_5 128~148초가 그 자리다 — 오븐 전력이
+    #  14~123W 라 A 에 한 칸도 안 잡히는데 실제로는 **켜졌다고 말하고 있다**.
+    #  ⚠ **합(A+B+C+D)에는 안 더한다.** 기각선 8 의 뜻이 바뀌면 옛 수치와 못 견준다.
+    #: ⚠⚠ **통전으로 갈라서 찍는다** (14.371). 안 가르면 **14W 를 병으로 오인한다** —
+    #  A' 86창의 오븐 전력이 중앙 **14.2W** · p90 16.0W 로 전부 **FAN_LIGHT(14.6W)** 다.
+    #  14.167 이 이미 그 기전을 적었다: *"FAN_LIGHT 지문이 너무 특이해서(h2/h1 0.0667,
+    #  다른 저항 상태의 20~35배) L_harm 이 짝수차가 조금만 보여도 '오븐 휴지 15W' 로
+    #  설명하는 **싼 길**을 얻는다"*. 그리고 14.175 가 그 지문을 정확히 맞췄더니 유령이
+    #  **3.9배**로 터져 되돌렸다 — 여기를 "고친다" 고 덤비면 그때와 같은 일이 난다.
+    #  ⇒ `A'통전` (>= 100W) 이 **진짜 병**이고 `A'휴지` 는 라벨 의미 문제다
+    #    ([[split-the-metric-before-sizing-the-disease]]).
+    def score_gate(Gt, P):
+        on_ = offo & (Gt[:, KO] > 0.5)
+        return np.array([int(on_.sum()), int((on_ & (P[:, KO] >= 100.0)).sum()),
+                         int((koff & (Gt[:, KK] > 0.5)).sum())])
+
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    PWS = []
+    PWS, GTS = [], []
     for c in good:
         m = load_model(c, dev)[0]
         m.eval()
@@ -184,16 +202,18 @@ def main():
         #    그 차가 Ĝ 를 최대 0.275 mS 움직인다 (14.346). 결과를 읽을 때 센다.
         _cb = float(getattr(m, "comb_tau", 0.0) or 0.0) > 0
         _zi = bool(getattr(m, "z_input", False))
-        o = []
+        o, q = [], []
         with torch.no_grad():
             for i in range(0, len(F), 256):
-                o.append(m(torch.from_numpy(F[i:i + 256].astype(np.float32)).to(dev),
-                           torch.from_numpy(W[i:i + 256].astype(np.float32)).to(dev),
-                           torch.from_numpy(g[i:i + 256].astype(np.float32)).to(dev)
-                           if _cb else None,
-                           torch.from_numpy(zr[i:i + 256]).to(dev)
-                           if _zi else None)["power"].cpu().numpy())
+                _o = m(torch.from_numpy(F[i:i + 256].astype(np.float32)).to(dev),
+                       torch.from_numpy(W[i:i + 256].astype(np.float32)).to(dev),
+                       torch.from_numpy(g[i:i + 256].astype(np.float32)).to(dev)
+                       if _cb else None,
+                       torch.from_numpy(zr[i:i + 256]).to(dev) if _zi else None)
+                o.append(_o["power"].cpu().numpy())
+                q.append(torch.sigmoid(_o["on_logit"]).cpu().numpy())
         PWS.append(np.concatenate(o).astype(np.float64))
+        GTS.append(np.concatenate(q).astype(np.float64))
         del m
     print("  실측 창 %d · 씨앗 %d (%s) · 오븐확실통전 %d · 포트ON %d"
           % (len(F), len(PWS), os.path.basename(good[0]).rsplit("_s", 1)[0],
@@ -216,6 +236,16 @@ def main():
         "바닥 A%.0f B%.0f C%.0f D%.0f 합 **%.0f** · |r| %.1fW  ->  "
         "사중+총량 A%.0f B%.0f C%.0f D%.0f 합 **%.0f** · |r| **%.1fW**  (기준 합<=33 · |r|<=11.5)"
         % (*mb, mb.sum(), rb, *mf, mf.sum(), rf))
+    gs = np.stack([score_gate(Q, P) for Q, P in zip(GTS, PWS)]); mg = np.median(gs, 0)
+    print("  [게이트 자] * 라벨 OFF 인데 **게이트가 켜진** 창 — "
+          "A' 전체 **%.0f** (그중 **통전(>=100W) %.0f**) · C' 포트 **%.0f**"
+          % (mg[0], mg[1], mg[2]))
+    print("      씨앗별 A'전체 %s · A'통전 %s"
+          % (gs[:, 0].tolist(), gs[:, 1].tolist()))
+    print("      ⚠ A'전체 − A'통전 은 **오븐 FAN_LIGHT(14.6W)** 다 — 라벨이 *조리* 를 "
+          "껐다는 뜻이고 플러그를 뽑았다는 뜻이 아니라 **병이 아닐 수** 있다")
+    print("      * 읽을 값은 **A'통전** 이다. A(전력>=300W)=%.0f 과 그 사이가 "
+          "어느 자에도 안 잡히던 창이다" % mb[0])
     chk(6, "씨앗 짝검정이 **6/6** 인가", sgn(dd) <= 0.05 and all(x < 0 for x in dd),
         "합차 %s · p=%.3f" % (dd, sgn(dd)))
     chk(7, "★ 거부권 **없이** 총량만 고정하면 C오탐이 는다",
