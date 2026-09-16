@@ -275,6 +275,7 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
                     fine_derive=str(pk.get("fine_derive", "window") or "window"),
                     wide_dg=bool(pk.get("wide_dg", False)),
         comb_tau=float(pk.get("comb_tau", 0.0) or 0.0),
+                    z_input=bool(pk.get("z_input", False)),
                     comb_over=_comb_over_of(pk),
                     comb_over_margin=float(pk.get("comb_over_margin", 2.0) or 2.0),
                     fine_dc=str(pk.get("fine_dc", "keep") or "keep"),

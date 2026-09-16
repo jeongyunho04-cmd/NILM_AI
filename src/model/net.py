@@ -221,6 +221,16 @@ class _CausalConv1d(nn.Module):
         return self.conv(F.pad(x, (self.pad, 0), mode=self.pad_mode))
 
 
+#: ★ 14.354 — **선로 임피던스 입력**의 정규화 상수. `cache/train60_v49/z_grid.npy`
+#: 30만창에서 잰 `log r_grid` 의 평균·표준편차다 (14.353):
+#:   서로 다른 r 값 17,639개 · 0.121~2.000Ω · 중앙 0.904
+#:   log r 평균 **-0.2927** · 표준편차 **0.5468** · 정규화 후 -3.33~+1.80
+#: 실측 자리는 전부 한가운데다 — E1 0.42 -> -1.051 · D1 1.15 -> +0.791 · D2 1.19 -> +0.853
+#: ⚠ 이 값을 바꾸면 **옛 체크포인트가 조용히 어긋난다.** 체크포인트에 같이 적는다.
+Z_LOG_MEAN = -0.2927
+Z_LOG_STD = 0.5468
+
+
 class NILMNet(nn.Module):
     """9종 동시 분해. 기기별 헤드는 파라미터를 공유하지 않는다."""
 
@@ -241,6 +251,33 @@ class NILMNet(nn.Module):
         min_on_w: Optional[Sequence[float]] = None,
         fine_channels: Optional[int] = None,
         aux_z: bool = False,
+        #: ★ 14.354 — **선로 임피던스를 입력으로 준다.** `False` 면 끔 = 비트 동일.
+        #:
+        #: ```
+        #:   zf    = [ (log r + 0.2927)/0.5468 , known ]      <- 창당 2개 · 모르면 [0, 0]
+        #:   z_pre = trunk(...)                                 <- 보조머리는 **여기**를 읽는다
+        #:   z     = z_pre + z_proj(zf)                         <- 전력·게이트 머리만 Z 를 본다
+        #: ```
+        #: ⚠⚠ **`log_z` 보조감독은 `z_pre` 에서 읽는다 (감독은 모든 창에 그대로).**
+        #:   주입된 표현에서 읽으면 과제가 시시해지고, 가린 창에서만 감독하면 세금이
+        #:   절반이 된다. 그 세금의 이득 기전이 **미확인**이라(§7.6: log_z 는 Z 가 아니라
+        #:   '창에 계단이 있나' 에 +0.622 로 반응한다) 줄이면 충전기·미니PC AUC 이득
+        #:   (+0.077/+0.068, 3/3 씨앗)이 같이 날아갈 수 있다. **갈라 놓는다.**
+        #:
+        #: 왜 채널이 아니라 여기인가 (14.354):
+        #: ```
+        #:   ① 채널이면 build_inputs 가 바뀌어 **캐시 재굽기 + 체크포인트 전부 무효**
+        #:   ② Z 는 창당 스칼라라 시간축 600칸에 상수로 깔면 GroupNorm 이 분산 0 을
+        #:      eps 로 나누고, 순수 DC 라 [[temporal-dc-leaks-into-conv-heads]] 통로다
+        #:   ③ 측정한 V 에 이미 선로 강하가 있다. Z 가 더 주는 것은 "그 전압 변화 중
+        #:      얼마가 내 부하 탓인가" 로 **표현을 어떻게 읽을지**의 조건이다
+        #: ```
+        #: ★ `z_proj` 를 **0 으로 초기화**한다 — 출발이 바닥과 비트 동일이고,
+        #:   ‖z_proj.weight‖ 가 움직이면 그건 **배운 것**이다
+        #:   ([[verify-new-modules-actually-trained]]).
+        #: ⚠ `x_grid` 는 **안 넣는다** — 실측 `SITE_SESSIONS` 에 R 뿐이고 X 는 미측정이다
+        #:   (§13.20: X 를 빼도 R² 가 같다). 넣으면 학습에만 있고 배치엔 없는 입력이 된다.
+        z_input: bool = False,
         #: 상태별 전력 슬롯을 `S_STATE` 의 잰 값에서 출발시킨다 (13.84.68). 학습된
         #: 체크포인트는 `load_state_dict` 가 덮으므로 **영향 없다** — 새 판에만 듣는다.
         #: `False` 로 두면 옛 초기화(전부 0)로 돌아간다.
@@ -881,6 +918,12 @@ class NILMNet(nn.Module):
         if self.aux_z:
             self.z_head = nn.Linear(h, 1)
             nn.init.zeros_(self.z_head.bias)
+        #: ★ 14.354 — 선로 임피던스 주입. 가중치·편향을 **0** 으로 둬 출발이 비트 동일이다.
+        self.z_input = bool(z_input)
+        if self.z_input:
+            self.z_proj = nn.Linear(2, h)
+            nn.init.zeros_(self.z_proj.weight)
+            nn.init.zeros_(self.z_proj.bias)
 
         # ── 합 정합성 사영 (계획 A, 14.3) ────────────────────────────────────
         # 13.86 이 근거를 크게 키웠다: CO-P 가 **잔차 1.2W** 를 내므로 이산 상태공간
@@ -1148,7 +1191,8 @@ class NILMNet(nn.Module):
         return feats
 
     def forward(self, fine: torch.Tensor, wide: torch.Tensor,
-                g_hat: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+                g_hat: Optional[torch.Tensor] = None,
+                z_in: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         t = self.target_pos
         # 이 체크포인트가 학습된 채널 수만 쓴다 (`self.fine_channels` 주석 참조).
         if fine.shape[1] < self.fine_channels:
@@ -1296,6 +1340,18 @@ class NILMNet(nn.Module):
                     >= self.fine_dropout).to(x.dtype)
             x = x * (1.0 - self.fine_dim_mask[None] * (1.0 - keep))
         z = self.trunk(x)
+        #: ★ 14.354 — 보조머리가 읽을 **주입 전** 표현을 잡아 둔다. `z_input` 이 꺼져
+        #  있으면 같은 물건이라 비트 동일이다.
+        z_pre = z
+        if self.z_input:
+            if z_in is None:
+                raise ValueError("z_input 을 켰는데 forward 에 z_in 이 안 들어왔다 "
+                                 "— r_grid[Ω] 를 (B,) 로 넘겨라 (모르는 창은 NaN)")
+            zr = z_in.to(z.dtype).reshape(-1)
+            known = torch.isfinite(zr) & (zr > 0)
+            zn = torch.where(known, torch.log(zr.clamp(min=1e-6)), torch.zeros_like(zr))
+            zn = torch.where(known, (zn - Z_LOG_MEAN) / Z_LOG_STD, torch.zeros_like(zn))
+            z = z + self.z_proj(torch.stack([zn, known.to(z.dtype)], -1))
 
         # ── 기기 축 어텐션 (13.93) ───────────────────────────────────────────
         # 지금까지 기기별 머리 9개가 **같은 z 에서 서로 못 보고** 갈라졌다
@@ -1432,7 +1488,9 @@ class NILMNet(nn.Module):
             **({"comb_w": comb_w} if comb_w is not None else {}),
         }
         if self.aux_z:
-            out["log_z"] = self.z_head(z).squeeze(-1)      # (B,)
+            #: ⚠⚠ **`z` 가 아니라 `z_pre` 다** (14.354). 주입된 표현에서 읽으면 과제가
+            #  시시해진다 — 몸통이 Z 를 담을 이유가 사라진다.
+            out["log_z"] = self.z_head(z_pre).squeeze(-1)  # (B,)
         if self.proj > 0:
             self._project(out, fine, z)
         # 몸통 표현. 사슬 구조(13.84.24)가 방출·전이 머리를 여기에 얹는다.

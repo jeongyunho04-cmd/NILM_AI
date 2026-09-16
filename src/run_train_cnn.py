@@ -40,6 +40,7 @@ from src.evaluation import (
     score_appliances, summarize, total_power_residual,
 )
 from src.model.inputs import fine_target_index as _fti
+from src.model import net as _NET
 from src.model.net import V_CH_FINE
 FINE_TPOS = _fti()          #: 세밀 창 안의 타깃 위치 (239 = 600−1−360). 14.53 이 쓴다.
 from src.model.inputs import (ZERO_EVEN_HARMONICS, EVEN_MAG0, EVEN2_CH,
@@ -555,7 +556,23 @@ def to_targets(batch, dev, vrel_target: bool = False):
         "v_rms": _v,
         # 13.55 — 이 창의 선로 저항 [Ω]. 옛 캐시면 NaN 이고 손실이 알아서 건너뛴다.
         "log_z": torch.log(zg[:, 0].clamp(min=1e-3)),
+        #: ★ 14.354 — 모델 **입력**용 원값 r_grid [Ω]. 정규화는 모델이 한다
+        #  (`net.Z_LOG_MEAN/STD`) — 호출부가 눈금을 틀릴 자리를 없앤다.
+        "r_grid": zg[:, 0],
     }
+
+
+def _z_drop(r, p: float):
+    """★ 14.354 — 창마다 확률 `p` 로 Z 를 **"모름"(NaN)** 으로 가린다.
+
+    왜 — 잰 자리에서는 Z 를 쓰고, **못 잰 자리에서도 돌아야** 한다. 이 가림이
+    요구를 업그레이드로 바꾼다. ⚠ 이 손잡이는 **오직 그 일만** 한다 —
+    `log_z` 보조감독은 `z_pre` 에서 읽으므로 세금이 안 줄어든다 (14.354).
+    """
+    if p <= 0:
+        return r
+    m = torch.rand(r.shape[0], device=r.device) < p
+    return torch.where(m, torch.full_like(r, float("nan")), r)
 
 
 def prepare_holdout_inputs(hs, batch: int = 512):
@@ -584,12 +601,18 @@ def prepare_holdout_inputs(hs, batch: int = 512):
     _apps = list(getattr(hs, "appliances", None) or sorted(_SS))
     _bud = _GB.Budget(_apps, _v15, volt_re0=33, volt_orders=_VO)
     _g = _bud.g_sum(_x.T[None])[0].astype(np.float32)          # (N,)
-    return np.concatenate(F), np.concatenate(W), _g
+    #: ★ 14.354 — 홀드아웃의 선로 저항. 14.353 이 빌더에 `z_grid` 를 넣었다.
+    #  ⚠ 없는 옛 홀드아웃이면 **전부 NaN = "모름"** 으로 준다 — 그 경우 평가는
+    #    대비책 갈래만 재는 것이고, 조용히 딴 값을 지어내지 않는다.
+    _zg = getattr(hs, "z_grid", None)
+    _r = (np.full(len(hs), np.nan, np.float32) if _zg is None
+          else np.asarray(_zg[:, 0], np.float32))
+    return np.concatenate(F), np.concatenate(W), _g, _r
 
 
 @torch.no_grad()
 def evaluate(model, prep, dev, batch: int = 512) -> tuple:
-    fine_all, wide_all, g_all = prep
+    fine_all, wide_all, g_all, r_all = prep
     model.eval()
     P, ON = [], []
     for i in range(0, len(fine_all), batch):
@@ -597,7 +620,9 @@ def evaluate(model, prep, dev, batch: int = 512) -> tuple:
             o = model(torch.from_numpy(fine_all[i:i + batch]).to(dev),
                       torch.from_numpy(wide_all[i:i + batch]).to(dev),
                       torch.from_numpy(g_all[i:i + batch]).to(dev)
-                      if model.comb_tau > 0 else None)
+                      if model.comb_tau > 0 else None,
+                      torch.from_numpy(r_all[i:i + batch]).to(dev)
+                      if getattr(model, "z_input", False) else None)
         P.append(o["power"].float().cpu().numpy())
         ON.append(torch.sigmoid(o["on_logit"]).float().cpu().numpy())
     model.train()
@@ -945,6 +970,11 @@ def main() -> int:
     #: ★ 14.347 — **조합 머리**. 저항 4종을 24개 조합 위의 softmax 로 낸다.
     #  `0` 이면 끔 = 비트 동일. 값은 물리 잔차의 눈금 (mS) — 14.343 의 λ 꼭지가 0.6~1.0 이다.
     #  ⚠ 캐시에 `g_hat.npy` 가 있어야 한다 (`run_build_ghat`).
+    #: ★ 14.354 — 선로 임피던스 주입 + 가림
+    ap.add_argument("--z-input", action="store_true",
+                    help="r_grid 를 몸통 표현에 주입한다 (보조머리는 주입 전을 읽는다)")
+    ap.add_argument("--z-drop", type=float, default=0.3,
+                    help="창마다 이 확률로 Z 를 '모름'(NaN)으로 가린다")
     ap.add_argument("--comb-tau", type=float, default=0.0)
     #: ★ 14.352 — 물리 벌점을 **초과 주장 쪽만** 꺾는다. 0 이면 끔(비트 동일).
     ap.add_argument("--comb-over", type=float, default=0.0,
@@ -1334,6 +1364,7 @@ def main() -> int:
     del pool
 
     model = NILMNet(apps, appliance_state_counts(apps), width=a.width,
+                    z_input=bool(a.z_input),
                     comb_tau=a.comb_tau, comb_over=a.comb_over,
                     comb_over_margin=a.comb_over_margin,
                     wide_summary=a.wide_summary, wide_target=a.wide_target,
@@ -1548,6 +1579,11 @@ def main() -> int:
                     #: 14.331 — 입력 배치의 규약. 없으면 옛 6차수 판이다.
                     "volt_orders": list(VOLT_ORDERS),
                     #: 14.347 — 조합 머리의 눈금. 0 이면 안 썼다.
+                    "z_input": bool(a.z_input),
+                    "z_drop": float(a.z_drop),
+                    #: 눈금을 체크포인트에 같이 적는다 — 바뀌면 옛 판이 조용히 어긋난다
+                    "z_log_mean": float(_NET.Z_LOG_MEAN),
+                    "z_log_std": float(_NET.Z_LOG_STD),
                     "comb_tau": float(a.comb_tau),
                     "comb_over": float(a.comb_over),
                     "comb_over_margin": float(a.comb_over_margin),
@@ -1665,7 +1701,9 @@ def main() -> int:
             odd_phase_jitter(fine, wide, a.odd_phase_jitter)   # 14.268 — 0 이면 무동작
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
                 out = model(fine, wide,
-                            tgt["g_hat"] if model.comb_tau > 0 else None)
+                            tgt["g_hat"] if model.comb_tau > 0 else None,
+                            _z_drop(tgt["r_grid"], a.z_drop)
+                            if getattr(model, "z_input", False) else None)
                 parts = crit(out, tgt)
             opt.zero_grad(set_to_none=True)
             parts["total"].backward()
