@@ -407,6 +407,30 @@ class NILMNet(nn.Module):
         #:   그래서 τ→∞ 극한이 지금과 같아지는 것은 **게이트·상태 주변확률**뿐이고 전력은
         #:   아니다. 끄고 켜는 스위치는 `comb_tau == 0` 이다.
         comb_tau: float = 0.0,
+        #: ★ 14.352 — **물리 벌점을 한쪽만 꺾는다** (`comb_tau>0` 일 때만 뜻이 있다).
+        #: `0` 이면 끔 = **비트 동일**.
+        #:
+        #: ```
+        #:   over_c  = relu( ΣG(c) − Ĝ − comb_over_margin )      <- 없는 전류를 주장하는 양
+        #:   score_c = … − over_c / comb_over                     (comb_over << comb_tau)
+        #: ```
+        #: 왜 — 거부권의 주장은 *"Ĝ 가 문턱 아래면 그 기기는 **아예** 못 켜져 있다"* 로
+        #: **딱딱한 불가능**인데, `|ΔG|/τ` 는 부드러워 "조금 나쁨" 으로만 적는다.
+        #: 14.351 이 잰 자리: test_5 215초에서 Ĝ 가 24.87~24.93(오븐 단독에서 0.06) 인데
+        #: 포트 후보(28.122)가 **3.2 mS 밖**이라 벌점이 겨우 3.2 고, β_포트 0.337 의 확신이
+        #: 그걸 넘어 **699W 를 가져갔다**. 합은 맞으니 손실은 조용했다
+        #: ([[a-sum-constraint-launders-misattribution]]).
+        #:
+        #: ⚠⚠ **한쪽만 꺾는다 — 미달은 안 막는다.** 초과 주장(없는 전류)은 불가능하지만
+        #:   미달은 **표에 없는 것**이 나머지를 끌 수 있어 가능하다: 선풍기가 명목의
+        #:   53~78% 를 Ĝ 에 흘리고(§37), 오븐에는 24.96 과 34.90 사이 **9.94 mS 짜리
+        #:   결손 상태**가 있다(§39.7ⓑ). 양쪽을 다 막으면 그 창에서 **후보가 전멸**한다.
+        #: ⚠ 그래서 이 항은 §39.7ⓑ(오븐↔핫플)를 **안 고친다.** 겨냥은 초과 주장뿐이다.
+        comb_over: float = 0.0,
+        #: 초과로 치기 전에 봐 주는 여유 [mS]. `gbudget.VETO_MARGIN_MS` 와 같은 값에서
+        #: 출발한다 — 같은 주장을 하는 물건이라 자를 맞춰 둔다. Ĝ 잡음은 σ 0.265 이고
+        #: 에어컨 구간에서 0.749 다 (§37).
+        comb_over_margin: float = 2.0,
         head_conductance: bool = False,
         #: 14.148 — **게이트 경화.** `power = (σ(on) > τ)·p_raw` 로 낸다. 0 이면 끈다
         #: (= 비트 동일). `--on-power-praw`(14.147B)가 손실에서 게이트를 뺐는데 추론은
@@ -914,6 +938,8 @@ class NILMNet(nn.Module):
             self.register_buffer("p_state_cap_w", cap, persistent=False)
         # ── 조합 머리 (14.347) ──────────────────────────────────────────────
         self.comb_tau = float(comb_tau)
+        self.comb_over = 0.0
+        self.comb_over_margin = float(comb_over_margin)
         if self.comb_tau > 0:
             import itertools as _it
 
@@ -946,6 +972,10 @@ class NILMNet(nn.Module):
             #: 기기별 **모델 신뢰도**. 1.0 에서 시작한다 — 그 값이 14.343 의 λ=1.0 꼭지다
             #: (λ 쓸기: 0 -> 84.5% · **0.6~1.0 -> 99.6%** · >=2 -> 94.9% 로 모델 단독 복귀).
             self.comb_beta = nn.Parameter(torch.ones(len(res)))
+            self.comb_over = float(comb_over)
+            self.comb_over_margin = float(comb_over_margin)
+            if self.comb_over < 0:
+                raise ValueError("comb_over 는 0 이상이어야 한다 (0 = 끔)")
             if head_conductance or vexp:
                 raise ValueError("comb_tau 는 vexp·head_conductance 와 같이 못 쓴다 "
                                  "— 저항 전력에 곱을 두 번 건다")
@@ -1371,6 +1401,13 @@ class NILMNet(nn.Module):
             zc = torch.where((st > 0)[None], pick.permute(0, 2, 1), lg0[:, None, :])
             score = ((zc * self.comb_beta[None, None]).sum(-1)
                      - (g_hat[:, None] - self.comb_gsum[None]).abs() / self.comb_tau)
+            if self.comb_over > 0:
+                #: ★ 14.352 — **초과 주장만** 꺾는다. `ΣG(c) > Ĝ + 여유` 는 없는 전류를
+                #  주장하는 것이라 물리적으로 불가능하다. 미달은 표에 없는 것이 끌 수
+                #  있으므로 건드리지 않는다 (안 그러면 후보가 전멸한다).
+                over = (self.comb_gsum[None] - g_hat[:, None]
+                        - self.comb_over_margin).clamp(min=0.0)
+                score = score - over / self.comb_over
             comb_w = score.softmax(-1)                                   # (B,C)
             pk = (comb_w @ self.comb_g) * 1e-3 * (v1 ** 2)[:, None]      # (B,R) W
             #: 표에 없는 켜짐 상태(오븐 FAN_LIGHT 등)는 **모델의 자유 크기**를 더한다

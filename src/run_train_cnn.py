@@ -946,6 +946,11 @@ def main() -> int:
     #  `0` 이면 끔 = 비트 동일. 값은 물리 잔차의 눈금 (mS) — 14.343 의 λ 꼭지가 0.6~1.0 이다.
     #  ⚠ 캐시에 `g_hat.npy` 가 있어야 한다 (`run_build_ghat`).
     ap.add_argument("--comb-tau", type=float, default=0.0)
+    #: ★ 14.352 — 물리 벌점을 **초과 주장 쪽만** 꺾는다. 0 이면 끔(비트 동일).
+    ap.add_argument("--comb-over", type=float, default=0.0,
+                    help="초과 주장 벌점의 눈금 [mS]. comb_tau 보다 훨씬 작게 (예 0.05)")
+    ap.add_argument("--comb-over-margin", type=float, default=2.0,
+                    help="초과로 치기 전 여유 [mS]. gbudget.VETO_MARGIN_MS 와 같은 자다")
     ap.add_argument("--prior-kappa", type=float, default=8.0,
                     help="on 게이트 물리 프라이어 세기 (12.9.8절). 0 이면 끈다")
     ap.add_argument("--prior-beta", type=float, default=0.5,
@@ -1329,7 +1334,8 @@ def main() -> int:
     del pool
 
     model = NILMNet(apps, appliance_state_counts(apps), width=a.width,
-                    comb_tau=a.comb_tau,
+                    comb_tau=a.comb_tau, comb_over=a.comb_over,
+                    comb_over_margin=a.comb_over_margin,
                     wide_summary=a.wide_summary, wide_target=a.wide_target,
                     periodicity=a.periodicity,
                     fine_dropout=a.fine_dropout,
@@ -1453,6 +1459,9 @@ def main() -> int:
         cache = CachedWindows(a.cache)
         #: ★ 14.348 — `--comb-tau` 를 켰는데 캐시에 `g_hat.npy` 가 없으면 배치가 **NaN**
         #  이고, 조합 softmax 가 그걸 퍼뜨려 **손실이 조용히 죽는다**. 여기서 멈춘다.
+        if a.comb_over > 0 and a.comb_tau <= 0:
+            raise SystemExit("--comb-over 는 --comb-tau 없이는 아무 일도 안 한다 "
+                             "(조합 머리가 꺼져 있으면 후보 점수가 없다)")
         if a.comb_tau > 0 and not getattr(cache, "has_ghat", False):
             raise SystemExit(
                 "--comb-tau 를 켰는데 캐시에 `g_hat.npy` 가 없다: %s@N@"
@@ -1540,6 +1549,8 @@ def main() -> int:
                     "volt_orders": list(VOLT_ORDERS),
                     #: 14.347 — 조합 머리의 눈금. 0 이면 안 썼다.
                     "comb_tau": float(a.comb_tau),
+                    "comb_over": float(a.comb_over),
+                    "comb_over_margin": float(a.comb_over_margin),
                     "cons_deadzone": float(a.cons_deadzone),
                     # 14.295 궤적 평균. 0 이면 안 쓴 것 = 옛 경로와 비트 동일.
                     "swa_start": int(a.swa_start),

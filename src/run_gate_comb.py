@@ -165,6 +165,77 @@ def main():
         "`comb_small` %s (기대 %s) · Ĝ=0 에서도 오븐 전력 최대 **%.2fW** 남는다 — "
         "0 이면 FAN_LIGHT 14.6W 가 통째로 증발한 것이다" % (small, want_small, left))
 
+    # ── ★ 14.352 — **초과 주장 꺾기** (`--comb-over`) ────────────────────────
+    ov = build(comb_tau=1.0, comb_over=0.05, comb_over_margin=2.0)
+    ov.load_state_dict(on.state_dict())                  # 같은 무게 · 항만 켠다
+    ov.eval()
+
+    # [10] 끄면 비트 동일
+    z0 = build(comb_tau=1.0, comb_over=0.0)
+    z0.load_state_dict(on.state_dict()); z0.eval()
+    with torch.no_grad():
+        b0 = z0(f, w, g)
+    chk(10, "`comb_over=0` 이면 **비트 동일**",
+        all(torch.equal(b[k], b0[k]) for k in ("power", "on_logit", "state", "comb_w")),
+        "power·on_logit·state·comb_w 가 한 비트도 안 다르다 — 기본이 꺼짐이라는 보증")
+
+    # [11] ★ 초과 주장은 뭉개진다 (14.351 의 test_5 215초 그 모양)
+    gk = float(GB.max_ms("oven"))                        # Ĝ = 오븐 단독 24.957
+    with torch.no_grad():
+        w_on = on(f, w, torch.full((B,), gk))["comb_w"]
+        w_ov = ov(f, w, torch.full((B,), gk))["comb_w"]
+    bad = [c for c in range(on.comb_g.shape[0])
+           if float(on.comb_gsum[c]) > gk + 2.0 + 1e-6]
+    m_on, m_ov = float(w_on[:, bad].sum(-1).mean()), float(w_ov[:, bad].sum(-1).mean())
+    chk(11, "★ **초과 주장**(ΣG > Ĝ+여유) 후보의 몫이 뭉개지나", m_ov < m_on * 0.05,
+        "Ĝ=%.2f mS 에서 초과 후보 %d개의 몫 **%.4f -> %.3e** (%.0f배 축소) — 14.351 에서 "
+        "포트(28.12)가 Ĝ 24.9 인 창의 **699W** 를 가져간 그 모양이다"
+        % (gk, len(bad), m_on, m_ov, m_on / max(m_ov, 1e-12)))
+
+    # [12] ⚠ **미달 주장은 안 건드린다** (표에 없는 것이 나머지를 끈다)
+    #: ⚠ 처음에 "comb_w 가 비트 동일" 로 적었다가 **내 자가 틀렸다** — 초과 후보가
+    #  눌리면 softmax 가 다시 정규화되므로 몫 자체는 당연히 움직인다. 불변식은
+    #  **미달 후보끼리의 비율**이다 ([[dont-loosen-a-gate-to-make-it-pass]] — 이건
+    #  관문을 늦춘 게 아니라 **틀린 자를 고친 것**이다).
+    big = 44.0
+    with torch.no_grad():
+        u_on = on(f, w, torch.full((B,), big))["comb_w"]
+        u_ov = ov(f, w, torch.full((B,), big))["comb_w"]
+    U = [c for c in range(on.comb_g.shape[0])
+         if float(on.comb_gsum[c]) <= big + 2.0 + 1e-6]
+    def _cond(x):
+        y = x[:, U]
+        return y / y.sum(-1, keepdim=True).clamp(min=1e-30)
+    d12 = float((_cond(u_on) - _cond(u_ov)).abs().max())
+    chk(12, "⚠ **미달 주장**(ΣG <= Ĝ+여유)끼리의 **비율이 안 변하나**", d12 < 1e-6,
+        "Ĝ=%.1f mS · 미달 후보 %d/%d · 조건부 분포 최대차 **%.3e** (몫 자체는 재정규화로 "
+        "%.1e 움직인다) — 선풍기가 명목의 53~78%% 를 Ĝ 에 흘리고 오븐에 9.94 mS 결손 "
+        "상태가 있어(§39.7ⓑ) 미달까지 막으면 **후보가 전멸한다**"
+        % (big, len(U), on.comb_g.shape[0], d12, float((u_on - u_ov).abs().max())))
+
+    # [13] 어떤 Ĝ 에서도 후보가 전멸하지 않는다
+    worst, wg, okk = 1.0, -1.0, True
+    with torch.no_grad():
+        for gv in np.linspace(0.0, 60.0, 61):
+            cw = ov(f, w, torch.full((B,), float(gv)))["comb_w"]
+            if not bool(torch.isfinite(cw).all()) or float(cw.sum(-1).min()) < 0.999:
+                okk = False; wg = gv; break
+            mx = float(cw.max(-1).values.min())
+            if mx < worst:
+                worst, wg = mx, gv
+    chk(13, "★ Ĝ 를 0~60 mS 로 쓸어도 **후보가 전멸 안 한다**", okk and worst > 0,
+        "최악의 창에서도 으뜸 후보 확률 **%.3f** (Ĝ=%.0f mS) · softmax 합 1 유지 — "
+        "꺾기가 NaN 이나 전멸을 만들지 않는다는 보증" % (worst, wg))
+
+    # [14] 기울기가 여전히 β 에 흐른다
+    ov.train()
+    ov(f, w, g)["power"].sum().backward()
+    gb2 = ov.comb_beta.grad
+    chk(14, "꺾은 뒤에도 기울기가 **β 에 흐르나**",
+        gb2 is not None and float(gb2.abs().sum()) > 0,
+        "β 기울기 %s" % [round(float(x), 3) for x in (gb2 if gb2 is not None else []).tolist()])
+    ov.eval()
+
     print("\n%s  (%d/%d)" % ("전부 통과" if all(OK) else "**실패 있음**", sum(OK), len(OK)))
     return 0 if all(OK) else 1
 
