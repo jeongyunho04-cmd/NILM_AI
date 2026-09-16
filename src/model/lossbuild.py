@@ -97,6 +97,9 @@ def build_loss(apps: Sequence[str], dev: str, *,
                harm_odd_only: bool = False,
                harm_even_by_class: bool = False,
                head_conductance: bool = False,   # 14.284 — 기본 False 라 **비트 동일**
+               hcond_scale: str = "log",         # 14.299 — log | watt
+               hcond_on_w: float = 5.0,          # 14.299 — 이 W 위만 전도도 목표
+               hcond_classes: str = "",          # 14.299 — 이 부하분류에만 (빈 값 = 전부)
                off_detach_praw: bool = False,
                gate_smooth: float = 0.0,
                gate_focal: float = 0.0,
@@ -175,8 +178,28 @@ def build_loss(apps: Sequence[str], dev: str, *,
                       % (len(_who), " · ".join(_who)))
     del pool
 
+    #: 14.299 — 부하분류로 열을 고른다. `--harm-vnorm-classes` 와 **같은 규약**이다
+    #  (모르는 이름은 죽는다 — 오타 하나가 조용히 전 기기를 빼면 A/B 를 착각한다).
+    _hcols = None
+    if head_conductance and str(hcond_classes).strip():
+        from src.preprocessing.file_registry import get_load_class
+        from src.synthesis.grid_simulator import GridSimulator
+        _known = {c.name.upper() for c in GridSimulator()._LOAD_EXPONENTS}
+        _want = {x.strip().upper() for x in hcond_classes.split(",") if x.strip()}
+        _bad = _want - _known
+        if _bad:
+            raise SystemExit("--hcond-classes: 모르는 분류 %s — 있는 것: %s"
+                             % (sorted(_bad), sorted(_known)))
+        _hcols = [i for i, a in enumerate(apps)
+                  if get_load_class(a).name.upper() in _want]
+        if not _hcols:
+            raise SystemExit("--hcond-classes %r 가 기기를 하나도 안 고른다" % hcond_classes)
+
     return NILMLoss(
         head_conductance=head_conductance,            # 14.284
+        hcond_scale=hcond_scale,                      # 14.299
+        hcond_on_w=hcond_on_w,                        # 14.299
+        hcond_cols=_hcols,                            # 14.299
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
         signatures=torch.from_numpy(sig),
         standby_sig=torch.from_numpy(sb_sig),

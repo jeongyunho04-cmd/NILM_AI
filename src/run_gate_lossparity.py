@@ -44,9 +44,19 @@ ADAPT = "src/run_adapt.py"
 #: 일이다. 이유를 못 적겠으면 넣지 말고 1단계에 뚫어라.
 ALLOW_SHARED_ONLY = {
     "drift_proj": "14.x 표류 사영 — 1단계는 `--drift-proj` 를 안 받는다 (2단계 전용 축)",
+    "hcond_cols": "14.299 — `build_loss` 가 `hcond_classes`(사람이 읽는 이름)를 "
+                  "`get_load_class` 로 풀어 **지어내는 열 목록**이다. 두 학습기가 다른 "
+                  "물리를 쓰는 게 아니라 **같은 변환을 한 곳에서** 한다 — 양쪽에 복붙하면 "
+                  "조용히 갈라진다([[pin-the-two-entry-points-against-each-other]]). "
+                  "짝인 `hcond_classes` 는 ALLOW_STAGE1_ONLY 에 있다",
 }
-#: 1단계만 넘겨도 되는 인자 (지금은 없어야 한다). 넣으려면 이유를 적어라.
-ALLOW_STAGE1_ONLY: dict = {}
+#: 1단계만 넘겨도 되는 인자. 넣으려면 이유를 적어라.
+ALLOW_STAGE1_ONLY: dict = {
+    "hcond_classes": "14.299 — `build_loss` 가 **소비해서** `hcond_cols` 로 바꾸므로 "
+                     "`NILMLoss` 까지 안 간다. 위 `hcond_cols` 와 한 쌍이고, 둘을 같이 "
+                     "봐야 경로가 끊기지 않은 것이 보인다. ⚠ `run_adapt` 쪽 배선은 "
+                     "아직이라 [5] 의 빚 목록에 따로 올라 있다",
+}
 
 #: `build_loss` 가 **풀에서 직접 계산**하는 것 — 인자로 받을 이유가 없다.
 #: 이것이 이 함수의 존재 이유다 (지문·척도를 한 곳에서 만든다).
@@ -80,6 +90,14 @@ KNOWN_DEBT = {
                         "미세조정하므로 체크포인트의 `head_conductance` 를 물려받아야 "
                         "맞는데, 그 배선은 아직이다. **이 팔이 채택되면 즉시 갚아야 한다** "
                         "— 안 갚으면 adapt 이 옛 와트 목표로 되돌려 이중 계산이 부활한다",
+    "hcond_scale": "14.299 — `head_conductance` 와 **같은 빚**이다. 셋 다 전도도 목표의 "
+                   "모양을 정하므로 그 팔이 채택되면 넷을 **한꺼번에** 갚아야 한다. "
+                   "특히 `watt` 로 구운 판을 adapt 이 `log` 기본값으로 미세조정하면 "
+                   "목표가 도중에 바뀐다 — 채택 전에 갚는 게 안전하다",
+    "hcond_on_w": "위와 한 쌍 (14.299). 기본 5.0 이라 안 적으면 adapt 이 오븐 s1 17W 를 "
+                  "다시 전도도 갈래로 넣어 기울기 4,626배 폭주가 되살아난다",
+    "hcond_classes": "위와 한 쌍 (14.299). 기본 빈 값이라 안 적으면 adapt 이 SMPS·모터에도 "
+                     "전도도 목표를 걸어 범주 오류가 되살아난다",
     "harm_vhrel_frac": "위와 한 쌍 — vhr 판이 채택되면 **즉시 빚을 갚아야 한다**",
     "harm_vhrel_on": "위와 한 쌍",
     "swap_slack": "`--w-swap` 이 0 이라 무력. 켜는 순간 살아난다",

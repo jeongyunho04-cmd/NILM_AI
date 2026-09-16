@@ -234,6 +234,8 @@ class NILMLoss(torch.nn.Module):
         head_conductance: bool = False,
         hcond_delta: float = 0.05,
         hcond_on_w: float = 5.0,
+        hcond_scale: str = "log",                   # log | watt  (14.299)
+        hcond_cols: Optional[Sequence[int]] = None,  # 이 열에만 건다 (None = 전부)
         standby_delta: float = 1.0,
         s_state: Optional[torch.Tensor] = None,      # (K, MAX_STATES) 상태별 척도
         harm_grad_balance: str = "off",             # off | smps | all  (12.120)
@@ -324,6 +326,31 @@ class NILMLoss(torch.nn.Module):
         self.head_conductance = bool(head_conductance)
         self.hcond_delta = float(hcond_delta)
         self.hcond_on_w = float(hcond_on_w)
+        #: 14.299 — ★ log 가 하던 일이 **둘**인데 뗄 수 있다 (사용자 지적).
+        #:   ① **V 불변** — 목표를 `vrel^e` 로 나눈다. 14.16 이 요구한 진짜 진단
+        #:   ② **척도 불변** — log 를 씌운다. "11,600배" 명분이자 피해의 원인
+        #:   `hcond_cols` 로 저항 기기만 남기면 ②는 **살 이유가 없다** — 명분이었던
+        #:   11,600배는 1.4kW 대 11W 이야기인데 그 11W 짜리가 갈래에서 빠진다.
+        #:   남는 넷은 529~1534W 라 `s_i` 정규화가 이미 공평하다.
+        #:   `watt` 는 ①만 산다: `huber(P̂/(vp·s), y/(vp·s), power_delta)`.
+        #: 측정 (14.299, 저항 기기 · 214V):
+        #:   오븐↔포트 196W 를 가르는 와트당 기울기  바닥 8.27e-05 ·
+        #:     **log 4.60e-05 (0.56배)** · **watt 8.90e-05 (1.08배)**
+        #:   오븐 s1 17W 가 1W 로 무너진 창           바닥 1.09e-05 ·
+        #:     **log 5.00e-02 (4,626배)** · **watt 1.27e-05 (바닥과 같은 자리)**
+        if str(hcond_scale) not in ("log", "watt"):
+            raise ValueError("hcond_scale 은 log|watt 다 (받은 값 %r)" % hcond_scale)
+        self.hcond_scale = str(hcond_scale)
+        #: 이 열에만 건다. `None` 이면 전부 = 옛 경로와 비트 동일.
+        #: ⚠ SMPS 는 `V_EXP=0` 이라 `P/vrel^0 = P` 다 — "전도도"가 아니라 **그냥 log P**,
+        #:   물리가 하나도 없다. 모터 0.6 도 전도도가 아니다. 범주 오류였다.
+        self.register_buffer(
+            "hcond_mask",
+            (torch.zeros(len(s_i), dtype=torch.bool) if hcond_cols is not None
+             else torch.ones(len(s_i), dtype=torch.bool)), persistent=False)
+        if hcond_cols is not None:
+            for _c in hcond_cols:
+                self.hcond_mask[int(_c)] = True
         self.use_state_scale = s_state is not None
         self.register_buffer("s_state", (s_state.clamp(min=1e-3) if s_state is not None
                                          else s_i[:, None].clamp(min=1e-3).repeat(1, 5)))
@@ -972,10 +999,16 @@ class NILMLoss(torch.nn.Module):
             # 14.284 — V 를 되돌려 **공칭(전도도) 영역**에서 log 로 잰다.
             vp = out["vrel_pow"].clamp(min=1e-3)
             y = tgt["y_power"]
-            on = y > self.hcond_on_w
-            gh = (out["power"] / vp).clamp(min=1.0)
-            gt = (y / vp).clamp(min=1.0)
-            l_on = _huber(torch.log(gh), torch.log(gt), self.hcond_delta)
+            #: 참값이 문턱 위이고 **이 열에 거는 경우**만 전도도 목표를 쓴다.
+            on = (y > self.hcond_on_w) & self.hcond_mask[None, :]
+            if self.hcond_scale == "log":
+                gh = (out["power"] / vp).clamp(min=1.0)
+                gt = (y / vp).clamp(min=1.0)
+                l_on = _huber(torch.log(gh), torch.log(gt), self.hcond_delta)
+            else:
+                #: 14.299 `watt` — V 만 나누고 **척도는 옛 그대로**. 0 에서 정의되므로
+                #: clamp 도 필요 없고, 기울기가 바닥의 `1/vp` 배(저항 ±29% 안)로 묶인다.
+                l_on = _huber(out["power"] / (vp * s), y / (vp * s), self.power_delta)
             l_off = _huber(out["power"] / s, y / s, self.power_delta)
             parts["power"] = torch.where(on, l_on, l_off).mean()
         else:

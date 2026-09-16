@@ -1083,6 +1083,28 @@ def main() -> int:
                          "두면 그 유인이 사라진다. e_k 는 net.V_EXP 표 고정 (저항 2 · SMPS 0 · "
                          "모터 0.6). 참값이 5W 위인 자리만 log 로 재고 꺼진 자리는 옛 척도 "
                          "Huber 를 그대로 써서 슬롯 사망(13.84.68)을 막는다. 끄면 **비트 동일**.")
+    ap.add_argument("--hcond-scale", default="log", choices=("log", "watt"),
+                    help="`--head-conductance` 의 **척도** (14.299). log 가 하던 일이 둘인데 "
+                         "뗄 수 있다 — ① **V 불변**(목표를 vrel^e 로 나눈다. 14.16 이 요구한 "
+                         "진짜 진단) ② **척도 불변**(log. '11,600배' 명분이자 피해의 원인). "
+                         "`watt` 는 ①만 산다: `huber(P̂/(vp·s), y/(vp·s), power_delta)`. "
+                         "저항 기기만 남기면 ②는 살 이유가 없다 — 11,600배는 1.4kW 대 11W "
+                         "이야기인데 그 11W 짜리가 갈래에서 빠지고, 남는 넷은 529~1534W 라 "
+                         "s_i 정규화가 이미 공평하다. 측정: 오븐↔포트 196W 를 가르는 와트당 "
+                         "기울기가 바닥 8.27e-05 · **log 4.60e-05(0.56배)** · "
+                         "**watt 8.90e-05(1.08배)** 이고, 오븐 s1 17W 가 무너진 창에서 "
+                         "log 는 바닥의 **4,626배**인데 watt 는 바닥과 같은 자리다.")
+    ap.add_argument("--hcond-on-w", type=float, default=5.0, metavar="W",
+                    help="참값이 이 W 위인 자리만 전도도 목표로 잰다 (14.299 에서 손잡이로 뺐다. "
+                         "옛 하드코딩 값이 5.0). ⚠ 폭주는 클래스가 아니라 **저전력 상태**에서 "
+                         "온다 — 오븐 s1 17W(팬·조명)가 4,626배, 핫플 s1 10W 가 1,668배다. "
+                         "둘 다 저항 기기라 클래스로는 안 잘린다. 100 이면 둘 다 빠진다.")
+    ap.add_argument("--hcond-classes", default="", metavar="LIST",
+                    help="전도도 목표를 **이 부하분류에만** 건다 (쉼표, 예: RESISTIVE). "
+                         "빈 값이면 전부 = 옛 경로. ⚠ SMPS 는 `V_EXP=0` 이라 "
+                         "`P/vrel^0 = P` 로 **그냥 log P** 다 — 전도도가 아니고 물리가 "
+                         "하나도 없다. 모터 0.6 도 전도도가 아니다. `--harm-vnorm-classes` 와 "
+                         "같은 규약이라 **모르는 이름은 죽는다**.")
     ap.add_argument("--swa-start", type=int, default=0, metavar="EPOCH",
                     help="**가중치 평균** (SWA, Izmailov 외 UAI 2018) 을 이 epoch 부터 켠다 "
                          "(14.295). 0 이면 **비트 동일**. 원리: LR 이 0 이 아닌 동안 SGD 는 "
@@ -1123,6 +1145,16 @@ def main() -> int:
                               or a.off_detach_praw):
         raise SystemExit("--gate-free-power 는 --on-power-praw/--on-detach-gate/"
                          "--off-detach-praw 와 같이 못 씁니다 (전자가 후자를 포함합니다)")
+
+    #: 14.299 — 셋 다 `--head-conductance` 없이는 뜻이 없다. 조용히 무시되면
+    #  "걸었는데 안 걸린 판"을 A/B 로 착각한다 ([[count-every-path-before-claiming-you-cut-one]]).
+    if not a.head_conductance:
+        for _n, _v, _d in (("--hcond-scale", a.hcond_scale, "log"),
+                           ("--hcond-on-w", a.hcond_on_w, 5.0),
+                           ("--hcond-classes", a.hcond_classes, "")):
+            if _v != _d:
+                raise SystemExit("%s 는 --head-conductance 와 같이 써야 합니다 "
+                                 "(지금 그 플래그가 없어 조용히 무시됩니다)" % _n)
 
     #: 14.295 — SWA 는 `select=final` 이라야 뜻이 있다. `best-f1` 은 epoch 마다
     #  **돌고 있는** 판을 저장하므로 평균낸 가중치가 덮어써지거나 무시된다.
@@ -1296,6 +1328,9 @@ def main() -> int:
     n_par = sum(p.numel() for p in model.parameters())
     crit = NILMLoss(
         head_conductance=a.head_conductance,          # 14.284
+        hcond_scale=a.hcond_scale,                    # 14.299
+        hcond_on_w=a.hcond_on_w,                      # 14.299
+        hcond_classes=a.hcond_classes,                # 14.299
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
         signatures=torch.from_numpy(sig),
         standby_sig=torch.from_numpy(sb_sig),
@@ -1541,6 +1576,10 @@ def main() -> int:
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)
                     "head_conductance": a.head_conductance,  # 14.284 전도도 머리
+                    # 14.299 전도도 목표의 척도·문턱·분류. 기본값이면 14.284 와 같다.
+                    "hcond_scale": str(a.hcond_scale),
+                    "hcond_on_w": float(a.hcond_on_w),
+                    "hcond_classes": str(a.hcond_classes),
                     "even_jitter": a.even_jitter,         # 14.245 학습 시 짝수차 모양 흔들기 (추론엔 무관)
                     "odd_phase_jitter": a.odd_phase_jitter,  # 14.268 학습 시 홀수차 위상 돌리기
                     # ⚠ 이것은 **추론에도 써야 한다** — 0 으로 배운 채널에 값을
