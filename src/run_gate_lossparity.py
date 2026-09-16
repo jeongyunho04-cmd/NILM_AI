@@ -76,6 +76,10 @@ KNOWN_DEBT = {
                        "2단계에서 켜려면 먼저 저장하거나 풀에서 다시 계산해야 한다",
     "harm_vnorm_vref_state": "위와 한 쌍",
     "harm_vhrel_rec": "위와 같음. **`--harm-vhrel-frac > 0` 이면 곧 살아난다** (985188)",
+    "head_conductance": "14.284 — 1단계 전용. 2단계(`run_adapt`)는 이미 학습된 판을 "
+                        "미세조정하므로 체크포인트의 `head_conductance` 를 물려받아야 "
+                        "맞는데, 그 배선은 아직이다. **이 팔이 채택되면 즉시 갚아야 한다** "
+                        "— 안 갚으면 adapt 이 옛 와트 목표로 되돌려 이중 계산이 부활한다",
     "harm_vhrel_frac": "위와 한 쌍 — vhr 판이 채택되면 **즉시 빚을 갚아야 한다**",
     "harm_vhrel_on": "위와 한 쌍",
     "swap_slack": "`--w-swap` 이 0 이라 무력. 켜는 순간 살아난다",

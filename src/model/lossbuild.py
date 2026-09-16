@@ -96,6 +96,7 @@ def build_loss(apps: Sequence[str], dev: str, *,
                harm_even_magnitude: bool = True,
                harm_odd_only: bool = False,
                harm_even_by_class: bool = False,
+               head_conductance: bool = False,   # 14.284 — 기본 False 라 **비트 동일**
                off_detach_praw: bool = False,
                gate_smooth: float = 0.0,
                gate_focal: float = 0.0,
@@ -175,6 +176,7 @@ def build_loss(apps: Sequence[str], dev: str, *,
     del pool
 
     return NILMLoss(
+        head_conductance=head_conductance,            # 14.284
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
         signatures=torch.from_numpy(sig),
         standby_sig=torch.from_numpy(sb_sig),

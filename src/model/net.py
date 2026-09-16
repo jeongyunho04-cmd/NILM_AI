@@ -377,6 +377,7 @@ class NILMNet(nn.Module):
         #: 책임 분모의 하한 (W). **이것이 로버스트 슬랙이다** — 아래 forward 주석 참조.
         proj_floor: float = 5.0,
         vexp: bool = False,
+        head_conductance: bool = False,
         #: 14.148 — **게이트 경화.** `power = (σ(on) > τ)·p_raw` 로 낸다. 0 이면 끈다
         #: (= 비트 동일). `--on-power-praw`(14.147B)가 손실에서 게이트를 뺐는데 추론은
         #: 그대로라 **학습·추론 불일치**가 생겼다 — 학습은 `p_raw -> y` 로 배우는데
@@ -876,12 +877,23 @@ class NILMNet(nn.Module):
         # `p_raw` 는 **V_CENTER 에서의** 상태 명목값이 되고 전압 의존은 구조가 낸다.
         # ⚠ 꺼지면 지수가 전부 0 이라 `vrel**0 = 1` — 옛 동작과 **비트 동일**이다.
         self.vexp = bool(vexp)
+        #: 14.284 — **전도도 머리**. 순전파는 `vexp` 와 같은 곱을 쓰지만 손실의 **목표**가
+        #: `log(P/V^e)` 로 바뀌는 것이 요점이다 (`losses.head_conductance`).
+        #: 14.16 이 `vexp` 를 죽인 까닭은 구조가 아니라 **목표가 와트였던 것**이다 —
+        #: 와트는 V 를 따라 움직이니 헤드가 잔여 지수 k=0.66 을 **또** 배워 합이 2.68 이 됐다
+        #: (물리 2.0, 실측 다섯 파일 전부 악화). 목표를 V 불변으로 두면 그 유인이 사라진다.
+        #: ⚠ `vrel_pow` 를 출력에 실어 손실이 같은 값으로 되돌릴 수 있게 한다 —
+        #:   손실이 따로 계산하면 두 입구가 어긋난다 (기억: 두 입구를 서로 못 박아라).
+        self.hcond = bool(head_conductance)
+        if self.hcond and self.vexp:
+            raise ValueError("head_conductance 와 vexp 를 같이 못 쓴다 — 같은 곱을 두 번 건다")
         self.hard_gate = float(hard_gate)
         self.gate_free_power = bool(gate_free_power)
         # ⚠ `persistent=False` — **유도 상수**지 배우는 값이 아니다. state_dict 에 넣으면
         #   옛 체크포인트가 "Missing key" 로 안 실린다.
         self.register_buffer("v_exp", torch.tensor(
-            [V_EXP.get(a, 0.0) if vexp else 0.0 for a in self.appliances], dtype=torch.float32),
+            [V_EXP.get(a, 0.0) if (vexp or head_conductance) else 0.0
+             for a in self.appliances], dtype=torch.float32),
             persistent=False)
 
     def _conv_in(self, fine: torch.Tensor) -> torch.Tensor:
@@ -1178,11 +1190,13 @@ class NILMNet(nn.Module):
         else:
             mix = state.masked_fill(self.power_mix_mask[None] == 0, -1e4).softmax(-1)
         p_raw = (mix * p_states).sum(-1)                                 # (B,K)
-        if self.vexp:
+        _vpow = None
+        if self.vexp or self.hcond:
             # 창의 전압을 세밀 채널에서 되살린다 (`inputs.py` 가 (v−V_CENTER)/V_SPAN 로 넣는다).
             v = fine[:, V_CH_FINE].mean(-1) * V_SPAN + V_CENTER           # (B,)
             vrel = (v / V_CENTER).clamp(*V_REL_CLAMP)[:, None]            # (B,1)
-            p_raw = p_raw * vrel.pow(self.v_exp[None])                    # 기기별 지수
+            _vpow = vrel.pow(self.v_exp[None])                            # (B,K) 기기별 지수
+            p_raw = p_raw * _vpow
         # 14.148 — `hard_gate` 가 0 이면 `_g` 가 `sigmoid` 그대로라 **비트 동일**이다.
         _g = torch.sigmoid(on_logit)
         if self.hard_gate > 0:
@@ -1201,6 +1215,8 @@ class NILMNet(nn.Module):
             "state": state,
             "on_logit": on_logit,
             "plugged_logit": o[..., self.i_on + 1],
+            # 14.284 — 손실이 **같은 값으로** V 를 되돌리게 실어 보낸다. hcond 가 아니면 없다.
+            **({"vrel_pow": _vpow} if (self.hcond and _vpow is not None) else {}),
             "standby": F.softplus(o[..., self.i_on + 2]),
         }
         if self.aux_z:

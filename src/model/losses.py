@@ -231,6 +231,9 @@ class NILMLoss(torch.nn.Module):
         harm_max_order: int = 0,                    # 이 차수 위를 L_harm 에서 뺀다 (12.171.4 의 B)
         weights: Optional[LossWeights] = None,
         power_delta: float = 0.1,
+        head_conductance: bool = False,
+        hcond_delta: float = 0.05,
+        hcond_on_w: float = 5.0,
         standby_delta: float = 1.0,
         s_state: Optional[torch.Tensor] = None,      # (K, MAX_STATES) 상태별 척도
         harm_grad_balance: str = "off",             # off | smps | all  (12.120)
@@ -312,6 +315,15 @@ class NILMLoss(torch.nn.Module):
     ):
         super().__init__()
         self.register_buffer("s_i", s_i.clamp(min=1e-3))
+        #: 14.284 — **전도도 목표**. `L_power` 를 V 정규화 영역의 **log Huber** 로 바꾼다.
+        #:   `Ĝ = P̂ / (V/V_CENTER)^e` 는 V 불변이라 헤드가 전압을 인코딩할 유인이 없다.
+        #:   14.16 의 이중 계산(구조 +2.02 + 헤드 0.66 = 2.68)이 **목표 쪽에서** 막힌다.
+        #: ⚠ log 는 0 에서 안 정의된다. 참값이 `hcond_on_w` 위인 자리만 log 로 재고
+        #:   꺼진 자리는 **옛 척도 Huber 를 그대로** 써서 0 으로 미는 압력을 지킨다
+        #:   (13.84.68 의 슬롯 사망을 피하려면 꺼진 쪽 기울기가 살아 있어야 한다).
+        self.head_conductance = bool(head_conductance)
+        self.hcond_delta = float(hcond_delta)
+        self.hcond_on_w = float(hcond_on_w)
         self.use_state_scale = s_state is not None
         self.register_buffer("s_state", (s_state.clamp(min=1e-3) if s_state is not None
                                          else s_i[:, None].clamp(min=1e-3).repeat(1, 5)))
@@ -956,7 +968,19 @@ class NILMLoss(torch.nn.Module):
 
         # 3.1절 — 스케일 정규화 전력 회귀. 절대 W 를 쓰면 오븐 60W 와 프로젝터 60W 가
         # 같은 벌점이 되고, 0.7절의 오차 전가 보호막(87배)이 사라진다.
-        parts["power"] = _huber(out["power"] / s, tgt["y_power"] / s, self.power_delta).mean()
+        if self.head_conductance and "vrel_pow" in out:
+            # 14.284 — V 를 되돌려 **공칭(전도도) 영역**에서 log 로 잰다.
+            vp = out["vrel_pow"].clamp(min=1e-3)
+            y = tgt["y_power"]
+            on = y > self.hcond_on_w
+            gh = (out["power"] / vp).clamp(min=1.0)
+            gt = (y / vp).clamp(min=1.0)
+            l_on = _huber(torch.log(gh), torch.log(gt), self.hcond_delta)
+            l_off = _huber(out["power"] / s, y / s, self.power_delta)
+            parts["power"] = torch.where(on, l_on, l_off).mean()
+        else:
+            parts["power"] = _huber(out["power"] / s, tgt["y_power"] / s,
+                                    self.power_delta).mean()
 
         # ── 게이트 BCE (13.80) ────────────────────────────────────────────
         # 합성에서 이 과제는 이미 풀렸다 — 헤드 방향의 d' 가 4.5~7.9 이고 합성

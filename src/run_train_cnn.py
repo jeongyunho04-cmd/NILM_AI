@@ -1009,6 +1009,15 @@ def main() -> int:
                          "세션 간 변이를 자유도별로 재니 차수별 위상이 파일 사이 **18.73도 rms** 로 "
                          "가장 크고(다음이 짝수차 모양 5.99도), 포트·드라이는 녹화가 하나뿐이라 그 "
                          "변이가 풀에 0 이다. 0 이면 옛 경로.")
+    ap.add_argument("--head-conductance", action="store_true",
+                    help="전력 머리를 **전도도 영역**으로 바꾼다 (14.284). 순전파는 "
+                         "`p_raw *= (V/222)^e_k` 로 vexp 와 같지만, **손실의 목표가** "
+                         "`log(P/(V/222)^e)` 로 V 불변이 된다. 14.16 이 vexp 를 죽인 까닭은 "
+                         "구조가 아니라 목표가 와트였던 것이다 — 와트가 V 를 따라가니 헤드가 "
+                         "잔여 지수 0.66 을 또 배워 합이 2.68(물리 2.0)이 됐다. 목표를 V 불변으로 "
+                         "두면 그 유인이 사라진다. e_k 는 net.V_EXP 표 고정 (저항 2 · SMPS 0 · "
+                         "모터 0.6). 참값이 5W 위인 자리만 log 로 재고 꺼진 자리는 옛 척도 "
+                         "Huber 를 그대로 써서 슬롯 사망(13.84.68)을 막는다. 끄면 **비트 동일**.")
     ap.add_argument("--fine-channels", type=int, default=None, metavar="N",
                     help="세밀 갈래가 쓸 채널 수 (기본: inputs.FINE_CHANNELS). "
                          "캐시는 그대로 두고 앞에서부터 N 개만 쓴다. "
@@ -1183,12 +1192,14 @@ def main() -> int:
                                 if a.tap_layers else None),
                     fine_time_split=a.fine_time_split,
                     aux_z=(a.w_z > 0),
-                    vexp=a.vexp, seg_pool=a.seg_pool,
+                    vexp=a.vexp, head_conductance=a.head_conductance,
+                    seg_pool=a.seg_pool,
                     wide_seg_pool=a.wide_seg_pool,
                     wide_extra_dilations=[int(x) for x in a.wide_extra_dilations.split(",")
                                           if x.strip()]).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
     crit = NILMLoss(
+        head_conductance=a.head_conductance,          # 14.284
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
         signatures=torch.from_numpy(sig),
         standby_sig=torch.from_numpy(sb_sig),
@@ -1414,6 +1425,7 @@ def main() -> int:
                     # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)
+                    "head_conductance": a.head_conductance,  # 14.284 전도도 머리
                     "even_jitter": a.even_jitter,         # 14.245 학습 시 짝수차 모양 흔들기 (추론엔 무관)
                     "odd_phase_jitter": a.odd_phase_jitter,  # 14.268 학습 시 홀수차 위상 돌리기
                     # ⚠ 이것은 **추론에도 써야 한다** — 0 으로 배운 채널에 값을
