@@ -97,6 +97,8 @@ KNOWN_DEBT = {
     "swap_tiebreak": "위와 같음",
     "swap_tb_orders": "위와 같음",
     "power_gain": "14.172 — 1단계에 `--pow-sig` 를 뚫었다. adapt 은 아직. 풀에서 지으면 된다",
+    "power_gain_state": "14.367 — 1단계에 `--pow-sig-instate` 를 뚫었다. adapt 은 아직. `harmonic_signatures_by_power_instate(pool)` 로 지으면 된다. ⚠ 이 팔이 채택되면 **즉시 갚아야 한다** — 안 갚으면 adapt 이 상수 지문으로 되돌려 미니PC·충전기의 판별 차수(h9·h11)에서 38~86% 틀린 목표를 다시 건다",
+    "power_edges_state": "위와 한 쌍",
     "power_edges": "위와 한 쌍",
     "power_tau": "위와 한 쌍",
 }

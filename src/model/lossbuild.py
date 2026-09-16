@@ -121,6 +121,15 @@ def build_loss(apps: Sequence[str], dev: str, *,
                background: bool = True,
                state_signatures: bool = True,
                power_signatures: bool = False,
+               #: * 14.367 — **상태 안** 전력대 보정 (`--pow-sig-instate`).
+               #: `power_signatures` 와 달리 `state_signatures` 와 **같이 쓴다**
+               #: (14.172 의 축 충돌을 상태로 먼저 갈라 피한다). 기본 False = 비트 동일.
+               power_signatures_instate: bool = False,
+               power_rel_floor: float = 0.05,
+               #: 미리 지은 표를 그대로 받는 길 (1단계가 이렇게 넘긴다). `None` 이면
+               #: `power_signatures_instate` 로 여기서 짓는다.
+               power_gain_state=None,
+               power_edges_state=None,
                power_bands: int = 3,
                power_tau: float = 0.15,
                harm_even_magnitude: bool = True,
@@ -190,6 +199,13 @@ def build_loss(apps: Sequence[str], dev: str, *,
     if drift_basis and drift_k > 0:
         dproj = build_drift_proj(drift_basis, drift_k, len(h_scale), verbose=verbose)
     pow_gain = pow_edges = None
+    import numpy as _np
+    pow_gain_s = (None if power_gain_state is None else _np.asarray(power_gain_state))
+    pow_edges_s = (None if power_edges_state is None else _np.asarray(power_edges_state))
+    if power_signatures_instate and pow_gain_s is None:
+        from src.model.net import harmonic_signatures_by_power_instate
+        pow_gain_s, pow_edges_s, _usi = harmonic_signatures_by_power_instate(
+            pool, apps, n_bands=power_bands, rel_floor=power_rel_floor)
     if power_signatures:
         pow_gain, pow_edges, pow_used = harmonic_signatures_by_power(
             pool, apps, n_bands=power_bands)
@@ -227,6 +243,8 @@ def build_loss(apps: Sequence[str], dev: str, *,
         signatures_state=(torch.from_numpy(sig_state) if state_signatures else None),
         power_gain=(torch.from_numpy(pow_gain) if pow_gain is not None else None),
         power_edges=(torch.from_numpy(pow_edges) if pow_edges is not None else None),
+        power_gain_state=(torch.from_numpy(pow_gain_s) if pow_gain_s is not None else None),
+        power_edges_state=(torch.from_numpy(pow_edges_s) if pow_edges_s is not None else None),
         power_tau=power_tau,
         harm_even_magnitude=harm_even_magnitude,
         even_coherent=(torch.tensor([1.0 if x in PHASE_COHERENT_EVEN else 0.0 for x in apps],
