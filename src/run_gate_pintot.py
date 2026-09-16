@@ -173,12 +173,19 @@ def main():
     for c in good:
         m = load_model(c, dev)[0]
         m.eval()
+        #: ★ 14.349 — **조합 머리는 Ĝ 를 같이 먹어야 돈다.** 여기 `g` 는
+        #  `bud.g_sum` 이 낸 mS 로 `g_hat.npy` 와 **같은 양**이다. 안 넘기면
+        #  `net.forward` 가 멈춘다 (`run_gate_comb` [7] 이 잠근 가드).
+        #  ⚠ 다만 기준전압은 **이 녹화의 것**이고 학습은 **캐시의 것**이다 —
+        #    그 차가 Ĝ 를 최대 0.275 mS 움직인다 (14.346). 결과를 읽을 때 센다.
+        _cb = float(getattr(m, "comb_tau", 0.0) or 0.0) > 0
         o = []
         with torch.no_grad():
             for i in range(0, len(F), 256):
                 o.append(m(torch.from_numpy(F[i:i + 256].astype(np.float32)).to(dev),
-                           torch.from_numpy(W[i:i + 256].astype(np.float32)).to(dev)
-                           )["power"].cpu().numpy())
+                           torch.from_numpy(W[i:i + 256].astype(np.float32)).to(dev),
+                           torch.from_numpy(g[i:i + 256].astype(np.float32)).to(dev)
+                           if _cb else None)["power"].cpu().numpy())
         PWS.append(np.concatenate(o).astype(np.float64))
         del m
     print("  실측 창 %d · 씨앗 %d (%s) · 오븐확실통전 %d · 포트ON %d"

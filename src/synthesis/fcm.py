@@ -213,11 +213,36 @@ class DeviceModel12:
         return None if I is None else np.asarray(I, complex)
 
 
+def _numpy_two_pickle_shim() -> None:
+    """numpy 2.x 로 절인 pkl 을 numpy 1.x 에서 열게 한다 (14.349).
+
+    numpy 2 는 `numpy.core` 를 `numpy._core` 로 옮기고 **옛 이름만 별명으로** 남겼다.
+    반대 방향(2 로 절인 것을 1 에서 열기)은 별명이 없어 이쪽에서 놓아 준다.
+    numpy 2 에서는 아무것도 안 한다.
+    """
+    import sys
+
+    if hasattr(np, "_core") or "numpy._core" in sys.modules:
+        return
+    import numpy.core as _c
+    sys.modules["numpy._core"] = _c
+    for sub in ("multiarray", "umath", "numeric", "_multiarray_umath"):
+        m = getattr(_c, sub, None) or sys.modules.get("numpy.core." + sub)
+        if m is not None:
+            sys.modules["numpy._core." + sub] = m
+
+
 def load_models_v12(path: str = V12_DIR) -> Dict[str, DeviceModel12]:
     """`circuit_model/circ12_<dev>.pkl` 전부. 없으면 빈 dict 가 아니라 실패한다 (조용히 옛 모델로 가지 않게)."""
     import glob
     import os
     from circuit_model.fcm12 import FCM
+
+    #: 14.349 — 이 pkl 은 **numpy 2.x 로 절였다**. numpy 1.x 에서 열면
+    #  `No module named 'numpy._core'` 로 죽는다 (이름만 바뀐 내부 모듈이다).
+    #  ⚠ 값은 안 바뀐다 — 배열 복원은 dtype 문자열 + 원시 버퍼라 구현이 같다.
+    #    그래도 믿지 말고 `run_gate_pintot` 의 기록된 수로 확인해라 (14.345: 합 31·|r| 11.0W).
+    _numpy_two_pickle_shim()
     files = sorted(glob.glob(os.path.join(path, "circ12_*.pkl")))
     if not files:
         raise FileNotFoundError(f"{path} 에 circ12_*.pkl 이 없다 — circuit_model/sp_model_v12.zip 을 풀어라")

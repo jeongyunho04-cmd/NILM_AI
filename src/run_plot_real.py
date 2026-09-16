@@ -93,14 +93,24 @@ def load_model(ckpt: str, dev: str):
 
 
 @torch.no_grad()
-def predict(model, rw, dev: str, batch: int = 512):
-    """(전력, 대기, 관문, 관측P, 관측고조파, 계측P) — 후처리가 뒤의 셋을 쓴다."""
+def predict(model, rw, dev: str, batch: int = 512, g_hat=None):
+    """(전력, 대기, 관문, 관측P, 관측고조파, 계측P) — 후처리가 뒤의 셋을 쓴다.
+
+    ★ 14.349 — `comb_tau>0` 이면 **Ĝ 가 입력이다.** 안 넘기면 `net.forward` 가
+      멈춘다 (`run_gate_comb` [7]). 모델과 물리가 한 몸이라는 뜻이다.
+    """
     P, S, G, PO, OH, PN = [], [], [], [], [], []
+    _cb = float(getattr(model, "comb_tau", 0.0) or 0.0) > 0
+    if _cb and g_hat is None:
+        raise ValueError("comb_tau 체크포인트인데 g_hat 이 없다 — solve_ghat 을 먼저 불러라")
     for i in range(0, len(rw), batch):
         f, w, pobs, oh, pn = rw.batch(np.arange(i, min(i + batch, len(rw))))
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
             o = model(torch.from_numpy(np.ascontiguousarray(f)).to(dev),
-                      torch.from_numpy(np.ascontiguousarray(w)).to(dev))
+                      torch.from_numpy(np.ascontiguousarray(w)).to(dev),
+                      torch.from_numpy(
+                          np.ascontiguousarray(g_hat[i:i + batch], np.float32)).to(dev)
+                      if _cb else None)
         P.append(o["power"].float().cpu().numpy())
         S.append(o["standby"].float().cpu().numpy())
         G.append(torch.sigmoid(o["on_logit"]).float().cpu().numpy())
@@ -124,11 +134,15 @@ def run_postproc(mode, apps, pred, standby, gate, pobs, oh, pn, v_rms):
     return np.asarray(P, np.float32), np.asarray(g, np.float32)
 
 
-def gbudget_apply(stem, rw, apps, pred):
-    """14.341 — `gbudget` 사중을 걸고 **어느 창이 움직였는지** 같이 돌려준다.
+def solve_ghat(stem, rw, apps):
+    """14.341·14.349 — 그 파일의 **타깃 사이클에서** `(Ĝ mS, |V₁|)` 를 푼다.
 
-    Ĝ 는 그 파일의 **타깃 사이클에서** 푼다 (`rw.target_cycle`). 창·라벨·Ĝ 가 같은
-    색인이라야 한다 — 34.7 ⑦ 이 39사이클 어긋난 자리를 재서 헛것을 냈다.
+    창·라벨·Ĝ 가 같은 색인이라야 한다 — 34.7 ⑦ 이 39사이클 어긋난 자리를 재서
+    헛것을 냈다. ★ **조합 머리(`comb_tau>0`)의 입력이자 사중의 예산이다** — 둘이
+    같은 함수를 써야 그림과 후처리가 **같은 Ĝ** 위에 선다.
+
+    ⚠ 기준전압은 **이 녹화의 중앙값**이다. 학습은 캐시의 것을 썼다 (14.346 이 잰
+      차가 최대 0.275 mS = 포트 여유의 43%). 실측은 원리상 이쪽밖에 없다.
     """
     import numpy as _np
 
@@ -148,8 +162,17 @@ def gbudget_apply(stem, rw, apps, pred):
                                                 time_split="train"),
                     volt_re0=33, volt_orders=_I.VOLT_ORDERS)
     tc = _np.asarray(rw.target_cycle, _np.int64)
-    g = bud.g_sum(x[None][:, :, tc])[0]
-    v1 = _np.abs(x[33, tc] + 1j * x[33 + nv, tc])
+    return (bud.g_sum(x[None][:, :, tc])[0],
+            _np.abs(x[33, tc] + 1j * x[33 + nv, tc]))
+
+
+def gbudget_apply(stem, rw, apps, pred, gv=None):
+    """14.341 — `gbudget` 사중을 걸고 **어느 창이 움직였는지** 같이 돌려준다."""
+    import numpy as _np
+
+    from src.model import gbudget as GB
+
+    g, v1 = solve_ghat(stem, rw, apps) if gv is None else gv
     q, info = GB.apply(_np.asarray(pred, _np.float64), g, v1, apps)
     print("    사중 — Ĝ 중앙 %.2f mS · 거부 %d창 · 바닥 %d창 · 고정으로 바뀐 칸 %d"
           % (float(_np.median(g)), int(info["veto"].sum()), int(info["floor"].sum()),
@@ -349,12 +372,18 @@ def main() -> int:
             print(f"  {stem}: 봉인 — 건너뜀 (4.3절)")
             continue
         rw = dense_targets(stem, stride=a.stride)
-        pred, standby, gate, pobs, oh, pn = predict(model, rw, dev)
+        #: ★ 14.349 — Ĝ 를 **한 번만** 푼다. 조합 머리의 입력이자 사중의 예산이라
+        #  둘이 갈리면 그림과 후처리가 다른 자 위에 선다.
+        _gv = (solve_ghat(stem, rw, apps)
+               if (a.gbudget or float(getattr(model, "comb_tau", 0.0) or 0.0) > 0)
+               else None)
+        pred, standby, gate, pobs, oh, pn = predict(
+            model, rw, dev, g_hat=None if _gv is None else _gv[0])
         mark = None
         if a.gbudget:
             #: 14.341 — 컨덕턴스 예산 사중. `--postproc` 과 **다른 물건**이다
             #  (저쪽은 12.112 의 `resistive_match`). 같이 켜지 못하게 막는다.
-            pred, _gi = gbudget_apply(stem, rw, apps, pred)
+            pred, _gi = gbudget_apply(stem, rw, apps, pred, gv=_gv)
             mark = {"veto": _gi["veto"], "floor": _gi["floor"]}
         if a.postproc != "off":
             pred, gate = run_postproc(a.postproc, apps, pred, standby, gate,
