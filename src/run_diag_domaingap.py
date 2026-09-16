@@ -46,8 +46,12 @@ STATS = ("타깃", "평균", "최대", "최소")
 def fine_names():
     """세밀 57채널 이름 — 뜻으로 읽히게."""
     n = {}
+    # ⚠ 14.267 정정 — `inputs.build_fine` 은 **블록**으로 넣는다:
+    #     out[:, s] = Re(I_h) · out[:, len(ODD_ORDERS) + s] = Im(I_h)
+    #   교차(2i, 2i+1)로 적고 있어서 ch0~15 이름이 전부 틀렸었다 (ch12 를 Re(I13) 로
+    #   불렀는데 실제로는 Im(I9) 다). 검증: raw 에 Im(I3) 만 넣으면 **ch9** 가 켜진다.
     for i, h in enumerate(ODD_ORDERS):
-        n[2 * i], n[2 * i + 1] = "Re(I%d)" % h, "Im(I%d)" % h
+        n[i], n[len(ODD_ORDERS) + i] = "Re(I%d)" % h, "Im(I%d)" % h
     for i, h in enumerate(EVEN_ORDERS):
         n[EVEN_MAG0 + i] = "|I%d|" % h
     n.update({23: "asinh(P/100)", 24: "Q", 25: "V",

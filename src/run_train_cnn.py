@@ -46,7 +46,8 @@ from src.model.inputs import (ZERO_EVEN_HARMONICS, EVEN_MAG0, EVEN2_CH,
                              FINE_VOLT0, HALFWAVE_CH, TARGET_LOOKAHEAD,
                              V_CENTER, V_SPAN,
                              VOLT_ORDERS, WIDE_CHANNELS, WIDE_MAG0,
-                             WIDE_VOLT0, build_inputs, RAW_CHANNELS)
+                             WIDE_VOLT0, WIDE_PHI0, ODD_ORDERS, PHI_ORDERS, PHI0,
+                             build_inputs, RAW_CHANNELS)
 from src.synthesis.dataset import chunk_seed
 from src.model.traincache import CachedWindows
 from src.model.losses import (LossWeights, NILMLoss, PHASE_COHERENT_EVEN,
@@ -297,6 +298,55 @@ def even_jitter(fine: torch.Tensor, wide: torch.Tensor, sigma: float) -> None:
     for c in EVEN_WIDE_H2:
         wide[:, c] = torch.asinh(torch.sinh(wide[:, c]) * f[:, 0])
     wide[:, EVEN_WIDE_MAG] = torch.asinh(torch.sinh(wide[:, EVEN_WIDE_MAG]) * f)
+
+
+#: 홀수차 위상이 닿는 채널. `run_gate_phasejit.py` 가 **원시를 돌려** 이 표를 검증한다.
+#: ⚠ 배치는 **블록**이다 — ch0~7 = Re(I1..I15), ch8~15 = Im(I1..I15).
+#:   `run_diag_domaingap.fine_names` 가 교차로 적고 있었다 (14.267 에서 고침).
+N_ODD = len(ODD_ORDERS)
+PHASE_RE = [i for i, h in enumerate(ODD_ORDERS) if h >= 3]          # 1..7 (h=3..15)
+PHASE_H = [h for h in ODD_ORDERS if h >= 3]
+
+
+def odd_phase_jitter(fine: torch.Tensor, wide: torch.Tensor, sigma_deg: float) -> None:
+    """홀수차 **h>=3 의 위상**을 창마다 무작위로 돌린다 — 제자리 수정 (14.268).
+
+    왜: 분절 풀이 담는 세션 간 변이를 자유도별로 재 보니 (14.266, 여러 파일 있는 기기로),
+    **차수별 위상이 파일 사이 18.73° rms** 로 여섯 자유도 중 절대 크기가 압도적이다
+    (다음이 짝수차 모양 5.99°). 그런데 **포트와 반파/전파 드라이는 녹화가 각각 하나뿐**이라
+    그 변이가 풀에 **구조적으로 0** 이다 — 실패하는 조합(포트+드라이)의 두 기기만 그렇다.
+    `even_jitter` 가 통한 것과 **같은 구멍이 같은 기기에** 하나 더 뚫려 있다.
+
+    ★ 라벨 안전: `h=1` 은 **안 건드린다.** P·Q 는 원시 `seg[:,30]·[:,31]` 에서 오고
+    회전은 크기를 안 바꾸므로 `|I_h|`·역률·`I_rms`·모든 크기비(26·27·28·40)가 **불변**이다.
+    움직이는 것은 `Re/Im(I3..I15)` 와 불변위상 `φ_h` 뿐이다.
+
+    φ_h = arg(I_h) − h·arg(I_1) 이고 `I_1` 을 안 건드리므로 `φ_h -> φ_h + δ_h` 다.
+    채널은 `w·cosφ`·`w·sinφ` 라 그 쌍을 δ_h 만큼 돌리면 된다 (게이트 `w` 는 크기라 불변).
+    ⚠ 광역 φ 는 블록 **중앙값**이라 회전과 정확히 교환되지 않는다 — 관문이 그 오차를 잰다.
+
+    `sigma_deg <= 0` 이면 **난수도 안 뽑고** 곧장 돌아온다 (비트 동일).
+    """
+    if sigma_deg <= 0:
+        return
+    B = fine.shape[0]
+    d = torch.randn(B, len(PHASE_H), device=fine.device, dtype=torch.float32)         * (float(sigma_deg) * np.pi / 180.0)
+    c, s = torch.cos(d), torch.sin(d)
+    for j, i in enumerate(PHASE_RE):
+        re = torch.sinh(fine[:, i])
+        im = torch.sinh(fine[:, N_ODD + i])
+        cj, sj = c[:, j, None], s[:, j, None]
+        fine[:, i] = torch.asinh(re * cj - im * sj)
+        fine[:, N_ODD + i] = torch.asinh(re * sj + im * cj)
+    for j, h in enumerate(PHASE_H):
+        if h not in PHI_ORDERS:
+            continue
+        k = PHI_ORDERS.index(h)
+        cj, sj = c[:, j, None], s[:, j, None]
+        for base, t in ((PHI0, fine), (WIDE_PHI0, wide)):
+            a, b = t[:, base + 2 * k].clone(), t[:, base + 2 * k + 1].clone()
+            t[:, base + 2 * k] = a * cj - b * sj
+            t[:, base + 2 * k + 1] = a * sj + b * cj
 
 
 def _vnorm_exp(apps, classes: str = ""):
@@ -953,6 +1003,12 @@ def main() -> int:
                          "arcsinh(x*20) 포화 아래라 기본파의 50.8배 이득으로 들어오고, 12.1도만 돌려도 "
                          "포트 게이트가 0.979 -> 0.003 이다. 풀은 모양이 0.06도로 얼어 있는데 실측 반파는 "
                          "2.2~9.2도 돈다. 세밀 16~22,28,43,44 와 광역 6,9,13~25 를 **함께** 돌린다. 0 이면 옛 경로.")
+    ap.add_argument("--odd-phase-jitter", type=float, default=0.0, metavar="DEG",
+                    help="학습 배치에서 **홀수차 h>=3 의 위상**을 창마다 N(0, DEG) 로 돌린다 (14.268). "
+                         "h=1 은 안 건드리므로 P·Q·역률·모든 크기비가 **불변**이다. 까닭: 풀의 "
+                         "세션 간 변이를 자유도별로 재니 차수별 위상이 파일 사이 **18.73도 rms** 로 "
+                         "가장 크고(다음이 짝수차 모양 5.99도), 포트·드라이는 녹화가 하나뿐이라 그 "
+                         "변이가 풀에 0 이다. 0 이면 옛 경로.")
     ap.add_argument("--fine-channels", type=int, default=None, metavar="N",
                     help="세밀 갈래가 쓸 채널 수 (기본: inputs.FINE_CHANNELS). "
                          "캐시는 그대로 두고 앞에서부터 N 개만 쓴다. "
@@ -1359,6 +1415,7 @@ def main() -> int:
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)
                     "even_jitter": a.even_jitter,         # 14.245 학습 시 짝수차 모양 흔들기 (추론엔 무관)
+                    "odd_phase_jitter": a.odd_phase_jitter,  # 14.268 학습 시 홀수차 위상 돌리기
                     # ⚠ 이것은 **추론에도 써야 한다** — 0 으로 배운 채널에 값을
                     # 주면 본 적 없는 입력이 된다. 채점 쪽이 읽어 같이 0 으로
                     # 만들 수 있게 남긴다 (13.80.10).
@@ -1378,6 +1435,7 @@ def main() -> int:
                 wide[:, ZERO_W] = 0.0
             vswap(fine, wide, a.vswap_p)          # 13.84.11 — 0 이면 아무것도 안 한다
             even_jitter(fine, wide, a.even_jitter)  # 14.245 — 0 이면 난수도 안 뽑는다
+            odd_phase_jitter(fine, wide, a.odd_phase_jitter)   # 14.268 — 0 이면 무동작
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
                 out = model(fine, wide)
                 parts = crit(out, tgt)
