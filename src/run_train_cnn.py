@@ -495,6 +495,11 @@ def main() -> int:
                          "되살려 몸통 입력에 더한다 (14.183). 41·42 는 수용영역이 1인데 "
                          "p(t+3.0s)·p(t+5.5s) 를 담는다 — dzn_s1 에서 이 넷이 **93%%**였다. "
                          "**캐시를 다시 안 구워도 된다.** window 면 비트 동일.")
+    #: 14.224 — 시간축 DC 를 conv 에서 떼어 머리로 보낸다 (`net.fine_dc` 독스트링).
+    ap.add_argument("--fine-dc", default="keep", choices=("keep", "split"),
+                    help="split 이면 `_conv_in` 출력에서 채널별 시간평균을 빼서 conv 에 "
+                         "넣고 그 평균을 머리 특징에 붙인다. 첫 conv 의 DC/AC 이득비가 "
+                         "15판 중앙 **776배** 였다 (14.220). keep 이면 **비트 동일**.")
     ap.add_argument("--fine-pad", default="zeros", choices=("zeros", "replicate"),
                     help="세밀 몸통 conv 의 패딩 (14.131). **zeros 가 기본이라 비트 동일.** "
                          "zeros 는 창 밖을 0 으로 채우는데 `asinh` 눈금에서 0 은 "
@@ -1042,6 +1047,7 @@ def main() -> int:
                     state_power_src=a.state_power_src,
                     fine_norm=a.fine_norm, fine_conv=a.fine_conv,
                     fine_tpool=a.fine_tpool, fine_derive=a.fine_derive,
+                    fine_dc=a.fine_dc,
                     fine_pad=a.fine_pad,
                     fine_future_segs=a.fine_future_segs,
                     tap_layers=(tuple(int(x) for x in a.tap_layers.split(","))
@@ -1233,6 +1239,7 @@ def main() -> int:
                     "fine_conv": str(model.fine_conv),
                     "fine_tpool": str(model.fine_tpool),
                     "fine_derive": str(model.fine_derive),
+                    "fine_dc": str(model.fine_dc),
                     "fine_pad": str(model.fine_pad),
                     # 어느 캐시·홀드아웃으로 배웠나 (14.126). 판정할 때 "이 팔이 어느
                     # 캐시였지" 를 체크포인트에서 못 읽어 sbatch 를 뒤져야 했다.

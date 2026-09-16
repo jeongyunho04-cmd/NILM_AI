@@ -263,6 +263,24 @@ class NILMNet(nn.Module):
         fine_conv: str = "sym",
         fine_tpool: str = "whole",
         fine_derive: str = "window",
+        #: 14.224 — **시간축 DC 를 conv 에서 떼어 머리로 보낸다.** `"keep"` 이면 비트 동일.
+        #:
+        #: 까닭(14.220~221 측정): 같은 L2 크기의 섭동을 넣으면 첫 conv 의 응답이
+        #: **DC 가 AC 의 776배**다 (15판 중앙, 범위 63~938). 첫 conv 커널의 시간합이
+        #: |Σw|/|w| = 4.33 으로 무작위 기대(2.12)의 2배라 DC 를 막기는커녕 더 통과시키고,
+        #: 바로 뒤 GroupNorm 이 (C_g, T) 통계라 채널 간 차등 DC 가 분모까지 흔든다.
+        #: 실측 실패 창의 변위는 창 전체에 고르고(에너지 8~15%/칸) 맞히는 창은 타깃에
+        #: 78% 몰려 있어, **실패만 이 통로로 직통**한다 (DC 만 주입: 로짓 +5.7 -> −9.8,
+        #: AC 만 주입: +2.7 로 멀쩡, 가짜약 정답 DC: +2.7 로 안 뒤집힘).
+        #:
+        #: `"split"` 이면 `_conv_in` 출력에서 **채널별 시간평균을 빼서** conv 스택에 넣고,
+        #: 그 평균 벡터(C_in 차원)를 **머리 특징에 그대로 붙인다**. 정보는 안 버린다 —
+        #: 통째로 빼면 게이트는 살아도(0.005 -> 0.993) 미탐이 17.5% -> 36.8% 로 뛴다.
+        #:
+        #: ⚠ **반증**: `leak4`(인과 GroupNorm)는 DC/AC 가 이미 63~75배로 10배 낮은데도
+        #:   실측에서 가장 깊게 무너졌다 (s0 0.002 · s1 0.006). DC 민감도를 낮추는 것만으로
+        #:   낫는다는 증거는 **아직 없다.** 이 팔은 그 가설의 시험이다.
+        fine_dc: str = "keep",
         #: 머리 배치 (14.130). `"v1"` 이 지금까지의 것이고 **기본이라 비트 동일**이다.
         #:
         #: `"v2"` — 사용자: *"지금 너무 많은 요소가 있어서 너도 나도 모델 구조를 완벽히
@@ -520,12 +538,19 @@ class NILMNet(nn.Module):
         for _nm, _v, _ok2 in (("fine_norm", self.fine_norm, ("window", "causal")),
                               ("fine_conv", self.fine_conv, ("sym", "causal")),
                               ("fine_tpool", self.fine_tpool, ("whole", "split")),
-                              ("fine_derive", self.fine_derive, ("window", "both"))):
+                              ("fine_derive", self.fine_derive, ("window", "both")),
+                              ("fine_dc", str(fine_dc), ("keep", "split"))):
             if _v not in _ok2:
                 raise ValueError("%s 는 %s 중 하나: %r" % (_nm, "/".join(_ok2), _v))
         #: 파생 인과 짝 4개 (41·42 의 후방탭 · 29·30 의 인과 이동평균). `window` 면 0.
         self.n_derive = 4 if self.fine_derive == "both" else 0
         _cin0 = self.fine_channels + self.n_derive
+        #: 14.224 — 떼어 낸 DC 벡터의 폭. `keep` 이면 0 이라 `trunk_in` 도 배치도 그대로다.
+        self.fine_dc = str(fine_dc)
+        self.n_dc = _cin0 if self.fine_dc == "split" else 0
+        if self.n_dc and str(head_layout) == "v2":
+            raise ValueError("fine_dc=split 은 head_layout=v2 와 같이 못 쓴다 "
+                             "— v2 는 feats 를 `_feats_v2` 에서 따로 짓는다")
         _cz = bool(self.fine_conv == "causal")
         #: 정규화 기준선의 끝. `None` 이면 **비트 동일** 경로다.
         _nt = fine_target_index() if self.fine_norm == "causal" else None
@@ -645,6 +670,7 @@ class NILMNet(nn.Module):
             trunk_in += w2 * wns + w2   # 광역 amax(구간별) + 창 끝 슬라이스 (후보 1)
         if self.periodicity:
             trunk_in += N_PERIOD        # 후보 2
+        trunk_in += self.n_dc           # 14.224 — 떼어 낸 DC 벡터 (맨 뒤에 붙인다)
         h = int(256 * width)
         self.trunk = nn.Sequential(
             nn.Linear(trunk_in, h), nn.GELU(), nn.Dropout(dropout),
@@ -728,6 +754,7 @@ class NILMNet(nn.Module):
         if self.periodicity:
             fine_flags += ([1] * len(PERIOD_LAGS_FINE) + [0] * len(PERIOD_LAGS_WIDE)
                            + [1, 0])                          # 교차율 세밀/광역
+        fine_flags += [1] * self.n_dc      # 14.224 — DC 벡터는 **세밀 유래**라 1 이다
         if self.head_layout != "v2":
             assert len(fine_flags) == trunk_in, (len(fine_flags), trunk_in)
             # persistent=False — 옛 체크포인트에 없는 키라 state_dict 호환을 깨면 안 된다.
@@ -842,6 +869,16 @@ class NILMNet(nn.Module):
             out.append(torch.arcsinh((p - q) / RIPPLE_SCALE)[:, None])
         return torch.cat(out, 1)
 
+    def _split_dc(self, x: torch.Tensor):
+        """14.224 — `(B,C,T)` 에서 **채널별 시간평균**을 떼어 `(x_ac, dc)` 로 돌린다.
+
+        `fine_dc="keep"` 이면 `(x, None)` 그대로다 — **비트 동일** 경로다.
+        """
+        if self.n_dc == 0:
+            return x, None
+        dc = x.mean(-1, keepdim=True)
+        return x - dc, dc[:, :, 0]
+
     def _feats_v2(self, fine, wide, t):
         """머리 배치 v2 (14.130) — **시간 부호를 주려면 그 조각을 따로 태운다.**
 
@@ -932,7 +969,7 @@ class NILMNet(nn.Module):
                 #   ⚠ `--seg-pool` 과 다르다. 저쪽은 **전역 풀링**을 쪼개는데, 지금
                 #     새는 길은 탭 **안**이라 풀링을 쪼개도 못 막는다 (14.42 의 처방은
                 #     wtap 이 없던 RF 187 짜리 몸통에 맞춘 것이었다).
-                _ci = self._conv_in(fine)
+                _ci, _dc = self._split_dc(self._conv_in(fine))
                 hp, hf = _ci[:, :, :t + 1], _ci[:, :, t + 1:]
                 for i, blk in enumerate(self.fine):
                     hp, hf = blk(hp), blk(hf)
@@ -941,7 +978,7 @@ class NILMNet(nn.Module):
                 h = hp                                  # 아래 타깃 탭·풀링은 과거 쪽
                 self._h_fut = hf
             else:
-                h = self._conv_in(fine)
+                h, _dc = self._split_dc(self._conv_in(fine))
                 for i, blk in enumerate(self.fine):
                     h = blk(h)
                     if i in self._keep_tap:             # 얕은 층의 타깃 슬라이스
@@ -1029,6 +1066,10 @@ class NILMNet(nn.Module):
                     _autocorr(fp, PERIOD_LAGS_FINE), _autocorr(wp, PERIOD_LAGS_WIDE),
                     _crossing_rate(fp)[:, None], _crossing_rate(wp)[:, None],
                 ], dim=1))
+            #: 14.224 — 떼어 낸 DC 를 **머리에 그대로** 준다 (버리는 게 아니라 옮긴다).
+            #:   `fine_flags` 와 `trunk_in` 이 이 자리를 맨 뒤로 잡고 있다.
+            if _dc is not None:
+                feats.append(_dc)
         x = torch.cat(feats, dim=1)
         if self.training and self.fine_dropout > 0:
             # 창 단위로 세밀 갈래를 통째로 가린다. 부분 드롭아웃이 아니라 **갈래
