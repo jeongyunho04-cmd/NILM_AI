@@ -84,6 +84,36 @@ def stage1_physics(ck, apps, skip=()):
     return out
 
 
+def hcond_cols_of(head_conductance, hcond_classes, apps):
+    """14.299 — `--hcond-classes`(사람이 읽는 이름) -> 열 번호. **두 입구가 같이 쓴다.**
+
+    `--harm-vnorm-classes` 와 같은 규약이다 — 모르는 이름은 죽는다 (오타 하나가 조용히
+    전 기기를 빼면 A/B 를 착각한다). 끄면 `None` 이라 `NILMLoss` 가 전 기기를 쓴다.
+
+    ⚠⚠ **14.315 — 이 변환이 `build_loss` 안에만 있었다.** 그래서 `run_train_cnn` 이
+      `hcond_classes` 를 **그대로** `NILMLoss` 로 넘겨 `TypeError` 가 났고, `0c5d5f0`
+      이후 **모든 학습이 시작조차 못 했다** (985841 의 여섯 판이 1분 만에 죽어서 잡혔다).
+      관문 목록에 내가 적어 둔 *"`build_loss` 가 소비하므로 `NILMLoss` 까지 안 간다"* 는
+      **`build_loss` 의 사정이지 1단계의 사정이 아니었다** — 그 한 줄이 1단계를 면제했다.
+      ⇒ 갈래가 둘이면 변환도 **한 곳에** 둔다 ([[count-every-path-before-claiming-you-cut-one]]).
+    """
+    if not (head_conductance and str(hcond_classes).strip()):
+        return None
+    from src.preprocessing.file_registry import get_load_class
+    from src.synthesis.grid_simulator import GridSimulator
+    _known = {c.name.upper() for c in GridSimulator()._LOAD_EXPONENTS}
+    _want = {x.strip().upper() for x in str(hcond_classes).split(",") if x.strip()}
+    _bad = _want - _known
+    if _bad:
+        raise SystemExit("--hcond-classes: 모르는 분류 %s — 있는 것: %s"
+                         % (sorted(_bad), sorted(_known)))
+    cols = [i for i, a in enumerate(apps)
+            if get_load_class(a).name.upper() in _want]
+    if not cols:
+        raise SystemExit("--hcond-classes %r 가 기기를 하나도 안 고른다" % (hcond_classes,))
+    return cols
+
+
 def build_loss(apps: Sequence[str], dev: str, *,
                npz_dir: str = "processed_data/npz",
                time_split: str = "train",
@@ -178,22 +208,8 @@ def build_loss(apps: Sequence[str], dev: str, *,
                       % (len(_who), " · ".join(_who)))
     del pool
 
-    #: 14.299 — 부하분류로 열을 고른다. `--harm-vnorm-classes` 와 **같은 규약**이다
-    #  (모르는 이름은 죽는다 — 오타 하나가 조용히 전 기기를 빼면 A/B 를 착각한다).
-    _hcols = None
-    if head_conductance and str(hcond_classes).strip():
-        from src.preprocessing.file_registry import get_load_class
-        from src.synthesis.grid_simulator import GridSimulator
-        _known = {c.name.upper() for c in GridSimulator()._LOAD_EXPONENTS}
-        _want = {x.strip().upper() for x in hcond_classes.split(",") if x.strip()}
-        _bad = _want - _known
-        if _bad:
-            raise SystemExit("--hcond-classes: 모르는 분류 %s — 있는 것: %s"
-                             % (sorted(_bad), sorted(_known)))
-        _hcols = [i for i, a in enumerate(apps)
-                  if get_load_class(a).name.upper() in _want]
-        if not _hcols:
-            raise SystemExit("--hcond-classes %r 가 기기를 하나도 안 고른다" % hcond_classes)
+    #: 14.315 — 변환은 **공유 헬퍼 한 곳**에 있다 (`hcond_cols_of` 독스트링 참조).
+    _hcols = hcond_cols_of(head_conductance, hcond_classes, apps)
 
     return NILMLoss(
         head_conductance=head_conductance,            # 14.284

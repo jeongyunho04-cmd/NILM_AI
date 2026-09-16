@@ -44,18 +44,9 @@ ADAPT = "src/run_adapt.py"
 #: 일이다. 이유를 못 적겠으면 넣지 말고 1단계에 뚫어라.
 ALLOW_SHARED_ONLY = {
     "drift_proj": "14.x 표류 사영 — 1단계는 `--drift-proj` 를 안 받는다 (2단계 전용 축)",
-    "hcond_cols": "14.299 — `build_loss` 가 `hcond_classes`(사람이 읽는 이름)를 "
-                  "`get_load_class` 로 풀어 **지어내는 열 목록**이다. 두 학습기가 다른 "
-                  "물리를 쓰는 게 아니라 **같은 변환을 한 곳에서** 한다 — 양쪽에 복붙하면 "
-                  "조용히 갈라진다([[pin-the-two-entry-points-against-each-other]]). "
-                  "짝인 `hcond_classes` 는 ALLOW_STAGE1_ONLY 에 있다",
 }
 #: 1단계만 넘겨도 되는 인자. 넣으려면 이유를 적어라.
 ALLOW_STAGE1_ONLY: dict = {
-    "hcond_classes": "14.299 — `build_loss` 가 **소비해서** `hcond_cols` 로 바꾸므로 "
-                     "`NILMLoss` 까지 안 간다. 위 `hcond_cols` 와 한 쌍이고, 둘을 같이 "
-                     "봐야 경로가 끊기지 않은 것이 보인다. ⚠ `run_adapt` 쪽 배선은 "
-                     "아직이라 [5] 의 빚 목록에 따로 올라 있다",
 }
 
 #: `build_loss` 가 **풀에서 직접 계산**하는 것 — 인자로 받을 이유가 없다.
@@ -98,7 +89,7 @@ KNOWN_DEBT = {
                   "(오븐 전이 35 · 핫플 61)을 다시 전도도 갈래로 넣는다. "
                   "⚠ 14.301 정정 — 옛 이유에 적었던 '오븐 s1 17W · 4,626배' 는 `S_STATE`"
                   "(척도표)를 목표로 착각하고 분모도 `s_i` 로 쓴 값이라 둘 다 틀렸다",
-    "hcond_classes": "위와 한 쌍 (14.299). 기본 빈 값이라 안 적으면 adapt 이 SMPS·모터에도 "
+    "hcond_cols": "위와 한 쌍 (14.299·14.315 에서 이름이 `hcond_classes` 에서 바뀌었다). 기본 None 이라 안 적으면 adapt 이 SMPS·모터에도 "
                      "전도도 목표를 걸어 범주 오류가 되살아난다",
     "harm_vhrel_frac": "위와 한 쌍 — vhr 판이 채택되면 **즉시 빚을 갚아야 한다**",
     "harm_vhrel_on": "위와 한 쌍",
@@ -111,6 +102,7 @@ KNOWN_DEBT = {
 }
 
 DERIVED = {
+    "hcond_cols": "14.315 — 두 입구가 `hcond_cols_of()` 로 **같이 계산**한다. `build_loss` 서명에는 사람이 읽는 `hcond_classes` 만 있다",
     "s_i": "S_I 표에서",
     "s_state": "build_state_scales",
     "signatures": "harmonic_signatures(pool)",
@@ -186,6 +178,27 @@ def main() -> int:
           % (len(A), len(B), len(P)))
 
     C = (call_kwargs(ADAPT, "NILMLoss") or set()) | splat_credit(ADAPT, "NILMLoss")
+
+    # [0] ★★ 두 입구가 넘기는 이름을 `NILMLoss` 가 **실제로 받나** (14.315)
+    #     아래 [2] 는 `A ∩ B` 만 보므로 `ALLOW_STAGE1_ONLY` 로 면제된 이름은 안 온다.
+    #     그 구멍으로 `hcond_classes` 가 1단계에서 그대로 `NILMLoss` 까지 갔고
+    #     `TypeError` 로 **0c5d5f0 이후 모든 학습이 시작조차 못 했다** (985841).
+    import inspect as _ins0
+    from src.model.losses import NILMLoss as _NL
+    _sig = _ins0.signature(_NL.__init__)
+    _NLP = {p.name for p in _sig.parameters.values()
+            if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
+    _kwargs_ok = any(p.kind is p.VAR_KEYWORD for p in _sig.parameters.values())
+    bad0 = set() if _kwargs_ok else ((A | B) - _NLP)
+    print("\n[0] ★ 두 입구의 인자를 `NILMLoss` 서명(%d개)이 받나  %s"
+          % (len(_NLP), "OK" if not bad0 else
+             "**FAIL — %d개를 못 받는다 (그 호출은 TypeError 로 죽는다)**" % len(bad0)))
+    for _n in sorted(bad0):
+        print("      %-22s %s" % (_n, "1단계" if _n in A else "") +
+              ("  build_loss" if _n in B else ""))
+    if _kwargs_ok:
+        print("      ⚠ `NILMLoss.__init__` 이 `**kwargs` 를 받아 이 관문이 무력하다 — 고쳐라")
+    ok &= not bad0 and not _kwargs_ok
 
     # [1] 1단계 것이 전부 있나
     gap = A - B - set(ALLOW_STAGE1_ONLY)

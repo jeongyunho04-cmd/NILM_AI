@@ -19,7 +19,7 @@ log 가 하던 일이 둘인데(① V 불변 ② 척도 불변) 저항 기기만
   [5] 클래스 마스크가 **진짜 열**을 고른다 (V_EXP 2.0 인 넷)
   [6] `--hcond-on-w` 가 실제로 자른다 (문턱 아래는 옛 Huber 로 간다)
   [7] 모르는 분류 이름은 **죽는다** · hcond 없이 쓰면 죽는다
-  [8] 체크포인트 키 셋이 배선돼 있고 `build_loss` 가 받는다
+  [8] 변환이 **공유 헬퍼 한 곳**에 있고 체크포인트 키 셋이 배선돼 있다
 """
 import sys
 
@@ -312,11 +312,20 @@ ok(7, "모르는 분류·모르는 척도·짝 없는 플래그가 죽는다", d
 lb_src = Path("src/model/lossbuild.py").read_text(encoding="utf-8")
 wired = all(k in lb_src for k in ("hcond_scale", "hcond_on_w", "hcond_classes"))
 ckpt = all('"%s":' % k in src for k in ("hcond_scale", "hcond_on_w", "hcond_classes"))
-passed = all(("%s=a.%s" % (k, k)) in src.replace(" ", "")
-             for k in ("hcond_scale", "hcond_on_w", "hcond_classes"))
-ok(8, "build_loss 받음 · run_train_cnn 넘김 · 체크포인트 기록",
-   wired and ckpt and passed,
-   "lossbuild %s · 넘김 %s · 체크포인트 %s" % (wired, passed, ckpt))
+flat = src.replace(" ", "")
+passed = all(("%s=a.%s" % (k, k)) in flat for k in ("hcond_scale", "hcond_on_w"))
+#: ⚠⚠ 14.315 — `hcond_classes` 는 **그대로 넘기면 안 된다.** `NILMLoss` 는 사람이 읽는
+#  분류 이름이 아니라 **열 번호**(`hcond_cols`)를 받는다. 이 관문의 첫 판이
+#  `hcond_classes=a.hcond_classes` **를 찾고 있어서 틀린 배선의 존재를 증명**해 주었고,
+#  그래서 `0c5d5f0` 이후 **모든 학습이 `TypeError` 로 시작조차 못 했다** (985841 에서
+#  여섯 판이 1분 만에 죽어서야 잡혔다). 이제 **공유 헬퍼를 쓰는지**를 본다 —
+#  변환이 한 곳에 있어야 두 입구가 다시 갈라지지 않는다.
+shared = ("hcond_cols=hcond_cols_of(" in flat
+          and "defhcond_cols_of(" in lb_src.replace(" ", "")
+          and "hcond_classes=a.hcond_classes" not in flat)
+ok(8, "공유 헬퍼로 변환 · build_loss 받음 · 체크포인트 기록",
+   wired and ckpt and passed and shared,
+   "lossbuild %s · **공유 헬퍼 %s** · 척도·문턱 넘김 %s · 체크포인트 %s" % (wired, shared, passed, ckpt))
 
 print("=" * 92)
 print("실패 %d 개%s" % (len(FAIL), (" — " + str(FAIL)) if FAIL else ""))

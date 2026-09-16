@@ -1337,11 +1337,14 @@ def main() -> int:
                     wide_extra_dilations=[int(x) for x in a.wide_extra_dilations.split(",")
                                           if x.strip()]).to(dev)
     n_par = sum(p.numel() for p in model.parameters())
+    from src.model.lossbuild import hcond_cols_of     # 14.315
     crit = NILMLoss(
         head_conductance=a.head_conductance,          # 14.284
         hcond_scale=a.hcond_scale,                    # 14.299
         hcond_on_w=a.hcond_on_w,                      # 14.299
-        hcond_classes=a.hcond_classes,                # 14.299
+        #: 14.315 — **분류 이름을 그대로 넘기면 안 된다.** `NILMLoss` 는 열 번호를 받는다.
+        #  여기서 직접 변환하던 시절은 없었고 `build_loss` 안에만 있어서 1단계가 죽었다.
+        hcond_cols=hcond_cols_of(a.head_conductance, a.hcond_classes, apps),
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
         signatures=torch.from_numpy(sig),
         standby_sig=torch.from_numpy(sb_sig),
