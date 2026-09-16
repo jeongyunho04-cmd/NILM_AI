@@ -157,8 +157,16 @@ def main() -> int:
                 if 0 <= sid_ < m_on.n_pow and w_ > 0:
                     cap[k, sid_] = R * float(w_)
         m_on.register_buffer("p_state_cap_w", cap, persistent=False)
+        #: ⚠⚠ 14.355 — **986157 이 여기서 죽었다.** 14.345 가 이 관문을 "제일 새
+        #  호환 체크포인트" 로 바꿨는데 그게 이제 **조합 판**(`comb_tau>0`)이라
+        #  `g_hat` 없이 부르면 가드가 선다. 그리고 `z_input` 판이면 `z_in` 도 필요하다.
+        #  [[find-patch-collisions-by-shape]] 의 *"전제가 바뀐 땜질"* 이다.
+        #  ⇒ **두 판에 같은 값**을 넘긴다. 이 관문의 주장은 `p_states` 상한이라
+        #    무엇을 넘기든 [3c]·[4] 의 비교는 그대로 성립한다.
+        _gh = (torch.full((len(f),), 24.96) if m_on.comb_tau > 0 else None)
+        _zi = (torch.full((len(f),), 1.0) if getattr(m_on, "z_input", False) else None)
         with torch.no_grad():
-            a_, b_ = m_off(f, w), m_on(f, w)
+            a_, b_ = m_off(f, w, _gh, _zi), m_on(f, w, _gh, _zi)
         raw = a_["power_states"]                     # 상한 없는 값
         held = float((b_["power_states"] / cap.clamp(max=1e9)[None]).max())
         ratio, worst = 0.0, ""
