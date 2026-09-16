@@ -53,33 +53,44 @@
 전부 미분 가능하다 (`argmin` 이 닫힌 형태고 비음수 투영은 ReLU 다). `kappa` 는 학습
 가능한 값으로 둘 수 있다. 실시간이면 `center=None` 로 **끝 프레임 기준**(과거만)을 쓴다.
 
-## ⚠ 현재 상태 — **아직 쓸 수 없다** (14.318, 측정으로 확인)
+## ★ 작동 구성 (14.319~320, 측정으로 확정)
 
-고친 내 버그 셋:
 ```
-  ⓐ 열 정규화 없음        cond(H) **1.9e8 -> 641**
-  ⓑ κ 가 창 길이에 안 맞음  유효 프레임 **3.5/120 -> 29.5/120** (e 에 문턱을 줬다)
-  ⓒ 가중치 자가 틀림       `1/harmonic_scales`(차수균등)는 **지문 손실용**이다. G 는 h1 에서
-                        결정되는데 무게의 14/15 를 고차에 준다 -> **암페어균등**으로 94.1% -> 38.2%
-  그리고 `run_diag_dictcond` 머리글이 이미 *"계획 B 는 펼친 **NNLS** 반복"* 이라고
-  적어 뒀는데 내가 평범한 릿지로 지었다. 비음수 제약을 넣었다.
+  A = [ V_h , j·V_h , T_SMPS(FCM 셋) , T_에어컨 ]   · 전압 **15차수** · NNLS
+  저항만 **−1.9%** · 에어컨 켜짐 **+6.5%** · 선풍기 켜짐 **+1.1%**
 ```
-⚠⚠ **그리고 내 채점 자가 틀렸다 (오늘 네 번째).** 참값을 `Σ 라벨전력 / V²` 로 잡았는데:
+기준은 `g_ref = Re(I₁V₁*)/|V₁|² − (비저항 전력)/|V₁|²` 다 — 모델을 안 쓴다.
+
+**열을 하나씩 넣고 뺀 표** (저항만 / 에어컨 켜짐 / 선풍기 켜짐):
 ```
-  관측 P / 라벨 Σy_power = **0.940** (저항만 켜진 창) — 라벨은 전달 전력이 아니다
-  그리고 오븐 s1 은 `FAN_LIGHT` 16.8W 로 **히터가 아닌데** 컨덕턴스로 셌다
+  G·B 만                −0.1  ·   —    ·   —      물리 자체는 **정확하다**
+  + SMPS(FCM) 셋        −1.1  · +47.7  ·  +1.9    G 가 에어컨을 통째로 먹는다
+  + **에어컨**           −1.9  ·  +6.5  ·  +1.1    ★ 7배 개선. **에어컨 열은 필수다**
+  + 에어컨 + **선풍기**   −18.5 · −12.7  · −15.8    선풍기가 전부 망친다
+  L1 희소성(3e-3)        효과 **없음** (6.5 -> 6.5) — 지렛대가 아니다
 ```
-**모델도 라벨도 안 쓰는 자**로 다시 재야 한다 — `g_obs = Re(I₁V₁*)/|V₁|²`:
+
+**왜 에어컨은 되고 선풍기는 안 되나 — 단독 녹화가 답한다**
 ```
-  저항만 켜진 프레임   Ĝ_sum 이 g_obs 보다 **−18.5%**  (같아야 한다)
-  섞인 프레임          **−24.6%** · 뺀 몫 4.7mS 는 비저항 실제 몫보다 훨씬 크다
+  같은 전압에서 **순수 저항의 h3/h1 = V3/V1 = 0.028** 이 기준선이다
+
+  에어컨   비h1 몫 28~36% · h3/h1 0.58~0.60 (저항의 **21배**) · THD 62~74%
+          -> 인버터 정류 앞단. **강하게 갈린다.** 열을 줘야 한다
+  선풍기   s1 약풍 비h1 1.75% · s2 0.62% · **s3 강풍 0.14% · h3/h1 0.033 · PF 0.998**
+          -> 강풍 선풍기는 **전기적으로 저항이다.** `fan_s3` 가 G 열과 7.5도인 것은
+             모델 결함이 아니라 **물리**다. 회로모델도 L1 도 템플릿도 못 고친다
+          -> 처방: 열을 **주지 않고** G 가 먹게 둔다. 대가는 37.6W = 약 1~2% 다
 ```
-⇒ **템플릿 열이 저항 전류를 먹는다.** NNLS 는 음수만 막지 양수 흡수는 못 막는다.
-  `fan_s3` 가 G 열과 **7.5도**(fan_s2 23.3 · s1 35.5)라 선풍기 열이 저항 몫을 가져간다.
-⇒ **다음 손잡이는 SMPS 회로모델이다** (사용자 지적). 지금은 `harmonic_signatures_by_state`
-  의 **상수 와트당 페이저**를 쓴다 — `sig_model.SigModel.predict(app,P,V)` 로 반복해 봤지만
-  바닥이 37~38% 로 안 깨졌다. 진짜 물리는 `circuit_model/circ12_*.pkl`(`fcm.forward`)이고
-  **아직 안 붙였다.** 13.84.23 이 상수 지문의 SMPS 잔차를 17~27% 로 쟀다.
+⇒ 사용자 가설 *"선풍기나 에어컨만 보완하면"* 은 **반만 맞다** — 에어컨은 보완하면 되고
+  (그리고 그것이 제일 큰 이득이다), 선풍기는 **보완할 수 없는 것**이라 포기가 답이다.
+
+## 아직 안 한 것
+```
+  ⓐ 모델 배선 — 채널로 낼지 ⑤ 사전대조까지 갈지 미정
+  ⓑ ② 정밀화를 **작동 구성**에서 다시 재기 (전이 차단은 통과, 잡음 감소는 미측정)
+  ⓒ FCM 은 합에서 안 보인다 (SMPS ~100W 대 저항 1,300W). minipc 지문이 전력에 따라
+     46.8% 움직이므로 **SMPS 자체를 읽을 때**는 필요하다 — 저항 추정에는 −1.1 대 −1.1
+```
 """
 from typing import Optional, Sequence, Tuple
 
@@ -140,7 +151,7 @@ def _colnorm(A: np.ndarray, w: np.ndarray) -> np.ndarray:
 
 
 def _nnsolve(H: np.ndarray, g: np.ndarray, nn: np.ndarray,
-             iters: int = NN_ITERS) -> np.ndarray:
+             iters: int = NN_ITERS, l1: float = 0.0) -> np.ndarray:
     """`nn` 이 True 인 좌표에 **비음수**를 걸고 푼다 (투영 경사, 벡터화).
 
     ⚠⚠ **이게 빠져서 다 틀렸다** (14.318). 음수 α̂ 를 허용하면 템플릿 열이 저항 전류를
@@ -158,15 +169,22 @@ def _nnsolve(H: np.ndarray, g: np.ndarray, nn: np.ndarray,
         return th
     th = np.where(nn, np.maximum(th, 0.0), th)
     eta = 1.0 / np.maximum(np.linalg.norm(H, ord=2, axis=(-2, -1), keepdims=True), 1e-30)
+    #: 14.320 — `l1` 은 **비음수 좌표에만** 건다. 근위 경사의 soft-threshold 인데
+    #  비음수와 겹치면 그냥 `max(0, x − ηλ)` 다. 꺼진 기기의 α̂ 를 **정확히 0** 으로
+    #  만든다 — 안 그러면 안 켜진 열이 저항 전류를 조금씩 훔친다 (에어컨 −0.8%p).
     for _ in range(iters):
         grad = np.einsum("...cd,...d->...c", H, th) - g
         th = th - eta[..., 0] * grad
-        th = np.where(nn, np.maximum(th, 0.0), th)
+        if l1 > 0.0:
+            th = np.where(nn, np.maximum(th - eta[..., 0] * l1, 0.0), th)
+        else:
+            th = np.where(nn, np.maximum(th, 0.0), th)
     return th
 
 
 def _solve(A: np.ndarray, y: np.ndarray, w2: np.ndarray, lam: np.ndarray,
-           prior: np.ndarray, nn: np.ndarray, fw: Optional[np.ndarray] = None
+           prior: np.ndarray, nn: np.ndarray, fw: Optional[np.ndarray] = None,
+           l1: float = 0.0
            ) -> Tuple[np.ndarray, np.ndarray]:
     """가중 릿지. `fw` 가 있으면 프레임을 그 무게로 **합쳐** 하나를 푼다 (②).
 
@@ -182,7 +200,7 @@ def _solve(A: np.ndarray, y: np.ndarray, w2: np.ndarray, lam: np.ndarray,
         Aw = An * w2[None, None, :, None]
         H = np.einsum("btkc,btkd->btcd", An, Aw) + lam
         g = np.einsum("btkc,btk->btc", Aw, y) + prior * np.diagonal(lam, 0, -2, -1)
-        th = _nnsolve(H, g, nn)
+        th = _nnsolve(H, g, nn, l1=l1)
         return th / sc, H
     Af = A * np.sqrt(fw)[..., None, None]                    # 프레임 무게를 행에 실어
     sc = _colnorm(Af.reshape(len(A), -1, A.shape[-1]),
@@ -191,7 +209,7 @@ def _solve(A: np.ndarray, y: np.ndarray, w2: np.ndarray, lam: np.ndarray,
     Aw = An * w2[None, None, :, None]
     H = np.einsum("bt,btkc,btkd->bcd", fw, An, Aw) + lam[:, 0]
     g = np.einsum("bt,btkc,btk->bc", fw, Aw, y) + prior * np.diagonal(lam[:, 0], 0, -2, -1)
-    th = _nnsolve(H, g, nn)
+    th = _nnsolve(H, g, nn, l1=l1)
     return th / sc, H
 
 
