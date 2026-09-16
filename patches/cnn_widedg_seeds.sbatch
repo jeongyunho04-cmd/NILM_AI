@@ -70,7 +70,7 @@ SEED=${SLURM_ARRAY_TASK_ID}
 echo "노드 $(hostname) · 씨 $SEED · $(date '+%F %H:%M:%S')"
 nvidia-smi --query-gpu=index,name --format=csv,noheader
 echo "=== 관문 ==="
-# ⚠ §7-3 — **코드가 올라왔는지 먼저.** 파이프로 grep 하면  아래에서
+# ⚠ §7-3 — **코드가 올라왔는지 먼저.** 파이프로 grep 하면 `set -o pipefail` 아래에서
 #   조기 종료가 SIGPIPE 로 잡힐 수 있어 변수로 받아서 본다.
 HELP=$($PY -X utf8 -m src.run_train_cnn --help)
 case "$HELP" in *--wide-dg*) : ;; *) echo "run_train_cnn 에 --wide-dg 가 없다 — 코드를 안 올렸다"; exit 1;; esac
