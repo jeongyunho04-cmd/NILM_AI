@@ -539,7 +539,7 @@ class NILMNet(nn.Module):
                               ("fine_conv", self.fine_conv, ("sym", "causal")),
                               ("fine_tpool", self.fine_tpool, ("whole", "split")),
                               ("fine_derive", self.fine_derive, ("window", "both")),
-                              ("fine_dc", str(fine_dc), ("keep", "split"))):
+                              ("fine_dc", str(fine_dc), ("keep", "split", "mag"))):
             if _v not in _ok2:
                 raise ValueError("%s 는 %s 중 하나: %r" % (_nm, "/".join(_ok2), _v))
         #: 파생 인과 짝 4개 (41·42 의 후방탭 · 29·30 의 인과 이동평균). `window` 면 0.
@@ -547,10 +547,12 @@ class NILMNet(nn.Module):
         _cin0 = self.fine_channels + self.n_derive
         #: 14.224 — 떼어 낸 DC 벡터의 폭. `keep` 이면 0 이라 `trunk_in` 도 배치도 그대로다.
         self.fine_dc = str(fine_dc)
-        self.n_dc = _cin0 if self.fine_dc == "split" else 0
+        self.n_dc = _cin0 if self.fine_dc in ("split", "mag") else 0
         if self.n_dc and str(head_layout) == "v2":
-            raise ValueError("fine_dc=split 은 head_layout=v2 와 같이 못 쓴다 "
-                             "— v2 는 feats 를 `_feats_v2` 에서 따로 짓는다")
+            raise ValueError("fine_dc=%s 는 head_layout=v2 와 같이 못 쓴다 "
+                             "— v2 는 feats 를 `_feats_v2` 에서 따로 지어 DC 를 "
+                             "떼지 않는다 (mag 면 되돌릴 DC 가 아예 없다)"
+                             % self.fine_dc)
         _cz = bool(self.fine_conv == "causal")
         #: 정규화 기준선의 끝. `None` 이면 **비트 동일** 경로다.
         _nt = fine_target_index() if self.fine_norm == "causal" else None
@@ -670,7 +672,9 @@ class NILMNet(nn.Module):
             trunk_in += w2 * wns + w2   # 광역 amax(구간별) + 창 끝 슬라이스 (후보 1)
         if self.periodicity:
             trunk_in += N_PERIOD        # 후보 2
-        trunk_in += self.n_dc           # 14.224 — 떼어 낸 DC 벡터 (맨 뒤에 붙인다)
+        if self.fine_dc == "split":
+            trunk_in += self.n_dc       # 14.224 — 떼어 낸 DC 벡터 (맨 뒤에 붙인다)
+        # 14.251 `mag` 는 **몸통에 안 넣는다.** DC 는 머리의 크기 슬롯으로만 돌아간다.
         h = int(256 * width)
         self.trunk = nn.Sequential(
             nn.Linear(trunk_in, h), nn.GELU(), nn.Dropout(dropout),
@@ -720,6 +724,30 @@ class NILMNet(nn.Module):
                         if 0 <= sid < self.n_pow and w > 0 and sid < n_states[j]:
                             self.heads[j].bias[sid] = (
                                 float(w) if w > 20.0 else float(np.log(np.expm1(w))))
+        #: 14.251 — **DC 를 크기 경로에만 되돌리는 길**. `mag` 가 아니면 `None` 이다.
+        #
+        # 왜 이 자리인가 (14.243~14.250 이 잰 것):
+        #   · `ch23 = asinh(P/100)` 의 창 평균 = **절대 전력 수준**이다. 이 양은 두 일을
+        #     한꺼번에 한다 — 오븐/저항부하 **신원**을 합성에서 AUC 0.943 으로 갈라 주는데
+        #     실측에서는 **0.521**(동전)로 무너진다. 전이가 깨지는 숏컷이다.
+        #   · 동시에 **진짜 크기 정보**다. `split` 로 몸통에서 통째로 떼었더니 실측 포트
+        #     게이트는 6/6 으로 고쳐졌지만(14.247) 홀드아웃 MAE 가 4.65 -> **7.75**,
+        #     F1 0.933 -> 0.904 로 나빠졌다 (여섯 대 셋, **겹침 0**).
+        #   ⇒ 빼느냐 두느냐가 아니라 **어느 경로에 주느냐**가 물음이다.
+        #
+        # RevIN(ICLR 2022)이 표준으로 삼는 것이 정확히 이 대칭이다 — 입력에서 창 통계를
+        # 빼고 **출력에서 도로 넣는다**. `split` 은 앞 절반만 했다 (머리에 특징으로
+        # 던졌을 뿐 되돌리는 단계가 없다). 여기서 뒤 절반을 만든다:
+        #   `p_states` (크기) <- DC 를 **더한다**        `on_logit`·`state` <- **안 닿는다**
+        #
+        # 0 으로 초기화한다 — 출발점이 정확히 "DC 를 전부 뺀 모델"이고 거기서 되돌리는
+        # 법을 배운다 (`attn_out`·`ChainHeads.emit` 과 같은 규약).
+        self.dc_pow = None
+        if self.fine_dc == "mag":
+            self.dc_pow = nn.Linear(self.n_dc, len(self.appliances) * MAX_STATES)
+            nn.init.zeros_(self.dc_pow.weight)
+            nn.init.zeros_(self.dc_pow.bias)
+
         # 세밀 유래 차원 표식. **연결 순서를 바꾸지 않고** 마스킹만 한다.
         # 순서를 바꾸면 이전 체크포인트가 뒤섞인 입력을 받는다 (실제로 한 번 겪었다).
         if self.head_layout == "v2":
@@ -754,7 +782,8 @@ class NILMNet(nn.Module):
         if self.periodicity:
             fine_flags += ([1] * len(PERIOD_LAGS_FINE) + [0] * len(PERIOD_LAGS_WIDE)
                            + [1, 0])                          # 교차율 세밀/광역
-        fine_flags += [1] * self.n_dc      # 14.224 — DC 벡터는 **세밀 유래**라 1 이다
+        if self.fine_dc == "split":
+            fine_flags += [1] * self.n_dc  # 14.224 — DC 벡터는 **세밀 유래**라 1 이다
         if self.head_layout != "v2":
             assert len(fine_flags) == trunk_in, (len(fine_flags), trunk_in)
             # persistent=False — 옛 체크포인트에 없는 키라 state_dict 호환을 깨면 안 된다.
@@ -951,6 +980,10 @@ class NILMNet(nn.Module):
         #   `--fine-time-split` 은 몸통만 쪼개고 이 줄은 **안 끊는다** (14.138 참조).
         fp, wp = fine[:, P_CH_FINE], wide[:, P_CH_WIDE]            # asinh(P/100)
         fp_max, wp_max = fp.amax(-1), wp.amax(-1)
+        # ⚠ 14.251 — `_dc` 는 아래 v1 갈래 **안에서만** 할당된다. v2 면 미할당이라
+        #   `UnboundLocalError` 가 난다 (14.138 이 `fp_max` 로 똑같이 당했다).
+        #   생성자가 v2+mag 를 막지만, 분기보다 위에서 None 으로 두어 **구조적으로** 막는다.
+        _dc = None
         # 원본 입력의 타깃 샘플. 수용영역 1 - 어떤 conv 로도 뭉갤 수 없는 순시 값이다.
         if self.head_layout == "v2":
             feats = self._feats_v2(fine, wide, t)
@@ -1068,7 +1101,7 @@ class NILMNet(nn.Module):
                 ], dim=1))
             #: 14.224 — 떼어 낸 DC 를 **머리에 그대로** 준다 (버리는 게 아니라 옮긴다).
             #:   `fine_flags` 와 `trunk_in` 이 이 자리를 맨 뒤로 잡고 있다.
-            if _dc is not None:
+            if _dc is not None and self.fine_dc == "split":
                 feats.append(_dc)
         x = torch.cat(feats, dim=1)
         if self.training and self.fine_dropout > 0:
@@ -1095,6 +1128,12 @@ class NILMNet(nn.Module):
             att, _ = self.attn(tok, tok, tok, need_weights=False)
             zk = zk + self.attn_out(att)                        # 0 초기화면 zk = z
         o = torch.stack([hd(zk[:, j]) for j, hd in enumerate(self.heads)], dim=1)
+        if self.dc_pow is not None and _dc is not None:
+            # 14.251 — **DC 를 크기 경로에만 되돌린다.** `F.pad` 로 뒤를 0 으로 채워
+            # `o[..., 0:MAX_STATES]` 에만 더한다. `i_state`(상태혼합)·`i_on`(게이트)은
+            # 이 항이 **구조적으로 못 닿는다** — 관문 [3] 이 그것을 측정으로 못 박는다.
+            _adj = self.dc_pow(_dc).view(-1, len(self.heads), MAX_STATES)
+            o = o + F.pad(_adj, (0, o.shape[-1] - MAX_STATES))
         on_logit = o[..., self.i_on]
 
         # ── 물리 프라이어 (12.9.8절) ──────────────────────────────────────

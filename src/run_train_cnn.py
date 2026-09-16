@@ -555,10 +555,15 @@ def main() -> int:
                          "p(t+3.0s)·p(t+5.5s) 를 담는다 — dzn_s1 에서 이 넷이 **93%%**였다. "
                          "**캐시를 다시 안 구워도 된다.** window 면 비트 동일.")
     #: 14.224 — 시간축 DC 를 conv 에서 떼어 머리로 보낸다 (`net.fine_dc` 독스트링).
-    ap.add_argument("--fine-dc", default="keep", choices=("keep", "split"),
+    ap.add_argument("--fine-dc", default="keep", choices=("keep", "split", "mag"),
                     help="split 이면 `_conv_in` 출력에서 채널별 시간평균을 빼서 conv 에 "
-                         "넣고 그 평균을 머리 특징에 붙인다. 첫 conv 의 DC/AC 이득비가 "
-                         "15판 중앙 **776배** 였다 (14.220). keep 이면 **비트 동일**.")
+                         "넣고 그 평균을 **머리 특징**에 붙인다. 첫 conv 의 DC/AC 이득비가 "
+                         "15판 중앙 **776배** 였다 (14.220). keep 이면 **비트 동일**. "
+                         "mag 는 DC 를 몸통에 안 넣고 **크기 슬롯(p_states)에만** 되돌린다 "
+                         "(14.251) — split 이 실측 게이트를 6/6 으로 고쳤지만 홀드아웃 MAE 를 "
+                         "4.65 -> 7.75 로 올린 까닭이 DC 가 신원(on_logit)과 크기 양쪽에 "
+                         "닿았기 때문이다. 신원 쪽 전이는 AUC 0.943 -> 0.521 로 깨지고 "
+                         "크기 쪽은 진짜 정보다. RevIN 의 denorm 을 우리 머리에 맞춘 꼴이다.")
     ap.add_argument("--fine-pad", default="zeros", choices=("zeros", "replicate"),
                     help="세밀 몸통 conv 의 패딩 (14.131). **zeros 가 기본이라 비트 동일.** "
                          "zeros 는 창 밖을 0 으로 채우는데 `asinh` 눈금에서 0 은 "
