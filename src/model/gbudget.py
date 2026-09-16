@@ -65,9 +65,13 @@
 
 ## ⚠ 거부권과 바닥은 **동시에 못 선다**
 
-거부권은 `Ĝ < G_k − 여유`, 바닥은 `k 를 넣은 조합이 더 맞을 때`다. `Ĝ` 가 `G_k` 보다
-여유만큼 아래면 `k` 를 넣는 순간 과설명이라 바닥이 안 선다. 구조적으로 배타적이지만
-**단언하지 않는다** — `run_gate_gbudget` [4] 가 실측 전 창에서 확인한다.
+⚠⚠ 14.345 — 처음에 *"구조적으로 배타적"* 이라 적었는데 **틀렸다.** 오븐을 바닥에 넣자
+`run_gate_gbudget_cache` [6] 이 18만 칸 중 **3칸**에서 둘이 같이 서는 것을 잡았다.
+거부권 문턱 바로 **아래 좁은 띠**에서 가능하다 — 예: `Ĝ=22.9` 면 거부권이 서고
+(22.9 < 24.957−2), 동시에 오븐을 넣은 조합이 더 맞는다 (없이 19.389 dist 3.51 ·
+넣어 24.957 dist 2.06). 포트는 켜짐 상태가 하나라 **우연히** 안 겹쳤을 뿐이다.
+⇒ `apply` 가 `fm &= ~vm` 로 **배타성을 강제한다. 거부권이 이긴다** — 거부권은 씨앗
+  여섯으로 검증된 처치고(14.322 p=0.031) 바닥은 새 칸이다. 모순이면 보수적인 쪽이다.
 """
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import itertools
@@ -104,9 +108,17 @@ RESISTIVE: Tuple[str, ...] = ("electiric_kettle", "hair_dryer", "hotplate", "ove
 #:   포트ON·드라이ON  98.61% 회수  ·  포트OFF·드라이ON 745칸에서 헛세움 **0.00%**
 #:   전체 헛세움 **1 / 5,715** (0.02%)
 #: ```
-#: ⚠ 오븐에는 **안 건다** — 14.325 가 `Ĝ_sum` 단독 오븐 재현을 **44.9%** 로 쟀다
-#:   (포트는 99.7%). 오븐은 듀티로 꺼져 있는 시간이 라벨 ON 의 54~71% 다 (14.328).
-FLOOR_APPS: Tuple[str, ...] = ("electiric_kettle",)
+#: ⚠⚠ **14.344 에서 오븐을 넣었다.** 14.334 는 *"오븐에는 안 건다"* 고 적었는데, 그 근거는
+#:   14.325 의 `Ĝ_sum` 단독 **오븐 재현 44.9%** 였다. 그건 **라벨** 기준이라 듀티가 섞인
+#:   수다 (오븐은 라벨 ON 의 54~71%가 비통전). 바닥이 하는 일은 *"모델이 껐는데 예산이
+#:   요구한다"* 이고 그건 다른 물음이다. 새 바닥 `cnn_v49base` 씨앗 여섯에서 잰 것:
+#: ```
+#:   사중 + 총량 고정 · 바닥=포트      A 8 B13 C16 D2  합 40
+#:   사중 + 총량 고정 · 바닥=포트+오븐  A10 B**3** C16 D2  합 **31**  6/6 p=0.031
+#: ```
+#:   **B미탐 13 -> 3.** 대가는 A유령 8 -> 10 이고, 그 자는 쌍안정이라 얇다
+#:   ([[nilm-oven-ghost-ruler-is-two-episodes]]).
+FLOOR_APPS: Tuple[str, ...] = ("electiric_kettle", "oven")
 
 VETO_MARGIN_MS = 2.0      #: 14.322 — 0.5~3.0mS 에서 결과가 같았다. 가운데를 쓴다
 FLOOR_MARGIN_MS = 1.0     #: 14.334 — 1.0 에서 회수 70.9%/띠 안 97.9~99.2% · 헛세움 0.02%
@@ -243,13 +255,75 @@ def pin_power(power: np.ndarray, v1: np.ndarray, apps: Sequence[str],
     return q
 
 
+# ── ⓓ 총량 고정 (크기 · 사용자 제안 14.344) ─────────────────────────────────
+def pin_total(power: np.ndarray, g_ms: np.ndarray, v1: np.ndarray, apps: Sequence[str],
+              fill: bool = True, fill_min_w: float = 100.0) -> np.ndarray:
+    """저항 **총 전력**을 `Ĝ·|V₁|²` 로 묶는다. 배분(비율)은 모델 것을 그대로 쓴다.
+
+    사용자: *"잘못된걸 거부하면 거기에 뭘 채워놔야지 그냥 비워놓아 버리면 어떡하니"*.
+    맞다 — 거부권만 걸면 test_5 총잔차가 **20.7 -> 39.5W** 로 터진다. 211~216초에 포트
+    1,100W 를 지웠는데 참 주인인 오븐(Ĝ=24.91 ≈ 24.957)은 18W 로 눌린 채였다.
+
+    **기기별 고정(`pin_power`)과 다른 물건이다.** 저쪽은 조합을 **정해야** 하고 이쪽은
+    **안 정해도** 된다. 그리고 Ĝ 의 강점이 여기 있다 (14.343, 캐시 2만창):
+    ```
+      계량기  저항 **총 전력** 오차 중앙 **−5.4W** · σ 17.3W · 상대 **−0.39%**
+      분류기  조합 정확 Ĝ 단독 84.5% · Ĝ+반파 94.3% · 모델 94.9% · Ĝ+모델 **99.7%**
+      ⇒ **총량은 물리, 배분은 모델.**
+    ```
+    ⚠ **거부권 뒤에 와야 한다.** 거부권 없이 총량만 맞추면 오탐이 유일한 주장일 때
+      재정규화가 **그놈을 키운다** — 실측에서 C오탐 20 -> **22** (14.344).
+
+    Args:
+        fill: 거부 뒤 아무도 안 남았는데 예산이 `fill_min_w` 넘게 있으면 **조합 맞춤**으로
+            채운다. 실측에서는 한 번도 안 걸렸고(구멍이 안 생긴다) 캐시의 총량보존 맞바꿈
+            에서는 272창이 걸렸다. 구멍 방지용 안전판이라 기본을 켜 둔다.
+    """
+    q = np.array(power, np.float64, copy=True)
+    cols = [j for j, a in enumerate(apps) if a in PIN_MS]
+    if not cols:
+        return q
+    tot = np.asarray(g_ms, np.float64) * 1e-3 * np.asarray(v1, np.float64) ** 2
+    s = q[:, cols].sum(1)
+    hot = s > 1e-9
+    sh = np.zeros_like(q[:, cols])
+    sh[hot] = q[hot][:, cols] / s[hot][:, None]
+    q[:, cols] = sh * tot[:, None]
+    if fill:
+        empty = (~hot) & (tot > fill_min_w)
+        if empty.any():
+            #: 조합 맞춤 — 후보 총합이 Ĝ 에 제일 가까운 것을 고른다
+            names = [apps[j] for j in cols]
+            opts = [[(0.0, None)] + [(gg, s_) for s_, gg in app_states(a)] for a in names]
+            combos = list(itertools.product(*opts))
+            cg = np.array([sum(y[0] for y in c) for c in combos])
+            cv = np.array([[y[0] for y in c] for c in combos])
+            j = np.argmin(np.abs(np.asarray(g_ms, np.float64)[empty, None] - cg[None, :]), 1)
+            idx = np.nonzero(empty)[0]
+            q[idx[:, None], np.array(cols)[None, :]] = (
+                cv[j] * 1e-3 * np.asarray(v1, np.float64)[empty, None] ** 2)
+    return q
+
+
 # ── 넷을 한 번에 ─────────────────────────────────────────────────────────────
 def apply(power: np.ndarray, g_ms: np.ndarray, v1: np.ndarray, apps: Sequence[str],
           *, veto: bool = True, floor: bool = True, pin: bool = True,
+          total: bool = False,
           veto_margin: float = VETO_MARGIN_MS, floor_margin: float = FLOOR_MARGIN_MS,
           claim_w: float = CLAIM_W, floor_apps: Sequence[str] = FLOOR_APPS,
           allowed: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
-    """거부권 -> 바닥 -> 고정. 셋 다 끄면 **입력을 그대로** 돌려준다 (비트 동일).
+    """거부권 -> 바닥 -> 고정 -> **총량 고정**. 전부 끄면 입력 그대로다 (비트 동일).
+
+    ★ 14.344 — 실측 5,382창 · `cnn_v49base` 씨앗 여섯:
+    ```
+      팔                              A유령 B미탐 C오탐 D미탐   합 | 총잔차|r| | 짝검정
+      바닥                             12   18   20    6   56 |  12.2W  |  —
+      veto+floor+pin                   8   18   16    2   44 |  14.2W  | 6/6 p=0.031
+      ★ **+ total** (바닥=포트+오븐)     10    3   16    2 **31**| **11.0W**| 6/6 p=0.031
+                                          씨앗차 [−15,−26,−10,−15,−28,−33]
+    ```
+    ⚠ **디코더 없이** 31 이다 — 한 사이클 · 0.39ms · 지연 0 · 인과적.
+    ⚠ 셋이 각자 다른 칸을 고친다: 거부권 C · **총량 B** · 바닥 D.
 
     Returns:
         `(power, info)` — `info` 에 `veto`·`floor`·`on` 마스크가 들어 있다.
@@ -262,6 +336,14 @@ def apply(power: np.ndarray, g_ms: np.ndarray, v1: np.ndarray, apps: Sequence[st
         q[vm] = 0.0
     if floor:
         fm = floor_mask(q, g_ms, apps, floor_margin, claim_w, floor_apps, allowed)
+        #: ⚠⚠ 14.345 — **배타성을 코드로 만든다.** "구조적으로 배타적" 이라고 적어 뒀는데
+        #  `run_gate_gbudget_cache` [6] 이 반증했다 — 오븐을 바닥에 넣자 18만 칸 중 **3칸**
+        #  에서 둘이 같이 섰다. 거부권 문턱(`Ĝ < min_ms−여유`) 바로 **아래 좁은 띠**에서,
+        #  오븐을 넣은 조합이 더 잘 맞을 수 있다 (예: Ĝ=22.9 -> 없이 19.389 dist 3.51 ·
+        #  넣어 24.957 dist 2.06). 포트는 상태가 하나라 우연히 안 겹쳤을 뿐이다.
+        #  ⇒ **거부권이 이긴다.** 거부권은 씨앗 여섯으로 검증된 처치이고(14.322 p=0.031)
+        #    바닥은 새 칸이다. 모순이 나면 보수적인 쪽을 남긴다.
+        fm &= ~vm
     on = ((q >= claim_w) | fm)
     for j, a in enumerate(apps):
         if a not in PIN_MS:
@@ -273,7 +355,10 @@ def apply(power: np.ndarray, g_ms: np.ndarray, v1: np.ndarray, apps: Sequence[st
         #: `p_raw` 는 멀쩡하지만(1,398~1,438W) 게이트가 곱해져 0 이 되어 있다.
         #: 그 경우 호출자가 `info["floor"]` 로 직접 채워야 한다 — 여기서 짓지 않는다.
         pass
-    if not (veto or floor or pin):
+    if total:
+        #: ★ 마지막이다 — 거부·바닥·고정이 정한 **비율** 위에 물리가 **총량**을 씌운다
+        q = pin_total(q, g_ms, v1, apps)
+    if not (veto or floor or pin or total):
         q = np.array(power, np.float64, copy=True)
     return q, {"veto": vm, "floor": fm, "on": on}
 

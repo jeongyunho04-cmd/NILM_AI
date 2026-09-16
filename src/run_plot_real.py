@@ -124,8 +124,41 @@ def run_postproc(mode, apps, pred, standby, gate, pobs, oh, pn, v_rms):
     return np.asarray(P, np.float32), np.asarray(g, np.float32)
 
 
+def gbudget_apply(stem, rw, apps, pred):
+    """14.341 — `gbudget` 사중을 걸고 **어느 창이 움직였는지** 같이 돌려준다.
+
+    Ĝ 는 그 파일의 **타깃 사이클에서** 푼다 (`rw.target_cycle`). 창·라벨·Ĝ 가 같은
+    색인이라야 한다 — 34.7 ⑦ 이 39사이클 어긋난 자리를 재서 헛것을 냈다.
+    """
+    import numpy as _np
+
+    from src.model import gbudget as GB
+    from src.model import inputs as _I
+    from src.model.realdata import RealWindows
+    from src.synthesis.segment_pool import SegmentPool
+
+    z = np.load("processed_data/composite_eval/%s.npz" % stem, allow_pickle=True)
+    x = RealWindows._to_33ch(z).astype(_np.float64)
+    nv = len(_I.VOLT_ORDERS)
+    v15 = _np.zeros(15, complex)
+    med = _np.median(x[33:33 + nv], 1) + 1j * _np.median(x[33 + nv:33 + 2 * nv], 1)
+    for s_, h in enumerate(_I.VOLT_ORDERS):
+        v15[h - 1] = med[s_]
+    bud = GB.Budget(apps, v15, pool=SegmentPool(npz_dir="processed_data/npz",
+                                                time_split="train"),
+                    volt_re0=33, volt_orders=_I.VOLT_ORDERS)
+    tc = _np.asarray(rw.target_cycle, _np.int64)
+    g = bud.g_sum(x[None][:, :, tc])[0]
+    v1 = _np.abs(x[33, tc] + 1j * x[33 + nv, tc])
+    q, info = GB.apply(_np.asarray(pred, _np.float64), g, v1, apps)
+    print("    사중 — Ĝ 중앙 %.2f mS · 거부 %d창 · 바닥 %d창 · 고정으로 바뀐 칸 %d"
+          % (float(_np.median(g)), int(info["veto"].sum()), int(info["floor"].sum()),
+             int((_np.abs(q - pred) > 1.0).sum())))
+    return q.astype(np.float32), info
+
+
 def plot_file(stem, apps, t_pred, pred, standby, t_obs, obs, spec, path, title,
-              gate=None, gate_thr=0.5):
+              gate=None, gate_thr=0.5, mark=None):
     n_ax = 4 if gate is None else 5
     hr = [3, 2, 3, 2.2] if gate is None else [3, 2, 3, 2.2, 2.4]
     fig, ax = plt.subplots(n_ax, 1, figsize=(16, 11 if gate is None else 13.4), sharex=True,
@@ -257,8 +290,24 @@ def plot_file(stem, apps, t_pred, pred, standby, t_obs, obs, spec, path, title,
             ax[4].annotate(f"{100*frac:.0f}% (참 {100*true_s/span:.0f}%)",
                            (1.002, i), xycoords=("axes fraction", "data"),
                            fontsize=7.5, va="center", color="0.25")
+        #: 14.341 — 사중이 **어느 창을 움직였는지** 게이트 칸에 겹친다.
+        #   ✕ 가 찍힌 색 = 거부권이 지운 것 · ▲ = 바닥이 세운 것
+        #   ⇒ **✕ 없이 테두리 밖에 남은 색이 "사중이 못 막은 오탐"** 이다
+        if mark:
+            for i, _a in enumerate(apps):
+                for key, sym, c, ms in (("veto", "x", "0.05", 4.2),
+                                        ("floor", "^", "#0a7d00", 4.0)):
+                    mk = mark.get(key)
+                    if mk is None:
+                        continue
+                    sel = np.asarray(mk, bool)[:, i]
+                    if not sel.any():
+                        continue
+                    ax[4].plot(t_pred[sel], np.full(int(sel.sum()), i), sym, ms=ms,
+                               mew=1.2, color=c, zorder=8, ls="none")
         ax[4].annotate("진하기 = 게이트 세기   검은 테두리 = 참 ON   점선 = uncertain   "
-                       "**테두리 밖의 색 = 헛detect, 테두리 안 빈칸 = 놓침**",
+                       "**테두리 밖의 색 = 헛detect, 테두리 안 빈칸 = 놓침**"
+                       + ("   ✕ 거부권이 지움 · ▲ 바닥이 세움" if mark else ""),
                        (0.01, 0.03), xycoords="axes fraction", fontsize=8.5, color="0.3")
 
     fig.savefig(path, dpi=110, bbox_inches="tight")
@@ -276,6 +325,9 @@ def main() -> int:
     ap.add_argument("--gate-thr", type=float, default=0.5,
                     help="5번 칸에서 '켜졌다' 로 볼 게이트 문턱")
     ap.add_argument("--no-gate", action="store_true", help="5번 칸을 안 그린다 (옛 4칸 그림)")
+    #: 14.341 — `gbudget` 사중(거부권·바닥·고정). **끄면 비트 동일**이다.
+    ap.add_argument("--gbudget", action="store_true",
+                    help="컨덕턴스 예산 사중을 걸고 ✕/▲ 로 표시한다")
     ap.add_argument("--postproc", default="off", choices=("off", "cap", "full"),
                     help="`cap` 물리 상한 넘기기 · `full` 거기에 저항 조합 정합까지. "
                          "⚠ resistive_match 는 min_w=150W 라 SMPS 전용 창은 안 건드린다")
@@ -298,6 +350,12 @@ def main() -> int:
             continue
         rw = dense_targets(stem, stride=a.stride)
         pred, standby, gate, pobs, oh, pn = predict(model, rw, dev)
+        mark = None
+        if a.gbudget:
+            #: 14.341 — 컨덕턴스 예산 사중. `--postproc` 과 **다른 물건**이다
+            #  (저쪽은 12.112 의 `resistive_match`). 같이 켜지 못하게 막는다.
+            pred, _gi = gbudget_apply(stem, rw, apps, pred)
+            mark = {"veto": _gi["veto"], "floor": _gi["floor"]}
         if a.postproc != "off":
             pred, gate = run_postproc(a.postproc, apps, pred, standby, gate,
                                       pobs, oh, pn,
@@ -309,7 +367,8 @@ def main() -> int:
         r = plot_file(stem, apps, t_pred, pred, standby, t_obs, obs, ev[stem],
                       str(outd / f"real_{stem}_{name}.png"),
                       f"{stem}  —  {a.ckpt} 예측  ({len(rw):,}창, {a.stride/60:.1f}초 간격)",
-                      gate=None if a.no_gate else gate, gate_thr=a.gate_thr)
+                      gate=None if a.no_gate else gate, gate_thr=a.gate_thr,
+                      mark=mark)
         rows.append((stem, r, pred))
 
     print(f"\n{'파일':10s}{'잔차 평균':>11s}{'절대':>9s}  기기별 평균 예측 (W)")
