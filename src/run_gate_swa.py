@@ -28,6 +28,7 @@ from src import env_guard                                            # noqa: F40
 
 import torch                                                         # noqa: E402
 
+from src.model import inputs as _I  # noqa: E402
 from src.model.net import NILMNet                                    # noqa: E402
 from src.model.losses import S_STATE                                 # noqa: E402
 from src.run_train_cnn import WeightAverager                         # noqa: E402
@@ -48,7 +49,9 @@ def build(seed=0):
     """**학습이 짓는 것과 같은 모델**을 짓는다 — 관문이 딴 물건을 재면 안 된다
     ([[the-gate-must-build-the-real-object]])."""
     torch.manual_seed(seed)
-    return NILMNet(APPS, NS, fine_channels=57, fine_extra_dilations=(32, 64),
+    #: ⚠ 14.368 — 채널 수를 **박아 두면 배치가 바뀔 때 조용히 만료된다**
+    #  (57/47 은 14.331 이전 값이다. `run_gate_pstatecap` 이 같은 꼴로 986157 을 죽였다).
+    return NILMNet(APPS, NS, fine_channels=_I.FINE_CHANNELS, fine_extra_dilations=(32, 64),
                    tap_layers=(0, 1, 4), p_state_cap=3.0, prior_kappa=8.0)
 
 
@@ -59,7 +62,7 @@ def run(model, steps, lr_fn, avg=None, avg_every=0, seed=1):
     fc = model.fine_channels
     for t in range(steps):
         f = torch.randn(4, fc, 600, generator=g) * 0.3
-        w = torch.randn(4, 47, 120, generator=g) * 0.3
+        w = torch.randn(4, _I.WIDE_CHANNELS, 120, generator=g) * 0.3
         out = model(f, w)
         loss = out["power"].pow(2).mean() + out["on_logit"].pow(2).mean()
         opt.zero_grad(set_to_none=True)
@@ -207,7 +210,7 @@ with tempfile.TemporaryDirectory() as d:
     m8.load_state_dict(ck["model"])
     m8.eval()
     with torch.no_grad():
-        o = m8(torch.randn(2, m8.fine_channels, 600) * 0.3, torch.randn(2, 47, 120) * 0.3)
+        o = m8(torch.randn(2, m8.fine_channels, 600) * 0.3, torch.randn(2, _I.WIDE_CHANNELS, 120) * 0.3)
     fin = all(bool(torch.isfinite(v).all()) for v in o.values()
               if isinstance(v, torch.Tensor))
     ident = all(torch.equal(m7.state_dict()[k], m8.state_dict()[k])
