@@ -44,15 +44,24 @@
 그런데 후보 표에 **없는** 것이 둘 실린다:
 ```
   선풍기   강풍은 **전기적으로 저항**이다 (PF 0.998 · h3/h1 0.033 대 저항 0.028).
-           템플릿이 못 가져가고 Ĝ 에 그대로 실린다 -> **0.432~0.765 mS** (21.3~37.7W @222V)
-           포트 식별 여유 0.635 **보다 크다**
-  에어컨   §34.319 가 잰 잔차 편향 **+6.5%** -> 28 mS 에서 **+1.83 mS**
-           ⚠⚠ **실측 5파일에 에어컨이 한 칸도 없다.** 오늘 잰 헛세움 1/5,715 에
-              에어컨 구간이 **0칸**이다 — 그 구간은 **안 재 본 것**이지 안전한 게 아니다
+           템플릿이 못 가져가고 Ĝ 에 **그대로 실린다** — 캐시 2만창에서 확인 (14.338):
+             선풍기 전력   21~25W(G 0.43)  25~32W(0.60)  32~50W(0.75)
+             Ĝ 잔차 중앙   **+0.226**      **+0.411**    **+0.583** mS
+           = 명목 G 의 53~78% 가 Ĝ 로 샌다. 포트 식별 여유 0.635 와 같은 급이다
+  에어컨   ⚠ **내 예측이 틀렸다.** §34 의 "+6.5%" 를 편향으로 읽고 28mS 에서 +1.83 mS 가
+           실린다고 적었는데, 캐시 2만창(에어컨 813창)에서 재니 **편향이 없다**:
+             에어컨 W  5~100  100~300  300~500  500~900   (꺼짐 −0.173)
+             잔차 중앙 −0.015  −0.059   −0.383   −0.119 mS
+           대신 **σ 가 0.265 -> 0.749 (2.8배)** 로 벌어진다. 즉 **잡음**으로 온다
 ```
-★ 다만 **방향이 우리 편이다** — 둘 다 Ĝ 를 **위로** 민다. 그러면 거부권은 덜 서고
-  (안 지운다) 바닥도 덜 선다 (안 세운다). **틀리는 쪽이 아니라 안 하는 쪽**이다.
-  실제로 바닥 회수가 70.9% 에 그친 녹화(test_2)가 **선풍기가 83% 켜진** 녹화다.
+★ 방향이 다르다 — 이걸 갈라 둬야 한다:
+```
+  선풍기  **편향**이고 위쪽이다 -> 거부권·바닥이 **덜 선다** (안 하는 쪽. 보수적)
+  에어컨  **잡음**이고 방향이 없다 -> 원리상 양쪽으로 틀릴 수 있다
+```
+그런데 캐시에서 재니 에어컨 구간에서도 **헛세움이 0.000%** 이고 회수만 43.8% -> 10.0% 로
+떨어진다. 판정식이 **여유 비교**(`lo1 + 여유 < lo0`)라서 대칭 잡음은 주로 **회수**를 깎지
+정밀도를 안 깎는다. 그래도 "안전하다"가 아니라 **"이 자료에서는 안 터졌다"** 로 적어 둔다.
 
 ## ⚠ 거부권과 바닥은 **동시에 못 선다**
 
@@ -111,9 +120,22 @@ def app_states(app: str) -> List[Tuple[int, float]]:
 
 
 def max_ms(app: str) -> float:
-    """그 기기가 낼 수 있는 **최대** 컨덕턴스. 거부권 문턱이 이것을 쓴다."""
+    """그 기기가 낼 수 있는 **최대** 컨덕턴스."""
     d = PIN_MS.get(app)
     return max(d.values()) if d else 0.0
+
+
+def min_ms(app: str) -> float:
+    """그 기기가 켜져 있다면 **적어도** 내는 컨덕턴스. **거부권 문턱이 이것이다.**
+
+    ⚠⚠ 14.338 — 처음에 `max_ms` 를 썼다가 캐시 관문이 잡았다. 거부권의 주장은
+      *"이 기기는 **아예** 못 켜져 있다"* 이므로 **제일 작은 켜짐 상태**로 재야 한다.
+      `max_ms` 를 쓰면 드라이기가 **반파**(9.446)로 켜져 있을 때 `Ĝ < 18.814 − 2` 가
+      성립해 **참으로 켜진 기기를 지운다** — 캐시에서 참 통전 4,643창의 **22.2%** 였다.
+      (실측 관문이 이걸 못 잡은 까닭: 거기서는 라벨로 재는데 반파 구간이 적었다.)
+    """
+    d = PIN_MS.get(app)
+    return min(d.values()) if d else 0.0
 
 
 def _cols(apps: Sequence[str], subset: Iterable[str]) -> List[int]:
@@ -142,7 +164,7 @@ def veto_mask(power: np.ndarray, g_ms: np.ndarray, apps: Sequence[str],
     for j, a in enumerate(apps):
         if a not in PIN_MS:
             continue
-        out[:, j] = (power[:, j] >= claim_w) & (g < max_ms(a) - margin)
+        out[:, j] = (power[:, j] >= claim_w) & (g < min_ms(a) - margin)
     return out
 
 
@@ -272,7 +294,12 @@ class Budget:
                   "minipc": (5., 30.)}
 
     def __init__(self, apps: Sequence[str], v_ref: np.ndarray, pool=None,
-                 volt_re0: int = 33, n_harm: int = 15):
+                 volt_re0: int = 33, n_harm: int = 15, volt_orders=None):
+        #: 14.338 — **차수는 인자다.** 실측 npz 는 15차수를 다 주지만 **학습 캐시의
+        #  세밀 갈래에는 홀수 8차수뿐**이다 (`VOLT_ORDERS`). 캐시 위에서 이 모듈을
+        #  쓰려면 여기를 못 박으면 안 된다.
+        #  ⚠ Ĝ 자체는 차수를 줄여도 거의 안 변한다 (6차수 0.111 대 15차수 0.107 mS, 14.331).
+        self.vo = tuple(self.V15 if volt_orders is None else volt_orders)
         from src.model.fcmtab import build_table, fcm_devices, template
         from src.model.net import harmonic_signatures_by_state
         import src.model.physdecomp as PD
@@ -303,7 +330,7 @@ class Budget:
     def g_sum(self, raw: np.ndarray) -> np.ndarray:
         """`raw` (B, C, N) -> `Ĝ_sum` (B, N) **mS**."""
         import src.model.physdecomp as PD
-        A = PD.build_design(raw, self.T, volt_orders=self.V15, volt_re0=self.volt_re0)
+        A = PD.build_design(raw, self.T, volt_orders=self.vo, volt_re0=self.volt_re0)
         y = PD.observed(raw)
         th, _ = PD._solve(A, y, self.w ** 2, self.lam, np.zeros(self.k), self.nn)
         return 1e3 * th[..., 0]
