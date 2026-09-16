@@ -109,10 +109,21 @@ def main():
     fan_on = yp[:, APPS.index("fan")] > 1.0
     ac_on = yp[:, APPS.index("air_conditioner")] > 5.0
 
+    #: ⚠ 14.346 — FCM **기준전압**은 캐시가 적어 둔 것을 쓴다. 여기서 다시 중앙값을
+    #  잡으면 표본이 달라 Ĝ 가 최대 **0.275 mS** 어긋난다 (포트 식별 여유의 43%).
     v0 = np.zeros(15, complex)
-    for s, h in enumerate(_I.VOLT_ORDERS):
-        v0[h - 1] = (np.median(raw[:, 33 + s, 0])
-                     + 1j * np.median(raw[:, 33 + len(_I.VOLT_ORDERS) + s, 0]))
+    import json as _json
+    import os as _os
+    _mp = "%s/meta.json" % c
+    _vr = None
+    if _os.path.exists(_mp):
+        _vr = (_json.load(open(_mp, encoding="utf-8")).get("g_hat") or {}).get("v_ref")
+    if _vr:
+        v0 = np.array([complex(x[0], x[1]) for x in _vr])
+    else:
+        for s, h in enumerate(_I.VOLT_ORDERS):
+            v0[h - 1] = (np.median(raw[:, 33 + s, 0])
+                         + 1j * np.median(raw[:, 33 + len(_I.VOLT_ORDERS) + s, 0]))
     bud = GB.Budget(APPS, v0, volt_re0=33, volt_orders=_I.VOLT_ORDERS)
     g = bud.g_sum(raw)[:, 0]
     r = g - g_true
@@ -176,6 +187,19 @@ def main():
         "|잔차| 중앙 **%.3f mS** — 고차 전류가 mA 급이라 여기서 무너지면 바로 보인다. "
         "기기별 식별 여유(포트 0.635 · 오븐 2.590)와 견줘라"
         % float(np.median(np.abs(r[clean]))))
+
+    # [9] 14.346 — 캐시에 얹은 `g_hat` 이 **지금 푼 것**과 같나
+    import os as _os
+    gp = "%s/g_hat.npy" % c
+    if _os.path.exists(gp):
+        gh = np.asarray(np.load(gp, mmap_mode="r")[:n], np.float64)
+        d9 = float(np.abs(gh - g).max())
+        chk(9, "★ 캐시 `g_hat` 이 지금 푼 Ĝ 와 같나", d9 < 1e-3,
+            "최대차 **%.3e mS** (창 %d) — 다르면 학습이 **옛 배치의 Ĝ** 를 조용히 먹는다"
+            % (d9, n))
+    else:
+        chk(9, "★ 캐시 `g_hat` 이 지금 푼 Ĝ 와 같나", True,
+            "`%s` 가 없다 — `run_build_ghat` 을 아직 안 돌렸다 (조합 머리 전에 필요하다)" % gp)
 
     print("\n%s  (%d/%d)" % ("전부 통과" if all(OK) else "**실패 있음**", sum(OK), len(OK)))
     return 0 if all(OK) else 1
