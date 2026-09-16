@@ -731,7 +731,15 @@ def main() -> int:
     model.site_transfer = st_map
     print(f"1단계 체크포인트: {a.init} (ep{ck.get('epoch')}, width {ck.get('width')})")
 
+    #: 14.171 — 1단계가 쓴 손실 물리를 **체크포인트에서** 이어받는다. 여기 없어서
+    #  2단계 적응이 전압 앵커·죽은구역 없이 돌고 있었다 (17개가 어긋나 있었다).
+    #  `res_ohm`/`res_ohm_half` 는 아래에서 `--res-apps` 로 이미 짓는다.
+    from src.model.lossbuild import stage1_physics as _s1p
+    _phys = _s1p(ck, apps, skip=("res_ohm", "res_ohm_half"))
+    if _phys:
+        print("1단계 물리를 이어받았다: " + " · ".join(sorted(_phys)))
     crit = NILMLoss(
+        **_phys,
         s_i=torch.tensor([S_I[x] for x in apps], dtype=torch.float32),
         signatures=torch.from_numpy(sig), standby_sig=torch.from_numpy(sb),
         noise_sig=torch.from_numpy(nz), harm_scale=torch.from_numpy(hsc),

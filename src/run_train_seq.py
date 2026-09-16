@@ -167,35 +167,18 @@ def real_windows(apps, grid_s, dev):
     return out
 
 
-def _stage1_physics(a, apps):
-    """1단계 체크포인트가 적어 둔 손실 물리를 `build_loss` 인자로 바꾼다 (14.171).
 
-    ⚠ **옛 체크포인트에는 키가 없다.** 그때는 빈 dict 를 내어 **옛 동작과 비트 동일**로
-    둔다 — 없는 값을 지어내면 지난 판과 비교가 끊긴다.
-    """
-    import torch as _T
-    path = getattr(a, "init", "") or getattr(a, "ref", "") or getattr(a, "ckpt", "")
+
+def _ck_physics(path, apps):
+    """1단계 체크포인트에서 손실 물리를 읽는다 (14.171). 없으면 빈 dict = 비트 동일."""
     if not path:
         return {}
     try:
-        ck = _T.load(path, map_location="cpu", weights_only=False)
+        ck = torch.load(path, map_location="cpu", weights_only=False)
     except Exception:
         return {}
-    out = {}
-    if ck.get("harm_sig_vnorm") is not None and ck.get("harm_vnorm_anchor"):
-        from src.run_train_cnn import _vnorm_exp
-        out["harm_sig_vnorm"] = bool(ck["harm_sig_vnorm"])
-        out["harm_vnorm_exp"] = _vnorm_exp(apps, ck.get("harm_vnorm_classes", ""))
-        out["harm_vnorm_frac"] = float(ck.get("harm_vnorm_frac", 1.0))
-    if ck.get("cons_deadzone") is not None:
-        out["cons_deadzone"] = float(ck["cons_deadzone"])
-    if ck.get("res_apps") is not None:
-        from src.run_train_cnn import _res_cond, _res_ohm
-        out["res_ohm"] = _res_ohm(apps, ck["res_apps"], half=False)
-        out["res_ohm_half"] = _res_ohm(apps, ck["res_apps"], half=True)
-        out["res_cond_state"] = _res_cond(apps, ck.get("res_cond_state", ""))
-        out["swap_tol"] = float(ck.get("swap_tol", 0.02))
-    return out
+    from src.model.lossbuild import stage1_physics
+    return stage1_physics(ck, apps)
 
 
 def main():
@@ -511,7 +494,7 @@ def main():
         #  있었다. 살아 있던 갈라짐은 둘이다: `harm_sig_vnorm`(전압 크기 앵커) 과
         #  `cons_deadzone`. 플래그로 받으면 또 잊으므로 **체크포인트가 기준**이다.
         #  관문: `src/run_gate_lossparity.py`.
-        _phys = _stage1_physics(a, apps)
+        _phys = _ck_physics(getattr(a, "init", "") or getattr(a, "ref", ""), apps)
         crit = build_loss(apps, dev, weights=LossWeights(
             harm=a.w_harm, cons=a.w_cons, over=a.w_over, z=a.w_z,
             state_power=a.w_state_power),
