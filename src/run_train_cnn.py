@@ -532,7 +532,7 @@ def to_targets(batch, dev, vrel_target: bool = False):
     ⚠ `vrel` 과 `v_rms` **둘 다** 옮긴다 — 같은 순간의 같은 물리량이라 한쪽만 옮기면
       그 자체가 새 불일치다. `v_rms` 는 `L_swap`(14.32)과 `L_res` 의 `P = V²/R` 이 쓴다.
     """
-    (fine, wide, yp, yo, ypl, ys, yst, oh, pn, pobs, zg) = [
+    (fine, wide, yp, yo, ypl, ys, yst, oh, pn, pobs, zg, gh) = [
         b.to(dev, non_blocking=True) for b in batch]
     # 14.53 — 타깃 사이클 하나 대 10초 평균. 끄면 옛 식 그대로다.
     _v = (fine[:, V_CH_FINE, FINE_TPOS] if vrel_target
@@ -548,6 +548,8 @@ def to_targets(batch, dev, vrel_target: bool = False):
         # 14.26 — 창 전압비 V/V_CENTER. `L_harm` 의 지문을 이것으로 나눈다 (`--harm-sig-vnorm`).
         #   세밀 채널 25 가 `(v − V_CENTER)/V_SPAN` 이다 (`net.V_CH_FINE`).
         "vrel": _v / V_CENTER,
+        #: 14.348 — 조합 머리가 쓰는 창별 Ĝ_sum (mS). 캐시에 없으면 NaN 이다.
+        "g_hat": gh,
         # 14.32 — `L_swap` 이 쓰는 창 전압 (V). **같은 채널에서 같은 식으로** 낸다.
         #   ⚠ 이것이 없으면 `_swap_term` 의 가드가 **조용히 0** 을 낸다.
         "v_rms": _v,
@@ -567,18 +569,35 @@ def prepare_holdout_inputs(hs, batch: int = 512):
     for i in range(0, len(hs), batch):
         f, w = build_inputs(np.asarray(hs.X[i:i + batch]))
         F.append(f); W.append(w)
-    return np.concatenate(F), np.concatenate(W)
+    #: ★ 14.348 — 조합 머리가 홀드아웃에서도 `Ĝ` 를 받아야 한다. 홀드아웃에는
+    #  `obs_harm.npy` 가 없지만 `X` 가 **원시 49채널**이라 타깃 색인에서 바로 푼다.
+    #  ⚠ 없으면 평가만 반쪽으로 돌아 **학습과 평가가 다른 모델**이 된다.
+    from src.model import gbudget as _GB
+    from src.model.inputs import VOLT_ORDERS as _VO, target_index as _ti
+    _t = _ti(hs.X.shape[-1])
+    _x = np.asarray(hs.X[:, :, _t], np.float64)               # (N,49)
+    _nv = len(_VO)
+    _v15 = np.zeros(15, complex)
+    for _s, _h in enumerate(_VO):
+        _v15[_h - 1] = np.median(_x[:, 33 + _s]) + 1j * np.median(_x[:, 33 + _nv + _s])
+    from src.model.losses import S_STATE as _SS
+    _apps = list(getattr(hs, "appliances", None) or sorted(_SS))
+    _bud = _GB.Budget(_apps, _v15, volt_re0=33, volt_orders=_VO)
+    _g = _bud.g_sum(_x.T[None])[0].astype(np.float32)          # (N,)
+    return np.concatenate(F), np.concatenate(W), _g
 
 
 @torch.no_grad()
 def evaluate(model, prep, dev, batch: int = 512) -> tuple:
-    fine_all, wide_all = prep
+    fine_all, wide_all, g_all = prep
     model.eval()
     P, ON = [], []
     for i in range(0, len(fine_all), batch):
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
             o = model(torch.from_numpy(fine_all[i:i + batch]).to(dev),
-                      torch.from_numpy(wide_all[i:i + batch]).to(dev))
+                      torch.from_numpy(wide_all[i:i + batch]).to(dev),
+                      torch.from_numpy(g_all[i:i + batch]).to(dev)
+                      if model.comb_tau > 0 else None)
         P.append(o["power"].float().cpu().numpy())
         ON.append(torch.sigmoid(o["on_logit"]).float().cpu().numpy())
     model.train()
@@ -923,6 +942,10 @@ def main() -> int:
                     help="**쉬운 창 가중 낮추기** (13.80). BCE 에 (1-p_t)^gamma 를 "
                          "곱해 이미 맞은 창이 방향을 정하지 못하게 한다. 로짓은 안 "
                          "묶으므로 --gate-smooth 와 겨냥이 다르다 — 따로 켜서 갈라라.")
+    #: ★ 14.347 — **조합 머리**. 저항 4종을 24개 조합 위의 softmax 로 낸다.
+    #  `0` 이면 끔 = 비트 동일. 값은 물리 잔차의 눈금 (mS) — 14.343 의 λ 꼭지가 0.6~1.0 이다.
+    #  ⚠ 캐시에 `g_hat.npy` 가 있어야 한다 (`run_build_ghat`).
+    ap.add_argument("--comb-tau", type=float, default=0.0)
     ap.add_argument("--prior-kappa", type=float, default=8.0,
                     help="on 게이트 물리 프라이어 세기 (12.9.8절). 0 이면 끈다")
     ap.add_argument("--prior-beta", type=float, default=0.5,
@@ -1306,6 +1329,7 @@ def main() -> int:
     del pool
 
     model = NILMNet(apps, appliance_state_counts(apps), width=a.width,
+                    comb_tau=a.comb_tau,
                     wide_summary=a.wide_summary, wide_target=a.wide_target,
                     periodicity=a.periodicity,
                     fine_dropout=a.fine_dropout,
@@ -1427,6 +1451,13 @@ def main() -> int:
     cache = None
     if a.cache and a.cache.lower() != "none":
         cache = CachedWindows(a.cache)
+        #: ★ 14.348 — `--comb-tau` 를 켰는데 캐시에 `g_hat.npy` 가 없으면 배치가 **NaN**
+        #  이고, 조합 softmax 가 그걸 퍼뜨려 **손실이 조용히 죽는다**. 여기서 멈춘다.
+        if a.comb_tau > 0 and not getattr(cache, "has_ghat", False):
+            raise SystemExit(
+                "--comb-tau 를 켰는데 캐시에 `g_hat.npy` 가 없다: %s@N@"
+                "    python -X utf8 -m src.run_build_ghat --cache %s"
+                .replace("@N@", chr(10)) % (a.cache, a.cache))
         # 짝수차 규약은 캐시에 **구워져** 있다 (`build_fine` 이 0 으로 만든 것은 못 되돌린다).
         # 체크포인트에는 현재 코드 값이 적히므로, 둘이 다르면 체크포인트가 거짓을 주장하고
         # `run_gate_check` 의 검사가 그것을 통과시킨다. 여기서 막는다 (13.10).
@@ -1507,6 +1538,8 @@ def main() -> int:
                     "even_median": int(a.even_median),
                     #: 14.331 — 입력 배치의 규약. 없으면 옛 6차수 판이다.
                     "volt_orders": list(VOLT_ORDERS),
+                    #: 14.347 — 조합 머리의 눈금. 0 이면 안 썼다.
+                    "comb_tau": float(a.comb_tau),
                     "cons_deadzone": float(a.cons_deadzone),
                     # 14.295 궤적 평균. 0 이면 안 쓴 것 = 옛 경로와 비트 동일.
                     "swa_start": int(a.swa_start),
@@ -1620,7 +1653,8 @@ def main() -> int:
             even_jitter(fine, wide, a.even_jitter)  # 14.245 — 0 이면 난수도 안 뽑는다
             odd_phase_jitter(fine, wide, a.odd_phase_jitter)   # 14.268 — 0 이면 무동작
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
-                out = model(fine, wide)
+                out = model(fine, wide,
+                            tgt["g_hat"] if model.comb_tau > 0 else None)
                 parts = crit(out, tgt)
             opt.zero_grad(set_to_none=True)
             parts["total"].backward()

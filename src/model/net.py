@@ -47,7 +47,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.model.inputs import (
-    DROP_TAPS, FINE_CHANNELS, FINE_CYCLES, LEGACY_FINE_CHANNELS, POWER_SCALE,
+    DROP_TAPS, FINE_CHANNELS, FINE_CYCLES, FINE_VOLT0, LEGACY_FINE_CHANNELS, POWER_SCALE,
     RIPPLE_HALF_LONG, RIPPLE_HALF_SHORT, RIPPLE_SCALE,
     V_CENTER, V_SPAN, WIDE_CHANNELS, fine_target_index, wide_target_index)
 
@@ -384,6 +384,29 @@ class NILMNet(nn.Module):
         #: 책임 분모의 하한 (W). **이것이 로버스트 슬랙이다** — 아래 forward 주석 참조.
         proj_floor: float = 5.0,
         vexp: bool = False,
+        #: ★ 14.347 — **조합 머리.** 저항 4종을 독립 게이트가 아니라 **24개 조합 위의
+        #: softmax** 로 낸다. `0` 이면 끔 = **비트 동일**.
+        #:
+        #: ```
+        #:   후보 c   저항 4종의 (OFF ∪ 통전상태) 곱집합 24개
+        #:   z_{k,OFF} = log(1−σ(on_k))   ·   z_{k,s} = log σ(on_k) + log mix_k[s]
+        #:   score_c = Σ_k β_k·z_{k,c_k}  −  |Ĝ − ΣG(c)| / comb_tau
+        #:   P_k = Σ_c w_c · G(k,c_k) · |V₁|²          (w = softmax(score))
+        #: ```
+        #: 왜 이 모양인가 (14.343~344 측정):
+        #: ```
+        #:   Ĝ 는 **계량기**  저항 총 전력 오차 중앙 −5.4W · σ 17.3W · 상대 −0.39%
+        #:   Ĝ 는 **못 가른다**  조합 정확 84.5% (반파 넣어 94.3%) · 모델 단독 94.9%
+        #:   ★ 둘을 합치면 **99.69%** — 이득이 **결합**에서만 나온다
+        #: ```
+        #: ⚠ **β_k 가 기기별이다** (사용자 결정). 오늘 근거: Ĝ 단독 정확이 오븐 **99.8%** ·
+        #:   포트 **94.5%** 로 갈린다 (포트는 충돌 C 가 반파로도 안 깨진다). β 가 크면
+        #:   그 기기는 모델 쪽, 작으면 물리 쪽이다. τ 는 잔차의 눈금이라 **하나**로 둔다 —
+        #:   `|Ĝ−ΣG(c)|` 은 조합 하나의 성질이지 기기별로 쪼갤 물건이 아니다.
+        #: ⚠⚠ **`comb_tau>0` 이면 저항 전력이 `G 표`에서 나온다** (자유 크기 슬롯이 아니다).
+        #:   그래서 τ→∞ 극한이 지금과 같아지는 것은 **게이트·상태 주변확률**뿐이고 전력은
+        #:   아니다. 끄고 켜는 스위치는 `comb_tau == 0` 이다.
+        comb_tau: float = 0.0,
         head_conductance: bool = False,
         #: 14.148 — **게이트 경화.** `power = (σ(on) > τ)·p_raw` 로 낸다. 0 이면 끈다
         #: (= 비트 동일). `--on-power-praw`(14.147B)가 손실에서 게이트를 뺐는데 추론은
@@ -889,6 +912,44 @@ class NILMNet(nn.Module):
                     if 0 <= sid < self.n_pow and w > 0:
                         cap[j, sid] = self.p_state_cap * float(w)
             self.register_buffer("p_state_cap_w", cap, persistent=False)
+        # ── 조합 머리 (14.347) ──────────────────────────────────────────────
+        self.comb_tau = float(comb_tau)
+        if self.comb_tau > 0:
+            import itertools as _it
+
+            from src.model.gbudget import PIN_MS as _PIN
+            res = [a for a in self.appliances if a in _PIN]
+            if not res:
+                raise ValueError("comb_tau 를 켰는데 저항 기기가 하나도 없다")
+            opts = [[(0, 0.0)] + [(int(s), float(g)) for s, g in sorted(_PIN[a].items())]
+                    for a in res]
+            cb = list(_it.product(*opts))
+            self.register_buffer("comb_cols", torch.tensor(
+                [self.appliances.index(a) for a in res], dtype=torch.long), persistent=False)
+            self.register_buffer("comb_state", torch.tensor(
+                [[x[0] for x in c] for c in cb], dtype=torch.long), persistent=False)
+            cg = torch.tensor([[x[1] for x in c] for c in cb], dtype=torch.float32)
+            #: ⚠⚠ **표에 없는 켜짐 상태**를 되돌려 줘야 한다. `PIN_MS` 에는 니크롬선
+            #  상태만 있는데 (오븐 s2 · 핫플 s2) `power_mix_mask` 는 오븐 s1(FAN_LIGHT
+            #  14.6W)·핫플 s1(ARMED_IDLE 0.6W)도 켜짐으로 친다. 처음에 그걸 안 더해서
+            #  **그 상태의 확률과 전력이 통째로 사라졌다** (τ→∞ 주변확률이 σ 와 0.156 어긋났다).
+            #  그 상태들은 저항이 아니므로 **모델의 자유 크기**를 그대로 쓴다.
+            _sm = torch.zeros(len(res), MAX_STATES)
+            for _i, _a in enumerate(res):
+                _j = self.appliances.index(_a)
+                for _s in range(MAX_STATES):
+                    if on_states[_j, _s] > 0 and _s not in _PIN[_a]:
+                        _sm[_i, _s] = 1.0
+            self.register_buffer("comb_small", _sm, persistent=False)
+            self.register_buffer("comb_g", cg, persistent=False)          # (C,R) mS
+            self.register_buffer("comb_gsum", cg.sum(-1), persistent=False)
+            #: 기기별 **모델 신뢰도**. 1.0 에서 시작한다 — 그 값이 14.343 의 λ=1.0 꼭지다
+            #: (λ 쓸기: 0 -> 84.5% · **0.6~1.0 -> 99.6%** · >=2 -> 94.9% 로 모델 단독 복귀).
+            self.comb_beta = nn.Parameter(torch.ones(len(res)))
+            if head_conductance or vexp:
+                raise ValueError("comb_tau 는 vexp·head_conductance 와 같이 못 쓴다 "
+                                 "— 저항 전력에 곱을 두 번 건다")
+
         # ── 전압 지수 (14.7) ────────────────────────────────────────────────
         # `p_raw` 는 **V_CENTER 에서의** 상태 명목값이 되고 전압 의존은 구조가 낸다.
         # ⚠ 꺼지면 지수가 전부 0 이라 `vrel**0 = 1` — 옛 동작과 **비트 동일**이다.
@@ -1056,7 +1117,8 @@ class NILMNet(nn.Module):
                                   for v in (fp[:, a:b].amax(-1), fp[:, a:b].amin(-1))], 1))
         return feats
 
-    def forward(self, fine: torch.Tensor, wide: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(self, fine: torch.Tensor, wide: torch.Tensor,
+                g_hat: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         t = self.target_pos
         # 이 체크포인트가 학습된 채널 수만 쓴다 (`self.fine_channels` 주석 참조).
         if fine.shape[1] < self.fine_channels:
@@ -1272,9 +1334,53 @@ class NILMNet(nn.Module):
         if self.gate_free_power:
             # ★ 곱을 뗀다. 게이트는 `out["on_logit"]` 로만 남아 검출·채점에 쓰인다.
             _g = torch.ones_like(_g)
+        power = _g * p_raw
+        comb_w = None
+        if self.comb_tau > 0:
+            #: ★ 14.347 — 저항 4종을 **24개 조합 위의 softmax** 로 다시 쓴다.
+            #  `g_hat` 이 없으면(옛 호출) **아무 일도 안 한다** — 조용히 반쪽으로 돌지 않게
+            #  관문 [7] 이 그것을 잡는다.
+            if g_hat is None:
+                raise ValueError("comb_tau 를 켰는데 forward 에 g_hat 이 안 들어왔다 "
+                                 "— 캐시의 `g_hat.npy` 를 배치와 같이 넘겨야 한다")
+            R = self.comb_cols
+            nv = (fine.shape[1] - FINE_VOLT0) // 2
+            t_ = self.target_pos
+            v1 = torch.sqrt(
+                (fine[:, FINE_VOLT0, t_] * V_SPAN + V_CENTER) ** 2
+                + (fine[:, FINE_VOLT0 + nv, t_] * V_SPAN) ** 2)          # (B,) 타깃 |V₁|
+            lg = F.logsigmoid(on_logit[:, R])                            # (B,R) log σ
+            #: ⚠⚠ **"컨덕턴스 0" 은 OFF 만이 아니다.** 오븐 FAN_LIGHT(14.6W)·핫플
+            #  ARMED_IDLE(0.6W)은 켜져 있어도 니크롬선이 아니라 예산에 0 을 낸다.
+            #  처음에 `lg0 = log(1−σ)` 만 썼더니 그 상태의 확률이 **어디에도 안 들어가**
+            #  softmax 가 그 몫을 OFF·통전에 나눠 줬다 (오븐 주변확률 0.436 -> **0.777**).
+            #  ⇒ `z_OFF = log( (1−σ) + σ·Σ_{s∉표} mix_s )`. 그러면 Σ_후보 exp(z) = 1 이다.
+            _sm = (mix[:, R] * self.comb_small[None]).sum(-1)             # (B,R)
+            lg0 = torch.log(((1.0 - torch.sigmoid(on_logit[:, R]))
+                             + torch.sigmoid(on_logit[:, R]) * _sm).clamp(min=1e-12))
+            #: ⚠ **`power_mix_mask` 를 써야 한다.** 처음에 생 `state` 를 log_softmax
+            #  했다가 OFF 상태(0번)까지 섞여 Σ_s exp(z) 가 1 이 안 됐고, τ→∞ 에서
+            #  주변확률이 σ(on) 과 **0.223** 어긋났다. 전력 경로가 쓰는 그 마스크다.
+            z_on = lg[..., None] + F.log_softmax(
+                state[:, R].masked_fill(self.power_mix_mask[None, R] == 0, -1e4), -1)
+            st = self.comb_state                                         # (C,R)
+            pick = z_on.gather(2, st.t()[None].expand(len(fine), -1, -1))  # (B,R,C)
+            #: ⚠⚠ 변수 이름을 `z` 로 쓰면 **몸통 표현 `z` 를 덮어쓴다** — `z_head` 와
+            #  `out["z"]` 가 그걸 읽어서 986092 가 `mat1 and mat2 shapes cannot be
+            #  multiplied (12288x4 and 256x1)` 로 죽었다. `zc` 로 둔다.
+            zc = torch.where((st > 0)[None], pick.permute(0, 2, 1), lg0[:, None, :])
+            score = ((zc * self.comb_beta[None, None]).sum(-1)
+                     - (g_hat[:, None] - self.comb_gsum[None]).abs() / self.comb_tau)
+            comb_w = score.softmax(-1)                                   # (B,C)
+            pk = (comb_w @ self.comb_g) * 1e-3 * (v1 ** 2)[:, None]      # (B,R) W
+            #: 표에 없는 켜짐 상태(오븐 FAN_LIGHT 등)는 **모델의 자유 크기**를 더한다
+            pk = pk + _g[:, R] * (mix[:, R] * p_states[:, R]
+                                  * self.comb_small[None]).sum(-1)
+            power = power.clone()
+            power[:, R] = pk
         out = {
             # 전력은 on/off 로 게이팅한다. 게이팅이 없으면 꺼진 기기에도 전력이 샌다.
-            "power": _g * p_raw,
+            "power": power,
             "power_raw": p_raw,
             "power_states": p_states,
             # 상태 혼합 (B,K,S). 상태별 지문(13.11)이 이것을 쓴다 — 손실 쪽에서
@@ -1286,6 +1392,7 @@ class NILMNet(nn.Module):
             # 14.284 — 손실이 **같은 값으로** V 를 되돌리게 실어 보낸다. hcond 가 아니면 없다.
             **({"vrel_pow": _vpow} if (self.hcond and _vpow is not None) else {}),
             "standby": F.softplus(o[..., self.i_on + 2]),
+            **({"comb_w": comb_w} if comb_w is not None else {}),
         }
         if self.aux_z:
             out["log_z"] = self.z_head(z).squeeze(-1)      # (B,)

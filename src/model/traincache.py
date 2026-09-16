@@ -447,6 +447,13 @@ class CachedWindows:
             p = d / f"{name}.npy"
             self.arr[name] = np.load(p, mmap_mode="r") if p.exists() else None
         self.has_z = self.arr["z_grid"] is not None
+        #: ★ 14.348 — 조합 머리(`--comb-tau`)가 쓰는 창별 `Ĝ_sum` (mS).
+        #  `run_build_ghat` 이 **나중에** 얹으므로 `_SPEC` 이 아니라 여기서 따로 읽는다
+        #  (굽기·병합 경로를 안 건드린다). 없으면 **NaN** 을 내보내 배치 길이를 지킨다 —
+        #  `z_grid` 와 같은 규약이다. `--comb-tau` 를 켰는데 NaN 이면 트레이너가 멈춘다.
+        _gp = d / "g_hat.npy"
+        self.arr["g_hat"] = np.load(_gp, mmap_mode="r") if _gp.exists() else None
+        self.has_ghat = self.arr["g_hat"] is not None
         # ── 14.93 배열의 **실제 모양**을 본다 ────────────────────────────────
         # 위 `fine_shape` 검사는 **meta 를 믿는다**. 광역은 meta 에 모양 키가
         # 아예 없었고(`n_wide` 만 있다) 검사도 없었다 — `WIDE_CHANNELS` 를 바꾸면
@@ -510,4 +517,6 @@ class CachedWindows:
             np.asarray(a["p_noise"][i], np.float32), np.asarray(a["p_observed"][i], np.float32),
             (np.asarray(a["z_grid"][i], np.float32) if a["z_grid"] is not None
              else np.full((len(i), 2), np.nan, np.float32)),
+            (np.asarray(a["g_hat"][i], np.float32) if a["g_hat"] is not None
+             else np.full(len(i), np.nan, np.float32)),
         )

@@ -124,8 +124,13 @@ def main() -> int:
     #   걸려 **985993 이 여섯 토막 전부 12초에 죽었다.** 배치를 바꾸면 "맞는 체크포인트가
     #   하나도 없는" 부트스트랩 구간이 반드시 생긴다 — 그때는 **실패가 아니라 건너뜀**이다.
     #   ⚠ 건너뜀이 굳지 않게 **자동으로 찾는다**: 새 팔이 하나라도 구워지면 다시 돈다.
-    from src.run_gate_check import load_model, newest_compatible_ckpt
+    from src.run_gate_check import load_model, newest_compatible_ckpt, sync_even_median
     _q = newest_compatible_ckpt()
+    #: ⚠ 14.348 — 고른 체크포인트의 **짝수차 규약**을 따라간다. 이 줄이 없으면
+    #  `load_model` 이 `even_median` 불일치로 멈춘다. [4] 가 오래 건너뛰어 있어서
+    #  안 드러나 있었고, `cnn_v49base` 가 구워지자 바로 나왔다 (건너뜀이 안 굳는다는 증거).
+    if _q:
+        sync_even_median([_q])
     p = Path(_q) if _q else Path("results/__none__.pt")
     if not p.exists():
         print("  [4] **건너뜀** — 지금 배치(FINE %d · WIDE %d · 차수 %s)와 맞는 체크포인트가"
@@ -133,7 +138,17 @@ def main() -> int:
               "      배치를 바꾼 직후의 부트스트랩이다. 한 팔이라도 구워지면 이 줄이 다시 돈다."
               % (_I.FINE_CHANNELS, _I.WIDE_CHANNELS, tuple(_I.VOLT_ORDERS)))
     else:
+        #: ⚠⚠ 14.348 — **옛 [4] 는 자기모순이었다.** *"진짜 가중치에서 상한이 빔 s1 을
+        #  자르나"* 를 물었는데, `--p-state-cap` 을 **켜고 학습한 판**에서는 표류가 애초에
+        #  안 일어나 자를 게 없다. 처치가 통해서 검사가 실패한다.
+        #  실제로 `cnn_v49base_s0` 에서 재니 빔 s1 이 **9.4W** — 초기값 10.0W 의 0.94배다
+        #  (14.121 이 잰 옛 아홉 판은 **83.6배**였다). 그 전제가 **만료됐다**
+        #  ([[a-diagnosis-expires-when-the-architecture-changes]] 의 사촌).
+        #  ⇒ 살아 있는 불변식으로 바꾼다: **상한이 지켜지나** + **상한을 꺼도 넘나**.
+        #    후자가 있으면 옛 행동(자른다), 없으면 새 행동(표류가 없다). 둘 다 통과지만
+        #    **어느 쪽인지 찍는다** — 다시 표류하면 이 줄이 바로 말해 준다.
         m_off = load_model(str(p), "cpu")[0]
+        m_off.p_state_cap = 0.0                      # 진짜 무상한 기준
         m_on = load_model(str(p), "cpu")[0]
         m_on.p_state_cap = R
         cap = torch.full((len(APPS), m_on.n_pow), float("inf"))
@@ -144,11 +159,21 @@ def main() -> int:
         m_on.register_buffer("p_state_cap_w", cap, persistent=False)
         with torch.no_grad():
             a_, b_ = m_off(f, w), m_on(f, w)
-        d = float((a_["power_states"][:, j, sid] - b_["power_states"][:, j, sid]).max())
-        ck("[4] ★ 진짜 체크포인트에서 빔 s1 이 잘린다", d > 1.0,
-           "%.1fW -> %.1fW (%.1fW 깎였다)"
-           % (float(a_["power_states"][:, j, sid].mean()),
-              float(b_["power_states"][:, j, sid].mean()), d))
+        raw = a_["power_states"]                     # 상한 없는 값
+        held = float((b_["power_states"] / cap.clamp(max=1e9)[None]).max())
+        ratio, worst = 0.0, ""
+        for k, a in enumerate(APPS):
+            for sid_, w_ in S_STATE.get(a, {}).items():
+                if 0 <= sid_ < m_on.n_pow and w_ > 0:
+                    r_ = float(raw[:, k, sid_].max()) / float(w_)
+                    if r_ > ratio:
+                        ratio, worst = r_, "%s s%d" % (a, sid_)
+        ck("[4] ★ 진짜 체크포인트 — 상한이 **지켜지나**", held <= 1.0 + 1e-5,
+           "상한 대비 최대 **%.3f** (1 이하여야 한다) · 무상한 max(p_states)/S_STATE 최대 "
+           "**%.2f배** (%s) · 14.121 의 옛 아홉 판은 빔 s1 이 **83.6배**였다%s"
+           % (held, ratio, worst,
+              "  -> **상한이 지금은 놀고 있다** (표류가 안 일어난다)" if ratio <= R
+              else "  -> 상한이 실제로 자르고 있다"))
 
     # [5] 버퍼가 state_dict 에 안 들어간다 (옛 체크포인트 호환)
     ck("[5] `p_state_cap_w` 가 `state_dict` 에 **없다**",
