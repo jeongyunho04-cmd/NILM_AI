@@ -66,12 +66,17 @@
 #SBATCH -e logs/swa_%A_%a.err
 
 set -euo pipefail
-cd ~/NILM_AI
-PY=python
-EPOCHS=300
+# ⚠ 이 네 줄은 짝(`patches/cnn_evenjit_seeds.sbatch`)에서 **그대로 베낀 것**이다.
+#   처음에 `PY=python` 과 없는 캐시 경로를 적었다가 잡았다 — 로그인 노드엔 torch 가
+#   없고 `processed_data/train60_v33` 는 **존재하지 않는다**.
+cd "$HOME/NILM_AI"
+PY=./env/bin/python
+CACHE=${CACHE:-cache/train60_v32h}
+HOLDOUT=${HOLDOUT:-processed_data/holdout60_v32h}
+EPOCHS=${EPOCHS:-300}
 SEED=${SLURM_ARRAY_TASK_ID}
-CACHE=processed_data/train60_v33
-HOLDOUT=processed_data/holdout_v32
+echo "노드 $(hostname) · 씨 $SEED · $(date '+%F %H:%M:%S')"
+nvidia-smi --query-gpu=index,name --format=csv,noheader
 
 echo "=== 관문 ==="
 $PY -X utf8 -m src.run_gate_ctordefault
