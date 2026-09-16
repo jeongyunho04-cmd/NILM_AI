@@ -60,6 +60,10 @@ class HoldoutSet:
     recipe: np.ndarray          # (N,) <U32
     appliances: List[str]
     meta: dict
+    #: ★ 14.353 — (N,2) float32 선로 임피던스 `(r_grid_ohm, x_grid_ohm)`.
+    #: 옛 홀드아웃에는 **없다** — 그때는 `None` 이고 쓰는 쪽이 "모름" 으로 다뤄야 한다.
+    #: ⚠ 기본값이 있으니 **반드시 맨 뒤**다 (앞에 두면 dataclass 가 안 만들어진다).
+    z_grid: Optional[np.ndarray] = None
 
     def __len__(self) -> int:
         return len(self.X)
@@ -71,6 +75,7 @@ class HoldoutSet:
             X=self.X[m], y_power=self.y_power[m], y_standby=self.y_standby[m],
             y_on=self.y_on[m], y_state=self.y_state[m], y_plugged=self.y_plugged[m],
             p_noise=self.p_noise[m], p_observed=self.p_observed[m], recipe=self.recipe[m],
+            z_grid=None if self.z_grid is None else self.z_grid[m],
             appliances=self.appliances, meta={**self.meta, "subset_n": int(m.sum())},
         )
 
@@ -112,7 +117,12 @@ def _w_chunk(task):
          "y_power": np.empty((n, k), np.float32), "y_standby": np.empty((n, k), np.float32),
          "y_on": np.empty((n, k), np.int8), "y_state": np.empty((n, k), np.int16),
          "y_plugged": np.empty((n, k), np.int8),
-         "p_noise": np.empty(n, np.float32), "p_observed": np.empty(n, np.float32)}
+         "p_noise": np.empty(n, np.float32), "p_observed": np.empty(n, np.float32),
+         #: ★ 14.353 — 선로 임피던스 `(r_grid, x_grid)`. 캐시의 `z_grid` 와 **같은 규약**이다
+         #  (`traincache` 도 `smp.metadata` 에서 그대로 읽는다). 창 하나는 배전 환경
+         #  하나 위에 놓인다 (`sample_environment`). ⚠ 이걸 안 적으면 홀드아웃에서
+         #  Z 주입 갈래를 **아예 못 재고** 학습과 평가가 다른 모델이 된다.
+         "z_grid": np.empty((n, 2), np.float32)}
     rec = []
     for j in range(n):
         smp, recipe = g._synthesize_window()
@@ -122,6 +132,8 @@ def _w_chunk(task):
         r["y_on"][j], r["y_state"][j], r["y_plugged"][j] = t["y_on"], t["y_state"], t["y_plugged"]
         r["p_noise"][j] = smp.p_noise_w[tgt]
         r["p_observed"][j] = smp.power_features[tgt, 0]
+        r["z_grid"][j] = (smp.metadata.get("r_grid_ohm", np.nan),
+                          smp.metadata.get("x_grid_ohm", np.nan))
         rec.append(recipe)
     r["recipe"] = np.asarray(rec)
     return r
@@ -359,6 +371,7 @@ def build_holdout(
     ypl = np.empty((n_windows, k), np.int8)
     pn = np.empty(n_windows, np.float32)
     pobs = np.empty(n_windows, np.float32)
+    zg = np.empty((n_windows, 2), np.float32)          # ★ 14.353 (r_grid, x_grid)
     rec: List[str] = []
 
     nw = max(0, int(workers or 0))
@@ -375,6 +388,8 @@ def build_holdout(
             yo[i], yst[i], ypl[i] = t["y_on"], t["y_state"], t["y_plugged"]
             pn[i] = smp.p_noise_w[tgt]
             pobs[i] = smp.power_features[tgt, 0]
+            zg[i] = (smp.metadata.get("r_grid_ohm", np.nan),
+                     smp.metadata.get("x_grid_ohm", np.nan))
             rec.append(recipe)
             if progress_every and (i + 1) % progress_every == 0:
                 print(f"  {i + 1:>6,}/{n_windows:,}", flush=True)
@@ -384,7 +399,7 @@ def build_holdout(
         cw = max(1, int(chunk_windows))
         tasks = [(i, min(cw, n_windows - i * cw)) for i in range((n_windows + cw - 1) // cw)]
         dst = {"y_power": yp, "y_standby": ys, "y_on": yo, "y_state": yst,
-               "y_plugged": ypl, "p_noise": pn, "p_observed": pobs}
+               "y_plugged": ypl, "p_noise": pn, "p_observed": pobs, "z_grid": zg}
         ctx = mp.get_context("spawn")
         pos = 0
         with ctx.Pool(nw, initializer=_w_init,
@@ -407,7 +422,7 @@ def build_holdout(
     print(f"[holdout] 생성 {time.time() - t0:.0f}초 "
           f"({n_windows / max(time.time() - t0, 1e-9):,.0f} win/s)")
     arrays = {"y_power": yp, "y_standby": ys, "y_on": yo, "y_state": yst,
-              "y_plugged": ypl, "p_noise": pn, "p_observed": pobs,
+              "y_plugged": ypl, "p_noise": pn, "p_observed": pobs, "z_grid": zg,
               "recipe": np.asarray(rec)}
     for name, arr in arrays.items():
         np.save(out / f"{name}.npy", arr)
@@ -484,5 +499,6 @@ def load_holdout(out_dir: Union[str, Path] = DEFAULT_DIR) -> HoldoutSet:
         X=np.load(d / "X.npy", mmap_mode="r"), y_power=g("y_power"), y_standby=g("y_standby"), y_on=g("y_on"),
         y_state=g("y_state"), y_plugged=g("y_plugged"), p_noise=g("p_noise"),
         p_observed=g("p_observed"), recipe=g("recipe"),
+        z_grid=(np.load(d / "z_grid.npy") if (d / "z_grid.npy").exists() else None),
         appliances=meta["appliances"], meta=meta,
     )

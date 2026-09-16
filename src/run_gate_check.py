@@ -146,6 +146,23 @@ def sync_even_median(ckpts, force=None):
     return int(k)
 
 
+def _comb_over_of(pk) -> float:
+    """★ 14.353 — 초과 주장 꺾기의 **추론 운영점**을 정한다.
+
+    `comb_over` 를 적은 판(14.352 이후)은 **그 값을 그대로** 따른다. 그 키가 아예
+    없는 옛 조합 판은 학습 뒤에 나온 항이므로 운영점 `COMB_OVER_OP` 를 얹는다 —
+    합 15 -> **8** · C포트오탐 9 -> **2** (14.352). **조용히 하지 않고 한 줄 찍는다.**
+    """
+    if float(pk.get("comb_tau", 0.0) or 0.0) <= 0:
+        return 0.0
+    if "comb_over" in pk:
+        return float(pk.get("comb_over") or 0.0)
+    from src.model.gbudget import COMB_OVER_OP
+    print("  ** 초과 주장 꺾기 comb_over=%.3f (추론 운영점) — 체크포인트에 키가 없다 **"
+          % COMB_OVER_OP)
+    return float(COMB_OVER_OP)
+
+
 def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True,
                state_power_init: bool = True, proj_from: dict = None):
     """`weights=False` 면 **구조·가림만** 체크포인트에서 가져오고 가중치는 새로 뽑는다 (13.84.27).
@@ -258,8 +275,8 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
                     fine_derive=str(pk.get("fine_derive", "window") or "window"),
                     wide_dg=bool(pk.get("wide_dg", False)),
         comb_tau=float(pk.get("comb_tau", 0.0) or 0.0),
-        comb_over=float(pk.get("comb_over", 0.0) or 0.0),
-        comb_over_margin=float(pk.get("comb_over_margin", 2.0) or 2.0),
+                    comb_over=_comb_over_of(pk),
+                    comb_over_margin=float(pk.get("comb_over_margin", 2.0) or 2.0),
                     fine_dc=str(pk.get("fine_dc", "keep") or "keep"),
                     fine_pad=str(pk.get("fine_pad", "zeros") or "zeros"),
                     # 미래 토막 수 (14.122). 없으면 1 이라 **비트 동일**이다.
