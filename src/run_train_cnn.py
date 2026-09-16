@@ -41,9 +41,11 @@ from src.evaluation import (
 from src.model.inputs import fine_target_index as _fti
 from src.model.net import V_CH_FINE
 FINE_TPOS = _fti()          #: 세밀 창 안의 타깃 위치 (239 = 600−1−360). 14.53 이 쓴다.
-from src.model.inputs import (ZERO_EVEN_HARMONICS, FINE_CYCLES, FINE_LAYOUT,
-                             FINE_VOLT0, TARGET_LOOKAHEAD, V_CENTER, V_SPAN,
-                             VOLT_ORDERS, WIDE_CHANNELS,
+from src.model.inputs import (ZERO_EVEN_HARMONICS, EVEN_MAG0, EVEN2_CH,
+                             FINE_CYCLES, FINE_LAYOUT,
+                             FINE_VOLT0, HALFWAVE_CH, TARGET_LOOKAHEAD,
+                             V_CENTER, V_SPAN,
+                             VOLT_ORDERS, WIDE_CHANNELS, WIDE_MAG0,
                              WIDE_VOLT0, build_inputs, RAW_CHANNELS)
 from src.synthesis.dataset import chunk_seed
 from src.model.traincache import CachedWindows
@@ -238,6 +240,63 @@ def vswap(fine: torch.Tensor, wide: torch.Tensor, p: float) -> None:
     sel = torch.where(torch.rand(B, device=fine.device) < p, perm, torch.arange(B, device=fine.device))
     fine[:, FINE_VOLT0:FINE_VOLT0 + nv] = fine[sel][:, FINE_VOLT0:FINE_VOLT0 + nv]
     wide[:, WIDE_VOLT0:WIDE_VOLT0 + nv] = wide[sel][:, WIDE_VOLT0:WIDE_VOLT0 + nv]
+
+
+#: 짝수차 크기를 나르는 채널. `run_gate_evenjit.py` 가 **원시를 흔들어** 이 표를 검증한다.
+EVEN_FINE_MAG = list(range(EVEN_MAG0, EVEN_MAG0 + 7))   # |I2|,|I4|,...,|I14|
+EVEN_FINE_R2 = 28                                        # |I2|/|I1|
+EVEN_WIDE_H2 = (6, 9)                                    # |I2| · |I2|/|I1| (i_b 는 차수 키다)
+EVEN_WIDE_MAG = [WIDE_MAG0 + 2 * s + 1 for s in range(7)]  # 13,15,...,25
+
+
+def even_jitter(fine: torch.Tensor, wide: torch.Tensor, sigma: float) -> None:
+    """짝수차 고조파 **크기의 모양**을 창마다 무작위로 흔든다 — 제자리 수정 (14.245).
+
+    왜: 합성 캐시 안에서 짝수차가 **켜짐 조합의 결정함수**다. 300,000창 캐시에서 채널을
+    9기기 전력·켜짐으로 회귀한 R² 가 `|I2|` **0.906** · 평활`|I2|` **0.929** ·
+    `|I2|−|I4|` **0.934** 이고, 같은 조합 안 잔차 퍼짐이 전체의 **0.12~0.16** 뿐이다
+    (14.243). 그러면 그 채널을 믿고 결정해도 합성 안에선 손실이 한 번도 안 오르니
+    가중치를 깎을 `−∇L` 자체가 **생기지 않는다**.
+    그런데 그 블록은 물리적으로 **5~7mA** 이고 `arcsinh(x·20)` 이 포화 아래라 기본파의
+    **50.8배** 이득으로 들어온다. 판 147개 전부가 진폭 줄기보다 모양 방향에 **2.8배**
+    민감하고(14.233), 짝수차 7채널을 **12.1° 돌리기만** 해도 건강한 판의 포트 게이트가
+    0.979 -> 0.003 으로 죽는다(14.230). 숏컷이 부러지기 쉬운 자리에 박혀 있다.
+
+    왜 이 폭인가: 분절 풀은 반파 드라이를 **녹화 하나**(`hair_dryer_1`, 149.7초)에서만
+    뽑아 모양이 구간 사이 **0.06°** · 구간 안 0.15° 로 얼어 있는데, 실측 반파는 에피소드
+    사이 **2.2~9.2°** · 안 0.7~4.9° 로 돈다 (14.234·14.237). 그 폭을 학습에 넣어
+    "이 채널을 믿지 말라" 는 기울기를 **만들어 준다**.
+
+    어떻게: 차수별 배수 `f_h = exp(σ·ε_h)` 를 창마다 뽑되 `log f` 의 평균을 빼서
+    **기하평균을 1 로 고정**한다 — 크기(진폭 줄기)는 두고 **모양만** 돈다. 크기는
+    라벨이 정해도 되는 진짜 정보라서 건드리면 안 된다 (14.220 의 DC 전량 제거가
+    미탐을 17.5% -> 36.8% 로 올린 것과 같은 실수를 피한다).
+
+    ⚠ **경로를 다 끊는다.** `|I2|` 는 세밀 16 말고도 28(`/|I1|`) · 44(평활) · 43(차) 과
+    광역 6 · 9 · 13 에 실려 있다. 하나만 돌리면 망이 **안 돌린 쪽에서 원값을 도로 읽어**
+    증강이 무효가 된다. 43 은 `|I2|−|I4|` 차라서 44 에서 `|I4|` 를 되살려 둘을 함께
+    다시 짓는다. `asinh`/`sinh` 가 짝이라 `CURRENT_SCALE` 은 저절로 약분된다.
+    ⚠ 세밀 39(역률)의 `i_rms` 에도 짝수차가 들어가지만 `|I1|` 2.55A 대 짝수차 6mA 라
+    기여가 1e-5 미만이다 — 일부러 안 건드린다.
+
+    `sigma <= 0` 이면 **난수도 안 뽑고** 곧장 돌아온다 (비트 동일).
+    """
+    if sigma <= 0:
+        return
+    e = torch.randn(fine.shape[0], 7, device=fine.device, dtype=torch.float32)
+    f = torch.exp(sigma * (e - e.mean(1, keepdim=True)))[:, :, None]      # (B,7,1)
+
+    fine[:, EVEN_FINE_MAG] = torch.asinh(torch.sinh(fine[:, EVEN_FINE_MAG]) * f)
+    fine[:, EVEN_FINE_R2] = torch.asinh(torch.sinh(fine[:, EVEN_FINE_R2]) * f[:, 0])
+    a = torch.sinh(fine[:, EVEN2_CH])                    # S·평활|I2|
+    d = torch.sinh(fine[:, HALFWAVE_CH])                 # S·평활(|I2|−|I4|)
+    a2 = a * f[:, 0]
+    m4 = (a - d) * f[:, 1]                               # S·평활|I4| -> 돌린 것
+    fine[:, EVEN2_CH] = torch.asinh(a2)
+    fine[:, HALFWAVE_CH] = torch.asinh(a2 - m4)
+    for c in EVEN_WIDE_H2:
+        wide[:, c] = torch.asinh(torch.sinh(wide[:, c]) * f[:, 0])
+    wide[:, EVEN_WIDE_MAG] = torch.asinh(torch.sinh(wide[:, EVEN_WIDE_MAG]) * f)
 
 
 def _vnorm_exp(apps, classes: str = ""):
@@ -880,6 +939,15 @@ def main() -> int:
                     help="학습 배치에서 전압 고조파 채널을 **같은 자리의 다른 창** 것으로 바꿔 끼울 확률 "
                          "(13.84.11). 생성기의 정확한 V->I 법칙을 판별자로 배우는 것을 막는다 — 합성끼리 "
                          "전압만 바꿔도 미니PC 유령 8%% -> 32%%, 실측 전압을 붙이면 0.12 -> 0.50. 0 이면 옛 경로.")
+    ap.add_argument("--even-jitter", type=float, default=0.0, metavar="SIGMA",
+                    help="학습 배치에서 **짝수차 고조파 크기의 모양**을 창마다 무작위로 흔든다 (14.245). "
+                         "차수별 배수 exp(sigma*eps) 를 기하평균 1 로 고정해 걸므로 크기는 두고 모양만 돈다. "
+                         "까닭: 합성 캐시에서 짝수차가 켜짐 조합의 결정함수다 — R²(채널|9기기전력) 가 "
+                         "|I2| 0.906 / 평활|I2| 0.929 / |I2|-|I4| 0.934 라 그 채널을 믿어도 손실이 안 올라 "
+                         "가중치를 깎을 기울기가 안 생긴다. 그런데 물리적으로 5~7mA 인 그 블록이 "
+                         "arcsinh(x*20) 포화 아래라 기본파의 50.8배 이득으로 들어오고, 12.1도만 돌려도 "
+                         "포트 게이트가 0.979 -> 0.003 이다. 풀은 모양이 0.06도로 얼어 있는데 실측 반파는 "
+                         "2.2~9.2도 돈다. 세밀 16~22,28,43,44 와 광역 6,9,13~25 를 **함께** 돌린다. 0 이면 옛 경로.")
     ap.add_argument("--fine-channels", type=int, default=None, metavar="N",
                     help="세밀 갈래가 쓸 채널 수 (기본: inputs.FINE_CHANNELS). "
                          "캐시는 그대로 두고 앞에서부터 N 개만 쓴다. "
@@ -1285,6 +1353,7 @@ def main() -> int:
                     # 손실 설정이라 추론엔 안 쓴다. 계보 추적용이다 (13.80).
                     "gate_smooth": a.gate_smooth, "gate_focal": a.gate_focal,
                     "vswap_p": a.vswap_p,                 # 13.84.11 학습 시 전압 채널 바꿔 끼우기 (추론엔 무관)
+                    "even_jitter": a.even_jitter,         # 14.245 학습 시 짝수차 모양 흔들기 (추론엔 무관)
                     # ⚠ 이것은 **추론에도 써야 한다** — 0 으로 배운 채널에 값을
                     # 주면 본 적 없는 입력이 된다. 채점 쪽이 읽어 같이 0 으로
                     # 만들 수 있게 남긴다 (13.80.10).
@@ -1303,6 +1372,7 @@ def main() -> int:
             if ZERO_W:
                 wide[:, ZERO_W] = 0.0
             vswap(fine, wide, a.vswap_p)          # 13.84.11 — 0 이면 아무것도 안 한다
+            even_jitter(fine, wide, a.even_jitter)  # 14.245 — 0 이면 난수도 안 뽑는다
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
                 out = model(fine, wide)
                 parts = crit(out, tgt)
