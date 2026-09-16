@@ -295,6 +295,9 @@ class NILMLoss(torch.nn.Module):
         #: 넘어간다. 선형이라 보면 영점은 저항 4종이 f = 0.32(포트) ~ 0.77(오븐), 실측
         #: 고전력이 f = **0.745** 다. `L_power` 가 반대로 당기던 평형을 온전히 지우는 것이
         #: 과했던 것이다. ⚠ 선형은 **가정**이다 — 재라.
+        #: ★ 14.367 — 상태 안 전력대 보정비. `None` 이면 **비트 동일**.
+        power_gain_state: Optional[torch.Tensor] = None,
+        power_edges_state: Optional[torch.Tensor] = None,
         harm_vnorm_frac: float = 1.0,
         #: 14.56 — `sig` 의 **파형 몫** 앵커. `(K,H,2)` 그 녹화의 `v_h_rel = V_h/V_1`.
         #: 저항은 `sig_h = v_h_rel,h / V_1` 인데 14.49 앵커는 `1/V_1` 만 고쳤다.
@@ -598,6 +601,14 @@ class NILMLoss(torch.nn.Module):
         self.register_buffer("pow_gain", power_gain if power_gain is not None else torch.zeros(0))
         self.register_buffer("pow_edges", power_edges if power_edges is not None else torch.zeros(0))
         self.use_pow_sig = power_gain is not None
+        #: ★ 14.367 — **상태 안** 전력대 보정 (K,S,NB,H,2) · 경계 (K,S,NB-1).
+        #: `pow_gain`(기기 x 전력대)은 `sig_state` 와 **같은 축**이라 못 쓴다 (14.172).
+        #: 이쪽은 상태로 **먼저 가르고** 그 안에서만 대역을 나눈다.
+        self.register_buffer("pow_gain_s",
+                             power_gain_state if power_gain_state is not None else torch.zeros(0))
+        self.register_buffer("pow_edges_s",
+                             power_edges_state if power_edges_state is not None else torch.zeros(0))
+        self.use_pow_sig_state = power_gain_state is not None
         self.pow_tau = float(power_tau)
         # ── 짝수차는 크기 공간에서 (2026-09-06, 13.11) ─────────────────────
         # 플러그를 반대로 꽂으면 `I_h -> −(−1)^h I_h` 라 **짝수차만 180° 돈다.**
@@ -914,8 +925,28 @@ class NILMLoss(torch.nn.Module):
         _d = self._vhrel_delta()
         if _d is not None:
             sgs = self._vhrel_apply(sgs, _d)
+        #: ★ 14.367 — **상태 안** 전력대 보정. 대역을 `p_states`(그 상태의 동작 전력)로
+        #  가른다 — `power`(총합)로 가르면 14.172 의 축 충돌이 되돌아온다.
+        if self.use_pow_sig_state:
+            sgs = self._apply_pow_gain_state(sgs, out["power_states"])
         per_k = torch.einsum("bks,bkshc->bkhc", pw, sgs)
         return self._apply_pow_gain(per_k, power).sum(1)
+
+    def _apply_pow_gain_state(self, sgs: torch.Tensor, p_states: torch.Tensor) -> torch.Tensor:
+        """`sgs` (B,K,S,H,2) 에 **상태 안 전력대 보정비**를 복소 곱한다 (14.367).
+
+        경계는 `_apply_pow_gain` 과 같은 방식으로 부드럽게 나눈다 (분할의 합 = 1).
+        표본이 얇았던 칸은 빌더가 `g = 1` 로 두므로 **그 칸은 비트 동일**이다.
+        """
+        e = self.pow_edges_s                                   # (K,S,NB-1)
+        p = p_states.clamp(min=0.0)[..., None]                 # (B,K,S,1)
+        u = torch.sigmoid((p - e[None]) / (self.pow_tau * e[None].clamp(min=1e-3)))
+        one = torch.ones_like(u[..., :1])
+        w = torch.cat([one, u], -1) - torch.cat([u, torch.zeros_like(u[..., :1])], -1)
+        g = torch.einsum("bksn,ksnhc->bkshc", w, self.pow_gain_s)
+        gr, gi = g[..., 0:1], g[..., 1:2]
+        ar, ai = sgs[..., 0:1], sgs[..., 1:2]
+        return torch.cat([ar * gr - ai * gi, ar * gi + ai * gr], -1)
 
     def _apply_pow_gain(self, per_k: torch.Tensor, power: torch.Tensor) -> torch.Tensor:
         """기기별 기여 (B,K,H,2) 에 **전력대 보정비**를 복소 곱한다 (13.84.38).

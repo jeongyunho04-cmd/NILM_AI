@@ -1876,6 +1876,87 @@ def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 
     return sig.astype(np.float32), used
 
 
+def harmonic_signatures_by_power_instate(
+        pool, appliances, n_harm: int = 15, n_bands: int = 3, min_cycles: int = 300,
+        max_states: int = MAX_STATES, rel_floor: float = 0.05):
+    """기기 x **상태** x 전력대 보정비 (K,S,B,n_harm,2) · 경계 (K,S,B−1) · 쓸 수 있는지 (K,S,B).
+
+    ★ 14.367 — 14.172 가 적어 둔 처방 그대로다: *"대역을 **상태 안에서** 잡아야 한다
+    (`sig_state` 를 분모로)"*. `harmonic_signatures_by_power` 는 대역 경계를 **기기 전체**
+    통전 전력의 분위수로 잡는데, 그건 곧 **상태 전력**이라 `sig_state` 와 같은 축을 두 번
+    잰다 (드라이 s2 h2/h1 이 x0.000 으로 소멸했다). 상태로 **먼저 가르고** 그 안에서만
+    전력대를 나누면 그 충돌이 원리상 사라진다.
+
+    왜 필요한가 (14.358·14.363 측정):
+    ```
+      상태 안에서 전력이 실제로 움직이는 기기는 **둘뿐**이다
+        minipc s2  전력 폭 **2.35배** · charger s2 **1.94배**
+        beam s2 1.05배 · fan s1~s3 **1.01배**  -> 보정비가 저절로 1 이 된다
+      그리고 오차가 **차수에 따라 가파르다** (minipc s2):
+        h1 12.0% · h7 26.1% · **h9 38.0%** · **h11 63.9%** · h13 129.6% · h15 284.2%
+      ★ 그 h9·h11 이 미니PC↔충전기를 가르는 **판별 차수**다 (기여 +2.51°/+2.54°)
+    ```
+    ⚠ **비(ratio)로 낸다** — `g[k,s,b,h] = sig_대역 / sig_state[k,s]` (복소). 지문을 갈아
+    끼우지 않으므로 `sig_state` 와 곱해서 같이 쓰고, 표본이 얇은 칸은 `g = 1` 이라
+    **끄면 비트 동일**이다 ([[copy-the-inclusion-rule-when-adding-an-axis]]).
+    ⚠ 대역을 가르는 전력은 `state_power_w(a, False)` — `harmonic_signatures_by_state` 와
+      **같은 분모**다. 다른 문턱을 쓰면 축이 조용히 빈다.
+    """
+    sig, us = harmonic_signatures_by_state(pool, appliances, n_harm, max_states)
+    sc = sig[..., 0] + 1j * sig[..., 1]                                   # (K,S,H)
+    K = len(appliances)
+    nb = max(int(n_bands), 1)
+    gain = np.zeros((K, max_states, nb, n_harm, 2), np.float32)
+    gain[..., 0] = 1.0
+    edges = np.zeros((K, max_states, max(nb - 1, 1)), np.float32)
+    used = np.zeros((K, max_states, nb), bool)
+    for j, app in enumerate(appliances):
+        acts = pool.appliance_activations.get(app, [])
+        if not acts:
+            continue
+        C, P, ST = [], [], []
+        for a in acts:
+            st = getattr(a, "state_id", None)
+            if st is None:
+                continue
+            pw = state_power_w(a, False)
+            m = np.asarray(pw) > 1.0
+            if m.any():
+                C.append(np.asarray(a.net_harmonics_complex)[m])
+                P.append(np.asarray(pw)[m]); ST.append(np.asarray(st)[m])
+        if not C:
+            continue
+        C = np.concatenate(C); P = np.concatenate(P); ST = np.concatenate(ST).astype(int)
+        for s_ in range(max_states):
+            ms = ST == s_
+            if not us[j, s_] or ms.sum() < min_cycles:
+                continue
+            c, p = C[ms], P[ms]
+            q = np.quantile(p, np.linspace(0.0, 1.0, nb + 1))[1:-1]
+            edges[j, s_, :len(q)] = q
+            per_w = c / np.maximum(p, 1e-6)[:, None]
+            b_idx = np.digitize(p, q)
+            #: ⚠⚠ **바닥이 없으면 0 으로 나눈 잡음을 증폭한다.** 저항 부하는 고차가
+            #  거의 0 이라 (오븐 h11/h1 ~0.01) 비가 **2.24배** 까지 튀었다 — 14.172 가
+            #  드라이 h2 를 x0.000 으로 죽인 것과 **같은 꼴**이다.
+            #  그 차수의 |sig| 가 h1 대비 `rel_floor` 아래면 **g=1 로 둔다** (안 건드린다).
+            #  SMPS 는 h9~h15 가 0.1~0.95 라 전부 남고, 저항은 0.002~0.035 라 전부 빠진다.
+            _rel = np.abs(sc[j, s_]) / max(abs(sc[j, s_, 0]), 1e-12)
+            _ok_h = _rel >= float(rel_floor)
+            den = np.where(np.abs(sc[j, s_]) > 1e-12, sc[j, s_], 1.0)
+            for b in range(nb):
+                mb = b_idx == b
+                if mb.sum() < min_cycles:
+                    continue
+                v = (np.median(np.real(per_w[mb]), 0)
+                     + 1j * np.median(np.imag(per_w[mb]), 0))
+                g = np.where(np.abs(sc[j, s_]) > 1e-12, v / den, 1.0)
+                g = np.where(_ok_h, g, 1.0)                 # 바닥 아래 차수는 항등
+                gain[j, s_, b, :, 0], gain[j, s_, b, :, 1] = np.real(g), np.imag(g)
+                used[j, s_, b] = True
+    return gain, edges, used
+
+
 def harmonic_signatures_by_power(pool, appliances: Sequence[str], n_harm: int = 15,
                                  n_bands: int = 3, min_cycles: int = 300
                                  ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:

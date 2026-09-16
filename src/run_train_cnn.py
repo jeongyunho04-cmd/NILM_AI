@@ -1072,6 +1072,21 @@ def main() -> int:
                          "한 번도 안 켜졌다 (14.172). 겨냥은 **② SMPS 표류** 다 — "
                          "오늘 잰 보정 크기(대표전력·mA): 에어컨 1,714 · 충전기 517 · "
                          "미니PC 94 인데 저항은 모양 차수가 2~15 뿐이다.")
+    #: ★ 14.367 — **상태 안** 전력대 보정. `--state-signatures` 와 **같이 쓴다**
+    #  (`--pow-sig` 는 같은 축이라 차단돼 있다 — 14.172).
+    ap.add_argument("--pow-sig-instate", action="store_true",
+                    help="`L_harm` 의 상태별 지문에 **상태 안 전력대 보정비**를 곱한다 "
+                         "(14.367). 14.172 가 적어 둔 처방이다 — 대역을 상태 안에서 잡고 "
+                         "`sig_state` 를 분모로 낸다. 겨냥은 **미니PC·충전기 둘**이다 "
+                         "(상태 안 전력 폭 2.35배·1.94배 · 빔 1.05배·선풍기 1.01배는 g=1 이 "
+                         "저절로 나온다). 판별 차수 h9·h11 에서 상수 지문이 38~86%% 틀린다 "
+                         "(14.358) 그리고 그 두 차수가 미니PC↔충전기를 가른다 (14.363). "
+                         "⚠ 그 차수의 |sig| 가 h1 대비 `--pow-rel-floor` 아래면 **g=1** 이라 "
+                         "저항 넷·선풍기는 한 칸도 안 움직인다 (드라이 h2 가 x0.000 으로 "
+                         "죽은 14.172 의 함정을 원리상 피한다). 끄면 **비트 동일**.")
+    ap.add_argument("--pow-rel-floor", type=float, default=0.05, metavar="R",
+                    help="보정을 걸 차수의 |sig_h|/|sig_1| 하한 (14.367). SMPS 고차는 "
+                         "0.1~0.95 · 저항은 0.002~0.035 라 0.05 가 둘을 가른다")
     ap.add_argument("--pow-bands", type=int, default=3, metavar="N",
                     help="전력대 개수. 경계는 그 기기 통전 전력의 분위수다")
     ap.add_argument("--pow-tau", type=float, default=0.15, metavar="T",
@@ -1337,6 +1352,20 @@ def main() -> int:
             + "  대역 경계 = 통전 전력의 분위수 = 상태 전력. 곱하면 제곱이 된다." + _nl
             + "  재현: python -X utf8 -m src.run_gate_powsig   (드라이 s2 h2/h1 x0.000)" + _nl
             + "  둘 중 하나만 쓰거나, 대역을 **상태 안에서** 잡는 판을 지어라.")
+    pow_gain_s = pow_edges_s = None
+    if a.pow_sig_instate:
+        from src.model.net import harmonic_signatures_by_power_instate
+        pow_gain_s, pow_edges_s, _us = harmonic_signatures_by_power_instate(
+            pool, apps, n_bands=a.pow_bands, rel_floor=a.pow_rel_floor)
+        if not a.state_signatures:
+            raise SystemExit("✖ --pow-sig-instate 는 --state-signatures 가 있어야 "
+                             "뜻이 있다 (상태로 먼저 가른 뒤의 잔여 전력 의존을 잰다)")
+        _g = pow_gain_s[..., 0] + 1j * pow_gain_s[..., 1]
+        _d = np.abs(np.abs(_g) - 1.0)
+        print("  ** 상태 안 전력대 보정 (14.367): %d/%d 칸 · |g| %.3f~%.3f · "
+              "1 에서 제일 먼 칸 %.3f **"
+              % (int(_us.sum()), _us.size, float(np.abs(_g).min()), float(np.abs(_g).max()),
+                 float(_d.max())))
     if a.pow_sig:
         #: 14.172 — 13.84.38 의 전력대 사전. 2단계에만 달려 있었다.
         from src.model.net import harmonic_signatures_by_power
@@ -1431,6 +1460,8 @@ def main() -> int:
         harm_even_magnitude=a.harm_even_magnitude,
         power_gain=(torch.from_numpy(pow_gain) if pow_gain is not None else None),
         power_edges=(torch.from_numpy(pow_edges) if pow_edges is not None else None),
+        power_gain_state=(torch.from_numpy(pow_gain_s) if pow_gain_s is not None else None),
+        power_edges_state=(torch.from_numpy(pow_edges_s) if pow_edges_s is not None else None),
         power_tau=a.pow_tau,
         harm_sig_vnorm=a.harm_sig_vnorm,
         # 14.28 — 기기별 `I/P` 전압 지수. 모터는 0 이라 보정이 안 걸린다.
@@ -1653,6 +1684,8 @@ def main() -> int:
                     #: 14.171 — 2단계가 **같은 순방향 모형**을 지으려면 이 둘이 필요하다.
                     #  없어서 `run_train_seq` 가 전압 앵커를 못 켜고 있었다.
                     "pow_sig": bool(a.pow_sig),
+                    "pow_sig_instate": bool(a.pow_sig_instate),
+                    "pow_rel_floor": float(a.pow_rel_floor),
                     "pow_bands": int(a.pow_bands),
                     "pow_tau": float(a.pow_tau),
                     "harm_sig_vnorm": bool(a.harm_sig_vnorm),
