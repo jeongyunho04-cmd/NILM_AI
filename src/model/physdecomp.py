@@ -95,18 +95,23 @@ E_THR = 6.0         #: 전이 강도의 문턱 — 중앙절대차의 이 배를
 NN_ITERS = 60       #: 비음수 투영 경사의 반복 수
 
 
-def build_design(raw: np.ndarray, templates: np.ndarray) -> np.ndarray:
+def build_design(raw: np.ndarray, templates: np.ndarray,
+                 volt_orders=None, volt_re0: int = VOLT_RE0) -> np.ndarray:
     """`A(τ)` 를 짓는다. `raw` (B,45,T) · `templates` (M,15,2) -> (B,T,30,2+M).
 
     열 배치:  0 = Ĝ_sum · 1 = B̂_sum · 2.. = 템플릿 α̂ (와트 단위)
     """
+    #: 14.319 — 차수는 **인자**다. 측정은 15차수까지 있고 `VOLT_ORDERS` 6차수는
+    #  `to_raw45` 의 피처 배치 선택이었다 (사용자 지적).
+    vo = tuple(VOLT_ORDERS) if volt_orders is None else tuple(volt_orders)
+    nv = len(vo)
     b, _, t = raw.shape
     m = len(templates)
     A = np.zeros((b, t, 2 * N_HARM, 2 + m), dtype=np.float64)
-    for s, h in enumerate(VOLT_ORDERS):
+    for s, h in enumerate(vo):
         j = h - 1
-        vr = raw[:, VOLT_RE0 + s, :]                       # (B,T)
-        vi = raw[:, VOLT_IM0 + s, :]
+        vr = raw[:, volt_re0 + s, :]                       # (B,T)
+        vi = raw[:, volt_re0 + nv + s, :]
         A[:, :, j, 0] = vr                                 # Re I = G·Re V
         A[:, :, N_HARM + j, 0] = vi                        # Im I = G·Im V
         A[:, :, j, 1] = -vi                                # Re I = −B·Im V

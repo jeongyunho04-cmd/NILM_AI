@@ -42,7 +42,7 @@ PRE = 13
 _G = {}
 
 
-def _init(npz_dir, split, gen_json, mix_name="seq"):
+def _init(npz_dir, split, gen_json, mix_name="seq", vo=VOLT_ORDERS):
     from src.synthesis.genopts import build_synthesizer, check, resolve
     opts = resolve(gen_json)
     gen = build_synthesizer(opts, npz_dir, split)
@@ -55,6 +55,7 @@ def _init(npz_dir, split, gen_json, mix_name="seq"):
     if mix_name not in MIXES:
         raise SystemExit("[seqraw] 모르는 mix: %r" % mix_name)
     _G["mix"] = MIXES[mix_name]
+    _G["vo"] = vo
 
 
 def _one(args):
@@ -67,7 +68,7 @@ def _one(args):
     sd = chunk_seed(seed, i)
     np.random.seed(sd)
     smp = make_record(gen, n_cyc, np.random.RandomState(sd), probs=_G["mix"])
-    raw = to_raw45(smp, VOLT_ORDERS)
+    raw = to_raw45(smp, _G["vo"])
     g = int(DUTY_CLOSE_S * FS)
     K = len(apps)
     T = len(grid)
@@ -105,6 +106,10 @@ def main():
                     help="기록당 기기 포함 확률 판. 'hp' 는 저항 기기 넷을 올려 "
                          "고전력 노출을 창 캐시 수준으로 되돌린다 (13.84.39)")
     ap.add_argument("--npz-dir", default="processed_data/npz")
+    ap.add_argument("--volt-orders", default="",
+                    help="전압 고조파 차수를 바꾼다 (기본 = inputs.VOLT_ORDERS 인 1,3,5,7,9,11). "
+                         "`1-15` 처럼 주면 15차수 전부 — 원시가 45채널이 아니게 되므로 "
+                         "`build_inputs` 에는 못 먹이고 **물리 분해 전용**이다 (14.319).")
     ap.add_argument("--split", default="train")
     ap.add_argument("--gen", default="v32",
                     help="생성기 설정. **기본 'v32'** = 사슬 이전 판 (= v36 − sibling_rotate, 14.4). "
@@ -119,6 +124,14 @@ def main():
     from src.synthesis.genopts import describe, resolve
     gen_opts = resolve(a.gen)
     print("[seqraw] 생성기 '%s': %s" % (a.gen, describe(gen_opts)))
+    #: 14.319 — 전압 차수는 `to_raw45` 의 인자다. 측정은 15차수까지 있고 6차수는
+    #  **피처 배치**의 선택이었다 (사용자 지적). 물리 분해는 h13·h15 도 쓸 수 있다.
+    if a.volt_orders.strip():
+        _t = a.volt_orders.replace("-", ",").split(",")
+        VO = (tuple(range(int(_t[0]), int(_t[1]) + 1)) if "-" in a.volt_orders
+              else tuple(int(x) for x in _t if x.strip()))
+    else:
+        VO = tuple(VOLT_ORDERS)
     from src.synthesis.segment_pool import SegmentPool
     apps = sorted(SegmentPool(npz_dir=a.npz_dir, time_split=a.split,
                               carrier_apps=tuple(gen_opts.get("carrier_apps") or ()) or None
@@ -126,7 +139,7 @@ def main():
     K = len(apps)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    shapes = {"raw": (a.records, 45, N), "y_on": (a.records, T, K),
+    shapes = {"raw": (a.records, 30 + 3 + 2 * len(VO), N), "y_on": (a.records, T, K),
               "y_power": (a.records, T, K), "y_plugged": (a.records, T, K),
               "y_standby": (a.records, T, K), "y_state": (a.records, T, K),
               "obs_harm": (a.records, T, 15, 2), "p_noise": (a.records, T),
@@ -146,7 +159,7 @@ def main():
     ctx = mp.get_context("spawn")
     import json as _json
     with ctx.Pool(a.workers, initializer=_init,
-                  initargs=(a.npz_dir, a.split, _json.dumps(gen_opts), a.mix)) as pool:
+                  initargs=(a.npz_dir, a.split, _json.dumps(gen_opts), a.mix, VO)) as pool:
         for done, r in enumerate(pool.imap_unordered(_one, tasks, chunksize=4), 1):
             i, raw, y_on, y_pow, y_plg, y_sb, y_st, oh, pn, po, zg = r
             mm["raw"][i] = raw
@@ -165,6 +178,7 @@ def main():
                       % (done, a.records, el / done, (a.records - done) * el / done / 60),
                       flush=True)
     meta = dict(records=a.records, record_s=a.record_s, grid_s=a.grid_s, steps=T, mix=a.mix,
+                volt_orders=list(VO),
                 appliances=apps, seed=a.seed, window_cycles=W_CYC,
                 target_lookahead=LOOK, target_offset=TGT_OFF,
                 duty_close_s=DUTY_CLOSE_S, gen=a.gen, gen_opts=gen_opts, grid=[int(x) for x in grid[:3]] + ["..."],
