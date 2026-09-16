@@ -34,9 +34,19 @@
 #   ⚠ 다만 미니PC AUC 의 **씨앗 바닥을 아직 모른다** — 986163 이 그걸 재 준다.
 #     그 수를 보고 다섯이 모자라면 올려라.
 #
-# ⚠ `ZIN` 은 짝을 맞추려고 켜 둔 것이다. 986163 이 Z 주입이 무용/유해로 나오면
-#   `ZIN_FLAGS=""` 로 던지고 짝을 `cnn_comb` 으로 바꿔라 (14.357 이 SMPS 에 대해
-#   Z 가 측정된 V 너머의 정보가 아님을 보였다 — 기대는 낮다).
+# ★★ 14.369 — **986163 이 판정났고 짝을 바꿨다.**
+#   ① **Z 주입 기각.** 같은 무게에서 Z 를 껐다 켜도 **모든 자가 동일**하다
+#      (합 11 = 11 · |r| 9.3 = 9.3 · minipc AUC 0.7804 대 0.7800 · test_2 18.1 대 18.0%%).
+#      ‖z_proj.W‖ 가 4.88~5.15 로 0 이 아닌데도 그렇다 — 배운 것의 대부분이 편향
+#      (‖b‖ 8.76 > ‖W‖ 4.88) 이라 **Z 값과 무관한 상수**다.
+#      ★ 왜 원리상 안 듣나 (사용자 지적): Z 가 크게 먹는 곳은 **고부하**인데
+#        (포트 ΔV=Z·I 가 **7.79V=3.62%%** 대 미니PC **0.10V=0.05%%**, **75배**)
+#        그 강하는 측정한 V₁ 에 이미 들어 있고 조합 머리가 **G(c)·|V₁|²** 로 쓴다.
+#        따로 주면 **같은 것을 두 번** 주는 것이다.
+#   ② **꺾기를 학습에 넣은 것도 기각.** 추론 적용이 합 **8** 인데 학습내장이 **11** 이다
+#      (14.352 sbatch 의 기각선이 그대로 작동했다). 그래서 `OVER=0` 으로 끄고
+#      **추론 운영점**(`gbudget.COMB_OVER_OP=0.05`)으로 간다.
+#   ⇒ 짝은 **`cnn_comb`**(986106) 이고 손잡이는 **`--pow-sig-instate` 하나**다.
 #
 #SBATCH -J nilm_psig
 #SBATCH -p gpu1,gpu2,gpu3,gpu4,gpu5,gpu6
@@ -53,7 +63,7 @@ set -euo pipefail
 cd "$HOME/NILM_AI"
 PY=./env/bin/python
 CACHE=${CACHE:-cache/train60_v49}
-HOLDOUT=${HOLDOUT:-processed_data/holdout60_v49z}
+HOLDOUT=${HOLDOUT:-processed_data/holdout60_v49}
 EPOCHS=${EPOCHS:-300}
 SEED=$SLURM_ARRAY_TASK_ID
 SIG=0.40
@@ -82,7 +92,6 @@ $PY -X utf8 src/run_gate_pstatecap.py
 $PY -X utf8 src/run_gate_deadzone.py
 $PY -X utf8 -m src.run_gate_evenjit
 $PY -X utf8 -m src.run_gate_comb
-$PY -X utf8 -m src.run_gate_zin
 $PY -X utf8 -m src.run_gate_powsig_instate
 $PY -X utf8 src/run_gate_swa.py
 test -d "$CACHE" || { echo "캐시가 없다: $CACHE"; exit 1; }
@@ -137,9 +146,10 @@ TREAT="--even-median 5 --w-cons 1.0 --cons-deadzone 100 --even-jitter $SIG"
 #  14.343 의 λ 쓸기: 0(Ĝ 단독) 84.5%% · **0.6~1.0 꼭지 99.6%%** · >=2 모델 단독 94.9%%
 #: ★ 14.352 — **이 판의 유일한 손잡이.** 초과 주장 벌점의 눈금 (mS).
 #  τ=1.0 은 그대로 두고 꺾기만 더한다. 0.05 면 215초 띠의 1.22 mS 초과가 벌점 24.4 다.
-COMB="--comb-tau ${TAU:-1.0} --comb-over ${OVER:-0.05} --comb-over-margin ${OVMARGIN:-2.0}"
+COMB="--comb-tau ${TAU:-1.0} --comb-over ${OVER:-0} --comb-over-margin ${OVMARGIN:-2.0}"
+#: ★ 14.369 — 꺾기는 **학습에 안 넣는다** (합 8 대 11). 추론 운영점으로 켠다.
 #: ★ 14.355 — 선로 임피던스 주입. `z_proj` 는 0 초기화라 **출발이 짝과 비트 동일**이다.
-ZIN="${ZIN_FLAGS:---z-input --z-drop ${ZDROP:-0.3}}"
+ZIN="${ZIN_FLAGS:-}"                       # ★ 14.369 기본 **끔** (Z 주입 기각)
 #: ★ 14.368 — **이 판의 손잡이.** 상태 안 전력대 보정 + SWA(공짜 대조).
 PSIG="--pow-sig-instate --pow-bands ${PBANDS:-3} --pow-rel-floor ${PFLOOR:-0.05}"
 SWA="--swa-start ${SWASTART:-240}"

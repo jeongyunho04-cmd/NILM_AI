@@ -345,10 +345,14 @@ def forward_file(model, stem: str, dev: str, stride: int = 30,
     #  (`run_gate_comb` [7]). `run_plot_real.solve_ghat` 과 **같은 함수**를 써서
     #  그림·채점·사중이 한 Ĝ 위에 서게 한다.
     _cb = float(getattr(model, "comb_tau", 0.0) or 0.0) > 0
-    _gh = None
+    _zi = bool(getattr(model, "z_input", False))
+    _gh = _zv = None
     if _cb:
         from src.run_plot_real import solve_ghat as _sg
         _gh = _sg(stem, rw, list(model.appliances))[0]
+    if _zi:
+        from src.run_plot_real import site_z as _sz
+        _zv = float(_sz(stem))
     G, R, SB, PL, PN, POBS, OH, ZT, OL = [], [], [], [], [], [], [], [], []
     for i in range(0, len(rw), 512):
         idx = np.arange(i, min(i + 512, len(rw)))
@@ -360,7 +364,8 @@ def forward_file(model, stem: str, dev: str, stride: int = 30,
         wt = torch.from_numpy(np.ascontiguousarray(w)).to(dev)
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
             o = model(ft, wt, torch.from_numpy(
-                np.ascontiguousarray(_gh[idx], np.float32)).to(dev) if _cb else None)
+                np.ascontiguousarray(_gh[idx], np.float32)).to(dev) if _cb else None,
+                torch.full((len(idx),), _zv, device=dev) if _zi else None)
         G.append(torch.sigmoid(o["on_logit"]).float().cpu().numpy())
         OL.append(o["on_logit"].float().cpu().numpy())
         R.append(o["power_raw"].float().cpu().numpy())

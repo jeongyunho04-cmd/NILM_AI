@@ -93,7 +93,7 @@ def load_model(ckpt: str, dev: str):
 
 
 @torch.no_grad()
-def predict(model, rw, dev: str, batch: int = 512, g_hat=None):
+def predict(model, rw, dev: str, batch: int = 512, g_hat=None, z_in=None):
     """(전력, 대기, 관문, 관측P, 관측고조파, 계측P) — 후처리가 뒤의 셋을 쓴다.
 
     ★ 14.349 — `comb_tau>0` 이면 **Ĝ 가 입력이다.** 안 넘기면 `net.forward` 가
@@ -101,8 +101,11 @@ def predict(model, rw, dev: str, batch: int = 512, g_hat=None):
     """
     P, S, G, PO, OH, PN = [], [], [], [], [], []
     _cb = float(getattr(model, "comb_tau", 0.0) or 0.0) > 0
+    _zi = bool(getattr(model, "z_input", False))
     if _cb and g_hat is None:
         raise ValueError("comb_tau 체크포인트인데 g_hat 이 없다 — solve_ghat 을 먼저 불러라")
+    if _zi and z_in is None:
+        raise ValueError("z_input 체크포인트인데 z_in 이 없다 — site_z(stem) 을 넘겨라")
     for i in range(0, len(rw), batch):
         f, w, pobs, oh, pn = rw.batch(np.arange(i, min(i + batch, len(rw))))
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
@@ -110,7 +113,8 @@ def predict(model, rw, dev: str, batch: int = 512, g_hat=None):
                       torch.from_numpy(np.ascontiguousarray(w)).to(dev),
                       torch.from_numpy(
                           np.ascontiguousarray(g_hat[i:i + batch], np.float32)).to(dev)
-                      if _cb else None)
+                      if _cb else None,
+                      torch.full((len(f),), float(z_in), device=dev) if _zi else None)
         P.append(o["power"].float().cpu().numpy())
         S.append(o["standby"].float().cpu().numpy())
         G.append(torch.sigmoid(o["on_logit"]).float().cpu().numpy())
@@ -164,6 +168,26 @@ def solve_ghat(stem, rw, apps):
     tc = _np.asarray(rw.target_cycle, _np.int64)
     return (bud.g_sum(x[None][:, :, tc])[0],
             _np.abs(x[33, tc] + 1j * x[33 + nv, tc]))
+
+
+def site_z(stem: str):
+    """★ 14.369 — 그 녹화의 **선로 저항** [Ω]. 모르면 `nan` ("모름" 토큰).
+
+    `--z-input` 판은 `forward` 에 이 값을 넘겨야 돈다 (`g_hat` 과 같은 규약이다).
+    출처는 `SITE_SESSIONS[...]["z_ohm"]` — §13.4 가 계단법으로 쟀다
+    (E1 13계단 0.424 · D1 5계단 1.214±0.017 · D2 test_3 1.35±0.42 / test_5 1.04±0.15).
+    ```
+      test_1 -> D1 1.15Ω · test_2 -> E1 0.42Ω · test_3·4·5 -> D2 1.19Ω
+    ```
+    ⚠ **못 잰 자리는 `nan` 을 넘긴다** — 학습이 가림(`--z-drop`)으로 그 갈래를 배웠다.
+      임의의 값을 지어 넣으면 **틀린 값을 자신 있게** 쓰게 된다.
+    """
+    from src.preprocessing.file_registry import SITE_SESSIONS
+    for _k, v in SITE_SESSIONS.items():
+        if stem in tuple(v.get("stems", ()) or ()):
+            z = v.get("z_ohm")
+            return float(z) if z else float("nan")
+    return float("nan")
 
 
 def gbudget_apply(stem, rw, apps, pred, gv=None):
@@ -378,7 +402,8 @@ def main() -> int:
                if (a.gbudget or float(getattr(model, "comb_tau", 0.0) or 0.0) > 0)
                else None)
         pred, standby, gate, pobs, oh, pn = predict(
-            model, rw, dev, g_hat=None if _gv is None else _gv[0])
+            model, rw, dev, g_hat=None if _gv is None else _gv[0],
+            z_in=site_z(stem) if getattr(model, "z_input", False) else None)
         mark = None
         if a.gbudget:
             #: 14.341 — 컨덕턴스 예산 사중. `--postproc` 과 **다른 물건**이다

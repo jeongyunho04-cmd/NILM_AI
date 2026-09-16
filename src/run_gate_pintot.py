@@ -121,7 +121,7 @@ def main():
     import torch
     ev = load_events()
     lo = target_index(WC)
-    F, W, L, G, V1, OB = [], [], [], [], [], []
+    F, W, L, G, V1, OB, ZR = [], [], [], [], [], [], []
     pool = None
     for stem in FILES:
         z = np.load("processed_data/composite_eval/%s.npz" % stem, allow_pickle=True)
@@ -152,8 +152,12 @@ def main():
         G.append(bud.g_sum(x[None][:, :, tg])[0])
         V1.append(np.abs(x[33, tg] + 1j * x[33 + nv, tg]))
         OB.append(x[30, tg])
+        #: ★ 14.369 — `--z-input` 판은 그 녹화의 선로 저항이 필요하다 (§13.4 계단 측정).
+        from src.run_plot_real import site_z as _sz
+        ZR.append(np.full(len(tg), _sz(stem), np.float32))
     F = np.concatenate(F); W = np.concatenate(W); L = np.concatenate(L)
     g = np.concatenate(G); v1 = np.concatenate(V1); obs = np.concatenate(OB)
+    zr = np.concatenate(ZR)
 
     #: §31.1 괄호 자 (모델 무관)
     PT = (100.0 * np.sinh(F[:, 23, :].astype(np.float64)))[:, _I.fine_target_index()]
@@ -179,13 +183,16 @@ def main():
         #  ⚠ 다만 기준전압은 **이 녹화의 것**이고 학습은 **캐시의 것**이다 —
         #    그 차가 Ĝ 를 최대 0.275 mS 움직인다 (14.346). 결과를 읽을 때 센다.
         _cb = float(getattr(m, "comb_tau", 0.0) or 0.0) > 0
+        _zi = bool(getattr(m, "z_input", False))
         o = []
         with torch.no_grad():
             for i in range(0, len(F), 256):
                 o.append(m(torch.from_numpy(F[i:i + 256].astype(np.float32)).to(dev),
                            torch.from_numpy(W[i:i + 256].astype(np.float32)).to(dev),
                            torch.from_numpy(g[i:i + 256].astype(np.float32)).to(dev)
-                           if _cb else None)["power"].cpu().numpy())
+                           if _cb else None,
+                           torch.from_numpy(zr[i:i + 256]).to(dev)
+                           if _zi else None)["power"].cpu().numpy())
         PWS.append(np.concatenate(o).astype(np.float64))
         del m
     print("  실측 창 %d · 씨앗 %d (%s) · 오븐확실통전 %d · 포트ON %d"
