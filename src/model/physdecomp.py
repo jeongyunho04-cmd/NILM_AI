@@ -242,7 +242,9 @@ def decompose(raw: np.ndarray, templates: np.ndarray, hscale: np.ndarray,
 
 def refine(raw: np.ndarray, templates: np.ndarray, hscale: np.ndarray,
            center: Optional[int] = None, kappa: float = KAPPA,
-           lam_g: float = LAM_G, lam_t: float = LAM_T) -> Tuple[np.ndarray, np.ndarray]:
+           lam_g: float = LAM_G, lam_t: float = LAM_T, volt_orders=None,
+           volt_re0: int = VOLT_RE0, w_mode: str = "amp",
+           l1: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
     """② 중앙(또는 끝) 프레임 정밀화. -> `theta_c` (B,2+M) · `w` (B,T) 프레임 무게.
 
     `center=None` 이면 **끝 프레임**(과거만) — 실시간용이고 지연이 안 는다.
@@ -266,9 +268,12 @@ def refine(raw: np.ndarray, templates: np.ndarray, hscale: np.ndarray,
     if c > 0:
         E[:, :c] = np.cumsum(e[:, 1:c + 1][:, ::-1], axis=-1)[:, ::-1]
     fw = np.exp(-(E ** 2) / (2.0 * kappa ** 2))
-    A = build_design(raw, templates)
+    A = build_design(raw, templates, volt_orders=volt_orders, volt_re0=volt_re0)
     y = observed(raw)
-    w = np.concatenate([1.0 / np.maximum(hscale, 1e-9)] * 2)
+    #: ⚠ `w_mode="amp"`(암페어 균등)가 기본이다 — `1/hscale`(차수 균등)은 **지문 손실용**
+    #  이고 G 추정에는 틀린 자다 (14.318: 94.1% 대 38.2%).
+    w = (np.ones(2 * N_HARM) if w_mode == "amp"
+         else np.concatenate([1.0 / np.maximum(hscale, 1e-9)] * 2))
     k = A.shape[-1]
     lam = np.zeros((b, 1, k, k))
     lam[:, :, 0, 0] = lam[:, :, 1, 1] = lam_g
@@ -276,7 +281,7 @@ def refine(raw: np.ndarray, templates: np.ndarray, hscale: np.ndarray,
         lam[:, :, i, i] = lam_t
     nn = np.ones(k, bool)
     nn[1] = False
-    th, _ = _solve(A, y, w ** 2, lam, np.zeros(k), nn, fw=fw)
+    th, _ = _solve(A, y, w ** 2, lam, np.zeros(k), nn, fw=fw, l1=l1)
     return th, fw
 
 
