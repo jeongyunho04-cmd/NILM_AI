@@ -91,6 +91,12 @@ V_EXP: Dict[str, float] = {
 V_REL_CLAMP = (0.88, 1.12)
 P_CH_FINE = 23      # 세밀 갈래의 asinh(P/100) 채널 (배치 v2, 13.12. v1 에서는 30 이었다)
 P_CH_WIDE = 0       # 광역 갈래의 asinh(P/100) 채널 (1.3절)
+V_CH_WIDE = 2       #: 광역 갈래의 `(v − V_CENTER)/V_SPAN` 채널 (`inputs.py:538`)
+#: 14.315 — ΔĜ 파생 넷(`_wide_dg`)의 상수.
+WDG_THR = 4.0       #: |ΔG| 최댓값이 창 중앙값의 이 배를 넘어야 "전이"로 센다
+WDG_SCALE = 20.0    #: mS. **선형**이다 — arcsinh 면 오븐 24.6 ↔ 포트 27.9 의
+                    #  13.4% 격차가 압축된다. 가르려는 축을 평평하게 만들지 마라.
+WDG_CLIP = 3.0      #: 60mS — 한 대가 낼 수 있는 계단(최대 포트 27.9)의 두 배
 WINDOW_STATS = 4    # 헤드에 직접 잇는 원시 창 통계 (아래 forward 참조)
 
 # 주기성 특징 (12.19.4 후보 2). 자기상관을 볼 지연.
@@ -263,6 +269,7 @@ class NILMNet(nn.Module):
         fine_conv: str = "sym",
         fine_tpool: str = "whole",
         fine_derive: str = "window",
+        wide_dg: bool = False,
         #: 14.224 — **시간축 DC 를 conv 에서 떼어 머리로 보낸다.** `"keep"` 이면 비트 동일.
         #:
         #: 까닭(14.220~221 측정): 같은 L2 크기의 섭동을 넣으면 첫 conv 의 응답이
@@ -545,7 +552,11 @@ class NILMNet(nn.Module):
                 raise ValueError("%s 는 %s 중 하나: %r" % (_nm, "/".join(_ok2), _v))
         #: 파생 인과 짝 4개 (41·42 의 후방탭 · 29·30 의 인과 이동평균). `window` 면 0.
         self.n_derive = 4 if self.fine_derive == "both" else 0
-        _cin0 = self.fine_channels + self.n_derive
+        #: 14.315 — 광역 60초에서 뽑은 **전이 컨덕턴스 계단** 넷. 기본 False 면 0 이라
+        #  `_conv_in` 이 항등이고 폭도 그대로다 (**비트 동일**).
+        self.wide_dg = bool(wide_dg)
+        self.n_wdg = 4 if self.wide_dg else 0
+        _cin0 = self.fine_channels + self.n_derive + self.n_wdg
         #: 14.224 — 떼어 낸 DC 벡터의 폭. `keep` 이면 0 이라 `trunk_in` 도 배치도 그대로다.
         self.fine_dc = str(fine_dc)
         self.n_dc = _cin0 if self.fine_dc in ("split", "mag") else 0
@@ -562,6 +573,11 @@ class NILMNet(nn.Module):
                 "(AC 진폭의 7.26%%, 14.253). 끊으려면 `_split_dc` 를 `_conv_in` **앞**으로 "
                 "옮겨야 하는데 그러면 파생이 DC 없는 ch23 을 보게 되어 뜻이 달라진다."
                 % self.fine_dc)
+        if self.n_wdg and str(head_layout) == "v2":
+            raise ValueError(
+                "wide_dg 는 head_layout=v2 와 같이 못 쓴다 — v2 는 `_feats_v2` 가 원시 "
+                "`fine` 을 바로 블록에 넣어 **`_conv_in` 을 아예 안 탄다**. 조용히 "
+                "아무 일도 안 일어나는 조합이라 막는다 ([[find-patch-collisions-by-shape]]).")
         if self.n_dc and str(head_layout) == "v2":
             raise ValueError("fine_dc=%s 는 head_layout=v2 와 같이 못 쓴다 "
                              "— v2 는 feats 를 `_feats_v2` 에서 따로 지어 DC 를 "
@@ -896,7 +912,8 @@ class NILMNet(nn.Module):
              for a in self.appliances], dtype=torch.float32),
             persistent=False)
 
-    def _conv_in(self, fine: torch.Tensor) -> torch.Tensor:
+    def _conv_in(self, fine: torch.Tensor,
+                 wide: torch.Tensor = None) -> torch.Tensor:
         """14.183 ⓐ — 파생 미래채널의 **인과 짝**을 `ch23` 에서 되살려 더한다.
 
         41·42 는 `arcsinh((p − p(t+tap))/20)` 이라 **수용영역이 1인데 미래를 담는다**
@@ -910,18 +927,69 @@ class NILMNet(nn.Module):
 
         `fine_derive="window"` 면 입력을 **그대로** 돌려준다 (비트 동일).
         """
-        if self.n_derive == 0:
+        if self.n_derive == 0 and self.n_wdg == 0:
             return fine
-        p = torch.sinh(fine[:, P_CH_FINE]) * POWER_SCALE          # (B,T) 와트
         out = [fine]
-        for tap in DROP_TAPS:                                     # 41·42 의 **후방** 짝
-            q = F.pad(p[:, None, :-int(tap)], (int(tap), 0), mode="replicate")[:, 0]
-            out.append(torch.arcsinh((p - q) / RIPPLE_SCALE)[:, None])
-        for half in (RIPPLE_HALF_SHORT, RIPPLE_HALF_LONG):        # 29·30 의 **인과** 짝
-            k = 2 * int(half) + 1
-            q = F.avg_pool1d(F.pad(p[:, None], (k - 1, 0), mode="replicate"), k, 1)[:, 0]
-            out.append(torch.arcsinh((p - q) / RIPPLE_SCALE)[:, None])
+        if self.n_derive:
+            p = torch.sinh(fine[:, P_CH_FINE]) * POWER_SCALE      # (B,T) 와트
+            for tap in DROP_TAPS:                                 # 41·42 의 **후방** 짝
+                q = F.pad(p[:, None, :-int(tap)], (int(tap), 0), mode="replicate")[:, 0]
+                out.append(torch.arcsinh((p - q) / RIPPLE_SCALE)[:, None])
+            for half in (RIPPLE_HALF_SHORT, RIPPLE_HALF_LONG):    # 29·30 의 **인과** 짝
+                k = 2 * int(half) + 1
+                q = F.avg_pool1d(F.pad(p[:, None], (k - 1, 0), mode="replicate"), k, 1)[:, 0]
+                out.append(torch.arcsinh((p - q) / RIPPLE_SCALE)[:, None])
+        if self.n_wdg:
+            #: 창 전체에 **같은 값**을 복제한다 (제안 ③). 수용영역과 무관하게 타깃
+            #  자리 탭(`fine[:, :, t]` 다음 층)이 그대로 읽는다.
+            out.append(self._wide_dg(wide)[:, :, None].expand(-1, -1, fine.shape[-1]))
         return torch.cat(out, 1)
+
+    def _wide_dg(self, wide: torch.Tensor) -> torch.Tensor:
+        """③ — 광역 60초에서 **전이 컨덕턴스 계단** ΔĜ 를 뽑는다 (14.315).
+
+        `G(tau) = P(tau)/V(tau)**2` 는 **전압 계단이 이미 나눠진** 양이다. 창 안에 큰
+        전이가 있으면 그 앞뒤 G 차이가 **기기 하나의 G** 다 — 실측 참 전이 101개가
+        전부 한 번에 한 대다 ([[nilm-onestep-one-switch]]).
+
+        **왜 광역에서 뽑나** (합성 300기록에서 잰 값):
+        ```
+          기기가 켜진 창 안에 **그 기기 자신의** 전이가 있는 비율
+            세밀 10초   오븐(가열) 47.9%  ·  포트 10.3%
+            광역 60초   오븐(가열) **89.1%** ·  포트 57.8%
+        ```
+        즉 "오븐이 켜졌다" 에 **반증 가능한 물증**이 생긴다 — 24.6mS 계단이 창 안에
+        없으면 오븐이 아니다. 지금 최대 항이 C포트오탐(오븐 쪽 헛게이트) 9.5 다.
+        ⚠ 이 89.1% 는 **창 중앙 기준**이다. 끝프레임(과거만) 판으로 바꾸면 떨어진다.
+
+        내는 넷 — 전부 `ok` 를 곱해 무효 창에서는 **정확히 0** 이다:
+        ```
+          [0] |dG|/20mS   기기 **크기** (부호 없음)  [2] 전이 자리 (타깃 기준, 창 단위)
+          [1] sign(dG)    켜짐/꺼짐                 [3] 유효 플래그 0/1
+        ```
+        ⚠ 제안의 `e(tau) = |dP|/sigma_P + |d∠I1|/sigma_phi` 에서 **위상 항을 뺐다.**
+          항이 둘이면 무엇이 이겼는지 못 가른다
+          ([[count-how-many-things-differ-before-attributing]]).
+        ⚠ 크기와 부호를 **가른 것**은 제안과의 의도적 차이다. 크기는 기기 신원이고
+          부호는 on/off 라 다른 질문인데, 한 채널이면 conv 가 `abs` 를 따로 배워야 한다.
+        ⚠ `argmax` 는 **자리 고르기에 기울기를 안 준다.** 값(앞뒤 G 평균)에는 흐른다.
+          제안 ②의 부드러운 kappa 가중은 이것이 통한 **뒤**에 올린다.
+        """
+        n = wide.shape[-1]
+        pw = torch.sinh(wide[:, P_CH_WIDE]) * POWER_SCALE                 # (B,T) 와트
+        v = (wide[:, V_CH_WIDE] * V_SPAN + V_CENTER).clamp(min=1.0)       # (B,T) 볼트
+        g = 1e3 * pw / v ** 2                                             # (B,T) mS
+        e = (g[:, 1:] - g[:, :-1]).abs()                                  # (B,T-1)
+        j = e.argmax(-1)                                                  # tau*
+        #: 창별 문턱 — 중앙값의 WDG_THR 배. 듀티가 없는 창의 잡음을 전이로 안 읽는다.
+        ok = (e.gather(1, j[:, None])[:, 0]
+              > WDG_THR * e.median(-1).values).to(g.dtype)                # (B,)
+        pre = g.gather(1, torch.stack([j - 1, j], 1).clamp(0, n - 1)).mean(-1)
+        post = g.gather(1, torch.stack([j + 1, j + 2], 1).clamp(0, n - 1)).mean(-1)
+        dg = ((post - pre) / WDG_SCALE).clamp(-WDG_CLIP, WDG_CLIP)        # (B,)
+        pos = (j.to(g.dtype) - float(wide_target_index(n))) / float(max(n, 1))
+        return torch.stack([dg.abs() * ok, torch.sign(dg) * ok,
+                            pos * ok, ok], 1)                             # (B,4)
 
     def _split_dc(self, x: torch.Tensor):
         """14.224 — `(B,C,T)` 에서 **채널별 시간평균**을 떼어 `(x_ac, dc)` 로 돌린다.
@@ -1027,7 +1095,7 @@ class NILMNet(nn.Module):
                 #   ⚠ `--seg-pool` 과 다르다. 저쪽은 **전역 풀링**을 쪼개는데, 지금
                 #     새는 길은 탭 **안**이라 풀링을 쪼개도 못 막는다 (14.42 의 처방은
                 #     wtap 이 없던 RF 187 짜리 몸통에 맞춘 것이었다).
-                _ci, _dc = self._split_dc(self._conv_in(fine))
+                _ci, _dc = self._split_dc(self._conv_in(fine, wide))
                 hp, hf = _ci[:, :, :t + 1], _ci[:, :, t + 1:]
                 for i, blk in enumerate(self.fine):
                     hp, hf = blk(hp), blk(hf)
@@ -1036,7 +1104,7 @@ class NILMNet(nn.Module):
                 h = hp                                  # 아래 타깃 탭·풀링은 과거 쪽
                 self._h_fut = hf
             else:
-                h, _dc = self._split_dc(self._conv_in(fine))
+                h, _dc = self._split_dc(self._conv_in(fine, wide))
                 for i, blk in enumerate(self.fine):
                     h = blk(h)
                     if i in self._keep_tap:             # 얕은 층의 타깃 슬라이스

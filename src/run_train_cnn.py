@@ -669,6 +669,12 @@ def main() -> int:
                          "되살려 몸통 입력에 더한다 (14.183). 41·42 는 수용영역이 1인데 "
                          "p(t+3.0s)·p(t+5.5s) 를 담는다 — dzn_s1 에서 이 넷이 **93%%**였다. "
                          "**캐시를 다시 안 구워도 된다.** window 면 비트 동일.")
+    ap.add_argument("--wide-dg", action="store_true",
+                    help="③ 광역 60초에서 **전이 컨덕턴스 계단** ΔĜ 를 뽑아 몸통 입력에 "
+                         "채널 넷으로 더한다 (14.315). `G=P/V^2` 라 전압 계단이 이미 "
+                         "나눠져 있고, 창 안 전이의 앞뒤 차이가 **기기 하나의 G** 다. "
+                         "오븐 가열 창의 **89.1%%** 가 자기 듀티 전이를 60초 안에 담는다 "
+                         "(10초 창은 47.9%%). **캐시를 다시 안 구워도 된다.** 끄면 비트 동일.")
     #: 14.224 — 시간축 DC 를 conv 에서 떼어 머리로 보낸다 (`net.fine_dc` 독스트링).
     ap.add_argument("--fine-dc", default="keep", choices=("keep", "split", "mag"),
                     help="split 이면 `_conv_in` 출력에서 채널별 시간평균을 빼서 conv 에 "
@@ -1100,7 +1106,7 @@ def main() -> int:
                          "옛 하드코딩 값이 5.0). ⚠⚠ **14.301 정정** — 처음엔 `S_STATE`(척도표)를 "
                          "학습 목표로 착각해 '오븐 s1 17W 가 4,626배' 라고 적었다. 실제 목표 "
                          "`target_power_w` 로 재면 오븐 팬·조명은 **0.0W** 라 문턱에 애초에 "
-                         "안 걸리고, 5~100W 띠의 **75.6%가 비저항**이다 (질량으로는 저항이 "
+                         "안 걸리고, 5~100W 띠의 **75.6%%가 비저항**이다 (질량으로는 저항이 "
                          "1/44). 그래서 폭주를 뗄 주역은 `--hcond-classes` 이고 이 문턱은 "
                          "저항 쪽에 남는 **96창**(오븐 전이 35 · 핫플 61)을 떼는 마무리다.")
     ap.add_argument("--hcond-classes", default="", metavar="LIST",
@@ -1317,6 +1323,7 @@ def main() -> int:
                     state_power_src=a.state_power_src,
                     fine_norm=a.fine_norm, fine_conv=a.fine_conv,
                     fine_tpool=a.fine_tpool, fine_derive=a.fine_derive,
+                    wide_dg=bool(a.wide_dg),
                     fine_dc=a.fine_dc,
                     fine_pad=a.fine_pad,
                     fine_future_segs=a.fine_future_segs,
@@ -1533,6 +1540,7 @@ def main() -> int:
                     "fine_conv": str(model.fine_conv),
                     "fine_tpool": str(model.fine_tpool),
                     "fine_derive": str(model.fine_derive),
+                    "wide_dg": bool(model.wide_dg),
                     "fine_dc": str(model.fine_dc),
                     "fine_pad": str(model.fine_pad),
                     # 어느 캐시·홀드아웃으로 배웠나 (14.126). 판정할 때 "이 팔이 어느

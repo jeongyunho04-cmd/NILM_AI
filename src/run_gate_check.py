@@ -242,6 +242,7 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
                     fine_conv=str(pk.get("fine_conv", "sym") or "sym"),
                     fine_tpool=str(pk.get("fine_tpool", "whole") or "whole"),
                     fine_derive=str(pk.get("fine_derive", "window") or "window"),
+                    wide_dg=bool(pk.get("wide_dg", False)),
                     fine_dc=str(pk.get("fine_dc", "keep") or "keep"),
                     fine_pad=str(pk.get("fine_pad", "zeros") or "zeros"),
                     # 미래 토막 수 (14.122). 없으면 1 이라 **비트 동일**이다.
