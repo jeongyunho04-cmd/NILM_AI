@@ -548,6 +548,19 @@ class NILMNet(nn.Module):
         #: 14.224 — 떼어 낸 DC 벡터의 폭. `keep` 이면 0 이라 `trunk_in` 도 배치도 그대로다.
         self.fine_dc = str(fine_dc)
         self.n_dc = _cin0 if self.fine_dc in ("split", "mag") else 0
+        # ⚠ 14.253 — `_split_dc` 는 `_conv_in` **뒤**에 걸린다. `fine_derive="both"` 면
+        #   파생 넷이 `arcsinh((sinh(ch23)·100 − q)/20)` 이라 **비선형**이라서, ch23 의 DC 를
+        #   밀면 그 넷의 **AC 까지** 변한다 — 평균 빼기가 못 되돌린다. 측정: ch23 DC 를
+        #   +0.30 밀면 파생 채널 AC 가 0.34~0.38 움직인다 (AC 진폭의 **7.26%**).
+        #   `window` 에서는 `_conv_in` 이 항등이라 9.07e-08 로 안 샌다.
+        #   차단이 목적인데 7% 새는 조합은 **막는다** (경로를 다 세고 끊어라).
+        if self.n_dc and self.n_derive:
+            raise ValueError(
+                "fine_dc=%s 는 fine_derive=both 와 같이 못 쓴다 — 파생 채널이 ch23 의 "
+                "비선형 함수라 DC 가 AC 로 새어 들어간 뒤에 평균을 빼는 꼴이 된다 "
+                "(AC 진폭의 7.26%%, 14.253). 끊으려면 `_split_dc` 를 `_conv_in` **앞**으로 "
+                "옮겨야 하는데 그러면 파생이 DC 없는 ch23 을 보게 되어 뜻이 달라진다."
+                % self.fine_dc)
         if self.n_dc and str(head_layout) == "v2":
             raise ValueError("fine_dc=%s 는 head_layout=v2 와 같이 못 쓴다 "
                              "— v2 는 feats 를 `_feats_v2` 에서 따로 지어 DC 를 "

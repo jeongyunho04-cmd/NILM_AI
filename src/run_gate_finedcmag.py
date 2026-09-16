@@ -152,6 +152,27 @@ def main() -> int:  # noqa: C901
     print("[8] `mag` + head_layout=v2 가 **막힌다**  %s" % ("OK" if good else "FAIL"))
     ok &= good
 
+    # ── [9] `_conv_in` 누수 차단 ─────────────────────────────────────────────
+    lk = {}
+    for deriv in ("window",):
+        mm = mk("mag", fine_derive=deriv)
+        g = f.clone()
+        g[:, 23] += 0.30                       # 순수 DC 이동 (AC 는 그대로)
+        with torch.no_grad():
+            a0 = mm._split_dc(mm._conv_in(f))[0]
+            a1 = mm._split_dc(mm._conv_in(g))[0]
+        lk[deriv] = float((a1 - a0).abs().max()) / float(a0.abs().max())
+    blocked = False
+    try:
+        mk("mag", fine_derive="both")
+    except ValueError:
+        blocked = True
+    good = lk["window"] < 1e-5 and blocked
+    print("[9] ch23 DC 만 밀어도 `_conv_in` 뒤 AC 상대변화 **%.2e** (window) · "
+          "`both` 조합은 **%s**  %s"
+          % (lk["window"], "막힌다" if blocked else "안 막힌다", "OK" if good else "FAIL"))
+    ok &= good
+
     print()
     print("관문 %s" % ("전부 통과" if ok else "**실패**"))
     return 0 if ok else 1
