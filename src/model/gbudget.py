@@ -387,7 +387,8 @@ class Budget:
                   "minipc": (5., 30.)}
 
     def __init__(self, apps: Sequence[str], v_ref: np.ndarray, pool=None,
-                 volt_re0: int = 33, n_harm: int = 15, volt_orders=None):
+                 volt_re0: int = 33, n_harm: int = 15, volt_orders=None,
+                 motor_cols: bool = False):
         #: 14.338 — **차수는 인자다.** 실측 npz 는 15차수를 다 주지만 **학습 캐시의
         #  세밀 갈래에는 홀수 8차수뿐**이다 (`VOLT_ORDERS`). 캐시 위에서 이 모듈을
         #  쓰려면 여기를 못 박으면 안 된다.
@@ -404,10 +405,32 @@ class Budget:
         tab = build_table(fcm_devices(), self.FCM_RANGES, v_ref, n_p=10)
         T = [np.stack([c.real, c.imag], -1)
              for c in (template(tab[d], 20., 1.0) for d in self.FCM)]
-        ka = list(apps).index("air_conditioner")
-        for s in range(sig.shape[1]):
-            if us[ka, s] and np.abs(sig[ka, s]).max() > 0:
-                T.append(sig[ka, s].astype(np.float64))
+        #: ★ 14.359 — **기둥을 가질 기기**. 에어컨은 처음부터 있었고 선풍기는 없었다.
+        #: `motor_cols` 로 켠다 (기본 옛 동작 = 에어컨만 = **비트 동일**).
+        #:
+        #: 왜 선풍기인가 — 풀에서 잰 값이 그 이유다:
+        #: ```
+        #:   fan s1 21.5W  h3/h1 0.114 · THD 0.147 · ∠I1 **+31.3°**
+        #:   fan s2 29.4W  h3/h1 0.079 · THD 0.086 · ∠I1 +21.6°
+        #:   fan s3 37.6W  h3/h1 0.034 · THD **0.038** · ∠I1 **+3.2°**
+        #:   (저항 넷은 THD 0.021~0.038 · ∠I1 −0.1~+1.0°)
+        #: ```
+        #: s3 은 **전기적으로 저항과 구분이 안 된다.** 기둥이 없으면 그 전류가 갈 데가
+        #: `G` 기둥뿐이라 Ĝ 가 부풀고, §37 이 잰 *"선풍기 명목의 53~78%가 Ĝ 로 샌다"* 가
+        #: 그것이다. 37.6W 는 216V 에서 **0.8 mS** — 포트 식별 여유 0.635 보다 크다.
+        #: ⚠ Ĝ 는 지금 조합 머리의 대들보라 **좋아지는지 관문으로 재고** 켠다.
+        #: ⚠ 선풍기 지문은 상태별 전력 폭이 **1.01배**(오차 ≤0.5%)라 템플릿으로 이상적이다.
+        self.motor_apps = tuple(["air_conditioner"]
+                                + (["fan"] if motor_cols else []))
+        self.col_src = [("fcm", d, None) for d in self.FCM]
+        for _a in self.motor_apps:
+            if _a not in list(apps):
+                continue
+            _k = list(apps).index(_a)
+            for s in range(sig.shape[1]):
+                if us[_k, s] and np.abs(sig[_k, s]).max() > 0:
+                    T.append(sig[_k, s].astype(np.float64))
+                    self.col_src.append(("sig", _a, int(s)))
         self.T = np.stack(T)
         k = 2 + len(self.T)
         self.lam = np.zeros((k, k))
