@@ -789,3 +789,42 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def newest_compatible_ckpt(patterns=("results/cnn_*.pt",), limit: int = 10):
+    """지금 입력 배치와 **맞는** 체크포인트 중 가장 새 것. 없으면 `None`.
+
+    ⚠ **관문에 체크포인트 이름을 박지 마라.** 14.331 이 `VOLT_ORDERS` 를 넓히자
+      `results/cnn_hzwt_s0.pt`(광역 47채널)를 이름으로 박아 둔 `run_gate_pstatecap` [4]
+      가 `load_model` 의 하드 스톱에 걸렸고, **985993 이 여섯 토막 전부 12초에 죽었다**.
+      배치를 바꾼 뒤에는 "맞는 체크포인트가 하나도 없는" 부트스트랩 구간이 반드시 생긴다.
+
+    새 것부터 최대 `limit` 개를 열어 보고 채널 수·차수가 맞는 첫 것을 돌려준다.
+    """
+    import glob as _glob
+    import os as _os
+
+    import torch as _torch
+
+    from src.model import inputs as _inp
+
+    cands = []
+    for pat in patterns:
+        cands += _glob.glob(pat)
+    cands = sorted(set(cands), key=lambda q: _os.path.getmtime(q), reverse=True)
+    for q in cands[:limit]:
+        try:
+            d = _torch.load(q, map_location="cpu", weights_only=False)
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            continue
+        if int(d.get("fine_channels", -1)) != int(_inp.FINE_CHANNELS):
+            continue
+        if int(d.get("wide_channels", _inp.WIDE_CHANNELS)) != int(_inp.WIDE_CHANNELS):
+            continue
+        vo = d.get("volt_orders")
+        if vo is not None and tuple(int(x) for x in vo) != tuple(_inp.VOLT_ORDERS):
+            continue
+        return q
+    return None

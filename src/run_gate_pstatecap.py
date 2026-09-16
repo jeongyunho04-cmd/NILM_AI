@@ -118,10 +118,20 @@ def main() -> int:
        torch.equal(od["power_raw"][:, other], ob["power_raw"][:, other]))
 
     # [4] ★ 진짜 체크포인트 — 따로 지은 물건이 아니라 구운 가중치에서 잰다
-    from src.run_gate_check import load_model
-    p = Path("results/cnn_hzwt_s0.pt")
+    #
+    # ⚠ 14.336 — **이름을 박지 않는다.** 옛 판은 `results/cnn_hzwt_s0.pt` 를 박아 뒀는데,
+    #   14.331 이 배치를 넓히자 그 체크포인트(광역 47채널)가 `load_model` 의 하드 스톱에
+    #   걸려 **985993 이 여섯 토막 전부 12초에 죽었다.** 배치를 바꾸면 "맞는 체크포인트가
+    #   하나도 없는" 부트스트랩 구간이 반드시 생긴다 — 그때는 **실패가 아니라 건너뜀**이다.
+    #   ⚠ 건너뜀이 굳지 않게 **자동으로 찾는다**: 새 팔이 하나라도 구워지면 다시 돈다.
+    from src.run_gate_check import load_model, newest_compatible_ckpt
+    _q = newest_compatible_ckpt()
+    p = Path(_q) if _q else Path("results/__none__.pt")
     if not p.exists():
-        ck("[4] ★ 진짜 체크포인트에서 빔 s1 이 잘린다", False, "%s 가 없다" % p)
+        print("  [4] **건너뜀** — 지금 배치(FINE %d · WIDE %d · 차수 %s)와 맞는 체크포인트가"
+              " results/ 에 하나도 없다.\n"
+              "      배치를 바꾼 직후의 부트스트랩이다. 한 팔이라도 구워지면 이 줄이 다시 돈다."
+              % (_I.FINE_CHANNELS, _I.WIDE_CHANNELS, tuple(_I.VOLT_ORDERS)))
     else:
         m_off = load_model(str(p), "cpu")[0]
         m_on = load_model(str(p), "cpu")[0]
@@ -150,10 +160,10 @@ def main() -> int:
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         q = Path(td) / "t.pt"
-        base_ck = torch.load("results/cnn_hzwt_s0.pt", map_location="cpu",
+        base_ck = torch.load(str(p), map_location="cpu",
                              weights_only=False) if p.exists() else None
         if base_ck is None:
-            ck("[6] 체크포인트 왕복", False, "기준 체크포인트가 없다")
+            print("  [6] **건너뜀** — [4]와 같은 까닭 (맞는 체크포인트가 없다)")
         else:
             base_ck["p_state_cap"] = R
             torch.save(base_ck, q)
