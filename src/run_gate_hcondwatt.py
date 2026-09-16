@@ -8,8 +8,14 @@ log 가 하던 일이 둘인데(① V 불변 ② 척도 불변) 저항 기기만
 
   [1] 기본값이면 **비트 동일** (scale=log · classes="" · on_w=5)
   [2] ★★ **오븐↔포트 분리력** — 196W 차이에서 watt 가 log 보다 세고 바닥 이상이다
-  [3] ★★ **폭주가 사라진다** — 오븐 s1 17W 가 무너진 창에서 log 대 watt
-  [4] ★ **클래스로는 폭주가 안 잘린다** — 1·2위(오븐 s1·핫플 s1)가 둘 다 RESISTIVE
+  [3] ★★ **폭주가 사라진다** — 5~100W 참값 창이 무너졌을 때 log 대 watt
+  [4] ★★ **클래스 제한이 폭주 창을 통째로 없앤다** — `target_power_w` 로 직접 센다
+
+⚠ **14.300 정정.** 처음엔 `S_STATE`(오븐 s1 = 17W)로 재고 "클래스로는 폭주가 안 잘린다"
+  고 적었다. 그건 **척도·초기값 표**지 학습 목표가 아니다(`losses.py` 의 "이 표는 초기값
+  전용이다"). 실제 목표 `target_power_w` 로 재면 오븐 팬·조명은 **0.0W** 라 5W 문턱에
+  애초에 안 걸리고, 5~100W 띠의 **75.6%가 비저항**이다. 결론이 뒤집혔다 —
+  `--hcond-classes RESISTIVE` **하나로 폭주가 사라진다** ([[verify-channel-layout-by-measurement]]).
   [5] 클래스 마스크가 **진짜 열**을 고른다 (V_EXP 2.0 인 넷)
   [6] `--hcond-on-w` 가 실제로 자른다 (문턱 아래는 옛 Huber 로 간다)
   [7] 모르는 분류 이름은 **죽는다** · hcond 없이 쓰면 죽는다
@@ -63,7 +69,23 @@ ok(1, "기본값이면 옛 경로 (scale=log · 전 열 · 5W)", same and not ba
    "마스크 %d/%d 열" % (int(a.hcond_mask.sum()), len(APPS)))
 
 # ── 기울기 자 (해석적으로, 손실 정의 그대로) ──────────────────────
-S_I = {k: float(v) for k, v in zip(APPS, mk().s_i.tolist())}
+# ⚠⚠ **14.301 정정.** `--per-state-scale` 기본값이 **True** 라 손실의 `s` 는
+#   `s_i`(기기 p90)가 아니라 **(기기,상태)별 척도** `s_state` 다 (`losses.py` forward
+#   의 `torch.gather`). 처음엔 전부 `s_i` 로 재서 폭주를 **246배까지 부풀렸다**
+#   (에어컨 s1: 2,024배 -> 실제 **8.2배**). 상태별 척도가 저전력 상태를 이미
+#   정규화하고 있다 ([[check-the-denominator-before-reading-a-ratio]]).
+_C = mk(per_state_scale=True)
+S_I = {k: float(v) for k, v in zip(APPS, _C.s_i.tolist())}
+_SS = _C.s_state.numpy()
+assert _C.use_state_scale, "per_state_scale 이 꺼졌다 — 자가 달라진다"
+
+
+def S_SCALE(app, state):
+    """손실이 실제로 쓰는 척도. 상태가 None 이면 기기 p90 (per_state_scale 꺼진 경우)."""
+    i = APPS.index(app)
+    return float(_SS[i, min(int(state), _SS.shape[1] - 1)]) if state is not None else S_I[app]
+
+
 VP = (214.0 / 222.0) ** 2.0        # 저항 기기, 214V
 
 
@@ -86,7 +108,7 @@ def g_base(y, ph, s, delta):
 
 
 # ── [2] ★★ 오븐↔포트 분리력 ─────────────────────────────────────
-S_OVEN = S_I["oven"]
+S_OVEN = S_SCALE("oven", 2)                    # ★ 통전은 **상태 2** 다 (s_i 아님)
 Y_OVEN, D_W = 1088.0, 196.0                    # 214V 에서 42.08Ω 대 35.67Ω
 gb = g_base(Y_OVEN, Y_OVEN + D_W, S_OVEN, 0.1)
 gl = g_log(Y_OVEN, Y_OVEN + D_W, 0.05)
@@ -95,38 +117,113 @@ ok(2, "196W 를 가르는 힘: watt >= 바닥 > log", gw >= gb > gl,
    "바닥 %.2e · **log %.2e (%.2f배)** · **watt %.2e (%.2f배)**"
    % (gb, gl, gl / gb, gw, gw / gb))
 
-# ── [3] ★★ 폭주가 사라진다 ──────────────────────────────────────
-Y_LOW, PH = 17.0, 1.0                          # 오븐 s1 팬·조명, 예측이 바닥으로 무너짐
-lb = g_base(Y_LOW, PH, S_OVEN, 0.1)
-ll = g_log(Y_LOW, PH, 0.05)
-lw = g_watt(Y_LOW, PH, S_OVEN, VP, 0.1)
-ok(3, "무너진 저전력 창: log 는 폭주 · watt 는 바닥 자리",
-   ll / lb > 1000.0 and lw / lb < 2.0,
-   "바닥 %.2e · **log %.2e (%.0f배)** · watt %.2e (%.2f배)"
-   % (lb, ll, ll / lb, lw, lw / lb))
+# ── 진짜 학습 목표를 읽는다 (14.300) ────────────────────────────
+import glob                                                          # noqa: E402
 
-# ── [4] ★ 클래스로는 폭주가 안 잘린다 ───────────────────────────
-try:
-    from src.model.losses import S_STATE
-except Exception:                                                    # pragma: no cover
-    S_STATE = {}
-blow = []
-for ap_ in APPS:
-    st = [v for v in S_STATE.get(ap_, {}).values() if v > 5.0]
-    if not st:
-        continue
-    y = min(st)
-    blow.append((g_log(y, 1.0, 0.05) / g_base(y, 1.0, S_I[ap_], 0.1), ap_, y))
-blow.sort(reverse=True)
+STEM = {"electiric_kettle": "electric_kettle"}    # ⚠ 기기 이름에 오타가 박혀 있다
+
+
+def band_frac(app, lo=5.0, hi=100.0):
+    """그 기기의 `target_power_w` 중 (lo, hi] 에 드는 **비율과 개수**."""
+    P = []
+    for f in sorted(glob.glob("processed_data/npz/%s_*.npz" % STEM.get(app, app))):
+        z = np.load(f, allow_pickle=True)
+        v = z["is_valid"].astype(bool)
+        P.append(z["target_power_w"].astype(np.float64)[v])
+    if not P:
+        return None
+    p = np.concatenate(P)
+    b = (p > lo) & (p <= hi)
+    return float(b.mean()), int(b.sum()), int(len(p))
+
+
+def band_median(app, lo=5.0, hi=100.0):
+    P = []
+    for f in sorted(glob.glob("processed_data/npz/%s_*.npz" % STEM.get(app, app))):
+        z = np.load(f, allow_pickle=True)
+        v = z["is_valid"].astype(bool)
+        P.append(z["target_power_w"].astype(np.float64)[v])
+    p = np.concatenate(P)
+    b = (p > lo) & (p <= hi)
+    return float(np.median(p[b])) if b.sum() else 0.0
+
+
+BAND = {a: band_frac(a) for a in APPS}
+if any(v is None for v in BAND.values()):
+    raise SystemExit("processed_data/npz 가 없다 — 이 관문은 **진짜 목표**를 읽어야 한다")
+BANDMED = {a: band_median(a) for a in APPS}
+
+
+def band_states(app, lo=5.0, hi=100.0):
+    """(상태, 창수, y중앙) 목록 — **상태별**로 갈라야 척도가 맞는다."""
+    P, ST = [], []
+    for f in sorted(glob.glob("processed_data/npz/%s_*.npz" % STEM.get(app, app))):
+        z = np.load(f, allow_pickle=True)
+        v = z["is_valid"].astype(bool)
+        P.append(z["target_power_w"].astype(np.float64)[v])
+        ST.append(z["state_id"].astype(int)[v])
+    p, st = np.concatenate(P), np.concatenate(ST)
+    b = (p > lo) & (p <= hi)
+    return [(int(sid), int((b & (st == sid)).sum()),
+             float(np.median(p[b & (st == sid)])))
+            for sid in sorted(set(st[b].tolist())) if (b & (st == sid)).sum()]
+
+
+BANDSTATE = {a: band_states(a) for a in APPS}
+#: 문턱 **위**도 봐야 ②가 자명한 명제가 안 된다.
+BANDSTATE_ALL = {a: band_states(a, 5.0, 1e9) for a in APPS}
+
+# ── [3] ★★ 폭주를 **창수 x 비** 로 센다 (실재하는 창만) ─────────
+# ⚠ 비 하나로 고르면 안 된다 — 오븐이 4,963배지만 창이 **35개**뿐이다.
+#   에어컨은 1,978배인데 **18,666개**다. 손실에 실제로 들어오는 것은 곱이다
+#   ([[count-effective-samples-not-rows]]).
+MASS = {}          # (기기, 상태) -> 창수 x 비
+for a in APPS:
+    for sid, cnt, ymed in BANDSTATE[a]:
+        sc = S_SCALE(a, sid)
+        MASS[(a, sid)] = (cnt * g_log(ymed, 1.0, 0.05) / g_base(ymed, 1.0, sc, 0.1),
+                          g_log(ymed, 1.0, 0.05) / g_base(ymed, 1.0, sc, 0.1), cnt, ymed, sc)
+heavy = max(MASS, key=lambda k: MASS[k][0])
+worst = max(MASS, key=lambda k: MASS[k][1])
+hm, hr, hc, hy, hs = MASS[heavy]
+wm, wr, wc, wy, ws = MASS[worst]
+lw_r = g_watt(hy, 1.0, hs, VP, 0.1) / g_base(hy, 1.0, hs, 0.1)
+ok(3, "폭주가 실재하고 watt 는 그 자리가 바닥이다",
+   wr > 100.0 and hm > 1e5 and lw_r < 2.0,
+   "비 최악 %s s%d **%.0f배**(창 %d) · 질량 최악 %s s%d %.0f배 x %d창 = **%.2fM** · "
+   "watt 는 %.2f배"
+   % (KO[worst[0]], worst[1], wr, wc, KO[heavy[0]], heavy[1], hr, hc, hm / 1e6, lw_r))
+
+# ── [4] ★★ 클래스 제한이 폭주 창을 통째로 없앤다 ────────────────
 res_set = {x for x in APPS if V_EXP.get(x, 0.0) == 2.0}
-res_blow = [x for x in blow if x[1] in res_set]
-# ⚠ 처음에 "폭주 1·2위가 둘 다 저항"이라고 적었다가 관문에 걸렸다 — 2위는 **에어컨(모터)**
-#   이다. 검사해야 할 주장은 그게 아니라 **"클래스로 잘라도 최악이 남는다"** 다.
-ok(4, "RESISTIVE 로 잘라도 폭주 최악이 그대로 남는다",
-   blow[0][1] in res_set and res_blow[0][0] > 1000.0,
-   "전역 1위 %s %.0f배(저항) · 저항만 남겼을 때 최대 %s %.0f배 | 전체: %s"
-   % (KO[blow[0][1]], blow[0][0], KO[res_blow[0][1]], res_blow[0][0],
-      " · ".join("%s %.0f배" % (KO[x[1]], x[0]) for x in blow[:4])))
+r_hit = sum(BAND[a][1] for a in res_set)
+r_tot = sum(BAND[a][2] for a in res_set)
+n_hit = sum(BAND[a][1] for a in APPS if a not in res_set)
+n_tot = sum(BAND[a][2] for a in APPS if a not in res_set)
+r_frac, n_frac = r_hit / max(r_tot, 1), n_hit / max(n_tot, 1)
+r_mass = sum(v[0] for k, v in MASS.items() if k[0] in res_set)
+n_mass = sum(v[0] for k, v in MASS.items() if k[0] not in res_set)
+share = r_mass / max(r_mass + n_mass, 1e-30)
+# ★ 두 단계다. ① 클래스가 대부분을 없애고 ② 문턱이 나머지를 없앤다.
+#   ②가 자명하지 않으려면 **문턱 위** 저항 창에 폭주가 없는지도 봐야 한다 —
+#   띠가 (5,100] 이라 "문턱 100 이 띠를 다 뗀다" 는 정의상 참이기 때문이다.
+over = []          # 문턱 위 저항 상태에서 **전형적 오차(30% 저평가)** 의 비
+for a in res_set:
+    for sid, cnt, ymed in BANDSTATE_ALL[a]:
+        if ymed <= 100.0:
+            continue
+        sc = S_SCALE(a, sid)
+        ph = 0.7 * ymed
+        over.append((g_log(ymed, ph, 0.05) / g_base(ymed, ph, sc, 0.1), a, sid, ymed, cnt))
+over.sort(reverse=True)
+ok(4, "① 클래스가 질량 대부분을 · ② 문턱이 나머지를 없앤다",
+   r_frac < 0.01 and n_frac > 0.5 and n_mass > 10 * r_mass and over[0][0] <= 2.0,
+   "① 질량 저항 %.2fM 대 비저항 %.1fM = **1/%.0f** · 창 %.3f%% 대 %.1f%% | "
+   "② 남는 %d 창이 전부 <=100W 라 문턱이 뗀다 · **문턱 위** 저항 최대비 "
+   "%s s%d **%.2f배**(폭주 없음)"
+   % (r_mass / 1e6, n_mass / 1e6, n_mass / max(r_mass, 1e-30),
+      100 * r_frac, 100 * n_frac, r_hit,
+      KO[over[0][1]], over[0][2], over[0][0]))
 
 # ── [5] 클래스 마스크가 진짜 열을 고른다 ────────────────────────
 r = mk(head_conductance=True, hcond_scale="watt", hcond_classes="RESISTIVE")
