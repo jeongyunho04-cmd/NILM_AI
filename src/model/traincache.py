@@ -41,7 +41,7 @@ import time
 import numpy as np
 
 from src.model.inputs import (ZERO_EVEN_HARMONICS, FINE_CHANNELS, FINE_CYCLES, FINE_LAYOUT,
-                             RAW_CHANNELS, WIDE_CHANNELS, build_inputs)
+                             RAW_CHANNELS, VOLT_ORDERS, WIDE_CHANNELS, build_inputs)
 
 # (이름, dtype, 창당 모양)
 _SPEC = {
@@ -371,6 +371,10 @@ def build_cache(
             "time_split": time_split, "seed": seed, "n_wide": n_wide,
             # 14.93 — 세밀은 `fine_shape` 로 막혀 있었는데 광역은 아무것도 없었다.
             "wide_shape": [int(WIDE_CHANNELS), int(n_wide)],
+            #: 14.331 — **입력 배치의 규약**. 없으면 6차수(1,3,5,7,9,11) 판이다.
+            #  채널 수만으로도 걸리지만(`run_gate_cacheshape`) 어느 차수인지는
+            #  여기에만 남는다 — 나중에 짝수차를 넣을 수도 있으므로 값을 적는다.
+            "volt_orders": [int(h) for h in VOLT_ORDERS],
             "exclude_activation_files": exclude_activation_files,
             "dither_amp": float(dither_amp), "dither_phase_deg": float(dither_phase_deg),
             "dither_min_order": int(dither_min_order),
