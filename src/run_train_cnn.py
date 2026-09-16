@@ -22,6 +22,7 @@ for s in 0 1 2; do python -m src.run_train_cnn --seed $s --tag seed$s; done
 from pathlib import Path
 import argparse
 import json
+import math
 import sys
 import time
 
@@ -347,6 +348,70 @@ def odd_phase_jitter(fine: torch.Tensor, wide: torch.Tensor, sigma_deg: float) -
             a, b = t[:, base + 2 * k].clone(), t[:, base + 2 * k + 1].clone()
             t[:, base + 2 * k] = a * cj - b * sj
             t[:, base + 2 * k + 1] = a * sj + b * cj
+
+
+class WeightAverager:
+    """궤적 평균 (SWA, Izmailov 외 UAI 2018) — 14.295.
+
+    **왜 이게 앙상블이 아닌가.** 앙상블은 따로 학습한 판 K 개의 *출력* 을 평균한다.
+    그 판들은 서로 다른 분지에 있고, 신경망은 뉴런 순서 바꾸기에 대해 대칭이라
+    **가중치를 평균하면 아무것도 아닌 것**이 나온다. 그래서 출력을 평균할 수밖에 없고,
+    그러면 2대1 다수결이 되어 확신에 차서 틀린 다수가 살아남는다 (§19.1 이 죽인 것).
+    여기서는 **한 궤적 안의 점들**을 평균한다. 그 점들은 손실이 낮은 경로로 이어져
+    있으므로(같은 분지) 평균이 여전히 쓸 수 있는 점이고, 결과는 **판 하나**다.
+
+    **왜 중심이 나은가.** 학습률이 0 이 아닌 동안 SGD 는 한 점이 아니라 분지 바닥
+    주변의 정상분포에 든다. 마지막 가중치는 거기서 뽑은 표본 하나다. 골짜기는 한쪽
+    벽이 가파르고 반대가 평평한데(He·Huang·Yuan, NeurIPS 2019), **학습** 손실의
+    최소점은 가파른 쪽으로 치우쳐 있다. 평균은 평평한 쪽으로 더 들어간다. 분포
+    이동은 곧 손실 곡면이 밀리는 것이므로, 평평한 안쪽 점이 덜 무너진다.
+
+    ⚠ **부동소수 텐서만 평균한다.** `state_dict()` 에는 정수·불리언 버퍼가 섞여 있고
+    (`_swap_combos` 같은 상수표), 그걸 누적 평균에 넣으면 dtype 이 깨지거나 값이
+    바뀐다. 그런 항목은 **마지막 값을 그대로** 쓴다.
+
+    ⚠ **BN 재추정이 필요 없다.** SWA 의 그 단계는 running mean/var 를 가진 정규화가
+    있을 때만 필요한데, 이 망은 `_TGroupNorm`(= `nn.GroupNorm`) 뿐이라 통계를 순전파
+    때마다 표본에서 낸다. 관문 [3] 이 실제 모델을 걸어 확인한다.
+    """
+
+    def __init__(self, model) -> None:
+        self.n = 0
+        self.avg = {k: (v.detach().clone().float() if v.is_floating_point()
+                        else v.detach().clone())
+                    for k, v in model.state_dict().items()}
+        self.float_keys = [k for k, v in self.avg.items() if v.is_floating_point()]
+
+    def add(self, model) -> None:
+        """누적 평균 — `w̄ <- w̄ + (w − w̄)/(n+1)`. n 점의 산술평균과 정확히 같다."""
+        sd = model.state_dict()
+        if self.n == 0:
+            for k, v in sd.items():
+                self.avg[k].copy_(v.detach().float() if k in self.float_keys
+                                  else v.detach())
+        else:
+            for k in self.float_keys:
+                self.avg[k].add_(sd[k].detach().float().sub(self.avg[k]),
+                                 alpha=1.0 / (self.n + 1))
+            for k, v in sd.items():          # 정수·불리언은 마지막 값
+                if k not in self.float_keys:
+                    self.avg[k].copy_(v.detach())
+        self.n += 1
+
+    def state_dict(self, like) -> dict:
+        """`like` 의 dtype 으로 되돌린 state_dict. 모델에 바로 실을 수 있다."""
+        ref = like.state_dict()
+        return {k: (v.to(ref[k].dtype) if k in ref else v)
+                for k, v in self.avg.items()}
+
+    def rel_shift(self, model) -> float:
+        """`||w̄ − w|| / ||w||` (부동소수 파라미터만). 관문 [2] 의 자다 —
+        이 값이 0 에 가까우면 **평균할 퍼짐이 없었다** = 무동작이다."""
+        sd = model.state_dict()
+        num = sum(float((self.avg[k] - sd[k].detach().float()).pow(2).sum())
+                  for k in self.float_keys)
+        den = sum(float(sd[k].detach().float().pow(2).sum()) for k in self.float_keys)
+        return (num / max(den, 1e-30)) ** 0.5
 
 
 def _vnorm_exp(apps, classes: str = ""):
@@ -1018,6 +1083,25 @@ def main() -> int:
                          "두면 그 유인이 사라진다. e_k 는 net.V_EXP 표 고정 (저항 2 · SMPS 0 · "
                          "모터 0.6). 참값이 5W 위인 자리만 log 로 재고 꺼진 자리는 옛 척도 "
                          "Huber 를 그대로 써서 슬롯 사망(13.84.68)을 막는다. 끄면 **비트 동일**.")
+    ap.add_argument("--swa-start", type=int, default=0, metavar="EPOCH",
+                    help="**가중치 평균** (SWA, Izmailov 외 UAI 2018) 을 이 epoch 부터 켠다 "
+                         "(14.295). 0 이면 **비트 동일**. 원리: LR 이 0 이 아닌 동안 SGD 는 "
+                         "한 점이 아니라 분지 바닥 주변의 **정상분포**에 들고, 마지막 가중치는 "
+                         "그 분포에서 뽑은 표본 하나다. 궤적을 평균하면 중심을 재는 것이고, "
+                         "비대칭 골짜기(He 외 NeurIPS 2019)에서 중심은 **평평한 쪽**으로 더 "
+                         "들어가 있어 곡면이 밀릴 때(= 분포 이동) 덜 무너진다. "
+                         "⚠ **앙상블과 다른 물건이다** — 앙상블은 다른 분지의 판들의 *출력*을 "
+                         "평균해 2대1 다수결이 되고 §19.1 에서 죽었다. 이건 **한 궤적 안의 "
+                         "가중치**를 평균해 판 **하나**를 만든다. 씨앗이 다르면 초기값이 달라 "
+                         "분지가 다르므로 **체크포인트끼리는 평균하면 안 된다**.")
+    ap.add_argument("--swa-lr", type=float, default=0.0, metavar="LR",
+                    help="평균 구간 동안 **고정할** 학습률. 0 이면 코사인이 `--swa-start` 에서 "
+                         "내는 값을 그대로 쓴다. ⚠ 이 고정이 처치의 **일부다** — 지금 스케줄은 "
+                         "`CosineAnnealingLR(T_max=steps)` 라 LR 이 0 으로 떨어져서, 그대로 "
+                         "평균하면 마지막 구간에 퍼짐이 없어 w̄ ≈ w_T 로 **무동작**이 된다. "
+                         "관문 [2] 가 그것을 잡는다.")
+    ap.add_argument("--swa-every", type=int, default=1, metavar="N",
+                    help="평균 구간에서 N epoch 마다 한 점씩 누적한다 (기본 1).")
     ap.add_argument("--fine-channels", type=int, default=None, metavar="N",
                     help="세밀 갈래가 쓸 채널 수 (기본: inputs.FINE_CHANNELS). "
                          "캐시는 그대로 두고 앞에서부터 N 개만 쓴다. "
@@ -1039,6 +1123,18 @@ def main() -> int:
                               or a.off_detach_praw):
         raise SystemExit("--gate-free-power 는 --on-power-praw/--on-detach-gate/"
                          "--off-detach-praw 와 같이 못 씁니다 (전자가 후자를 포함합니다)")
+
+    #: 14.295 — SWA 는 `select=final` 이라야 뜻이 있다. `best-f1` 은 epoch 마다
+    #  **돌고 있는** 판을 저장하므로 평균낸 가중치가 덮어써지거나 무시된다.
+    if a.swa_start:
+        if not (1 <= a.swa_start <= a.epochs):
+            raise SystemExit("--swa-start 는 1..%d 여야 합니다 (받은 값 %d)"
+                             % (a.epochs, a.swa_start))
+        if a.select != "final":
+            raise SystemExit("--swa-start 는 --select final 과만 씁니다 "
+                             "(--select %s 는 epoch 마다 도는 판을 저장합니다)" % a.select)
+        if a.swa_every < 1:
+            raise SystemExit("--swa-every 는 1 이상이어야 합니다")
 
     env_guard.verify_numerics()
     torch.manual_seed(a.seed); np.random.seed(a.seed)
@@ -1254,6 +1350,20 @@ def main() -> int:
     steps = a.epochs * max(1, a.epoch_windows // a.batch)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=steps)
 
+    #: 14.295 — 궤적 평균. `swa_start` 부터 LR 을 **상수로 고정**하고 epoch 끝마다
+    #  한 점씩 누적한다. 고정이 처치의 일부다 — 코사인이 0 으로 떨어지면 평균할
+    #  퍼짐이 없어 w̄ ≈ w_T 가 된다 (관문 [2]).
+    swa = WeightAverager(model) if a.swa_start else None
+    swa_lr = 0.0
+    if swa is not None:
+        _spe = max(1, a.epoch_windows // a.batch)          # epoch 당 step
+        swa_lr = float(a.swa_lr) if a.swa_lr > 0 else float(
+            a.lr * (1.0 + math.cos(math.pi * ((a.swa_start - 1) * _spe) / steps)) / 2.0)
+        print("** 14.295 가중치 평균 — ep%d 부터 LR 을 %.3e 로 고정하고 %d epoch 마다 "
+              "누적한다 (예상 %d 점) **"
+              % (a.swa_start, swa_lr, a.swa_every,
+                 1 + (a.epochs - a.swa_start) // a.swa_every))
+
     print(f"모델 {n_par/1e6:.2f}M 파라미터 | 배치 {a.batch} | {a.epochs} epoch x "
           f"{a.epoch_windows:,}창 = {steps:,} step | 장치 {dev}")
     if a.harm_sig_vnorm:
@@ -1347,6 +1457,11 @@ def main() -> int:
                     "gate_free_power": a.gate_free_power,
                     "even_median": int(a.even_median),
                     "cons_deadzone": float(a.cons_deadzone),
+                    # 14.295 궤적 평균. 0 이면 안 쓴 것 = 옛 경로와 비트 동일.
+                    "swa_start": int(a.swa_start),
+                    "swa_lr": float(swa_lr),
+                    "swa_every": int(a.swa_every),
+                    "swa_n": int(swa.n) if swa is not None else 0,
                     "off_detach_praw": a.off_detach_praw,
                     "wide_summary": a.wide_summary, "wide_target": a.wide_target,
                     "periodicity": a.periodicity,
@@ -1454,7 +1569,14 @@ def main() -> int:
             opt.zero_grad(set_to_none=True)
             parts["total"].backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            opt.step(); sched.step()
+            opt.step()
+            #: 14.295 — 평균 구간에서는 코사인을 **멈추고** LR 을 상수로 둔다.
+            #  SWA 원 논문의 처방이다. 퍼짐이 있어야 중심을 잴 수 있다.
+            if swa is not None and ep >= a.swa_start:
+                for _g in opt.param_groups:
+                    _g["lr"] = swa_lr
+            else:
+                sched.step()
             # 손실 항은 **GPU 텐서로** 누적한다. 여기서 `float(v)` 를 부르면 항마다
             # 스트림 동기화가 걸려(9개 항 x 매 스텝) CPU 가 다음 배치를 미리 읽지
             # 못하고 GPU 앞에서 멈춰 선다. 캐시 읽기 24.5ms 가 GPU 유휴 시간에
@@ -1467,6 +1589,10 @@ def main() -> int:
         # epoch 이 끝난 뒤 한 번만 CPU 로 가져온다.
         agg = {k: float(v) / max(nb, 1) for k, v in agg.items()}
         t_train = time.time() - t0
+        #: 14.295 — 이 epoch 의 점을 평균에 넣는다. 마지막 epoch 은 항상 넣는다.
+        if swa is not None and ep >= a.swa_start and (
+                (ep - a.swa_start) % a.swa_every == 0 or ep == a.epochs):
+            swa.add(model)
 
         # 중간 스냅샷. 두 가지를 준다 — 중단되면 잃는 것이 최대 N epoch 이고,
         # 나중에 "epoch 수가 적당했는가" 를 재학습 없이 사후 판정할 수 있다.
@@ -1505,6 +1631,24 @@ def main() -> int:
             best = row
         if a.select == "best-f1" and best is row:
             save_ckpt(Path(a.out) / f"{a.tag}.pt", ep)
+
+    #: 14.295 — 평균낸 가중치를 **모델에 싣고** 나서 저장·최종 평가한다. 순서를
+    #  거꾸로 하면 보고한 숫자와 저장한 판이 다른 물건이 된다
+    #  ([[verify-the-input-path-not-just-the-model]]).
+    if swa is not None:
+        _shift = swa.rel_shift(model)
+        print("** 14.295 가중치 평균 %d 점 · ||w̄ − w_T||/||w_T|| = **%.3e** %s **"
+              % (swa.n, _shift,
+                 "" if _shift > 1e-4 else "<- ⚠ 퍼짐이 없다. 무동작에 가깝다"))
+        #: ★ **짝을 공짜로 만든다** (14.295). `swa_start` 부터 LR 을 고정하면 짝과
+        #  다른 것이 **둘**(스케줄 꼬리·평균)이 되어 이겨도 어느 쪽인지 모른다
+        #  ([[count-how-many-things-differ-before-attributing]]). 같은 궤적의
+        #  **끝점**을 따로 저장하면, 씨앗·자료순서·스케줄이 전부 같고 **평균만** 다른
+        #  대조가 공짜로 생긴다.
+        save_ckpt(Path(a.out) / f"{a.tag}_last.pt", a.epochs)
+        print("   같은 궤적의 끝점을 %s_last.pt 로 따로 저장했다 (평균만 다른 대조)"
+              % a.tag)
+        model.load_state_dict(swa.state_dict(model))
 
     if a.select == "final":
         # **홀드아웃으로 체크포인트를 고르지 않는다** (12.9.9절).
