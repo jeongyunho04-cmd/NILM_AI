@@ -185,6 +185,10 @@ def main() -> None:
     a = ap.parse_args()
     if not (a.probe or a.real or a.sweep):
         a.probe = a.real = True
+    #: 14.350 — ★ **창을 짓기 전에** 짝수차 이동중앙값 규약을 맞춘다 (14.336 의 가드).
+    #  `--even-median 5` 로 구운 판을 k=0 규약 창에 올리면 분포 밖을 재게 된다.
+    from src.run_gate_check import sync_even_median
+    sync_even_median(a.ckpt)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
 
     if a.probe:
