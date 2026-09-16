@@ -37,6 +37,8 @@ import numpy as np  # noqa: E402
 
 from src import env_guard  # noqa: F401,E402
 
+from src.model import inputs as _I  # noqa: E402
+
 import torch  # noqa: E402
 
 from src.model.losses import S_STATE  # noqa: E402
@@ -51,15 +53,17 @@ ok = True
 
 def mk(hc=False, ve=False, seed=0):
     torch.manual_seed(seed)
-    return NILMNet(APPS, NS, fine_channels=57, fine_extra_dilations=(32, 64),
+    #: 14.331 — 상수에서 파생. 박아 두면 차수를 넓힐 때 조용히 틀린다.
+    return NILMNet(APPS, NS, fine_channels=_I.FINE_CHANNELS,
+                   fine_extra_dilations=(32, 64),
                    tap_layers=(0, 1, 4), p_state_cap=3.0, prior_kappa=8.0,
                    head_conductance=hc, vexp=ve).eval()
 
 
 def inp(vv, seed=7):
     torch.manual_seed(seed)
-    f = torch.randn(4, 57, 600) * 0.3
-    w = torch.randn(4, 47, 120) * 0.3
+    f = torch.randn(4, _I.FINE_CHANNELS, 600) * 0.3
+    w = torch.randn(4, _I.WIDE_CHANNELS, 120) * 0.3
     f[:, V_CH_FINE] = (vv - V_CENTER) / V_SPAN
     return f, w
 

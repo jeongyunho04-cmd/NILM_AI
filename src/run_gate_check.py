@@ -160,6 +160,20 @@ def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True
     #: 채점이 학습과 다른 입력을 보게 되므로 크게 경고한다
     #: ([[match-the-scoring-convention-before-comparing]]).
     from src.model import inputs as _I
+    #: 14.331 — **전압 고조파 차수**도 같은 종류의 규약이다. 어긋나면 `net.py` 가
+    #  `fine[:, :fine_channels]` 로 잘라서 **다른 뜻의 채널**을 먹는다 — 죽지 않고
+    #  그럴듯한 틀린 수를 낸다. `even_median` 과 같은 이유로 **멈춘다**.
+    _vo = ck.get("volt_orders")
+    if _vo is not None and tuple(int(x) for x in _vo) != tuple(_I.VOLT_ORDERS):
+        raise SystemExit(
+            "\u2716 \uc804\uc555 \uace0\uc870\ud30c \ucc28\uc218\uac00 \uc5b4\uae4b\ub09c\ub2e4 \u2014 \uccb4\ud06c\ud3ec\uc778\ud2b8 %s\ub300 \uc9c0\uae08 %s\n"
+            "    %s\n"
+            "  \uc785\ub825 \ubc30\uce58\uac00 \ub2ec\ub77c \uc7ac\ud559\uc2b5\ud574\uc57c \ud55c\ub2e4 (FINE %d \ub300 %d)."
+            % (tuple(int(x) for x in _vo), tuple(_I.VOLT_ORDERS), ckpt_path,
+               45 + 2 * len(_vo), _I.FINE_CHANNELS))
+    if _vo is None:
+        print("  \u26a0 \uccb4\ud06c\ud3ec\uc778\ud2b8\uc5d0 `volt_orders` \uac00 \uc5c6\ub2e4 (14.331 \uc774\uc804 \ud310) \u2014 "
+              "\uc9c0\uae08 %s \ub85c \uc77d\ub294\ub2e4" % (tuple(_I.VOLT_ORDERS),))
     _em = int(ck.get("even_median", 0) or 0)
     if max(_em, 1) != max(int(_I.EVEN_MEDIAN), 1):
         #: 14.168 — **경고가 아니라 멈춘다.** 이 어긋남의 실패 방식은 죽는 것이 아니라

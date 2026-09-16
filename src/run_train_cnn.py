@@ -1505,6 +1505,8 @@ def main() -> int:
                     "on_power_praw": a.on_power_praw,
                     "gate_free_power": a.gate_free_power,
                     "even_median": int(a.even_median),
+                    #: 14.331 — 입력 배치의 규약. 없으면 옛 6차수 판이다.
+                    "volt_orders": list(VOLT_ORDERS),
                     "cons_deadzone": float(a.cons_deadzone),
                     # 14.295 궤적 평균. 0 이면 안 쓴 것 = 옛 경로와 비트 동일.
                     "swa_start": int(a.swa_start),

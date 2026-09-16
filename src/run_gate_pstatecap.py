@@ -46,6 +46,8 @@ if sys.platform == "win32":
 
 from src import env_guard  # noqa: F401,E402
 
+from src.model import inputs as _I  # noqa: E402
+
 import torch  # noqa: E402
 
 from src.model.losses import S_STATE  # noqa: E402
@@ -74,7 +76,9 @@ def _net(seed=0, **kw):
 
 def main() -> int:
     print("`--p-state-cap` — 표류한 상태 전력 슬롯만 자른다 (14.121)\n")
-    f, w = torch.randn(4, 57, 600), torch.randn(4, 47, 120)
+    #: 14.331 — 채널 수를 박지 않는다. `VOLT_ORDERS` 를 넓히면 여기가 조용히 틀린다.
+    f = torch.randn(4, _I.FINE_CHANNELS, 600)
+    w = torch.randn(4, _I.WIDE_CHANNELS, 120)
 
     off, off2, on = _net(0), _net(0, p_state_cap=0.0), _net(0, p_state_cap=R)
     with torch.no_grad():
