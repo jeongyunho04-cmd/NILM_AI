@@ -33,7 +33,7 @@
 #SBATCH -n 1
 #SBATCH -c 24
 #SBATCH --mem=100G
-#SBATCH -t 00:35:00
+#SBATCH -t 00:50:00
 #SBATCH -a 0-7
 #SBATCH -o %x_%A_%a.out
 #SBATCH -e %x_%A_%a.out
@@ -80,11 +80,19 @@ $PY -X utf8 src/run_gate_hzwire.py
 #     세밀  옛 45..50 = V_re(1..11) -> 새 45..50 (같다) · 새 51,52 = V_re(13,15) **새 것**
 #           옛 51..56 = V_im(1..11) -> 새 53..58          · 새 59,60 = V_im(13,15) **새 것**
 #     광역  옛 35..40 -> 새 35..40 · 옛 41..46 -> 새 43..48
+#: 14.332b — ⚠ **짝 캐시를 고쳤다.** 985942 가 여덟 토막 전부 여기서 죽었다 (2분 39초):
+#      FileNotFoundError: 'cache/train60_v32/y_power.npy'
+#   `cache_v32h_par` 에서 글자 그대로 베낀 경로인데, 그 캐시는 14.62 물건이고 **지금 없다**.
+#   베낀 자리의 **전제가 바뀐 것**을 안 봤다.
+#   ⚠ 짝을 `v32h` 로 바꾸면 **재현도 `--harmonic-z` 로 구워야 한다** (v32h 는 harmonic_z=True).
+#     결과적으로 관문이 **실제로 굽는 그 배선**을 재게 되어 옛 관문보다 세다.
+PAIR="cache/train60_v32h"
+[ -f "$PAIR/y_power.npy" ] || { echo "짝 캐시 $PAIR 가 없다 — 관문 ③을 못 세운다"; exit 1; }
 REPRO="$HOME/NILM_AI/cache/_repro_${SLURM_ARRAY_TASK_ID}"
 rm -rf "$REPRO"
-echo "=== 관문 ③ 전압 블록 외 v32 와 비트 동일 (청크 0) ==="
+echo "=== 관문 ③ 전압 블록 외 v32h 와 비트 동일 (청크 0) ==="
 $PY -X utf8 -m src.run_build_traincache --out "$REPRO" --shard "0/1200" \
-    $COMMON --workers "${SLURM_CPUS_PER_TASK}" > /dev/null
+    $COMMON --workers "${SLURM_CPUS_PER_TASK}" --harmonic-z > /dev/null
 $PY -X utf8 -c "
 import numpy as np, sys
 bad = []
@@ -94,19 +102,19 @@ def cmp(nm, A, B):
     if not same: bad.append(nm)
 for nm in ('y_power', 'y_on', 'y_state', 'obs_harm'):
     a = np.asarray(np.load('$REPRO/%s.npy' % nm, mmap_mode='r'))
-    b = np.asarray(np.load('cache/train60_v32/%s.npy' % nm, mmap_mode='r'))[:len(a)]
+    b = np.asarray(np.load('$PAIR/%s.npy' % nm, mmap_mode='r'))[:len(a)]
     cmp(nm, a, b)
 f = np.asarray(np.load('$REPRO/fine.npy', mmap_mode='r'))
-g = np.asarray(np.load('cache/train60_v32/fine.npy', mmap_mode='r'))[:len(f)]
+g = np.asarray(np.load('$PAIR/fine.npy', mmap_mode='r'))[:len(f)]
 w = np.asarray(np.load('$REPRO/wide.npy', mmap_mode='r'))
-x = np.asarray(np.load('cache/train60_v32/wide.npy', mmap_mode='r'))[:len(w)]
+x = np.asarray(np.load('$PAIR/wide.npy', mmap_mode='r'))[:len(w)]
 cmp('fine 비전압 0..44', f[:, :45],    g[:, :45])
 cmp('fine V_re h1..11',  f[:, 45:51],  g[:, 45:51])
 cmp('fine V_im h1..11',  f[:, 53:59],  g[:, 51:57])
 cmp('wide 비전압 0..34', w[:, :35],    x[:, :35])
 cmp('wide V_re h1..11',  w[:, 35:41],  x[:, 35:41])
 cmp('wide V_im h1..11',  w[:, 43:49],  x[:, 41:47])
-if bad: sys.exit('전압 블록 말고도 v32 와 다르다: %s — 손잡이가 하나가 아니다' % bad)
+if bad: sys.exit('전압 블록 말고도 v32h 와 다르다: %s — 손잡이가 하나가 아니다' % bad)
 print('  관문 ③ 통과 — 새 차수(h13·h15) 말고는 한 바이트도 안 달라졌다')
 "
 rm -rf "$REPRO"

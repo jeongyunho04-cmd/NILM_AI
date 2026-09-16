@@ -36,7 +36,7 @@ import time
 
 import numpy as np
 
-from src.model.inputs import RAW_CHANNELS
+from src.model.inputs import RAW_CHANNELS, VOLT_ORDERS
 from src.synthesis.dataset import DEFAULT_RECIPE_MIX, NILMBatchGenerator
 from src.synthesis.augmentor import DataAugmentor
 from src.synthesis.segment_pool import SegmentPool
@@ -440,6 +440,11 @@ def build_holdout(
         "vtex_seg_s": float(vtex_seg_s or 0.0),          # 14.51
         "vtex_coarse_s": float(vtex_coarse_s or 0.0),    # 14.103
         "harmonic_z": bool(harmonic_z),                  # 14.59
+        #: 14.333 — **전압 고조파 차수**. `traincache` 와 체크포인트가 적는 것과 같은 규약이다
+        #  (14.331 의 막이 ⓒ). ⚠ 이걸 안 적으면 v32h 와 v49 홀드아웃의 meta 가 **한 글자도
+        #  안 달라진다** — 채널 수도 shape 도 meta 에 없어서, 짝 대조 관문이 **다른 배치를
+        #  통과시킨다.** 옛 홀드아웃에는 이 키가 없고 그건 '6차수' 를 뜻한다.
+        "volt_orders": [int(h) for h in VOLT_ORDERS],
         # 14.51 — 병렬로 구웠는가. **0 과 1 이상은 서로 다른 홀드아웃이다** (난수를 자르는
         # 방식이 다르다). 1 이상끼리는 워커 수와 무관하게 같은 바이트다.
         "workers_chunked": bool(workers and int(workers) > 0),
