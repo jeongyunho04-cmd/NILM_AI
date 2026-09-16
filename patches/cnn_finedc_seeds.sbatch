@@ -28,7 +28,9 @@
 #
 # ⚠ 씨앗 **여섯**이다 (`-a 0-5%3`). 셋으로는 못 읽는다 — 판정이 p≈0.46 이항이고
 #   씨앗 셋이면 표준오차가 0.29 다 (14.205). 동시 3개로 묶은 것은 QOS 몰림 때문이다
-#   (한 노드에 쌓이면 `/dev/shm` 을 같이 먹어 죽는다).
+#   ⚠ 2026-09-16 정정: `%3` 은 **불필요했다.** QOS 는 `node=10` 이고 GPU 노드가 한 대에
+#     4장이라 넷이 한 노드에 붙는 것은 정상 배치다 (n009 FreeMem 243GB, 여섯 다 무사).
+#     `scontrol update JobId=<id> ArrayTaskThrottle=6` 으로 풀었다. 다음엔 `-a 0-5` 로.
 #SBATCH -J nilm_finedc
 #SBATCH -p gpu1,gpu2,gpu3,gpu4,gpu5,gpu6
 #SBATCH -N 1
@@ -37,7 +39,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=48G
 #SBATCH -t 00:55:00
-#SBATCH -a 0-5%3
+#SBATCH -a 0-5
 #SBATCH -o %x_%A_%a.out
 #SBATCH -e %x_%A_%a.out
 set -euo pipefail
