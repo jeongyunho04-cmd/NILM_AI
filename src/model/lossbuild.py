@@ -123,6 +123,9 @@ def build_loss(apps: Sequence[str], dev: str, *,
                standby_operating: str = "session",
                background: bool = True,
                state_signatures: bool = True,
+               #: ★ 14.395 (§52 (가)) — 사전을 굽기 전에 **녹화별 위상 회전**을 맞춘다.
+               #: 기본 False = **비트 동일**. `src/model/sigalign.py` 머리말 참조.
+               align_recordings: bool = False,
                power_signatures: bool = False,
                #: * 14.367 — **상태 안** 전력대 보정 (`--pow-sig-instate`).
                #: `power_signatures` 와 달리 `state_signatures` 와 **같이 쓴다**
@@ -180,7 +183,16 @@ def build_loss(apps: Sequence[str], dev: str, *,
 
     from src.synthesis.segment_pool import SegmentPool
     pool = SegmentPool(npz_dir=npz_dir, time_split=time_split)
-    sig = harmonic_signatures(pool, apps)
+    #: 14.395 — 회전표는 **기기마다 한 번**만 낸다. `sig` 와 `sig_state` 가 같은 표를
+    #: 써야 두 입구의 위상 기준이 안 갈린다 ([[pin-the-two-entry-points-against-each-other]]).
+    rots = None
+    if align_recordings:
+        from src.model.sigalign import recording_rotations
+        rots = recording_rotations(pool, apps)
+        if verbose:
+            print("  ** 녹화 위상 정렬 (14.395): 기기 %d종 · %d녹화 **"
+                  % (len(rots), sum(len(v) for v in rots.values())))
+    sig = harmonic_signatures(pool, apps, rotations=rots)
     sb_sig = standby_signatures(pool, apps)
     if standby_operating != "off":
         from src.model.companion import standby_operating_signatures
@@ -221,7 +233,7 @@ def build_loss(apps: Sequence[str], dev: str, *,
                   % (int(pow_used.sum()), pow_used.size))
     sig_state = None
     if state_signatures:
-        sig_state, used = harmonic_signatures_by_state(pool, apps)
+        sig_state, used = harmonic_signatures_by_state(pool, apps, rotations=rots)
         if verbose:
             print("  ** 상태별 지문 (13.11): %d개 상태를 따로 맞췄다 **" % int(used.sum()))
             _src = getattr(harmonic_signatures_by_state, "last_source", None)

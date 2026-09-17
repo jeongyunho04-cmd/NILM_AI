@@ -1599,12 +1599,17 @@ def pool_segments(n_total: int, target: int, n_seg: int):
     return [(edges[i], edges[i + 1]) for i in range(n_seg)]
 
 
-def harmonic_signatures(pool, appliances: Sequence[str], n_harm: int = 15) -> np.ndarray:
+def harmonic_signatures(pool, appliances: Sequence[str], n_harm: int = 15,
+                        rotations: Optional[dict] = None) -> np.ndarray:
     """기기별 **와트당 고조파 페이저** (K, n_harm, 2) [Re, Im].
 
     3.4절의 `sig_i` 다. 세그먼트 풀에서 한 번 계산해 상수로 둔다.
     통전 구간(전력이 그 기기 p90 의 절반 이상)만 써서, 팬/조명 같은 저전력
     부수 상태가 지문을 오염시키지 않게 한다 (0.2절의 오븐 사례).
+
+    ★ 14.395 — `rotations` 를 주면 **녹화별 위상 회전을 빼고** 중앙값을 낸다
+    (`src/model/sigalign.py` 의 표). 돌아 있는 페이저의 복소 중앙값이 크기를
+    잃는 것을 고친다 (충전기 h15 coh 0.599). **안 주면 비트 동일**이다.
     """
     sig = np.zeros((len(appliances), n_harm, 2), dtype=np.float32)
     for j, app in enumerate(appliances):
@@ -1612,6 +1617,23 @@ def harmonic_signatures(pool, appliances: Sequence[str], n_harm: int = 15) -> np
         if not acts:
             continue
         thr = 0.5 * pool.get_steady_power_w(app)
+        rot = (rotations or {}).get(app)
+        if rot:
+            from src.model.sigalign import derotate, rec_of
+            ws = []
+            for a in acts:
+                m = a.target_power_w > max(thr, 1.0)
+                if m.any():
+                    ws.append(derotate(
+                        np.asarray(a.net_harmonics_complex)[m]
+                        / np.maximum(np.asarray(a.target_power_w)[m], 1e-6)[:, None],
+                        float(rot.get(rec_of(a), 0.0))))
+            if not ws:
+                continue
+            per_w = np.concatenate(ws)
+            sig[j, :, 0] = np.median(np.real(per_w), axis=0)
+            sig[j, :, 1] = np.median(np.imag(per_w), axis=0)
+            continue
         cs, ps = [], []
         for a in acts:
             m = a.target_power_w > max(thr, 1.0)
@@ -1808,7 +1830,8 @@ def state_power_w(act, measured: bool = False) -> np.ndarray:
 
 def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 15,
                                  max_states: int = MAX_STATES, min_cycles: int = 200,
-                                 measured_fallback: bool = False
+                                 measured_fallback: bool = False,
+                                 rotations: Optional[dict] = None
                                  ) -> Tuple[np.ndarray, np.ndarray]:
     """기기 x **상태**별 와트당 고조파 페이저 (K, S, n_harm, 2) 와 쓸 수 있는지 (K, S) bool.
 
@@ -1836,7 +1859,10 @@ def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 
     맞춘 칸이 어느 분모에서 왔는지는 `harmonic_signatures_by_state.last_source` 에
     (K, S) int8 로 남긴다: 0 못 맞춤 · 1 라벨 전력 · 2 실측 전력.
     """
-    base = harmonic_signatures(pool, appliances, n_harm)          # (K,H,2)
+    #: ★ 14.395 — **같은 회전표**를 바탕 지문에도 쓴다. 따로 내면 두 입구의 위상
+    #:   기준이 갈린다 ([[pin-the-two-entry-points-against-each-other]]).
+    base = harmonic_signatures(pool, appliances, n_harm, rotations=rotations)   # (K,H,2)
+    from src.model.sigalign import rec_of as _recof
     sig = np.repeat(base[:, None], max_states, axis=1)            # (K,S,H,2)
     used = np.zeros((len(appliances), max_states), dtype=bool)
     src = np.zeros((len(appliances), max_states), dtype=np.int8)
@@ -1859,7 +1885,15 @@ def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 
                     m = m0 & (np.asarray(st) == s)
                     if m.any():
                         by.setdefault(s, ([], []))
-                        by[s][0].append(a.net_harmonics_complex[m])
+                        #: 14.395 — 회전표가 있으면 **이 녹화의 회전을 먼저 뺀다**.
+                        #  없으면 `_rk = 0.0` 이라 곱이 항등이고 **비트 동일**이다.
+                        _rk = float(((rotations or {}).get(app) or {}).get(_recof(a), 0.0))
+                        if _rk != 0.0:
+                            from src.model.sigalign import derotate
+                            _z = derotate(np.asarray(a.net_harmonics_complex)[m], _rk)
+                            by[s][0].append(_z)
+                        else:
+                            by[s][0].append(a.net_harmonics_complex[m])
                         by[s][1].append(pw[m])
             for s, (cs, ps) in by.items():
                 if used[j, s]:
