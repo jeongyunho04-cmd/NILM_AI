@@ -133,7 +133,7 @@ ya  = np.asarray(np.load('$PAIR/y_on.npy', mmap_mode='r'))
 if not np.array_equal(yon, ya): sys.exit('❌ y_on 이 짝과 다르다 — 라벨이 움직였다')
 #: ⚠⚠ 14.390e — **'SMPS 없는 창' 을 y_on(타깃 사이클)으로 정의하면 안 된다.**
 #:   창은 60초인데 타깃은 한 사이클이라, 창 어딘가에 SMPS 가 있는 창이 섞인다.
-#:   캐시 관문 ④ 가 같은 실수로 986473_0 을 죽였고 `y_plugged|y_on` 으로 고치니
+#:   캐시 관문 ④ 가 같은 실수로 986473_0 을 죽였고 y_plugged|y_on 으로 고치니
 #:   그런 창의 최대차가 **정확히 0.000e+00** 이었다. 여기도 같은 정의를 쓴다.
 try:
     ypl = np.asarray(np.load('$OUT/y_plugged.npy', mmap_mode='r'))

@@ -1665,6 +1665,16 @@ def main() -> int:
                     "comb_over": float(a.comb_over),
                     "comb_over_margin": float(a.comb_over_margin),
                     "cons_deadzone": float(a.cons_deadzone),
+                    #: ★ 14.391 — **손실 가중을 적는다.** §29.5 가 빚으로 올려 둔
+                    #: 자리다: *"체크포인트에 `w_cons` 가 안 적힌다 — 보존 손실이
+                    #: 켜졌는지 판이 안 남는다"*. `cons_deadzone` 만 적혀 있어서
+                    #: `--w-cons 0` 판과 1.0 판을 **체크포인트로 구별할 수 없었다.**
+                    #: §45.1 과 같은 부류다 — 설정을 안 적으면 판정이 조용히 틀린다.
+                    "w_cons": float(a.w_cons),
+                    "w_harm": float(a.w_harm),
+                    "w_harm_smps": float(getattr(a, "w_harm_smps", 0.0) or 0.0),
+                    "w_z": float(a.w_z),
+                    "w_over": float(a.w_over),
                     # 14.295 궤적 평균. 0 이면 안 쓴 것 = 옛 경로와 비트 동일.
                     "swa_start": int(a.swa_start),
                     "swa_lr": float(swa_lr),
