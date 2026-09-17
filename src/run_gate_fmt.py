@@ -180,9 +180,54 @@ _GOOD = ('print("a %s b %s" % (x, y))' + chr(10)
          + 'print("%s" % v)')
 
 
+#: CLI 인자를 담는 셸 변수 대입 — `TREAT="..."` 꼴. 병이 여기서만 난다
+_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def check_literal_backslash_n(root="patches"):
+    """sbatch 안에 **리터럴 `\n`** 이 있나 (14.406).
+
+    ⚠⚠ 오늘 셸 인용으로 **네 번째** 죽었다. 이번엔 `TREAT="... \n   --load-rot"` 처럼
+    파이썬 힙독에서 이어쓰기를 쓰려다 **역슬래시+n 두 글자**가 파일에 들어갔고,
+    argparse 가 `unrecognized arguments: \n` 으로 죽었다 (986882, 학습 시작 42초 뒤).
+    관문 여섯이 다 통과한 **뒤**라 더 늦게 잡혔다.
+
+    ⇒ 셸에서 `"..."` 안의 `\n` 은 줄바꿈이 **아니다**. 이어쓰기는 역슬래시 + **진짜
+      줄바꿈**이어야 한다. 헷갈릴 바엔 **한 줄로 쓰는 것이 맞다**.
+    """
+    import glob
+    import io
+    import os
+    bad = []
+    for f in sorted(glob.glob(os.path.join(root, "*.sbatch"))
+                    + glob.glob(os.path.join(root, "*.sh"))):
+        for i, line in enumerate(io.open(f, encoding="utf-8", errors="replace"), 1):
+            #: ⚠ `chr(92) + "n"` 으로 쓴다 — `"\\n"` 이라고 적으면 이 파일을 고치는
+            #  다음 사람이 또 이스케이프 층에 걸린다. **내가 방금 그렇게 걸렸다**:
+            #  `"\n"` 으로 써서 진짜 줄바꿈이 됐고 모든 줄이 걸렸다.
+            #: ⚠⚠ 그리고 **자를 좁힌다.** 처음엔 모든 줄을 봤는데 `cpuprobe.sh:9` 의
+            #  `awk '{printf "...%.0f%%\n", ...}'` 가 걸렸다 — 그건 **정당한** 형식
+            #  문자열이다. 병의 꼴은 *"CLI 인자를 담는 셸 변수 대입"* 이다
+            #  (`TREAT=` · `BASE=` · `FLAGS=` · `COMMON=`). 거기서만 본다
+            #  ([[dont-loosen-a-gate-to-make-it-pass]] — 늘린 게 아니라 **모집단을 고쳤다**).
+            if not _ASSIGN.match(line):
+                continue
+            if (chr(92) + "n") in line and not line.lstrip().startswith("#"):
+                bad.append("%s:%d" % (os.path.basename(f), i))
+    return bad
+
+
 def main() -> int:
-    print("정적 관문 — `%` 자리 수 (14.66) · 안 묶인 이름 (14.67) · sbatch 백틱 (14.70)")
+    print("정적 관문 — `%` 자리 수 (14.66) · 안 묶인 이름 (14.67) · sbatch 백틱 (14.70) "
+          "· **리터럴 백슬래시-n** (14.406)")
     print()
+    #: ★ 14.406 — 오늘 셸 인용으로 **네 번째** 죽었다. 이번엔 리터럴 `\n` 이었고
+    #  관문 여섯을 다 통과한 **뒤** 학습 시작 42초 만에 argparse 가 잡았다 (986882).
+    _bn = check_literal_backslash_n()
+    ck("patches 전체 — sbatch·sh 에 **리터럴 백슬래시-n** 이 없다 (줄바꿈이 아니다)",
+       not _bn, ("걸린 자리: " + " · ".join(_bn)) if _bn
+       else "셸에서 \"...\" 안의 그 두 글자는 줄바꿈이 **아니다**. 이어쓰기는 "
+            "역슬래시 + **진짜 줄바꿈**이어야 하고, 헷갈릴 바엔 **한 줄로 쓴다**")
     ck("음성 대조 — 2026-09-14 에 학습을 죽인 그 꼴을 잡는다",
        len(bad_formats(_BROKEN)) == 1, str(bad_formats(_BROKEN)))
     ck("음성 대조 — 멀쩡한 꼴은 안 잡는다 (%%, 이름 있는 형태, 별표 너비 포함)",
