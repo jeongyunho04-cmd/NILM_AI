@@ -1132,6 +1132,16 @@ def main() -> int:
                     help="전력대 개수. 경계는 그 기기 통전 전력의 분위수다")
     ap.add_argument("--pow-tau", type=float, default=0.15, metavar="T",
                     help="대역 경계의 **부드러움**. `u=σ((p−e)/(τ·e))` — 계단이 아니다")
+    #: ★ 14.402 (나) — **부하 의존 위상** `sig(P) = sig·exp(−j·h·a_k·(lnP − lnP_ref))`.
+    #  `a` 는 **재서 굽는다** (배우지 않는다): 충전기 **+10.1** · 미니PC **+4.1** ·
+    #  빔 0 · 저항 넷 0. 근거는 §56~§57 — 주기 단위(60Hz) 적합 · **부호 시험**으로
+    #  시간 표류와 분리 · **토막 고정효과** · 대조군(오븐 +0.4%p · 핫플 −0.3%p).
+    #  ⚠ `--state-signatures` 가 있어야 한다 (상태별 사전을 돌리는 것이므로).
+    #  ⚠ `--pow-sig-instate` 와 **같이 못 쓴다** — 그쪽 `g = sig_대역/sig_state` 의
+    #    **분모를 여기서 돌려** 비가 어긋난다 (14.172 꼴). 아래에서 하드 스톱한다.
+    #  기본 꺼짐 = **비트 동일**. 관문 `src/run_gate_sigload.py`.
+    ap.add_argument("--load-rot", action="store_true",
+                    help="부하 의존 위상 sig(P) 를 손실에 건다 (14.402)")
     ap.add_argument("--state-signatures", action="store_true",
                     help="**상태별 고조파 지문** (13.11). 기기당 페이저 하나로는 "
                          "한 기기의 상태들이 고조파 모양이 다를 때 못 담는다 — 드라이기 "
@@ -1389,6 +1399,18 @@ def main() -> int:
     #  충전기도 x1.339 / x0.684 로 어긋난다.
     #  ⇒ 고치려면 대역을 **상태 안에서** 잡아야 한다 (`sig_state` 를 분모로).
     #    상태로 가른 뒤 남는 전력 의존은 SMPS 무리에서 7~23% 다 (저항은 <1.6%).
+    #: ⚠⚠ 14.402 — **(나)와 전력대 보정은 분모를 공유한다.** `--pow-sig-instate` 의
+    #  `g = sig_대역 / sig_state` 는 `sig_state` 를 분모로 쓰는데, (나)가 그 `sig_state`
+    #  를 돌리면 비가 어긋난다. 14.172 가 `--pow-sig` x `--state-signatures` 에서 겪은
+    #  그 충돌과 같은 부류다 — **재기 전에는 같이 던지지 않는다.**
+    if a.load_rot and a.pow_sig_instate:
+        _nl2 = chr(10)
+        raise SystemExit(
+            "✖ --load-rot 과 --pow-sig-instate 는 **분모를 공유한다** (14.402)." + _nl2
+            + "  g = sig_대역/sig_state 인데 (나)가 그 sig_state 를 돌린다." + _nl2
+            + "  하나씩 던져라. 같이 켜려면 g 를 회전 뒤 사전으로 다시 재야 한다.")
+    if a.load_rot and not a.state_signatures:
+        raise SystemExit("✖ --load-rot 은 --state-signatures 가 있어야 한다 (14.402)")
     if a.pow_sig and a.state_signatures:
         _nl = chr(10)
         raise SystemExit(
@@ -1416,6 +1438,23 @@ def main() -> int:
         pow_gain, pow_edges, _pu = harmonic_signatures_by_power(
             pool, apps, n_bands=a.pow_bands)
         print('  ** 전력 의존 지문 (13.84.38): %d/%d 칸을 따로 맞췄다 (나머지는 보정비 1) **' % (int(_pu.sum()), _pu.size))
+    #: ★ 14.402 (나) — 표는 **상수**이고 `ln P_ref` 만 풀에서 잰다 (`del pool` 앞).
+    _lr_a = _lr_p = _lr_on = None
+    if a.load_rot:
+        from src.model.sigload import LOAD_ROT_A_CELL, load_rot_table
+        _lr_a, _lr_p, _lr_onb = load_rot_table(pool, apps)
+        _lr_on = _lr_onb.astype("float32")
+        print("  ** 부하 의존 위상 (14.402): a = %s **"
+              % {"%s s%d" % k: v for k, v in LOAD_ROT_A_CELL.items()})
+        for _j, _x in enumerate(apps):
+            if float(np.abs(_lr_a[_j]).sum()) == 0.0:
+                continue
+            _c = [("s%d" % _s, float(np.exp(_lr_p[_j, _s])))
+                  for _s in range(_lr_p.shape[1]) if _lr_onb[_j, _s]]
+            print("       %-18s 걸린 칸 %s"
+                  % (_x, " ".join("%s a=%+5.2f P_ref %.1fW"
+                                  % (k, float(_lr_a[_j, int(k[1:])]), v)
+                                  for k, v in _c) or "**없음**"))
     if a.state_signatures:
         from src.model.net import harmonic_signatures_by_state
         sig_state, _used = harmonic_signatures_by_state(pool, apps)
@@ -1501,6 +1540,9 @@ def main() -> int:
         on_detach_gate=a.on_detach_gate,
         on_power_praw=a.on_power_praw,
         signatures_state=(torch.from_numpy(sig_state) if a.state_signatures else None),
+        load_rot_a=(torch.from_numpy(_lr_a) if _lr_a is not None else None),
+        load_rot_lpref=(torch.from_numpy(_lr_p) if _lr_a is not None else None),
+        load_rot_on=(torch.from_numpy(_lr_on) if _lr_a is not None else None),
         harm_even_magnitude=a.harm_even_magnitude,
         power_gain=(torch.from_numpy(pow_gain) if pow_gain is not None else None),
         power_edges=(torch.from_numpy(pow_edges) if pow_edges is not None else None),
@@ -1742,6 +1784,8 @@ def main() -> int:
                     "harm_vnorm_anchor": bool(a.harm_vnorm_anchor),
                     #: 14.171 — 2단계가 **같은 순방향 모형**을 지으려면 이 둘이 필요하다.
                     #  없어서 `run_train_seq` 가 전압 앵커를 못 켜고 있었다.
+                    #: 14.402 — **굽는 순간 적는다** (§29.5 부류 빚을 안 만든다)
+                    "load_rot": bool(a.load_rot),
                     "pow_sig": bool(a.pow_sig),
                     "w_harm_smps": float(a.w_harm_smps),
                     "harm_smps_min_order": int(a.harm_smps_min_order),

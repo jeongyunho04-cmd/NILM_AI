@@ -123,6 +123,15 @@ def build_loss(apps: Sequence[str], dev: str, *,
                standby_operating: str = "session",
                background: bool = True,
                state_signatures: bool = True,
+               #: ★ 14.402 (나) — **부하 의존 위상** `sig(P)`. 기본 꺼짐 = **비트 동일**.
+               #: `power_gain_state` 와 **같은 규약**이다 — 미리 지은 표를 그대로 받는 길이
+               #: 있고(1단계가 이렇게 넘긴다), 셋이 다 `None` 이면 `load_rot=True` 일 때만
+               #: 여기서 짓는다.
+               #: ⚠ `power_signatures_instate` 와 **같이 켜면 안 된다** (분모 공유, 14.172 꼴).
+               load_rot: bool = False,
+               load_rot_a=None,
+               load_rot_lpref=None,
+               load_rot_on=None,
                #: ⚠⚠ 14.396 — **반증됐다. 학습에 켜지 마라** (§54). 진단이 쓴다.
                #: 줄어든 복소 중앙값이 **올바른 접기**이고, 길이를 되찾으면 와트가
                #: 낮게 치우친다. `src/model/sigalign.py` 머리말에 측정이 있다.
@@ -248,6 +257,22 @@ def build_loss(apps: Sequence[str], dev: str, *,
     #: 14.315 — 변환은 **공유 헬퍼 한 곳**에 있다 (`hcond_cols_of` 독스트링 참조).
     _hcols = hcond_cols_of(head_conductance, hcond_classes, apps)
 
+    #: ★ 14.402 (나) — 표는 상수이고 `ln P_ref` 만 풀에서 잰다. `del pool` **앞**이어야 한다.
+    _lra, _lrp, _lron = load_rot_a, load_rot_lpref, load_rot_on
+    if load_rot and _lra is None:
+        if power_signatures_instate:
+            raise SystemExit("✖ load_rot 과 power_signatures_instate 는 "
+                             "**분모를 공유한다** (14.402) — 하나씩 켜라")
+        from src.model.sigload import load_rot_table
+        _a, _p, _o = load_rot_table(pool, apps)
+        _lra, _lrp, _lron = (torch.from_numpy(_a), torch.from_numpy(_p),
+                             torch.from_numpy(_o.astype("float32")))
+        if verbose:
+            print("  ** 부하 의존 위상 (14.402): 켠 칸 %d **" % int(_o.sum()))
+    elif _lra is not None and power_signatures_instate:
+        raise SystemExit("✖ load_rot 표와 power_signatures_instate 는 "
+                         "**분모를 공유한다** (14.402) — 하나씩 켜라")
+
     return NILMLoss(
         head_conductance=head_conductance,            # 14.284
         hcond_scale=hcond_scale,                      # 14.299
@@ -262,6 +287,7 @@ def build_loss(apps: Sequence[str], dev: str, *,
         drift_proj=dproj,
         off_detach_praw=off_detach_praw,
         signatures_state=(torch.from_numpy(sig_state) if state_signatures else None),
+        load_rot_a=_lra, load_rot_lpref=_lrp, load_rot_on=_lron,
         power_gain=(torch.from_numpy(pow_gain) if pow_gain is not None else None),
         power_edges=(torch.from_numpy(pow_edges) if pow_edges is not None else None),
         harm_smps=float(harm_smps),

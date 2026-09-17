@@ -302,6 +302,13 @@ class NILMLoss(torch.nn.Module):
         #: ★ 14.367 — 상태 안 전력대 보정비. `None` 이면 **비트 동일**.
         power_gain_state: Optional[torch.Tensor] = None,
         power_edges_state: Optional[torch.Tensor] = None,
+        #: ★ 14.402 (나) — **부하 의존 위상** `sig(P) = sig·exp(−j·h·a·(lnP − lnP_ref))`.
+        #  `load_rot_a` **(K,S)** 도/차수/lnW · `load_rot_lpref` (K,S) · `load_rot_on` (K,S).
+        #  ⚠ `a` 가 **칸마다**다 — 기기 하나로 두면 미니PC s1 이 **+45.3% 나빠진다**.
+        #  안 주면(또는 a=0) **곱이 항등이라 비트 동일**이다. `src/model/sigload.py` 참조.
+        load_rot_a: Optional[torch.Tensor] = None,
+        load_rot_lpref: Optional[torch.Tensor] = None,
+        load_rot_on: Optional[torch.Tensor] = None,
         #: ★ 14.375 — **SMPS 전용 고조파 항.** 0 이면 끕 = **비트 동일**.
         #:
         #: 왜 — `L_harm` 은 `|Σ(기기 전부) − obs|` **하나의 잔차**라 기기 전부가
@@ -634,6 +641,25 @@ class NILMLoss(torch.nn.Module):
         self.register_buffer("pow_edges_s",
                              power_edges_state if power_edges_state is not None else torch.zeros(0))
         self.use_pow_sig_state = power_gain_state is not None
+        # ── ★ 14.402 (나) 부하 의존 위상 ─────────────────────────────────────
+        #: ⚠⚠ `--pow-sig-instate` 와 **같이 켜면 안 된다.** 그쪽은 `g = sig_대역/sig_state`
+        #:   라는 **비**를 쓰는데, 여기서 `sig_state` 를 돌리면 분모가 바뀌어 비가 어긋난다
+        #:   (14.172 가 `--pow-sig` x `--state-signatures` 에서 겪은 그 충돌이다).
+        #:   부르는 쪽(`run_train_cnn`)이 하드 스톱으로 막는다.
+        self.register_buffer("load_rot_a", load_rot_a if load_rot_a is not None
+                             else torch.zeros(len(s_i), 0))
+        #: ⚠ `MAX_STATES` 는 `net.py` 에 있는데 여기서 들여오면 **순환 수입**이다.
+        #:   안 주면 (K,0) 으로 두고 `use_load_rot` 이 False 라 경로를 안 탄다.
+        _ns = 0 if load_rot_lpref is None else int(load_rot_lpref.shape[1])
+        self.register_buffer("load_rot_lpref", load_rot_lpref if load_rot_lpref is not None
+                             else torch.zeros(len(s_i), _ns))
+        self.register_buffer("load_rot_on", (load_rot_on.float() if load_rot_on is not None
+                                             else torch.zeros(len(s_i), _ns)))
+        #: 켜졌나 — 하나라도 0 이 아니어야 경로를 탄다. 아니면 **옛 코드 그대로**다
+        self.use_load_rot = bool(load_rot_a is not None
+                                 and float(load_rot_a.abs().sum()) > 0
+                                 and load_rot_on is not None
+                                 and float(load_rot_on.float().sum()) > 0)
         #: ★ 14.375 — SMPS 전용 항
         self.harm_smps = float(harm_smps)
         self.register_buffer("smps_sel",
@@ -963,8 +989,36 @@ class NILMLoss(torch.nn.Module):
         #  가른다 — `power`(총합)로 가르면 14.172 의 축 충돌이 되돌아온다.
         if self.use_pow_sig_state:
             sgs = self._apply_pow_gain_state(sgs, out["power_states"])
+        #: ★ 14.402 (나) — **부하 회전**. `p_states`(그 상태의 동작 전력)로 건다 —
+        #  `power`(총합)로 걸면 14.172 의 축 충돌이 되돌아온다.
+        if self.use_load_rot:
+            sgs = self._apply_load_rot(sgs, out["power_states"])
         per_k = torch.einsum("bks,bkshc->bkhc", pw, sgs)
         return self._apply_pow_gain(per_k, power).sum(1)
+
+    def _apply_load_rot(self, sgs: torch.Tensor, p_states: torch.Tensor) -> torch.Tensor:
+        """`sgs` (B,K,S,H,2) 를 **부하로** 돌린다 (14.402, (나)).
+
+            sig_k,s,h(P) = sig_k,s,h · exp(−j · h · a_k · (ln P − ln P_ref,k,s))
+
+        ⚠⚠ `a` 는 **칸(기기 x 상태)마다**다. 처음엔 기기당 하나로 뒀는데 (충전기가
+          s1 +10.73 · s2 +10.99 로 같아서), 관문 [5]가 **미니PC s1 에서 +45.3% 악화**
+          를 잡았다 — 그 칸은 자기 적합이 R² 0.07 인 **잡음**이다 (중앙 8.7W).
+          ⇒ 칸마다 재고 **자기 적합이 선 칸에만** 건다.
+        ⚠ `load_rot_on` 이 0 인 칸은 회전이 **정확히 0** 이다 (전력 폭이 없는 칸).
+        ⚠ `h1` 도 돈다 — 여기서는 **순수 지연이 맞다**. §53 이 h1 을 뺀 것은
+          *녹화 간* 회전이었고 (그건 배경이 섞여 지연이 아니었다), 부하 회전은
+          §56 이 차수별 `a_h` 로 확인했다 (충전기 평평함 **0.05**).
+        """
+        H = sgs.shape[3]
+        hv = torch.arange(1, H + 1, device=sgs.device, dtype=sgs.dtype)   # (H,)
+        lp = torch.log(p_states.clamp(min=1e-6))                          # (B,K,S)
+        d = (lp - self.load_rot_lpref[None]) * self.load_rot_on[None]     # (B,K,S)
+        th = torch.deg2rad(self.load_rot_a[None] * d)[..., None] * hv     # (B,K,S,H)
+        c, sn = torch.cos(th)[..., None], torch.sin(th)[..., None]
+        ar, ai = sgs[..., 0:1], sgs[..., 1:2]
+        #: exp(−j·θ) 곱 — 실/허를 따로 쌓아 둔 규약 그대로
+        return torch.cat([ar * c + ai * sn, ai * c - ar * sn], -1)
 
     def _apply_pow_gain_state(self, sgs: torch.Tensor, p_states: torch.Tensor) -> torch.Tensor:
         """`sgs` (B,K,S,H,2) 에 **상태 안 전력대 보정비**를 복소 곱한다 (14.367).

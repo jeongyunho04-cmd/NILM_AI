@@ -604,6 +604,14 @@ def main() -> int:
                 print(f"     {x:18s} |I1| {_o:6.2f} -> {_n:6.2f} mA "
                       f"({_n/max(_o,1e-9):.1f}배), 전력 {sb_pw[_j]:.2f}W")
                 sb[_j] = sb_op[_j]
+    _lr_tab = None
+    #: ★ 14.402 (나) — `ln P_ref` 는 **풀이 살아 있을 때** 재 둔다 (`ck` 는 아직 없다).
+    #  켤지는 아래에서 체크포인트를 읽고 정한다 — **체크포인트가 유일한 기준**이다 (14.171).
+    try:
+        from src.model.sigload import load_rot_table as _lrt
+        _lr_tab = _lrt(pool, apps)
+    except Exception as _e:          # 풀 구성이 다른 옛 경로에서도 안 죽는다
+        print("  ⚠ 부하 위상 표를 못 쟀다 (%s) — 1단계가 켰으면 아래에서 멈춘다" % _e)
     qp, qp_ok = reactive_signatures(pool, apps)
     nq = noise_reactive(pool)
     sig_state = None
@@ -731,6 +739,17 @@ def main() -> int:
     model.site_transfer = st_map
     print(f"1단계 체크포인트: {a.init} (ep{ck.get('epoch')}, width {ck.get('width')})")
 
+    #: ★ 14.402 (나) — 1단계가 켰으면 **2단계도 켠다**. 안 그러면 다른 물리로 미세조정한다
+    _lra = _lrp = _lron = None
+    if bool(ck.get("load_rot", False)):
+        if _lr_tab is None:
+            raise SystemExit("✖ 1단계가 --load-rot 을 켰는데 2단계가 표를 못 쟀다 "
+                             "(14.402) — 같은 풀로 다시 재야 한다")
+        _a2, _p2, _o2 = _lr_tab
+        _lra, _lrp, _lron = (torch.from_numpy(_a2), torch.from_numpy(_p2),
+                             torch.from_numpy(_o2.astype("float32")))
+        print("  ** 부하 의존 위상 (14.402): 1단계가 켰다 -> 켠 칸 %d **" % int(_o2.sum()))
+
     #: 14.171 — 1단계가 쓴 손실 물리를 **체크포인트에서** 이어받는다. 여기 없어서
     #  2단계 적응이 전압 앵커·죽은구역 없이 돌고 있었다 (17개가 어긋나 있었다).
     #  `res_ohm`/`res_ohm_half` 는 아래에서 `--res-apps` 로 이미 짓는다.
@@ -745,6 +764,7 @@ def main() -> int:
         noise_sig=torch.from_numpy(nz), harm_scale=torch.from_numpy(hsc),
         harm_odd_only=a.harm_odd_only,
         signatures_state=(torch.from_numpy(sig_state) if sig_state is not None else None),
+        load_rot_a=_lra, load_rot_lpref=_lrp, load_rot_on=_lron,
         gate_smooth=a.gate_smooth, gate_focal=a.gate_focal,
         standby_w=(None if SB_W is None else torch.from_numpy(SB_W)),
         signatures_site=(None if SIG_BANK is None else torch.from_numpy(SIG_BANK)),
