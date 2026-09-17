@@ -155,12 +155,21 @@ def _comb_over_of(pk) -> float:
     """
     if float(pk.get("comb_tau", 0.0) or 0.0) <= 0:
         return 0.0
-    if "comb_over" in pk:
-        return float(pk.get("comb_over") or 0.0)
+    #: ⚠⚠ 14.377 — **체크포인트의 `comb_over` 는 "학습에 쓴 값" 이지 "추론 설정" 이
+    #  아니다.** 둘을 섞어서 판정을 하나 망쳤다: `cnn_comb` 은 키가 없어 운영점 0.05 가
+    #  얹혔는데 `cnn_powsig` 는 `--comb-over 0` 으로 구웠다고 키가 0.0 이라 **추론에서도
+    #  꺼졌다**. 그 상태로 견줘 합 **8 대 19** 를 내고 "기각" 이라고 적었다 —
+    #  공정하게 재니 **8 대 9** 다 (§44 정정).
+    #  ⇒ **추론은 항상 운영점을 쓴다.** 학습 때 넣었든 아니든 추론에서 켜는 건
+    #    14.352 가 따로 잰 결정이다 (합 15 -> 8 · C포트오탐 9 -> 2).
+    #    일부러 끄려면 `NILM_COMB_OVER=0` 으로 명시해라 — 조용히 꺼지지 않게.
+    import os
     from src.model.gbudget import COMB_OVER_OP
-    print("  ** 초과 주장 꺾기 comb_over=%.3f (추론 운영점) — 체크포인트에 키가 없다 **"
-          % COMB_OVER_OP)
-    return float(COMB_OVER_OP)
+    _env = os.environ.get("NILM_COMB_OVER")
+    _v = float(_env) if _env not in (None, "") else float(COMB_OVER_OP)
+    print("  ** 초과 주장 꺾기 comb_over=%.3f (%s) · 체크포인트 학습값 %s **"
+          % (_v, "환경변수" if _env else "추론 운영점", pk.get("comb_over", "없음")))
+    return _v
 
 
 def load_model(ckpt_path: str, dev: str, weights: bool = True, mask: bool = True,
