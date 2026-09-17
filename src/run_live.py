@@ -92,35 +92,13 @@ KOR = {"oven": "오븐", "hotplate": "핫플", "electiric_kettle": "포트",
        "laptop_charger": "충전기", "fan": "선풍기", "air_conditioner": "에어컨"}
 
 
-def csv_columns(header: List[str]) -> Dict[str, int]:
-    return {name: i for i, name in enumerate(header)}
+#: ⚠⚠ 14.378 — `csv_columns`/`row_to_channels` 는 **여기와 배포 묶음에 따로** 적혀
+#: 있었고 둘 다 `np.empty(33)` 이라 **전압 고조파(33~48)를 안 채웠다.** 그래서 실시간
+#: 갈래는 채널 49 짜리 지금 모델을 원리상 못 돌린다. 정본을 `model/inputs.py` 로
+#: 옮겼다 ([[verify-the-input-path-not-just-the-model]]).
+from src.model.inputs import (csv_columns, csv_has_voltage_harmonics,  # noqa: F401,E402
+                              row_to_channels, RAW_CHANNELS)
 
-
-def row_to_channels(row: List[str], col: Dict[str, int]) -> Optional[np.ndarray]:
-    """CSV 한 행 -> 33채널 한 사이클.
-
-    전처리(`feature_extractor` + `numpy_exporter`)와 **같은 식이어야 한다.**
-        Re/Im  = ih_rms * (cos, sin)(radians(ih_deg))
-        S      = vrms * irms
-        Q      = sign(phase) * sqrt(max(0, S^2 - P^2))
-    """
-    try:
-        irms = float(row[col["irms"]])
-        p = float(row[col["p_w"]])
-        v = float(row[col["vrms"]])
-        phase = float(row[col["phase_deg"]])
-        mag = np.array([float(row[col[f"ih{k}"]]) for k in range(1, HARMONICS + 1)], np.float32)
-        deg = np.array([float(row[col[f"ihdeg{k}"]]) for k in range(1, HARMONICS + 1)], np.float32)
-    except (ValueError, IndexError, KeyError):
-        return None
-    rad = np.radians(deg)
-    s = v * irms
-    q = np.sign(phase) * np.sqrt(max(0.0, s * s - p * p))
-    x = np.empty(33, np.float32)
-    x[0:15] = mag * np.cos(rad)
-    x[15:30] = mag * np.sin(rad)
-    x[30], x[31], x[32] = p, q, v
-    return x
 
 
 class CycleRing:
@@ -164,7 +142,9 @@ class CycleRing:
     여기서 해소된다.
     """
 
-    def __init__(self, size: int, channels: int = 33, use_time: bool = True,
+    #: ⚠ 14.378 — **49 다.** 33~48 이 단자 전압 고조파이고 지금 모델의 입력이다.
+    def __init__(self, size: int, channels: int = RAW_CHANNELS,
+                 use_time: bool = True,
                  min_fill: float = 0.98, reset_after: int = 5):
         self.n = size
         self.buf = np.zeros((channels, size), np.float32)
@@ -475,6 +455,13 @@ def main() -> int:
           + "   0=전부끔  space=확정  u=취소  q=종료")
     print("=" * 92)
 
+    #: ★ 조합 머리를 쓴 체크포인트면 Ĝ 추정기를 세운다 (14.378).
+    _live_g = None
+    if float(getattr(model, "comb_tau", 0.0) or 0.0) > 0:
+        from src.model.gbudget import LiveGhat
+        _live_g = LiveGhat(apps)
+        print("  ** 조합 머리 tau=%.2f · 추론 꺾기 %.3f · Ĝ 추정기 켬 **"
+              % (model.comb_tau, float(model.comb_over)))
     ring = CycleRing(WINDOW_CYCLES, use_time=not a.no_reorder)
     actual: Dict[str, bool] = {}
     log = Path(a.log); log.parent.mkdir(parents=True, exist_ok=True)
@@ -558,8 +545,15 @@ def main() -> int:
                 _c = (win[:, 0:15] + 1j * win[:, 15:30]) / T_live[None, :, None]
                 win[:, 0:15], win[:, 15:30] = _c.real, _c.imag
             fine, wide = build_inputs(win)
+            #: ★ 14.378 — 조합 머리는 **Ĝ 가 입력**이다. 배포 묶음과 **같은 추정기**
+            #  (`gbudget.LiveGhat`) 를 쓴다 — 실시간 갈래가 둘인데 답이 갈리면 안 된다.
+            _kw = {}
+            if _live_g is not None:
+                _kw["g_hat"] = torch.full((1,), _live_g.of(win, ti),
+                                          dtype=torch.float32, device=dev)
             with torch.no_grad():
-                o = model(torch.from_numpy(fine).to(dev), torch.from_numpy(wide).to(dev))
+                o = model(torch.from_numpy(fine).to(dev),
+                          torch.from_numpy(wide).to(dev), **_kw)
             gate = torch.sigmoid(o["on_logit"])[0].float().cpu().numpy()
             power = o["power"][0].float().cpu().numpy()
             if model_s is not None:

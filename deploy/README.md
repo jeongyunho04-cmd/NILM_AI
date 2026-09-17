@@ -7,21 +7,30 @@
 deploy/
 ├─ README.md                 이 문서
 ├─ run_predict.py            CLI (수신기 CSV -> 기기별 전력)
+├─ sync_runtime.py           ★ 학습 저장소와 **다시 맞춘다** (+ 표를 굽는다)
+├─ gate_deploy.py            ★ 관문 — 묶음과 연구 갈래가 같은 답을 내나 (6/6)
 ├─ requirements.txt          numpy / torch (그게 전부다)
 ├─ models/
-│   ├─ adapt_zi_s0.pt        **운영점 체크포인트** (2.4MB, 복소 Z·I. 2026-09-02)
-│   └─ adapt_ovh.pt          옛 운영점 (2026-08-27~09-01)
-└─ nilm_runtime/
-    ├─ __init__.py           `from nilm_runtime import NILMPredictor`
-    ├─ predictor.py          ★ UI 가 부르는 API — 링버퍼 + 모델 + 후처리
-    ├─ receiver.py           수신기 (보드 -> CSV). 원본 `nilm_receiver.py`
-    ├─ inputs.py             33채널 -> 모델 입력(세밀 50ch + 광역 12ch) 변환
-    ├─ net.py                모델 구조 (2갈래 CNN, 0.61M 파라미터)
-    ├─ postproc.py           후처리 (상한 / 저항정합 / 스켈치 / 잔차흡수)
-    ├─ signatures.npz        와트당 고조파 지문 (잔차 흡수가 쓴다, 3KB)
-    ├─ file_registry.py      기기 명세 (정격·부하 분류)
-    └─ state_definitions.py  기기별 상태 정의
+│   ├─ cnn_comb_s0.pt        **운영점** (3.4MB, 조합 머리 + 추론 꺾기. 2026-09-17)
+│   ├─ adapt_zi_s0.pt        옛 운영점 (2026-09-02) — ⚠ **지금 런타임에서 안 돈다**
+│   └─ adapt_ovh.pt          더 옛것 (2026-08-27) — ⚠ 세밀 채널 50 이라 규약이 다르다
+├─ nilm_runtime/             ★ **묶음 고유 코드만** 남는다
+│   ├─ predictor.py          UI 가 부르는 API — 링버퍼 + 모델 + Ĝ + 후처리
+│   ├─ receiver.py           수신기 (보드 -> CSV). 원본 `nilm_receiver.py`
+│   ├─ signatures.npz        와트당 고조파·무효 지문 (잔차 흡수가 쓴다)
+│   └─ runtime_tables.npz    ★ 상태별 지문 (Ĝ 추정기의 에어컨 기둥)
+├─ src/                      ★ **연구 코드를 그대로 비춘 것** (손대지 마라)
+│   ├─ model/                inputs · net · build · postproc · losses
+│   │                        **gbudget · physdecomp · fcmtab** (Ĝ 추정기)
+│   ├─ labeling/             state_definitions
+│   └─ synthesis/            fcm · circuit_sim
+└─ circuit_model/            circ12_*.pkl + fcm12 (FCM 회로 모델 3종)
 ```
+
+> ⚠⚠ **`src/` 와 `circuit_model/` 은 고치지 마라.** 학습 저장소와 **바이트가 같아야**
+> 하고 `gate_deploy.py [1]` 이 그것을 지킨다. 고칠 일이 있으면 저장소 쪽을 고치고
+> `python sync_runtime.py` 를 돌려라.
+
 
 ---
 
@@ -287,33 +296,88 @@ python run_predict.py --csv data/live.csv --jsonl data/pred.jsonl --quiet
 | `0` | 끔 |
 | `0.02` (기본) | 없는 기기 전력 7.6 → 5.0W, 저항 전용 파일 F1 0.76/0.79 → 0.78/0.84 |
 
-## 7. 모델 교체
+## 7. ★ Ĝ 추정기 — 이제 모델 혼자 못 돈다 (14.378)
 
-체크포인트만 바꾸면 된다. 기기 목록·채널 수·창 길이는 파일 안에 들어 있어
-`NILMPredictor` 가 알아서 맞춘다.
+운영점 체크포인트는 **조합 머리**(`comb_tau > 0`)를 쓴다. 저항 4종(포트·드라이기·
+핫플·오븐)의 전력을 자유 크기가 아니라 **컨덕턴스 표**에서 내고, 그 표의 어느 칸을
+쓸지 고르는 것이 `Ĝ`(관측 총 컨덕턴스, mS)다.
 
-```bash
-cp <학습PC>/results/<새모델>.pt models/
-python run_predict.py --ckpt models/<새모델>.pt --replay ../data/test_11.csv --speed 0
 ```
-
-**호환 조건**: 창 3,600 사이클 / 타깃 끝-6초 / 세밀 채널 ≤ 58. 학습 저장소에서
-`zero_even_harmonics=True` 로 학습한 모델이어야 입력 규약이 맞는다.
+  score_c = Σ_k β_k·z_{k,c_k}  −  |Ĝ − ΣG(c)| / τ  −  relu(ΣG(c) − Ĝ − 2.0) / 0.05
+                                  └─ 물리 잔차 ─┘    └─ **초과 주장 꺾기** ─┘
+  ⇒ `g_hat` 을 안 넘기면 `net.forward` 가 **ValueError 로 멈춘다.** 조용히 반쪽으로
+    돌지 않는다 — 그러라고 그렇게 지었다
+```
+`NILMPredictor` 가 알아서 세운다. 비용은 잰 값이다:
+```
+  시작   **1.18s**  (FCM 기둥 표 한 번. `v_ref` = 그 창의 전압 중앙값)
+  창마다 **0.053 ms**  (정규화 NNLS, 미지수 9개)
+  ⚠ 기준전압이 *창 중앙값* 이라 연구 갈래(*녹화 전체* 중앙값)와 **0 은 아니다** —
+    잰 차가 중앙 **0.0029 mS** · 최대 0.0079 다. Ĝ 잡음 σ 0.265 · 포트 식별 여유
+    0.635 이니 여유의 **1.2%** 다. 그래서 표는 한 번만 짓는다
+  ⚠ 자리가 바뀌면(다른 건물) |V₁| 이 5% 넘게 움직여 **자동으로 다시 짓는다**
+```
+★★ **꺾기(`comb_over`)는 추론 설정이지 학습값이 아니다.** 체크포인트에 적힌 값을
+따라가면 안 된다 — 그래서 한 번 판정을 틀렸다(§45.1). 묶음은 **항상 운영점 0.05** 를
+쓰고 한 줄 찍는다. 일부러 끄려면 `NILM_COMB_OVER=0` 으로 **명시**해야 한다.
 
 ---
 
-## 8. 학습 저장소와의 관계
+## 8. 순서 뒤바뀜 — 대비돼 있다
 
-이 폴더의 `.py` 는 학습 저장소의 **사본**이다. 모델 구조나 입력 규약을 고치면
-양쪽이 어긋난다.
+수신기는 프레임을 **도착 순서 그대로** CSV 에 쓰는데, 펌웨어가 확인 못 받은 옛 장을
+재전송하므로 `37 -> 28 -> 38 -> 29` 처럼 온다. `CycleRing` 이 **도착 순서가 아니라
+`t_s`(보드 seq 로 계산한 값)** 로 자리를 정해 되꽂는다.
 
-| 배포 | 원본 |
-|---|---|
-| `nilm_runtime/inputs.py` | `src/model/inputs.py` |
-| `nilm_runtime/net.py` | `src/model/net.py` |
-| `nilm_runtime/postproc.py` | `src/model/postproc.py` |
-| `nilm_runtime/receiver.py` | `nilm_receiver.py` |
-| `nilm_runtime/predictor.py` | `src/run_live.py` 에서 런타임 부분만 발췌 |
+실측 녹화에서 잰 것:
+```
+  test_1 · test_3 · test_5   역전 **0건**
+  test_2                     3건 (0.01%) · 최대 **59사이클 = 0.98초**
+  test_4                     1건          · 최대 59사이클
+```
+관문 `gate_deploy.py [3]` 이 실제 창을 일부러 섞어 넣고 **바이트까지 같은지** 본다:
+```
+  순서대로 · 프레임 2장 뒤바꿈(1초) · 프레임 9장 역전(4.5초) · 실측 최악(59사이클)
+  -> 네 경우 모두 최대차 **0.0e+00** (되꽂음 210~990건)
+```
+⚠ `reorder=False` 로 끄지 마라. 프레임 하나가 30사이클(0.5초)이고 세밀 갈래의 타깃이
+창 끝에서 6초 안쪽이라, 오염되는 자리가 **정확히 타깃 근방**이다.
+⚠ 창보다 더 뒤인 행이 연달아 오면 **세션 리셋**으로 보고 버퍼를 비운다 (보드 재부팅).
+
+---
+
+## 9. 모델 교체
+
+```bash
+cp <학습PC>/results/<새모델>.pt models/
+python sync_runtime.py                     # 연구 코드와 다시 맞추고 표를 굽는다
+python gate_deploy.py --ckpt models/<새모델>.pt
+python run_predict.py --ckpt models/<새모델>.pt --replay ../data/test_1.csv --speed 0
+```
+⚠ **체크포인트만 복사하면 안 된다.** 2026-09-02 판 묶음이 그렇게 15일을 있다가
+```
+  세밀 채널 50 대 **61** · 링버퍼 33 대 **49** · 조합 머리 **없음** · Ĝ 추정기 **없음**
+```
+이 되어 새 모델을 **원리상 못 실었다.** 구조가 바뀌면 `sync_runtime.py` 를 돌려야 한다.
+`gate_deploy.py` 가 그것을 지킨다 — 관문이 통과해야 배포다.
+
+⚠ 입력 규약(`even_median` · `volt_orders`)은 체크포인트가 들고 있고 묶음이 **맞춘다**.
+  어긋나면 죽지 않고 *그럴듯한 틀린 수*를 내므로 `check_input_convention` 이 **멈춘다**.
+
+---
+
+## 10. 학습 저장소와의 관계
+
+**사본은 없다.** `deploy/src/` 와 `deploy/circuit_model/` 은 저장소 파일을 **바이트
+그대로** 비춘 것이고 `sync_runtime.py --check` 가 그것을 확인한다.
+
+| 배포 | 원본 | 관계 |
+|---|---|---|
+| `src/**`, `circuit_model/**` | 같은 경로 | **바이트 동일** (17개) |
+| `src/*/__init__.py` | — | **빈 파일** (원본은 학습 스택을 끌어온다) |
+| `nilm_runtime/predictor.py` | `src/run_live.py` | 묶음 고유. 링버퍼·CSV 는 이제 **공용** |
+| `nilm_runtime/receiver.py` | `nilm_receiver.py` | 묶음 고유 |
+| `nilm_runtime/*.npz` | `SegmentPool` | `sync_runtime.py bake()` 가 굽는다 |
 
 설계 근거와 측정 기록은 학습 저장소의 `MODEL_TRAINING_DESIGN.md` 에 있다
-(후처리는 12.100~12.104, 운영점 교체는 12.103, 봉인 평가는 12.105).
+(후처리 12.100~12.104 · 조합 머리 14.347 · 꺾기 14.352 · 배포 재동기화 14.378).

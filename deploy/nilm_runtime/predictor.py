@@ -17,13 +17,25 @@ CSV 파싱과 링버퍼(순서 뒤바뀜 보정, 세션 이어붙임)는 원본 
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
+import os
+import sys
 import numpy as np
 import torch
 
-from .inputs import build_inputs, target_index, FINE_CYCLES, TARGET_LOOKAHEAD
-from .net import NILMNet, appliance_state_counts
-from .postproc import (SMPS_GROUP, SNAP_TARGET_W, absorb_residual, apply_postproc,
-                       resistive_match, snap_power, squelch)
+#: ⚠⚠ 14.378 — **연구 코드를 그대로 비춘 `deploy/src/` 를 쓴다.** 예전에는 이 묶음이
+#: `nilm_runtime/net.py` 같은 **손으로 깎은 사본**을 들고 있었고, 사흘 만에 세밀
+#: 채널이 50 대 61 로 갈려 새 체크포인트를 원리상 못 실었다. 사본을 없앤다
+#: ([[verify-the-input-path-not-just-the-model]]).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.model.inputs import (build_inputs, csv_columns,  # noqa: F401,E402
+                              csv_has_voltage_harmonics, row_to_channels,
+                              target_index, FINE_CYCLES, RAW_CHANNELS,
+                              TARGET_LOOKAHEAD, VOLT_ORDERS)
+from src.model.build import build_model, check_input_convention  # noqa: E402
+from src.model.postproc import (SMPS_GROUP, SNAP_TARGET_W,  # noqa: F401,E402
+                                absorb_residual, apply_postproc, resistive_match,
+                                snap_power, squelch)
 
 CYCLE_HZ = 60
 WINDOW_CYCLES = 3600                 # 60초
@@ -37,35 +49,18 @@ APPLIANCE_KO = {
 }
 
 
-def csv_columns(header: List[str]) -> Dict[str, int]:
-    return {name: i for i, name in enumerate(header)}
+def sync_even_median(ck: dict) -> int:
+    """체크포인트가 적어 둔 짝수차 이동중앙값으로 **모듈 전역을 맞춘다** (14.164).
 
-
-def row_to_channels(row: List[str], col: Dict[str, int]) -> Optional[np.ndarray]:
-    """CSV 한 행 -> 33채널 한 사이클.
-
-    전처리(`feature_extractor` + `numpy_exporter`)와 **같은 식이어야 한다.**
-        Re/Im  = ih_rms * (cos, sin)(radians(ih_deg))
-        S      = vrms * irms
-        Q      = sign(phase) * sqrt(max(0, S^2 - P^2))
+    ⚠ `inputs.EVEN_MEDIAN` 은 전역이고 `build_inputs` 가 그것을 읽는다. 안 맞추면
+      **창을 짓는 식이 학습과 달라진다** — 죽지 않고 그럴듯한 틀린 수를 낸다.
+      `run_gate_check.sync_even_median` 과 같은 일을 한다 (배포는 체크포인트가
+      하나뿐이라 목록을 받을 필요가 없다).
     """
-    try:
-        irms = float(row[col["irms"]])
-        p = float(row[col["p_w"]])
-        v = float(row[col["vrms"]])
-        phase = float(row[col["phase_deg"]])
-        mag = np.array([float(row[col[f"ih{k}"]]) for k in range(1, HARMONICS + 1)], np.float32)
-        deg = np.array([float(row[col[f"ihdeg{k}"]]) for k in range(1, HARMONICS + 1)], np.float32)
-    except (ValueError, IndexError, KeyError):
-        return None
-    rad = np.radians(deg)
-    s = v * irms
-    q = np.sign(phase) * np.sqrt(max(0.0, s * s - p * p))
-    x = np.empty(33, np.float32)
-    x[0:15] = mag * np.cos(rad)
-    x[15:30] = mag * np.sin(rad)
-    x[30], x[31], x[32] = p, q, v
-    return x
+    from src.model import inputs as _I
+    k = max(int(ck.get("even_median", 0) or 0), 1)
+    _I.EVEN_MEDIAN = k
+    return k
 
 
 class CycleRing:
@@ -109,7 +104,11 @@ class CycleRing:
     여기서 해소된다.
     """
 
-    def __init__(self, size: int, channels: int = 33, use_time: bool = True,
+    #: ⚠ 14.378 — **49 다** (33 이 아니다). 33~48 이 단자 전압 고조파 Re/Im 이고
+    #  지금 모델은 그것을 입력으로 받는다. 옛 묶음은 33 이라 새 체크포인트를
+    #  원리상 못 돌렸다.
+    def __init__(self, size: int, channels: int = RAW_CHANNELS,
+                 use_time: bool = True,
                  min_fill: float = 0.98, reset_after: int = 5):
         self.n = size
         self.buf = np.zeros((channels, size), np.float32)
@@ -252,17 +251,28 @@ class NILMPredictor:
         """
         self.dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
         ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        self.appliances: List[str] = list(ck["appliances"])
-        self.model = NILMNet(
-            self.appliances, appliance_state_counts(self.appliances),
-            width=ck.get("width", 1.0), wide_summary=ck.get("wide_summary", False),
-            periodicity=ck.get("periodicity", False),
-            fine_dropout=ck.get("fine_dropout", 0.0),
-            prior_kappa=ck.get("prior_kappa", 0.0), prior_beta=ck.get("prior_beta", 0.5),
-            fine_channels=ck.get("fine_channels", 50)).to(self.dev)
-        self.model.load_state_dict(ck["model"])
-        self.model.eval()
+        #: ★ 14.378 — **연구 채점기와 같은 함수로 짓는다.** 예전에는 여기서 인자를
+        #  여섯 개만 넘겨서 dilation·탭·상태상한·**조합 머리**가 통째로 빠진 모델이
+        #  섰다. 같은 체크포인트인데 다른 모델이 서는 것을 아무도 못 봤다.
+        sync_even_median(ck)
+        check_input_convention(ck, ckpt_path)
+        self.model, self.appliances = build_model(ck, self.dev, ckpt_path=ckpt_path)
         self.meta = {k: v for k, v in ck.items() if k not in ("model",)}
+        #: ★★ Ĝ 추정기 — `comb_tau>0` 이면 **선택이 아니다.** `net.forward` 가
+        #: `g_hat` 없이 `ValueError` 로 멈춘다. 조합 머리가 저항 4종의 전력을
+        #: **G 표에서** 내는데 그 표의 어느 칸을 쓸지 고르는 것이 Ĝ 다.
+        self.comb_tau = float(getattr(self.model, "comb_tau", 0.0) or 0.0)
+        self._live = None
+        self._sigs_state = None
+        self.g_last = float("nan")
+        if self.comb_tau > 0:
+            z = np.load(Path(__file__).with_name("runtime_tables.npz"), allow_pickle=True)
+            if list(z["appliances"]) != list(self.appliances):
+                raise ValueError("runtime_tables.npz 의 기기 목록이 체크포인트와 다릅니다: "
+                                 "%s != %s" % (list(z["appliances"]), self.appliances))
+            self._sigs_state = (z["sig_state"], z["sig_state_used"])
+            print("  ** 조합 머리 tau=%.2f · 추론 꺾기 comb_over=%.3f · Ĝ 추정기 켬 **"
+                  % (self.comb_tau, float(self.model.comb_over)))
         self.postproc = postproc
         self.resmatch = float(resmatch)
         #: 프로젝터 참값 스냅 (12.128~12.129). 프로젝터 과대예측은 총전력
@@ -327,6 +337,16 @@ class NILMPredictor:
         """창(60초)이 찼는가."""
         return self.ring.ready()
 
+    # ── Ĝ 추정기 (14.378) ────────────────────────────────────────────────
+    def _ghat(self, win: np.ndarray) -> float:
+        """이 창의 **타깃 사이클에서** `Ĝ` [mS]. 정본은 `gbudget.LiveGhat` 다 —
+        `run_live.py` 도 같은 것을 부른다."""
+        if self._live is None:
+            from src.model.gbudget import LiveGhat
+            self._live = LiveGhat(self.appliances, sigs=self._sigs_state)
+        self.g_last = self._live.of(win, self.target_in_window)
+        return self.g_last
+
     # ── 추론 ─────────────────────────────────────────────────────────────
     @torch.no_grad()
     def predict(self) -> Optional[PredictionResult]:
@@ -339,8 +359,14 @@ class NILMPredictor:
             return None
         win = self.ring.window()[None]                     # (1, 33, 3600)
         fine, wide = build_inputs(win)
+        #: ★ 조합 머리는 **Ĝ 가 입력**이다 (14.349). 안 넘기면 `net.forward` 가
+        #  멈춘다 — 조용히 반쪽으로 돌지 않는다.
+        _kw = {}
+        if self.comb_tau > 0:
+            _kw["g_hat"] = torch.full((1,), self._ghat(win),
+                                      dtype=torch.float32, device=self.dev)
         o = self.model(torch.from_numpy(fine).to(self.dev),
-                       torch.from_numpy(wide).to(self.dev))
+                       torch.from_numpy(wide).to(self.dev), **_kw)
         gate = torch.sigmoid(o["on_logit"])[0].float().cpu().numpy()
         power = o["power"][0].float().cpu().numpy()
         standby_k = o["standby"][0].float().cpu().numpy()

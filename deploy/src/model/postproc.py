@@ -131,6 +131,10 @@ def apply_postproc(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
 #   **0개**, 10%를 넘는 창이 2개(평균 41.8~42.4W)다. 창 최소가 41.8W 이므로
 #   **최악의 스냅 오차가 +5.1W** 로 유계다 (2026-09-01 확인). 창이 짧아지면
 #   이 가정이 깨지므로 `state_targets` 로 가야 한다.
+#: ⚠ 2026-09-06: 46.9 는 옛 계측기 격리 녹화 값이다. 새 계측기 두 녹화의 60초창 중앙은 46.2 / 45.9W
+#:   (p5~p95 44.8~47.3, 창 55개) — 폭 안이지만 **`power_ref.REFERENCE_W` 와 함께** `run_power_check
+#:   --recompute-ref` 로 다시 낸 뒤 바꿔라 (둘의 출처를 하나로 묶는 것이 이 상수의 규약이다). 운영점은
+#:   스냅을 꺼 두고 있어(--snap 0) 지금은 안 쓰인다.
 SNAP_TARGET_W: Dict[str, float] = {"beam_projector": 46.9}
 
 #: 값 둔감성 검사용 후보. 한 점만 좋으면 튜닝 잔향이다 (12.102 가 상한에 쓴 검사).
@@ -270,6 +274,9 @@ ABSORB_MIN_GATE = 0.1
 #:
 #: 프로젝터는 `CAP_W` 의 55.0 을 그대로 둔다 — **더 느슨한 쪽을 남긴다.** 이 표는
 #: 흡수를 막는 안전장치이지 예측을 조이는 장치가 아니다.
+#: 2026-09-06 새 계측기 격리 녹화의 사이클 최대: 프로젝터 50.9 / 48.0, 충전기 68.2, 미니PC 29.5W.
+#: 프로젝터·미니PC 는 옛 천장 안이다. 충전기 68.2 는 이번 녹화에 72W 정전류 구간·돌입이 없어서이지
+#: 천장이 내려간 것이 아니다 — 옛 84.6 을 둔다 (천장은 느슨한 쪽을 남긴다). 재측정 뒤 갱신.
 ABSORB_CAP_W: Dict[str, float] = {
     "beam_projector": 55.0, "laptop_charger": 84.6, "minipc": 29.8,
 }
@@ -538,6 +545,10 @@ def absorb_residual(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
 #:     드라이기 54.48 / 54.57 / 53.89   핫플 101.76 / 101.82 / 101.90
 #: 니크롬선 저항이라 전압·개체와 무관하게 재현된다. 고조파로는 0.596%p 밖에
 #: 안 갈리는 저항 3종이 **저항값으로는 13~180% 갈린다** (0.2절의 그 문제).
+#: 2026-09-06 새 계측기(단일 입력 ADC)로 재검증 — 통전 중앙값 V²/P (p5~p95):
+#:     포트 35.61 (35.18~35.69, 228V HIGH)   오븐 히터 40.09 (39.58~40.51)   핫플 100.83 (100.36~102.40)
+#: 전부 옛 값의 1.3% 안이다 — **기기 고유값이라는 결론은 계측기를 바꿔도 선다.** 값은 그대로 둔다.
+#:     드라이기 강 53.22 (HIGH 100%, 순저항)   약(반파) 106.0 (|I2|/|I1| 0.431)   <- 옛 54.3 / 108.6 의 2.4% 안
 RESISTIVE_OHM: Dict[str, float] = {
     "electiric_kettle": 35.8, "oven": 40.6, "hair_dryer": 54.3, "hotplate": 101.8,
 }
@@ -548,6 +559,20 @@ RESISTIVE_OHM: Dict[str, float] = {
 HALFWAVE_OHM: Dict[str, float] = {"hair_dryer": 108.6}
 HALFWAVE_I2_MIN = 0.15
 
+#: 반파 관문의 **절대량** 판(12.157). `|I2| − |I4| > 이 값` (A).
+#
+# `HALFWAVE_I2_MIN` 은 비율 `|I2|/|I1|` 이라 **복합에서 분모가 터져 죽는다** —
+# 12.114.2 가 반증한 형태다. 실측 4파일에서 재면 비율 관문이 여는 창이
+# test_16 18.6% 인데 절대 관문은 28.7% 다 (test_17 16.5 -> 33.7%).
+#
+# 절대 차분은 12.114 의 ch50 과 **같은 양**이다 — 평평한 계측 인공물이 상쇄되고
+# 반파만 남는다 (반파는 h2 에서 h8 로 20배 감쇠, 인공물은 평평).
+#
+# 문턱 0.1A 의 근거: 격리 약풍 0.670A 의 1/6 이고, 복합 창 바닥(p50 ≤0.006A,
+# p90 은 드라이기 없는 파일에서 0.0035~0.017A)의 6~16배다. 분포가 이봉이라
+# (드라이기 있는 파일 p90 0.57~0.69) 이 사이가 비어 있다.
+HALFWAVE_ABS_MIN = 0.1
+
 
 def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
                     p_observed: np.ndarray, v_rms: np.ndarray,
@@ -555,7 +580,9 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
                     obs_harm: Optional[np.ndarray] = None,
                     tol: float = 0.05, min_w: float = 150.0,
                     cand_gate_min: float = 0.0, margin: float = 2.0,
-                    snap: bool = False,
+                    snap: bool = False, half_abs: bool = True,
+                    half_requires_dryer: bool = True,
+                    allow_drop: bool = False,
                     ) -> Tuple[np.ndarray, np.ndarray]:
     """관측 전력·전압에 **맞는 저항 조합**을 골라 재배정한다 (12.112).
 
@@ -578,6 +605,30 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
             경고한 "게이트로 후보를 좁히면 고쳐야 할 맞바꿈을 놓친다" 를 피한다
             (`test3` 오븐 게이트 0.09). 겨냥은 게이트가 **바닥**인 기기를
             맞바꿈으로 켜는 것이다 (`test_9` 드라이기).
+        half_requires_dryer: 반파 증거가 있으면 후보를 **반파 기기를 포함한 조합으로
+            제한**한다 (기본, 14.34). 여태 반파 판정은 드라이기의 **Ω 값만 바꾸고**
+            후보 집합은 안 건드렸다 — `|I2|−|I4|` 가 *"반파 부하가 있다"* 는 양성 증거인
+            동시에 *"핫플이 아니다"* 라는 **음성 증거**인데 앞의 절반만 쓴 것이다.
+            그 둘이 문제가 되는 이유는 간격이다:
+                드라이기 약(108.6Ω) 대 핫플(101.8Ω)   **6.3%**   <- 10개 쌍 중 유일하게 10% 미만
+                포트 대 오븐                          11.8%     (다음으로 가까운 쌍)
+                나머지 여덟 쌍                        25~67%
+            `tol` 이 0.02 라 6.3% 쌍은 **둘 다 tol 밖**이 되기 쉽고, 그러면 argmin 이
+            고르는데 거기에 음성 증거가 안 걸려 있었다.
+            관문은 격리에서 압도적이다 — `|I2|−|I4|` 드라이기 약풍 0.706A(문턱 초과 100%)
+            대 핫플 통전 0.0004A(3.1~3.7%, 릴레이 전이 사이클로 보인다).
+            `False` 면 옛 경로 그대로다.
+        half_abs: 반파(드라이기 약) 관문을 **절대량** `|I2|−|I4| > HALFWAVE_ABS_MIN` 으로
+            본다 (기본). `False` 면 옛 비율 관문 `|I2|/|I1| > HALFWAVE_I2_MIN` 이고
+            그때는 이 함수가 **비트 동일**하게 옛 동작을 낸다. 근거는 아래 `half` 계산
+            자리의 주석에 있다 (14.31).
+        allow_drop: 조합의 **개수를 줄이는 것**까지 후보에 넣는다 (14.48 ⑤ 가). 늘리는 것은
+            **여전히 금지**다 — 그것이 12.117.3 이 막은 실패(`test_9` 유령 3.94 -> 86.98W)이고,
+            여기서 여는 것은 **반대 방향**이다.
+            겨냥: `test_3` 153~162초. 참 `오븐+드라이`(ΣG 상대오차 **−0.9%**)인데 모델이
+            `포트+오븐+드라이`(**+63%**)를 낸다. 3개짜리 후보 중 최선이 +21.7% 라 `tol` 밖이고,
+            맞는 답이 **2개짜리**라 `len(pick) != len(cur)` 에서 통째로 빠진다 -> 손을 못 댄다.
+            `False` 면 옛 경로와 **비트 동일**이다.
         snap: 조합이 이미 맞을 때(`best == cur`)도 전력을 `V^2/R` 로 맞춘다
             (12.117 의 A). 개수도 신원도 안 바뀌므로 규칙 18 과 충돌하지 않는다 —
             **같은 집합**이다. 겨냥은 `test3` 처럼 조합은 맞는데 전력이 모자라
@@ -596,12 +647,34 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
     p_res = np.asarray(p_observed, np.float64) - other - standby.sum(1) - p_noise
 
     # 반파(드라이기 약) 판정용 짝수차
+    #
+    # ⚠⚠ **2026-09-14 (14.31) — 비율 관문을 기본에서 내렸다.** 여기만 `HALFWAVE_I2_MIN`
+    #   (비율 `|I2|/|I1|`)을 쓰고 있었다. `HALFWAVE_ABS_MIN` 정의 자리의 주석이 그 형태를
+    #   이미 반증해 놨고(*"복합에서 분모가 터져 죽는다 — 12.114.2 가 반증한 형태"*),
+    #   `losses.py:1086·1135` 의 컨덕턴스 항과 `run_degeneracy_probe`·`run_res_ohm_probe`·
+    #   `run_swap_coverage_probe` 는 **전부 절대 판을 쓴다.** 이 파일만 어긋나 있었다
+    #   ([[pin-the-two-entry-points-against-each-other]]).
+    #
+    #   증상: 드라이기 약풍(반파 108.6Ω)과 핫플(101.8Ω)이 6.6% 차이라, 반파 판정이
+    #   빗나가면 정합기가 **드라이기를 핫플로 맞바꾼다.** `test_2` 231~260초에서 관측
+    #   1993W 를 `포트+핫플` 로 98% 창에서 골랐다 (참은 `포트+드라이기약`) — 큰 부하가
+    #   같이 켜져 있어 `|I1|` 이 부풀고 비율이 문턱 아래로 내려간 것이다.
+    #
+    #   절대 판으로 바꾼 효과 (7구간, cnn_sigc_vn_s0):
+    #       test_2 231-260   포트+핫플 98%   -> **포트+드라이 98%**      참 포트+드라이약  ✓
+    #       test_5 128-143   포트+드라이 76% -> **포트+드라이+핫플 76%**  참 셋 다        ✓
+    #       나머지 다섯 구간은 **한 창도 안 바뀐다**
+    #   ⇒ 2구간 고침 · 0구간 손해. `half_abs=False` 면 옛 경로 그대로다.
     half = np.zeros(len(out), bool)
     if obs_harm is not None:
         h = np.asarray(obs_harm, np.float64)
         i1 = np.hypot(h[:, 0, 0], h[:, 0, 1])
         i2 = np.hypot(h[:, 1, 0], h[:, 1, 1])
-        half = (i2 / np.maximum(i1, 1e-9)) > HALFWAVE_I2_MIN
+        if half_abs:
+            i4 = np.hypot(h[:, 3, 0], h[:, 3, 1])
+            half = (i2 - i4) > HALFWAVE_ABS_MIN
+        else:
+            half = (i2 / np.maximum(i1, 1e-9)) > HALFWAVE_I2_MIN
 
     # 16개 조합의 컨덕턴스를 미리 만든다
     import itertools
@@ -628,6 +701,14 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
         if not cur:
             continue
 
+        # ── 반파 증거로 후보를 좁힌다 (14.34) ─────────────────────────────
+        # 이 기기 집합에서 반파를 내는 것은 **드라이기 약풍 하나**다. 그러니
+        # `|I2|−|I4|` 가 크면 그 창의 조합에는 드라이기가 **반드시** 들어간다.
+        # ⚠ 그 반대는 안 건다 — 반파가 없다는 것은 "드라이기 **약풍**이 아니다" 일
+        #   뿐이고 강풍(54.3Ω)일 수 있다. 한쪽만 거는 것이 맞다.
+        need_hw = (half[i] and half_requires_dryer
+                   and any(names[k] in HALFWAVE_OHM for k in range(len(cols))))
+
         # 후보 제한 (12.117.3). 게이트가 바닥인 기기는 맞바꿈으로 켜지 못한다.
         # **이미 켜진 것은 무조건 남긴다** — 안 그러면 `cur` 자체가 후보에서
         # 빠져 `cur_err` 이 inf 가 되고 아무 맞바꿈이나 통과한다.
@@ -638,10 +719,16 @@ def resistive_match(P: np.ndarray, gate: np.ndarray, apps: Sequence[str],
 
         best, best_err, cur_err = None, np.inf, np.inf
         for pick in combos:
-            if len(pick) != len(cur):
+            # ⚠ **늘리는 것은 언제나 금지**다 (12.117.3 의 `test_9` 유령). `allow_drop` 은
+            #   **줄이는 쪽만** 연다 — 관측이 못 받치는 기기를 끄는 방향이다 (14.48 ⑤ 가).
+            if (len(pick) > len(cur)) or (not allow_drop and len(pick) != len(cur)):
+                continue
+            if allow_drop and len(pick) == 0:
                 continue
             if allow is not None and not set(pick) <= allow:
                 continue
+            if need_hw and not any(names[k] in HALFWAVE_OHM for k in pick):
+                continue        # 반파가 관측됐는데 반파 기기가 없는 조합 — 물리적으로 불가
             gg = sum(1.0 / ohm[names[k]] for k in pick)
             if gg <= 0:
                 continue
