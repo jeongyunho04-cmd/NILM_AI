@@ -72,7 +72,7 @@ print('    합본 관문 통과 — 창 %d · 토막 %d개 · phase_jitter_map=%
 
 # ── Ĝ 를 넣는다 (학습 관문이 요구한다) ──────────────────────────────────────
 say "Ĝ 굽기 제출"
-GJ=$(CACHE="$OUT" sbatch --parsable --export=ALL,CACHE="$OUT" ghat_v49.sbatch) \
+GJ=$(CACHE="$OUT" sbatch --parsable --export=ALL,CACHE="$OUT" patches/ghat_v49.sbatch) \
   || { say "⚠ Ĝ 제출 실패"; exit 1; }
 say "Ĝ 작업 $GJ — 기다린다"
 while squeue -j "$GJ" -h -o '%T' 2>/dev/null | grep -q .; do sleep 30; done
@@ -86,7 +86,7 @@ print('    Ĝ 들어감 — 중앙 %.2f mS · 차수 %s' % (d.get('median_ms', -
 
 # ── 학습 ────────────────────────────────────────────────────────────────────
 say "학습 제출 (cnn_amp3_seeds.sbatch · 씨앗 6)"
-SB=$(sbatch --parsable cnn_amp3_seeds.sbatch) || { say "⚠ 제출 실패"; exit 1; }
+SB=$(sbatch --parsable patches/cnn_amp3_seeds.sbatch) || { say "⚠ 제출 실패"; exit 1; }
 say "제출됨 — 작업 $SB"
 squeue -j "$SB" -o '%.10i %.12j %.7P %.2t %.9L %.4C %.6m %.9R' | sed 's/^/    /'
 echo

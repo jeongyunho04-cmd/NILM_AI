@@ -236,6 +236,16 @@ def main():
         "바닥 A%.0f B%.0f C%.0f D%.0f 합 **%.0f** · |r| %.1fW  ->  "
         "사중+총량 A%.0f B%.0f C%.0f D%.0f 합 **%.0f** · |r| **%.1fW**  (기준 합<=33 · |r|<=11.5)"
         % (*mb, mb.sum(), rb, *mf, mf.sum(), rf))
+    #: ⚠⚠ 14.403 — **씨앗별로 찍는다.** 위 줄은 `median(axis=0)` 을 A·B·C·D 마다 따로
+    #  내고 **그 넷을 더한** 값이라 "합의 중앙값" 이 아니다. 그리고 짝 자신의 씨앗 폭이
+    #  **8~12** 인데(§45.1) 합 하나만 보면 그 폭 안의 흔들림을 **처치로 읽는다**
+    #  ([[measure-the-seed-floor-before-reading-any-effect]]).
+    print("  [씨앗별] 바닥 합 %s (중앙 %.0f · 폭 %d~%d) · 사중+총량 합 %s (중앙 %.0f)"
+          % ([int(x) for x in base.sum(1)], float(np.median(base.sum(1))),
+             int(base.sum(1).min()), int(base.sum(1).max()),
+             [int(x) for x in full.sum(1)], float(np.median(full.sum(1)))))
+    print("       바닥 A %s · B %s · C %s · D %s"
+          % tuple([[int(v) for v in base[:, k]] for k in range(4)]))
     gs = np.stack([score_gate(Q, P) for Q, P in zip(GTS, PWS)]); mg = np.median(gs, 0)
     print("  [게이트 자] * 라벨 OFF 인데 **게이트가 켜진** 창 — "
           "A' 전체 **%.0f** (그중 **통전(>=100W) %.0f**) · C' 포트 **%.0f**"
