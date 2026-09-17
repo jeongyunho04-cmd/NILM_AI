@@ -123,8 +123,10 @@ def build_loss(apps: Sequence[str], dev: str, *,
                standby_operating: str = "session",
                background: bool = True,
                state_signatures: bool = True,
-               #: ★ 14.395 (§52 (가)) — 사전을 굽기 전에 **녹화별 위상 회전**을 맞춘다.
-               #: 기본 False = **비트 동일**. `src/model/sigalign.py` 머리말 참조.
+               #: ⚠⚠ 14.396 — **반증됐다. 학습에 켜지 마라** (§54). 진단이 쓴다.
+               #: 줄어든 복소 중앙값이 **올바른 접기**이고, 길이를 되찾으면 와트가
+               #: 낮게 치우친다. `src/model/sigalign.py` 머리말에 측정이 있다.
+               #: 기본 False = **비트 동일**.
                align_recordings: bool = False,
                power_signatures: bool = False,
                #: * 14.367 — **상태 안** 전력대 보정 (`--pow-sig-instate`).

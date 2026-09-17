@@ -1132,15 +1132,6 @@ def main() -> int:
                     help="전력대 개수. 경계는 그 기기 통전 전력의 분위수다")
     ap.add_argument("--pow-tau", type=float, default=0.15, metavar="T",
                     help="대역 경계의 **부드러움**. `u=σ((p−e)/(τ·e))` — 계단이 아니다")
-    #: ★ 14.395 (§52 (가)) — 사전을 굽기 전에 **녹화별 위상 회전**을 맞춘다.
-    #  왜: `sig = median(I_h/P)` 가 녹화를 섞으므로, 돌아 있는 페이저의 복소 중앙값이
-    #  **크기를 잃는다** (충전기 coh h13 0.820 · h15 **0.599**). 그러면 `L_harm` 이
-    #  고차 크기를 맞추려고 **충전기 와트를 올린다** — §46.2 의 +4.1%/+20.8% 가 그 방향이다.
-    #  참 배분에서도 못 줄이던 잔차가 판별 차수에서 충전기 −30% · 빔 −21% · 미니PC −7.5%
-    #  내려간다 (대조군 오븐 **−3.0%**). ⚠ h1 은 안 돌린다 · 전체 위상은 안 옮긴다.
-    #  기본 꺼짐 = **비트 동일**. 관문 `src/run_gate_sigalign.py`.
-    ap.add_argument("--align-sig-recordings", action="store_true",
-                    help="지문을 굽기 전에 녹화별 h비례 위상 회전을 맞춘다 (14.395)")
     ap.add_argument("--state-signatures", action="store_true",
                     help="**상태별 고조파 지문** (13.11). 기기당 페이저 하나로는 "
                          "한 기기의 상태들이 고조파 모양이 다를 때 못 담는다 — 드라이기 "
@@ -1341,19 +1332,10 @@ def main() -> int:
 
     from src.synthesis.segment_pool import SegmentPool
     pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
-    #: 14.395 — 회전표는 **기기마다 한 번**. `sig` 와 `sig_state` 가 같은 표를 써야
-    #: 두 입구의 위상 기준이 안 갈린다 ([[pin-the-two-entry-points-against-each-other]]).
-    _rots = None
-    if a.align_sig_recordings:
-        from src.model.sigalign import recording_rotations
-        _rots = recording_rotations(pool, apps)
-        print("  ** 녹화 위상 정렬 (14.395): 기기 %d종 **" % len(_rots))
-        for _a2 in apps:
-            _r = _rots.get(_a2)
-            if _r:
-                print("       %-18s %s" % (_a2, " · ".join(
-                    "%s %+.2f" % (k.split("_")[-1], v) for k, v in sorted(_r.items()))))
-    sig = harmonic_signatures(pool, apps, rotations=_rots)
+    #: ⚠ 14.396 — 여기에 `rotations=` 를 넘기지 마라. **녹화 정렬은 반증됐다** (§54):
+    #:   녹화 정체성은 추론에서 관측할 수 없으므로 상수 사전에 접어 넣는 수밖에 없고,
+    #:   **복소 중앙값의 줄어듦이 바로 그 올바른 접기**다 (되푼 와트 0.99~1.01).
+    sig = harmonic_signatures(pool, apps)
     sb_sig = standby_signatures(pool, apps)
     # 동작 중 휴지의 지문 (12.164). `gt_plugged` 가 '동작 중' 으로 바뀐 기기는
     # `idle` 항이 가리키는 상태가 OFF_STANDBY 이 아니라 FAN_LIGHT 이다.
@@ -1436,7 +1418,7 @@ def main() -> int:
         print('  ** 전력 의존 지문 (13.84.38): %d/%d 칸을 따로 맞췄다 (나머지는 보정비 1) **' % (int(_pu.sum()), _pu.size))
     if a.state_signatures:
         from src.model.net import harmonic_signatures_by_state
-        sig_state, _used = harmonic_signatures_by_state(pool, apps, rotations=_rots)
+        sig_state, _used = harmonic_signatures_by_state(pool, apps)
         print(f"  ** 상태별 지문 (13.11): {int(_used.sum())}개 상태를 따로 맞췄다 **")
         _src = getattr(harmonic_signatures_by_state, "last_source", None)
         if _src is not None and (_src == 2).any():
@@ -1760,9 +1742,6 @@ def main() -> int:
                     "harm_vnorm_anchor": bool(a.harm_vnorm_anchor),
                     #: 14.171 — 2단계가 **같은 순방향 모형**을 지으려면 이 둘이 필요하다.
                     #  없어서 `run_train_seq` 가 전압 앵커를 못 켜고 있었다.
-                    #: 14.395 — **굽는 순간 적는다.** `w_cons` 를 안 적어 §29.5 가 빚이 된
-                    #  그 부류다. 이게 없으면 정렬한 판과 안 한 판을 체크포인트로 구별 못 한다.
-                    "align_sig_recordings": bool(a.align_sig_recordings),
                     "pow_sig": bool(a.pow_sig),
                     "w_harm_smps": float(a.w_harm_smps),
                     "harm_smps_min_order": int(a.harm_smps_min_order),

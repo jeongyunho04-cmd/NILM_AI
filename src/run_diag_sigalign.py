@@ -1,19 +1,11 @@
 # -*- coding: utf-8 -*-
-"""`--align-sig-recordings` 의 관문 (14.395, §52 (가)).
+"""녹화 정렬이 **왜 틀렸는지**를 재는 진단 (14.396, §54). 관문이었다가 내려왔다.
 
-미리 적어 둔 자(§52.4)를 그대로 판다:
-```
-  [1] 안 켜면 **바이트 동일** (두 입구 다)
-  [2] **h1 의 sig 가 한 비트도 안 바뀐다** (규약 ① — 돌리면 충전기 irr 이 두 배 나빠졌다)
-  [3] **전체 위상을 안 옮긴다** (규약 ② — 회전의 중앙값이 0)
-  [4] 정렬 뒤 **coh 가 오른다** (충전기 h13 0.820 -> 0.93 위)
-  [5] ★ 참 배분 `irr` 이 판별차수에서 내려간다 · **대조군 저항은 안 움직인다**
-  [6] 녹화가 하나뿐인 기기는 **항등**
-  [7] ⚠⚠ **진짜 손실 객체**를 지어 sig_state 가 바뀌고 forward 가 유한한가
-      ([[the-gate-must-build-the-real-object]])
-```
+⚠⚠ 이 파일은 `run_gate_sigalign` 이었다. 관문이 7/7 을 냈는데 **자가 틀렸다** —
+`irr(정렬한 사이클, 정렬한 sig)` 를 쟀다. 학습 자료의 사이클은 **안 돌아간다**.
+사이클을 그대로 두고 재면 부호가 뒤집힌다. 그 대조를 여기 남긴다.
 
-    python -X utf8 -m src.run_gate_sigalign
+    python -X utf8 -m src.run_diag_sigalign
 """
 from typing import List
 
@@ -104,55 +96,56 @@ def main() -> int:
         "상대 위상이 깨져 `Σ_k P_k·sig_k` 가 무너진다"
         % (max(abs(x) for x in meds.values()) if meds else 0.0, len(meds)))
 
-    # [4] ★ **채택이 갈리나** — 지연 모형이 맞는 기기에만 걸려야 한다
-    #: ⚠⚠ 처음엔 이 자리에서 `coh_h13`(=|중앙 페이저|/중앙 |페이저|)을 쟀는데
-    #:   **틀린 자였다.** `coh` 는 **배경까지 같이 센다** — h13·h15 는 세션 배경이
-    #:   기기 전류보다 큰 자리라(13.84.38) 정렬이 배경도 같이 돌려 `coh` 는 내려가는데
-    #:   손실이 실제로 보는 `irr` 은 **−30.0%** 로 좋아진다. 자를 늘린 게 아니라
-    #:   **재는 양을 바꿨다** ([[dont-loosen-a-gate-to-make-it-pass]]).
+    # [4] 채택이 갈리나 (이 부분은 여전히 맞다)
     rep = rotation_report(pool, APPS)
     smps_r2 = [rep[a][0] for a in SMPS if a in rep and np.isfinite(rep[a][0])]
     quiet_r2 = [rep[a][0] for a in QUIET if a in rep and np.isfinite(rep[a][0])]
-    ok4 = (bool(smps_r2) and bool(quiet_r2)
-           and min(smps_r2) > MIN_R2 > max(quiet_r2)
-           and all(rep[a][3] for a in SMPS if a in rep)
-           and not any(rep[a][3] for a in QUIET if a in rep))
-    chk(4, "★ **채택이 갈리나** (SMPS 만 채택 · 문턱 %.2f)" % MIN_R2, ok4,
-        " · ".join("%s R² %s %s" % (a[:9], ("%.2f" % rep[a][0]) if np.isfinite(rep[a][0])
-                                    else "녹화1", "**채택**" if rep[a][3] else "거름")
-                   for a in SMPS + QUIET if a in rep))
+    chk(4, "채택이 갈리나 (SMPS 만 · 문턱 %.2f)" % MIN_R2,
+        bool(smps_r2) and bool(quiet_r2) and min(smps_r2) > MIN_R2 > max(quiet_r2),
+        " · ".join("%s R² %s" % (a[:9], ("%.2f" % rep[a][0]) if np.isfinite(rep[a][0])
+                                 else "녹화1") for a in SMPS + QUIET if a in rep))
 
-    # [5] ★ 참 배분 `irr` 이 판별차수에서 내려간다 · **대조군은 안 움직인다**
-    got, ok5 = {}, True
-    for app in SMPS + QUIET:
-        C = cells(pool, app, 2 if app != "fan" else 1)
+    # [5] ⚠⚠⚠ **두 자를 나란히 놓는다** — 이것이 §54 의 반증이다
+    s0, u0 = harmonic_signatures_by_state(pool, APPS)
+    sA, _ = harmonic_signatures_by_state(pool, APPS, rotations=rots)
+    rows, ok5 = [], True
+    for app, sid in (("laptop_charger", 2), ("minipc", 2), ("beam_projector", 2),
+                     ("beam_projector", 1)):
+        j = APPS.index(app)
+        if not u0[j, sid]:
+            continue
+        C = cells(pool, app, sid)
         if len(C) < 2:
             continue
-        allw = np.concatenate([C[r] for r in sorted(C)])
+        raw = np.concatenate([C[r] for r in sorted(C)])
         alg = np.concatenate([derotate(C[r], float(rots.get(app, {}).get(r, 0.0)))
                               for r in sorted(C)])
-        i0 = irr_of(allw, med_phasor(allw), DISC)
-        i1 = irr_of(alg, med_phasor(alg), DISC)
-        got[app] = (i0, i1, 100 * (i1 - i0) / max(i0, 1e-9))
-    #: ⚠⚠ **문턱을 측정에서 가져온다.** 처음엔 "SMPS 는 −5% 넘게" 로 적었다가 미니PC
-    #:   −4.3% 로 실패했다. 그런데 (가)가 걷어내는 것은 **녹화 간 회전 σ** 이고 §52.1 이
-    #:   그것을 쟀다 — 미니PC **0.71** 대 충전기 3.06 · 빔 3.63 (도/차수). 예측 이득비
-    #:   0.71/3.06 = 0.23 이고 관측비가 4.3/33.6 = **0.13** 으로 같은 자릿수다.
-    #:   ⇒ 미니PC 가 작게 나오는 것이 **맞다.** 틀린 것은 내 기댓값이었다
-    #:   ([[dont-loosen-a-gate-to-make-it-pass]] — 허용오차는 측정에서 나와야 한다).
-    #:   ⇒ 자를 σ 에 묶는다: **σ 가 2 를 넘는 기기는 15% 넘게**, 나머지는 **내려가기만**.
-    for app in SMPS:
-        if app in got:
-            ok5 &= got[app][2] < 0.0
-            if rep.get(app, (0, 0))[1] > 2.0:
-                ok5 &= got[app][2] < -15.0
-    for app in QUIET:
-        if app in got:
-            ok5 &= abs(got[app][2]) < 1e-9       # ⚠ 거른 기기는 **정확히 0** 이어야 한다
-    chk(5, "★ SMPS 는 σ 만큼 내려가고 **대조군은 정확히 0** 인가", ok5,
-        " · ".join("%s %.3f->%.3f (**%+.1f%%** · σ %.2f)"
-                   % (k[:9], v[0], v[1], v[2], rep.get(k, (0, 0))[1])
-                   for k, v in got.items()))
+        #: 오라클 — 사이클도 같이 돌려 놓고 잰다 (관문이 하던 것)
+        o0 = irr_of(raw, med_phasor(raw), DISC)
+        o1 = irr_of(alg, med_phasor(alg), DISC)
+        #: ★ 올바른 자 — 사이클은 **그대로**, 손실이 쓸 sig 만 바꾼다
+        g0 = s0[j, sid, :, 0] + 1j * s0[j, sid, :, 1]
+        gA = sA[j, sid, :, 0] + 1j * sA[j, sid, :, 1]
+        t0, t1 = irr_of(raw, g0, DISC), irr_of(raw, gA, DISC)
+        rows.append("%s s%d 오라클 %+.1f%% **대 올바른 자 %+.1f%%**"
+                    % (app[:9], sid, 100 * (o1 - o0) / o0, 100 * (t1 - t0) / t0))
+        ok5 &= (100 * (t1 - t0) / t0) > -5.0        # 올바른 자로는 **이득이 없어야** 한다
+    chk(5, "⚠⚠ 오라클과 올바른 자가 **다른가** (정렬은 이득이 없다)", ok5,
+        " · ".join(rows))
+
+    # [5b] ★ 되푼 와트 — 줄어든 사전이 **편향이 없다**
+    j = APPS.index("laptop_charger")
+    z = np.concatenate([v for _, v in sorted(cells(pool, "laptop_charger", 2).items())])
+    g0 = s0[j, 2, :, 0] + 1j * s0[j, 2, :, 1]
+    gA = sA[j, 2, :, 0] + 1j * sA[j, 2, :, 1]
+    def wat(g, h):
+        i = h - 1
+        return float(np.mean((z[:, i] * np.conj(g[i])).real) / max(abs(g[i]) ** 2, 1e-18))
+    chk(51, "★ **줄어든 사전이 편향이 없나** (되푼 와트, 참값 1.000)",
+        abs(wat(g0, 15) - 1.0) < abs(wat(gA, 15) - 1.0),
+        "충전기 h15 — 지금 **%.3f** 대 정렬 %.3f · h11 %.3f 대 %.3f "
+        "⇒ `E[P*] = P·E[cosθ]/ρ = P`. 길이를 되찾으면 **낮게** 치우친다"
+        % (wat(g0, 15), wat(gA, 15), wat(g0, 11), wat(gA, 11)))
 
     # [6] 녹화가 하나뿐인 기기는 **항등**
     one = [a for a in APPS if a not in rots]

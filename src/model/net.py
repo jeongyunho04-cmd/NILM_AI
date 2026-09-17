@@ -1884,24 +1884,38 @@ def harmonic_signatures_by_state(pool, appliances: Sequence[str], n_harm: int = 
                         continue                 # 이미 맞춘 칸은 **안 건드린다**
                     m = m0 & (np.asarray(st) == s)
                     if m.any():
-                        by.setdefault(s, ([], []))
-                        #: 14.395 — 회전표가 있으면 **이 녹화의 회전을 먼저 뺀다**.
-                        #  없으면 `_rk = 0.0` 이라 곱이 항등이고 **비트 동일**이다.
-                        _rk = float(((rotations or {}).get(app) or {}).get(_recof(a), 0.0))
-                        if _rk != 0.0:
-                            from src.model.sigalign import derotate
-                            _z = derotate(np.asarray(a.net_harmonics_complex)[m], _rk)
-                            by[s][0].append(_z)
-                        else:
-                            by[s][0].append(a.net_harmonics_complex[m])
+                        by.setdefault(s, ([], [], []))
+                        by[s][0].append(a.net_harmonics_complex[m])
                         by[s][1].append(pw[m])
-            for s, (cs, ps) in by.items():
+                        by[s][2].append(_recof(a))      # 14.395 — 어느 녹화에서 왔나
+            for s, (cs, ps, rs) in by.items():
                 if used[j, s]:
                     continue
                 c = np.concatenate(cs); p = np.concatenate(ps)[:, None]
                 if len(c) < min_cycles:
                     continue
                 per_w = c / np.maximum(p, 1e-6)
+                #: ★ 14.395b — 회전은 **이 칸에서 지연 모형이 맞을 때만** 건다.
+                #  ⚠⚠ 왜 칸마다 다시 보나: 회전값은 녹화의 성질이라 기기마다 한 번
+                #  내는 것이 맞지만(규약 ③), *그 모형이 쓸 만한지* 는 **칸마다 다르다** —
+                #  SNR 이 상태마다 다르기 때문이다. 재 보니:
+                #      미니PC **s1**(중앙 8.7W) 칸 R² **0.18** -> 걸면 irr **+21.4%** 악화
+                #      미니PC  s2 (19.2W)      칸 R²  0.84  -> −4.3%
+                #      충전기 s1 0.97 / s2 0.89 · 빔 s1 0.96 / s2 0.98  (전부 개선)
+                #  저항을 거른 그 문턱(`MIN_R2`)이 이 칸도 그대로 거른다. 관문 [8].
+                if rotations and (rotations.get(app) or {}):
+                    from src.model.sigalign import cell_rotation_ok, derotate
+                    _rot = rotations[app]
+                    if cell_rotation_ok(per_w, np.asarray(rs), np.asarray(
+                            [len(x) for x in cs])):
+                        _off = 0
+                        _parts = []
+                        for _blk, _r in zip(cs, rs):
+                            _n = len(_blk)
+                            _parts.append(derotate(per_w[_off:_off + _n],
+                                                   float(_rot.get(_r, 0.0))))
+                            _off += _n
+                        per_w = np.concatenate(_parts)
                 sig[j, s, :, 0] = np.median(np.real(per_w), axis=0)
                 sig[j, s, :, 1] = np.median(np.imag(per_w), axis=0)
                 used[j, s] = True
