@@ -175,6 +175,10 @@ class LossWeights:
     plugged: float = 0.1
     standby: float = 0.1
     harm: float = 0.1
+    #: * 14.375 — **SMPS 전용** 고조파 항의 가중. 0 이면 완전히 꺼진다.
+    #  저항 몫을 `Ĝ·V_h` 로 빼고 SMPS 만 맞춘다 — 잔차를 저항이 지배하는 문제
+    #  (test_5 h1 에서 100%)와 저항으로의 기울기 누출(14.373 의 C 2->12)을 같이 막는다.
+    harm_smps: float = 0.0
     cons: float = 0.0        # 1단계 0. 2단계에서 0.4 로 올린다 (3.3절)
     over: float = 0.1        # 물리 상한 힌지 (아래 참조)
     # 몸통 -> log(r_grid) 보조 감독 (13.55). 0 이면 완전히 꺼진다.
@@ -298,6 +302,27 @@ class NILMLoss(torch.nn.Module):
         #: ★ 14.367 — 상태 안 전력대 보정비. `None` 이면 **비트 동일**.
         power_gain_state: Optional[torch.Tensor] = None,
         power_edges_state: Optional[torch.Tensor] = None,
+        #: ★ 14.375 — **SMPS 전용 고조파 항.** 0 이면 끕 = **비트 동일**.
+        #:
+        #: 왜 — `L_harm` 은 `|Σ(기기 전부) − obs|` **하나의 잔차**라 기기 전부가
+        #: 그걸 나눠 쓴다. 그래서 SMPS 목표를 바꾸면 기울기가 **저항 넷에도 간다**
+        #: (14.373: 상태 안 전력대 보정을 켜니 저항 `g` 가 전부 1.000 인데도
+        #: C포트오탐이 **2 -> 12** 로 늘었다).
+        #: 그리고 잔차를 **저항이 지배한다** — test_5 에서 관측 |I1| 7,915mA 중
+        #: 저항 몫이 **7,896mA (100%)** 고 SMPS 몫은 77mA (1%) 다 (14.374).
+        #:
+        #: ```
+        #:   err_smps = | Σ_smps + 대기 + 잡음 − ( obs − **Ĥ·V_h** ) |
+        #: ```
+        #: `Ĥ·V_h` 는 **입력만의 함수**라(모델 파라미터가 없다) 저항 예측과 결합이
+        #: **원리상 없다**. ⚠ `detach` 로는 안 끕긴다 — 결합은 기울기 식이 아니라
+        #: **잔차 값**에 있다.
+        #: ⚠ **h1 은 민다** (`harm_smps_min_order`): 저항 h1 이 7,900mA 라 0.3% 오차만
+        #: 나도 24mA 고 신호:오차가 **1.8:1** 이다. h3 이상은 3.5~5.6:1 이다.
+        #: ⚠ `smps_sel` (K,) 을 **밖에서 받는다** — 이 클래스는 기기 이름을 안 갖는다.
+        harm_smps: float = 0.0,
+        harm_smps_min_order: int = 3,
+        smps_sel: Optional[torch.Tensor] = None,
         harm_vnorm_frac: float = 1.0,
         #: 14.56 — `sig` 의 **파형 몫** 앵커. `(K,H,2)` 그 녹화의 `v_h_rel = V_h/V_1`.
         #: 저항은 `sig_h = v_h_rel,h / V_1` 인데 14.49 앵커는 `1/V_1` 만 고쳤다.
@@ -609,6 +634,11 @@ class NILMLoss(torch.nn.Module):
         self.register_buffer("pow_edges_s",
                              power_edges_state if power_edges_state is not None else torch.zeros(0))
         self.use_pow_sig_state = power_gain_state is not None
+        #: ★ 14.375 — SMPS 전용 항
+        self.harm_smps = float(harm_smps)
+        self.register_buffer("smps_sel",
+                             smps_sel if smps_sel is not None else torch.zeros(0))
+        self._smps_min_order = int(harm_smps_min_order)
         self.pow_tau = float(power_tau)
         # ── 짝수차는 크기 공간에서 (2026-09-06, 13.11) ─────────────────────
         # 플러그를 반대로 꽂으면 `I_h -> −(−1)^h I_h` 라 **짝수차만 180° 돈다.**
@@ -774,6 +804,10 @@ class NILMLoss(torch.nn.Module):
                 raise ValueError(f"모르는 harm_weight: {harm_weight}")
             mask = mask * (w_h / w_h.max())
         self.register_buffer("harm_mask", mask)
+        #: * 14.375 — SMPS 항이 쓸 차수 가면. `harm_mask` 뒤라야 크기를 안다.
+        _om = torch.zeros(int(mask.numel()))
+        _om[max(self._smps_min_order - 1, 0):] = 1.0
+        self.register_buffer("smps_ord", _om, persistent=False)
         # h1 만 1 인 (H,) 마스크. 12.151 의 전압 보정이 h1 에만 걸리는 이유는
         # 항등식 `Re(I1)/P = 1/V1` 이 h1 에서만 성립해서다. 고차는 `V_h/R` 로
         # 예측하면 최대 2배 틀리고 위상이 기기마다 달랐다 (12.151 의 자).
@@ -1154,6 +1188,36 @@ class NILMLoss(torch.nn.Module):
                              / self.harm_mask.mean().clamp(min=1e-6))
         else:
             parts["harm"] = out["power"].sum() * 0.0
+
+        # ── * 14.375 SMPS 전용 고조파 항 ──────────────────────────────────
+        # `L_harm` 은 잔차가 **하나**라 기기 전부가 그걸 나눠 쓴다 -> SMPS 목표를 바꾸면
+        # 저항 넷에도 기울기가 간다 (14.373 의 C포트오탐 2->12). 그리고 그 잔차를
+        # **저항이 지배한다** (test_5 h1 에서 100%). 여기서는 저항 몫을 **Ĝ·V_h** 로
+        # 빼고 SMPS 만 맞춘다 — `Ĝ·V_h` 는 입력만의 함수라 결합이 **원리상 없다**.
+        # ⚠ h1 은 뺀다 (`smps_ord`): 저항 h1 이 7,900mA 라 0.3% 오차가 24mA 다.
+        if (self.harm_smps > 0 and tgt.get("obs_harm") is not None
+                and tgt.get("g_hat") is not None and tgt.get("volt_harm") is not None
+                and self.smps_sel.numel() > 0):
+            _sel = self.smps_sel.to(out["power"].dtype)
+            _p = out["power"] * _sel[None]                       # SMPS 만 남긴다
+            _pred = self._harm_pred_active(out, _p)
+            _idle = torch.sigmoid(out["plugged_logit"]) * (1.0 - torch.sigmoid(out["on_logit"]))
+            _pred = _pred + torch.einsum("bk,khc->bhc", _idle * _sel[None], self.standby_sig)
+            _pred = _pred + self.noise_sig[None]
+            if tgt.get("harm_offset") is not None:
+                _pred = _pred + tgt["harm_offset"]
+            # 저항 몫 = Ĝ·V_h (차수마다 정확 · **모델 파라미터 없음**)
+            #: ⚠ `nan * 0 = nan` 이라 곱셈 가면으로는 못 막는다 — 옛 캐시엔 `g_hat` 이
+            #  없어 NaN 이 오고, 그게 손실 전체를 NaN 으로 만든다. `where` 로 **먼저** 지운다.
+            _gh = tgt["g_hat"].reshape(-1)
+            _fin = torch.isfinite(_gh)
+            _g = (torch.where(_fin, _gh, torch.zeros_like(_gh)) * 1e-3).reshape(-1, 1, 1)
+            _obs = tgt["obs_harm"] - _g * tgt["volt_harm"]
+            _e = self._harm_err(_pred, _obs, self._coherent_even_w(_p))
+            _m = (self.harm_mask * self.smps_ord)[None, :, None]
+            parts["harm_smps"] = (_e * _m).mean() / (self.harm_mask * self.smps_ord).mean().clamp(min=1e-6)
+        else:
+            parts["harm_smps"] = out["power"].sum() * 0.0
 
         if self.w.over > 0:
             recon = out["power"].sum(1) + out["standby"].sum(1) + tgt["p_noise"]

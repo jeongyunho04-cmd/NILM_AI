@@ -41,6 +41,7 @@ from src.evaluation import (
 )
 from src.model.inputs import fine_target_index as _fti
 from src.model import net as _NET
+from src.model.postproc import SMPS_GROUP as _SMPS_GROUP
 from src.model.net import V_CH_FINE
 FINE_TPOS = _fti()          #: 세밀 창 안의 타깃 위치 (239 = 600−1−360). 14.53 이 쓴다.
 from src.model.inputs import (ZERO_EVEN_HARMONICS, EVEN_MAG0, EVEN2_CH,
@@ -480,6 +481,31 @@ def _res_cond(apps, spec: str) -> torch.Tensor:
     return torch.tensor([d.get(x, 0) for x in apps], dtype=torch.long)
 
 
+def _volt_harm_from_fine(fine, at_target: bool):
+    """세밀 45~60 -> 그 창의 **절대** `V_h` (B, 15, 2) [Re, Im] (14.375).
+
+    `_vhrel_from_fine` 과 **같은 되돌림**을 쓰되 `V_1` 로 안 나눈다 —
+    `L_harm` 의 SMPS 항이 **저항 몫 `Ĝ·V_h`** 를 빼려면 절대값이 필요하다.
+    관측 안 되는 차수(짝수)는 0 이라 그 자리의 저항 몫도 0 이다 (저항은 선형이라 맞다).
+    """
+    from src.model.inputs import VOLT_HARM_SCALE
+    n = fine.shape[0]
+    out = fine.new_zeros((n, 15, 2))
+    nv = len(VOLT_ORDERS)
+    for s_, h_ in enumerate(VOLT_ORDERS):
+        xr = fine[:, FINE_VOLT0 + s_]
+        xi = fine[:, FINE_VOLT0 + nv + s_]
+        xr = xr[:, FINE_TPOS] if at_target else xr.mean(-1)
+        xi = xi[:, FINE_TPOS] if at_target else xi.mean(-1)
+        if h_ == 1:
+            vr, vi = xr * V_SPAN + V_CENTER, xi * V_SPAN
+        else:
+            vr, vi = torch.sinh(xr) / VOLT_HARM_SCALE, torch.sinh(xi) / VOLT_HARM_SCALE
+        out[:, h_ - 1, 0] = vr
+        out[:, h_ - 1, 1] = vi
+    return out
+
+
 def _vhrel_from_fine(fine, at_target: bool):
     """세밀 45~56 -> 그 창의 `V_h/V_1` (B, 15, 2) [Re, Im] (14.56).
 
@@ -544,6 +570,9 @@ def to_targets(batch, dev, vrel_target: bool = False):
         #   않으려고 입력 채널에서 복원한다 (`inputs.build_inputs` 의 역).
         #   ⚠ 손실이 `use_vhrel` 이 아니면 **안 읽는다** (계산만 버린다).
         "vhrel": _vhrel_from_fine(fine, vrel_target),
+        #: * 14.375 — `L_harm` 의 SMPS 항이 **저항 몫 Ĝ·V_h** 를 빼는 데 쓴다.
+        #  절대 전압이라야 한다 (`vhrel` 은 V1 로 나눈 값이다).
+        "volt_harm": _volt_harm_from_fine(fine, vrel_target),
         "y_power": yp, "y_on": yo, "y_plugged": ypl, "y_standby": ys, "y_state": yst,
         "obs_harm": oh, "p_noise": pn, "p_observed": pobs, "harm_offset": None,
         # 14.26 — 창 전압비 V/V_CENTER. `L_harm` 의 지문을 이것으로 나눈다 (`--harm-sig-vnorm`).
@@ -665,6 +694,18 @@ def main() -> int:
                          "잘 내는데 **같은 상태 안의 V² 의존**을 0.33~0.83 로만 읽어 순 지수가 "
                          "0.85 다(물리는 2). 저전압에서 과예측한다 (14.6). 끄면 비트 동일")
     ap.add_argument("--w-harm", type=float, default=0.1)
+    #: * 14.375 — **SMPS 전용 고조파 항.** 저항 몫을 `Ĝ·V_h` 로 빼고 SMPS 만 맞춘다.
+    ap.add_argument("--w-harm-smps", type=float, default=0.0,
+                    help="SMPS 전용 `L_harm` 항 (14.375). 0 이면 **비트 동일**. "
+                         "왜 — `L_harm` 은 잔차가 **하나**라 기기 전부가 나눠 쓰고, "
+                         "그 잔차를 **저항이 지배한다** (test_5 관측 |I1| 7,915mA 중 "
+                         "저항 몫 **7,896mA = 100%%** · SMPS 77mA = 1%%). 그래서 SMPS "
+                         "목표를 고쳐도 묻히고, 거꾸로 저항 쪽으로 **기울기가 샌다** "
+                         "(14.373 의 C포트오탐 2 -> 12). 저항 몫을 `Ĝ·V_h` 로 빼면 "
+                         "그 항엔 **모델 파라미터가 없어** 결합이 원리상 끊긴다. "
+                         "⚠ h1 은 뺀다 (`--harm-smps-min-order`) — 저항 h1 이 7,900mA 라 "
+                         "0.3%% 오차가 24mA 고 신호:오차가 1.8:1 이다 (h3 이상은 3.5~5.6:1)")
+    ap.add_argument("--harm-smps-min-order", type=int, default=3, metavar="H")
     ap.add_argument("--harm-sig-vnorm", action=argparse.BooleanOptionalAction,
                     default=True,
                     help="**기본 켜짐 (14.29 에서 채택).** L_harm 의 지문에 창 전압비를 "
@@ -1460,6 +1501,11 @@ def main() -> int:
         harm_even_magnitude=a.harm_even_magnitude,
         power_gain=(torch.from_numpy(pow_gain) if pow_gain is not None else None),
         power_edges=(torch.from_numpy(pow_edges) if pow_edges is not None else None),
+        #: * 14.375 — SMPS 선택자와 항 설정 (이 클래스는 기기 이름을 안 갖는다)
+        harm_smps=float(a.w_harm_smps),
+        harm_smps_min_order=int(a.harm_smps_min_order),
+        smps_sel=(torch.tensor([1.0 if x in _SMPS_GROUP else 0.0 for x in apps])
+                  if a.w_harm_smps > 0 else None),
         power_gain_state=(torch.from_numpy(pow_gain_s) if pow_gain_s is not None else None),
         power_edges_state=(torch.from_numpy(pow_edges_s) if pow_edges_s is not None else None),
         power_tau=a.pow_tau,
@@ -1474,7 +1520,7 @@ def main() -> int:
         harm_grad_balance=a.harm_grad_balance,
         smps_group=[apps.index(x) for x in
                     ("beam_projector", "laptop_charger", "minipc") if x in apps],
-        weights=LossWeights(harm=a.w_harm, cons=a.w_cons, over=a.w_over,
+        weights=LossWeights(harm=a.w_harm, harm_smps=a.w_harm_smps, cons=a.w_cons, over=a.w_over,
                             state_power=a.w_state_power, z=a.w_z, swap=a.w_swap,
                             gate_cond=a.w_gate_cond),
         s_state=(build_state_scales(apps, [S_I[x] for x in apps])
@@ -1684,6 +1730,8 @@ def main() -> int:
                     #: 14.171 — 2단계가 **같은 순방향 모형**을 지으려면 이 둘이 필요하다.
                     #  없어서 `run_train_seq` 가 전압 앵커를 못 켜고 있었다.
                     "pow_sig": bool(a.pow_sig),
+                    "w_harm_smps": float(a.w_harm_smps),
+                    "harm_smps_min_order": int(a.harm_smps_min_order),
                     "pow_sig_instate": bool(a.pow_sig_instate),
                     "pow_rel_floor": float(a.pow_rel_floor),
                     "pow_bands": int(a.pow_bands),

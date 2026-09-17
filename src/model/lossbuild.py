@@ -114,6 +114,9 @@ def hcond_cols_of(head_conductance, hcond_classes, apps):
     return cols
 
 
+from src.model.postproc import SMPS_GROUP as _SG375  # noqa: E402
+
+
 def build_loss(apps: Sequence[str], dev: str, *,
                npz_dir: str = "processed_data/npz",
                time_split: str = "train",
@@ -130,6 +133,10 @@ def build_loss(apps: Sequence[str], dev: str, *,
                #: `power_signatures_instate` 로 여기서 짓는다.
                power_gain_state=None,
                power_edges_state=None,
+               #: * 14.375 — SMPS 전용 고조파 항. 0 이면 비트 동일.
+               harm_smps: float = 0.0,
+               harm_smps_min_order: int = 3,
+               smps_sel=None,
                power_bands: int = 3,
                power_tau: float = 0.15,
                harm_even_magnitude: bool = True,
@@ -243,6 +250,11 @@ def build_loss(apps: Sequence[str], dev: str, *,
         signatures_state=(torch.from_numpy(sig_state) if state_signatures else None),
         power_gain=(torch.from_numpy(pow_gain) if pow_gain is not None else None),
         power_edges=(torch.from_numpy(pow_edges) if pow_edges is not None else None),
+        harm_smps=float(harm_smps),
+        harm_smps_min_order=int(harm_smps_min_order),
+        smps_sel=(smps_sel if smps_sel is not None else
+                  (torch.tensor([1.0 if x in _SG375 else 0.0 for x in apps])
+                   if harm_smps > 0 else None)),
         power_gain_state=(torch.from_numpy(pow_gain_s) if pow_gain_s is not None else None),
         power_edges_state=(torch.from_numpy(pow_edges_s) if pow_edges_s is not None else None),
         power_tau=power_tau,
