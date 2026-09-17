@@ -86,6 +86,10 @@ $PY -X utf8 src/run_gate_hzwire.py
 #   베낀 자리의 **전제가 바뀐 것**을 안 봤다.
 #   ⚠ 짝을 `v32h` 로 바꾸면 **재현도 `--harmonic-z` 로 구워야 한다** (v32h 는 harmonic_z=True).
 #     결과적으로 관문이 **실제로 굽는 그 배선**을 재게 되어 옛 관문보다 세다.
+#: ⚠⚠ 14.390 — **이 짝 캐시는 이제 없다.** 쿼터가 꽉 차서(110/110G) 지웠다
+#:   (fine=57 배치라 14.331 이후 체크포인트가 원리상 못 쓴다). 이 파일을 다시
+#:   돌리려면 관문 ③ 을 `cache_v50_par.sbatch` 의 관문 ④ 처럼 **두 판을 여기서
+#:   짓는 방식**으로 바꿔라 — 985942 가 사라진 짝으로 여덟 토막을 통째로 죽였다.
 PAIR="cache/train60_v32h"
 [ -f "$PAIR/y_power.npy" ] || { echo "짝 캐시 $PAIR 가 없다 — 관문 ③을 못 세운다"; exit 1; }
 REPRO="$HOME/NILM_AI/cache/_repro_${SLURM_ARRAY_TASK_ID}"

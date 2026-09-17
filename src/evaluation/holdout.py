@@ -161,6 +161,8 @@ def _build_generator(o: dict, quiet: bool = False):
     float_fill = o['float_fill']
     steady_crop = o['steady_crop']
     sibling_rotate = o['sibling_rotate']
+    #: 14.390 — 기기별 차수비례 위상 지터. 빈 문자열이면 **옛 경로**(비트 동일).
+    phase_jitter_map = o.get('phase_jitter_map') or ''
     # 14.62 ⚠ 이 줄이 빠져 있었다 — 14.51 에서 `_build_generator` 를 함수로 뽑을 때
     #   따라오지 않았고, `harmonic_z` 를 쓰는 아래 세 줄이 **NameError** 로 죽었다
     #   (984064). `run_gate_hzwire` (1) 이 이 파일에 그 두 줄이 **있는지만** 보는
@@ -187,6 +189,8 @@ def _build_generator(o: dict, quiet: bool = False):
     # 자를 시간 구간이 달라 미니PC IDLE 이 자연히 47.8% 라, 손대지 않으면 그 자체로
     # 상태가 고른 잣대가 된다. 판을 견줄 때는 **같은 홀드아웃을 그대로 쓴다.**
     aug = DataAugmentor(level_scramble=level_scramble or None,
+                        # 14.390 — 빈 문자열이면 None 이라 **비트 동일**이다.
+                        phase_jitter_std_map=(phase_jitter_map or None),
                         state_mix=state_mix,
                         sp_curves=bool(sp_curves),
                         sp_per_texture=bool(sp_per_texture),
@@ -287,6 +291,8 @@ def build_holdout(
     carrier_apps: Optional[Sequence[str]] = None,
     sp_curves: bool = False,
     sp_per_texture: bool = False,
+    #: ★ 14.390 — "measured" 면 기기별 위상 지터. 빈 문자열이면 옛 경로.
+    phase_jitter_map: str = "",
     vtail: bool = False,
     background: bool = False,
     couple_ext: bool = False,
@@ -345,6 +351,7 @@ def build_holdout(
         ('float_fill', float_fill),
         ('steady_crop', steady_crop),
         ('sibling_rotate', sibling_rotate),
+        ('phase_jitter_map', phase_jitter_map),
         ('vtex_step_s', vtex_step_s),
         ('vtail', vtail),
         ('background', background),
@@ -465,6 +472,7 @@ def build_holdout(
         "workers_chunked": bool(workers and int(workers) > 0),
         "chunk_windows": (int(chunk_windows) if (workers and int(workers) > 0) else 0),
         "sp_per_texture": bool(sp_per_texture),
+        "phase_jitter_map": str(phase_jitter_map or ""),
         "vtail": bool(vtail),
         "background": bool(background),
         "appliances": apps,

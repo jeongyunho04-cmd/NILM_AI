@@ -148,6 +148,9 @@ def main() -> int:
     ap.add_argument("--float-fill", default="",
                     help="상태 채움 + 전력 축소 (13.83.23). 프리셋 'charger_float' 또는 JSON. "
                          "학습 캐시와 같이 켜야 그 부류의 F1 을 잴 수 있다")
+    ap.add_argument("--phase-jitter-map", default="", metavar="measured",
+                    help="★ 14.390 — 기기별 차수비례 위상 지터 (학습 캐시와 같은 손잡이). "
+                         "빈 값이면 옛 경로이고 **비트 동일**이다")
     ap.add_argument("--sp-per-texture", action="store_true",
                     help="s(p) 를 **그 녹화의 텍스처**에서 만든 곡선으로 (13.74). 옛 곡선은 "
                          "깨끗한 정현파에서 만들어 자리 차이가 원리적으로 없었다 — 실측 채점에서 "
@@ -216,6 +219,7 @@ def main() -> int:
                   sibling_rotate=srot,
                   ablate_pedestal_apps=a.ablate_pedestal,
                   sp_curves=a.sp_curves, sp_per_texture=a.sp_per_texture, vtail=a.vtail, background=a.background,
+                  phase_jitter_map=a.phase_jitter_map,
                   level_scramble=_parse_scramble(a.level_scramble),
                   state_mix=_parse_state_mix(a.state_mix),
                   carrier_apps=(None if a.carrier_on is None
