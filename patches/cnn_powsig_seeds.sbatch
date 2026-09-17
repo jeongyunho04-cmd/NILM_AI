@@ -120,14 +120,7 @@ x = np.load('$HOLDOUT/X.npy', mmap_mode='r')
 print('  홀드아웃 X %s' % (x.shape,))
 if x.shape[1] != 49: sys.exit('홀드아웃 X 채널이 %d 다' % x.shape[1])
 if not (c.get('g_hat') or {}).get('v_ref'): sys.exit('캐시에 g_hat 이 없다 — run_build_ghat')
-import os
-if not os.path.exists('$HOLDOUT/z_grid.npy'):
-    sys.exit('홀드아웃에 z_grid.npy 가 없다 — 14.353 의 holdout_v49_z 를 먼저 구워라 '
-             '(없으면 평가가 전부 "모름" 으로 돌아 Z 갈래를 못 잰다)')
-zg = np.load('$HOLDOUT/z_grid.npy')
-print('  홀드아웃 z_grid %s · r %.3f~%.3f · 서로 다른 값 %d개'
-      % (zg.shape, zg[:,0].min(), zg[:,0].max(), len(np.unique(np.round(zg[:,0],4)))))
-if np.isnan(zg).any(): sys.exit('홀드아웃 z_grid 에 NaN 이 있다')
+#: 14.369 - Z 주입 기각으로 홀드아웃 관문을 뻐다 (짝이 cnn_comb 이다)
 print('  관문 ① 통과 — 학습과 평가가 같은 배치다 · g_hat 중앙 %.2f mS'
       % (c.get('g_hat') or {}).get('median_ms', -1))
 "
