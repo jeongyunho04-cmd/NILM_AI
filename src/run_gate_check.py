@@ -182,7 +182,8 @@ from src.model.inputs import EVEN_FINE_CHANNELS as EVEN_CHANNELS  # noqa: E402
 
 @torch.no_grad()
 def forward_file(model, stem: str, dev: str, stride: int = 30,
-                 zero_ch: Optional[List[int]] = None, site_transfer="ckpt") -> dict:
+                 zero_ch: Optional[List[int]] = None, site_transfer="ckpt",
+                 _rw=None, _ghat=None) -> dict:
     """파일 하나를 촘촘히 훑어 게이트와 원시 전력을 그대로 돌려준다.
 
     `site_transfer="ckpt"` 면 체크포인트가 적응에 쓴 장소 보정을 그대로 건다
@@ -190,7 +191,9 @@ def forward_file(model, stem: str, dev: str, stride: int = 30,
     """
     if isinstance(site_transfer, str) and site_transfer == "ckpt":
         site_transfer = getattr(model, "site_transfer", None)
-    rw = dense_targets(stem, stride=stride, site_transfer=site_transfer)
+    #: ★ 14.400 — 미리 지은 창을 받으면 **다시 안 짓는다** (창은 모델과 무관하다).
+    #  `real_auc_many` 가 파일을 바깥 고리로 돌며 한 번만 지어 넘긴다.
+    rw = dense_targets(stem, stride=stride, site_transfer=site_transfer) if _rw is None else _rw
     #: ★ 14.349 — 조합 머리는 **Ĝ 가 입력**이다. 안 넘기면 `net.forward` 가 멈춘다
     #  (`run_gate_comb` [7]). `run_plot_real.solve_ghat` 과 **같은 함수**를 써서
     #  그림·채점·사중이 한 Ĝ 위에 서게 한다.
@@ -198,8 +201,11 @@ def forward_file(model, stem: str, dev: str, stride: int = 30,
     _zi = bool(getattr(model, "z_input", False))
     _gh = _zv = None
     if _cb:
-        from src.run_plot_real import solve_ghat as _sg
-        _gh = _sg(stem, rw, list(model.appliances))[0]
+        if _ghat is None:
+            from src.run_plot_real import solve_ghat as _sg
+            _gh = _sg(stem, rw, list(model.appliances))[0]
+        else:
+            _gh = _ghat
     if _zi:
         from src.run_plot_real import site_z as _sz
         _zv = float(_sz(stem))

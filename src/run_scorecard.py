@@ -82,29 +82,63 @@ def holdout_pass(model, prep, dev: str, batch: int = 512):
 
 
 def real_auc(model, apps: List[str], dev: str, stride: int = 30) -> dict:
-    """파일별 관문 AUC. uncertain 구간은 `scorable` 로 뺀다."""
+    """파일별 관문 AUC (한 판). uncertain 구간은 `scorable` 로 뺀다."""
+    return real_auc_many([("_", model)], apps, dev, stride)["_"]
+
+
+def real_auc_many(pairs, apps: List[str], dev: str, stride: int = 30) -> dict:
+    """여러 판을 **한 번에** 채점한다 — 파일이 바깥 고리다 (14.400).
+
+    ⚠⚠ 왜 이렇게 바꿨나. 판마다 `forward_file` 을 부르면 그 안의
+    `dense_targets`(**7.4초**)와 `solve_ghat`(**5.1초**)이 **판 수만큼 다시 돈다**.
+    둘 다 **모델과 무관**하다 — 창은 짝수차 규약과 stride 로만 정해지고 Ĝ 는
+    입력만의 함수다. 18판 x 5파일이면 **12.5초 x 90 = 약 19분이 순수 낭비**였다
+    (전체 ~47분 중). 파일을 바깥으로 돌리면 파일당 **한 번**만 짓는다.
+
+    ⚠ 메모리도 이 순서가 낫다 — 한 파일의 창만 들고 있으면 된다.
+    """
+    from src.model.realdata import dense_targets
     ev = load_events()
-    per = {a: {"s": [], "y": []} for a in apps}
+    per = {k: {a: {"s": [], "y": []} for a in apps} for k, _ in pairs}
     for st in STEMS:
         if is_sealed(st):
             continue
-        d = forward_file(model, st, dev, stride=stride)
+        #: 창과 Ĝ 를 **파일당 한 번**. `forward_file` 과 같은 인자여야 한다.
+        #: ⚠⚠ **자리 보정을 단 판은 창이 다르다** — 공유하면 조용히 틀린 입력이 된다
+        #:   ([[verify-the-input-path-not-just-the-model]]). 하나라도 있으면 멈춘다.
+        _stf = {id(getattr(m, "site_transfer", None)) for _, m in pairs
+                if getattr(m, "site_transfer", None) is not None}
+        if _stf:
+            raise SystemExit(
+                "✖ 자리 보정(site_transfer)을 단 판이 섞여 있다 — 창을 공유하면 안 된다. "
+                "그 판은 따로 채점해라 (1단계 판끼리만 같이 넣어라)")
+        rw = dense_targets(st, stride=stride, site_transfer=None)
+        _gh = None
+        if any(float(getattr(m, "comb_tau", 0.0) or 0.0) > 0 for _, m in pairs):
+            from src.run_plot_real import solve_ghat as _sg
+            _gh = _sg(st, rw, list(apps))[0]
         n_cyc = int(ev[st]["cycles"])
         on, sc = build_on_off_truth(st, apps, n_cyc, ev)
-        t = np.asarray(d["targets"], int).clip(0, n_cyc - 1)
-        for j, a in enumerate(apps):
-            m = sc[t, j]
-            if not m.any():
-                continue
-            per[a]["s"].append(d["gate"][m, j])
-            per[a]["y"].append(on[t, j][m])
+        for key, model in pairs:
+            d = forward_file(model, st, dev, stride=stride, _rw=rw, _ghat=_gh)
+            t = np.asarray(d["targets"], int).clip(0, n_cyc - 1)
+            for j, a in enumerate(apps):
+                m = sc[t, j]
+                if not m.any():
+                    continue
+                per[key][a]["s"].append(d["gate"][m, j])
+                per[key][a]["y"].append(on[t, j][m])
+        print("    %s 채점 완료 (판 %d)" % (st, len(pairs)), flush=True)
     out = {}
-    for a in apps:
-        if not per[a]["s"]:
-            continue
-        s = np.concatenate(per[a]["s"])
-        y = np.concatenate(per[a]["y"])
-        out[a] = (auc(s, y), int(y.sum()), int(len(y)))
+    for key, _ in pairs:
+        o = {}
+        for a in apps:
+            if not per[key][a]["s"]:
+                continue
+            sv = np.concatenate(per[key][a]["s"])
+            yv = np.concatenate(per[key][a]["y"])
+            o[a] = (auc(sv, yv), int(yv.sum()), int(len(yv)))
+        out[key] = o
     return out
 
 
@@ -116,37 +150,63 @@ def main() -> None:
     ap.add_argument("--holdout", default=HOLDOUT)
     ap.add_argument("--skip-real", action="store_true",
                     help="실측 채점을 건너뛴다 (합성 홀드아웃과 전력 헤드만)")
+    #: ★ 14.400 — 홀드아웃 **없이** 실측만 잰다. `run_gate_pintot` 처럼 실측 자는
+    #  `composite_eval` 을 읽어 **이 노트북에서만** 도는데, 홀드아웃은 HPC 에 있고
+    #  5GB 라 내려받을 것이 아니다. 판정할 때 실측 AUC 만 필요한 경우가 그것이다.
+    ap.add_argument("--skip-holdout", action="store_true",
+                    help="합성 홀드아웃을 건너뛴다 (실측 AUC 만) — 홀드아웃이 없는 자리에서")
     a = ap.parse_args()
     if not a.bare and not a.adapt:
         raise SystemExit("--bare 또는 --adapt 로 체크포인트를 주십시오")
+    if a.skip_holdout and a.skip_real:
+        raise SystemExit("--skip-holdout 과 --skip-real 을 같이 주면 잴 것이 없다")
     dev = "cuda" if torch.cuda.is_available() else "cpu"
+    #: ⚠⚠ 14.400 — **창을 짓기 전에** 짝수차 규약을 체크포인트에 맞춘다.
+    #  `inputs.EVEN_MEDIAN` 은 모듈 전역이라 안 맞추면 `forward_file` 이 조용히
+    #  분포 밖 입력을 만든다 ([[verify-the-input-path-not-just-the-model]]).
+    #  규약이 갈리는 판을 한 번에 주면 `sync_even_median` 이 **멈춘다** — 그게 맞다.
+    from src.run_gate_check import sync_even_median
+    sync_even_median(a.bare + a.adapt)
 
-    hs = load_holdout(a.holdout)
-    apps = hs.appliances
-    prep = prepare_holdout_inputs(hs)
-    yon = hs.y_on.astype(bool)
-    yst = np.asarray(hs.y_state, int)
+    if a.skip_holdout:
+        from src.model.build import build_model as _bm
+        _ck0 = torch.load((a.bare + a.adapt)[0], map_location="cpu", weights_only=False)
+        apps = list(_ck0["appliances"])
+        hs = prep = yon = yst = None
+    else:
+        hs = load_holdout(a.holdout)
+        apps = hs.appliances
+        prep = prepare_holdout_inputs(hs)
+    if hs is not None:
+        yon = hs.y_on.astype(bool)
+        yst = np.asarray(hs.y_state, int)
 
     rows = {}
+    _models = []
     for p in a.bare + a.adapt:
         m, mapps, ck = load_model(p, dev)
         assert list(mapps) == list(apps), (mapps, apps)
-        g, ps, pw = holdout_pass(m, prep, dev)
-        syn = {x: auc(g[:, j], yon[:, j]) for j, x in enumerate(apps)}
-        pst = {}
-        for j, x in enumerate(apps):
-            for s in range(ps.shape[2]):
-                k = yon[:, j] & (yst[:, j] == s)
-                if k.sum() >= 20:
-                    pst[(x, s)] = (float(np.median(ps[k, j, s])),
-                                   float(np.median(pw[k, j])),
-                                   float(np.median(hs.y_power[k, j])))
-        real = {} if a.skip_real else real_auc(m, mapps, dev)
-        rows[p] = {"syn": syn, "pst": pst, "real": real,
+        syn, pst = {}, {}
+        if hs is not None:
+            g, ps, pw = holdout_pass(m, prep, dev)
+            syn = {x: auc(g[:, j], yon[:, j]) for j, x in enumerate(apps)}
+            for j, x in enumerate(apps):
+                for s in range(ps.shape[2]):
+                    k = yon[:, j] & (yst[:, j] == s)
+                    if k.sum() >= 20:
+                        pst[(x, s)] = (float(np.median(ps[k, j, s])),
+                                       float(np.median(pw[k, j])),
+                                       float(np.median(hs.y_power[k, j])))
+        rows[p] = {"syn": syn, "pst": pst, "real": {},
                    "aux_z": bool(ck.get("aux_z", False))}
-        print(f"  {p} 완료", flush=True)
-        del m
-        torch.cuda.empty_cache()
+        _models.append((p, m))
+        print(f"  {p} 적재", flush=True)
+    if not a.skip_real:
+        #: ★ 14.400 — **파일이 바깥 고리다.** 창·Ĝ 를 파일당 한 번만 짓는다
+        for k, v in real_auc_many(_models, apps, dev).items():
+            rows[k]["real"] = v
+    _models.clear()
+    torch.cuda.empty_cache()
 
     names = list(rows)
     short = [n.replace("\\", "/").split("/")[-1].replace(".pt", "") for n in names]
@@ -166,6 +226,12 @@ def main() -> None:
             f"{np.nanmean([v[0] for v in rows[n]['real'].values()]):17.3f}"
             for n in names))
 
+    #: ⚠ 14.400 — `--skip-holdout` 이면 `syn`·`pst` 가 **비어 있다**. 안 막으면 여기서
+    #  KeyError 로 죽는다. 실측 표는 **이미 다 찍은 뒤**라 더 고약하다 — 값은 다 나왔는데
+    #  종료코드만 1 이 된다 (배경 작업이 "실패" 로 보인다).
+    if a.skip_holdout:
+        print("\n  (합성 홀드아웃은 건너뛰었다 — --skip-holdout)")
+        return
     print("\n" + "=" * 104)
     print("② 합성 홀드아웃 AUC" + ("" if a.skip_real else " 와 격차 (합성 − 실측)"))
     print("=" * 104)

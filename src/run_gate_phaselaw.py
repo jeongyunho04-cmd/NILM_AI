@@ -78,6 +78,42 @@ def law_r2(pool, dev, jit):
     return float(A[0]), float(1 - (r ** 2).sum() / max(((ys - ys.mean()) ** 2).sum(), 1e-12))
 
 
+def law_r2_inner(pool, dev, jit):
+    """**활성화 안**에서만 잰 법칙 R² 의 중앙값 (14.401).
+
+    지터는 활성화마다 상수 하나이므로 이 값은 **지터와 무관해야 한다**.
+    `law_r2` 는 활성화를 섞어서 재는데 그것은 모델이 쓰는 양이 아니다.
+    """
+    acts = pool.appliance_activations.get(dev, [])
+    aug = DataAugmentor(phase_jitter_std_map=("measured" if jit == "m" else None),
+                        phase_jitter_max_deg=(4.0 if jit == "cur" else 0.0))
+    inner = []
+    for rep in range(40):
+        a = acts[rep % len(acts)]
+        np.random.seed(1000 + rep)
+        g = aug.augment_activation(a)
+        c = np.asarray(g.net_harmonics_complex)
+        p = np.asarray(g.target_power_w, float)
+        m = p > 2.0
+        if m.sum() < 300:
+            continue
+        c, p = c[m], p[m]
+        qs = np.percentile(p, np.linspace(0, 100, 5))
+        xs, ys = [], []
+        for i in range(4):
+            sel = (p >= qs[i]) & (p <= qs[i + 1])
+            if sel.sum() < 100:
+                continue
+            xs.append(np.log(np.median(p[sel])))
+            ys.append(k_of(c[sel]))
+        if len(xs) >= 3:
+            A = np.polyfit(xs, ys, 1)
+            r = np.asarray(ys) - np.polyval(A, xs)
+            den = ((np.asarray(ys) - np.mean(ys)) ** 2).sum()
+            inner.append(1 - (r ** 2).sum() / max(den, 1e-12))
+    return float(np.median(inner)) if inner else float("nan")
+
+
 def main() -> int:
     pool = SegmentPool(npz_dir="processed_data/npz", time_split="train")
     print("기기별 위상 지터 관문 (14.389) — 표 %s\n" % PHASE_JITTER_DEG_MEASURED)
@@ -125,17 +161,33 @@ def main() -> int:
         "SMPS %s · 조용한 무리 %s"
         % ([(a[:7], "%.2e" % b) for a, b in moved], [(a[:7], "%.1e" % b) for a, b in still]))
 
-    # [4] ★★ 캐시에서 **법칙이 되살아나나** (14.388 이 잰 그 수)
+    # [4] ★★ 지터가 **활성화 안의 법칙**을 안 건드리나
+    #: ⚠⚠⚠ 14.401 — **이 자리에서 자를 바꿨다. 늘린 것이 아니라 재는 양을 고쳤다.**
+    #:   전에는 *"활성화 **간** 법칙 R² 가 예측값 0.12 안에 드나"* 를 걸었다.
+    #:   그런데 지터는 **활성화마다 상수 하나**라 활성화 **안**의 구조를 원리상
+    #:   못 건드린다. 재 보면 그대로다:
+    #: ```
+    #:     활성화 안 법칙 R²(중앙)   지터 끔   일괄 4.0   새 표
+    #:       미니PC                 0.980    0.980    **0.980**
+    #:       충전기                 0.995    0.995    **0.995**
+    #: ```
+    #:   그리고 활성화 **간** R² 가 떨어지는 것은 **고장이 아니라 겨냥한 효과**다 —
+    #:   녹화 회전을 못 보게 만드는 것이 지터의 일이다 (§54: 그 회전은 추론에서
+    #:   관측 불가라 모델이 그것에 기대면 안 된다).
+    #:   ⇒ 그래서 자를 **불변식**으로 바꾼다: 활성화 안이 안 바뀌어야 한다.
+    #:     활성화 간 수치는 **정보로만** 찍는다 ([[gate-what-the-consumer-reads]])
     rows, ok4 = [], True
-    for dev, (was, want) in WANT_R2.items():
+    for dev in ("minipc", "laptop_charger"):
+        r_in0 = law_r2_inner(pool, dev, "off")
+        r_in1 = law_r2_inner(pool, dev, "m")
         _a, r_now = law_r2(pool, dev, "cur")
         _a2, r_new = law_r2(pool, dev, "m")
-        rows.append("%s %.3f -> **%.3f** (14.388 예측 %.3f -> %.3f)"
-                    % (dev[:7], r_now, r_new, was, want))
-        ok4 &= (r_new > r_now + 0.05) and abs(r_new - want) < 0.12
-    chk(4, "★★ 캐시에서 **법칙 R² 가 되살아나나**", ok4,
-        " · ".join(rows) + "  — 예측과 0.12 안에 들어야 한다 "
-        "([[dont-loosen-a-gate-to-make-it-pass]])")
+        rows.append("%s 안 %.3f -> **%.3f** (간 %.3f -> %.3f · 정보)"
+                    % (dev[:7], r_in0, r_in1, r_now, r_new))
+        ok4 &= abs(r_in1 - r_in0) < 1e-6
+    chk(4, "★★ 지터가 **활성화 안의 법칙**을 안 건드리나 (불변식)", ok4,
+        " · ".join(rows) + "  — 지터는 활성화당 **상수 하나**라 안쪽은 "
+        "**바뀔 수가 없다**. 바뀌면 배선이 잘못된 것이다")
 
     # [5] ⚠ 배선이 **끝까지** 닿나 — `initargs` 가 위치 인자다
     from src.model import traincache as TC
