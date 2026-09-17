@@ -1,0 +1,139 @@
+#!/bin/bash
+# 14.390 — **캐시 재굽기 v50**. 손잡이는 `--phase-jitter-map measured` **하나**다.
+# 짝은 `cache/train60_v49` 이고 그것 말고는 `cache_v49_par.sbatch` 와 글자까지 같다.
+#
+# 왜 (14.386~389):
+#   SMPS 의 정류 도통 창이 **부하로 움직여** 모든 차수가 `h·ω·τ(P)` 로 돈다.
+#     미니PC k = 3.71·ln(P) − ...  R² 0.730   ·  충전기 k = 9.21·ln(P) − ...  R² 0.755
+#     (같은 세션·같은 콘센트·같은 전압에서 corr(k, irms) = **+0.939**)
+#   그 법칙은 실측 조각에 **이미 들어 있고** `s(p)`(복소)가 캐시로 제대로 옮긴다.
+#   ⚠⚠ 그런데 `DataAugmentor.phase_jitter_max_deg = 4.0` 이 `exp(1j·h·θ)`, θ~U(−4,4)
+#     를 **무작위로** 더한다 — **같은 함수 모양**이다. 그리고 `traincache.py` 가 이
+#     인자를 안 넘겨 **기본값이 학습 캐시에 그대로** 걸려 있었다.
+#     ⇒ 캐시가 모델에게 *"이 회전은 잡음"* 이라고 가르쳐 왔다. 실제로는 **신호**다.
+#     ⇒ 캐시에서 잰 법칙 R²: 미니PC 0.726 -> **0.308** · 충전기 0.759 -> **0.518**
+#
+# 고침은 **끄는 것이 아니라 크기를 잰 잔차로 맞추는 것**이다 (법칙은 조각에 이미
+# 있으니 더하면 이중계산이다):
+#     미니PC **0.94** · 충전기 **2.13** · 빔 **3.66** [도/차수]
+#   ⚠ 저항 넷·선풍기·에어컨은 **안 건드린다** — h3 이상 크기가 거의 0 이라 위상이
+#     난수고, 잰 σ(오븐 4.96 · 핫플 4.66)는 신호가 아니라 잡음이다.
+#   ⇒ 관문 `run_gate_phaselaw` 6/6 이 확인했다 (캐시 R² 0.280->0.673 · 0.549->0.686).
+#
+# ⚠ 이 판은 **손잡이 하나**다. `sig(P)` 를 손실에 거는 것(§48.3)은 **다음 판**이다 —
+#   둘을 같이 켜면 §46 처럼 어느 쪽 덕인지 못 가른다.
+#
+#SBATCH -J nilm_v50
+#SBATCH -p cpu1,gpu6,cpu2,gpu3,gpu4,gpu5
+#SBATCH -N 1
+#SBATCH -n 1
+#SBATCH -c 24
+#SBATCH --mem=100G
+#SBATCH -t 00:50:00
+#SBATCH -a 0-7
+#SBATCH -o %x_%A_%a.out
+#SBATCH -e %x_%A_%a.out
+set -euo pipefail
+cd "$HOME/NILM_AI"
+PY=./env/bin/python
+
+WINDOWS=${WINDOWS:-300000}
+GEN=${GEN:-v50}
+NSHARD=${SLURM_ARRAY_TASK_COUNT:-8}
+OUT="$HOME/NILM_AI/cache/train60_${GEN}_s${SLURM_ARRAY_TASK_ID}"
+
+echo "노드 $(hostname) · 토막 ${SLURM_ARRAY_TASK_ID}/${NSHARD} · 코어 ${SLURM_CPUS_PER_TASK} · $(date '+%F %H:%M:%S')"
+
+# ⚠⚠ 여기에 mmlsquota 를 넣지 마라 (HPC_RULES §7-5).
+
+# ── 관문 ⓪ **코드가 올라왔나** ──────────────────────────────────────────────
+$PY -X utf8 -c "
+import sys
+from src.model.inputs import VOLT_ORDERS, RAW_CHANNELS, FINE_CHANNELS, WIDE_CHANNELS
+from src.synthesis.augmentor import PHASE_JITTER_DEG_MEASURED as T
+print('  차수 %s · RAW %d · FINE %d · WIDE %d'
+      % (tuple(VOLT_ORDERS), RAW_CHANNELS, FINE_CHANNELS, WIDE_CHANNELS))
+print('  위상 지터 표 %s' % T)
+ok = (tuple(VOLT_ORDERS) == (1, 3, 5, 7, 9, 11, 13, 15)
+      and (RAW_CHANNELS, FINE_CHANNELS, WIDE_CHANNELS) == (49, 61, 51)
+      and set(T) == {'minipc', 'laptop_charger', 'beam_projector'})
+sys.exit(0 if ok else '코드를 안 올렸다 — 14.389 이전 배치다')
+"
+$PY -X utf8 -m src.run_build_traincache --help | grep -q -- --phase-jitter-map \
+  || { echo 'CLI 에 --phase-jitter-map 이 없다'; exit 1; }
+
+# `--phase-jitter-map` 말고는 v49 와 **글자까지 같아야 한다**.
+COMMON="--windows $WINDOWS --window-cycles 3600 --seed 0
+        --power-scale-std measured --recipe-mix steady2 --smps-focus-off-p 0.4
+        --state-mix minipc_balanced --carrier-on oven --couple-ext
+        --sp-curves --sp-per-texture --vtail --float-fill charger_float
+        --steady-crop smps_steady --standby-jitter-cap 95"
+
+echo "=== 관문 ① Z 표 배선 ==="
+$PY -X utf8 src/run_gate_zharm.py
+echo "=== 관문 ② 굽기가 타는 그 경로 (traincache._init) ==="
+$PY -X utf8 src/run_gate_hzwire.py
+echo "=== 관문 ③ 위상 지터 배선·표 (run_gate_phaselaw) ==="
+$PY -X utf8 -m src.run_gate_phaselaw
+
+# ── 관문 ④ **손잡이가 하나인가** — 같은 씨로 두 번 굽고 견준다 ───────────────
+#   v49 합본과 견주는 대신 **여기서 두 판을 짓는다**. 그러면 짝이 지금 이 코드로
+#   구워진 것이라 "옛 캐시가 어떤 코드로 구워졌나" 를 안 믿어도 된다
+#   (14.332b 가 사라진 짝 캐시로 여덟 토막을 통째로 죽인 자리다).
+#   ★ 걸어야 할 것: **라벨은 비트 동일** · 달라지는 창은 **SMPS 가 켜진 창뿐**.
+if [ "${SLURM_ARRAY_TASK_ID}" = "0" ]; then
+  A="$HOME/NILM_AI/cache/_pj_off"; B="$HOME/NILM_AI/cache/_pj_on"
+  rm -rf "$A" "$B"
+  echo "=== 관문 ④ 손잡이 하나 확인 (청크 0/1200 을 두 번) ==="
+  $PY -X utf8 -m src.run_build_traincache --out "$A" --shard "0/1200" \
+      $COMMON --workers "${SLURM_CPUS_PER_TASK}" --harmonic-z > /dev/null
+  $PY -X utf8 -m src.run_build_traincache --out "$B" --shard "0/1200" \
+      $COMMON --workers "${SLURM_CPUS_PER_TASK}" --harmonic-z \
+      --phase-jitter-map measured > /dev/null
+  $PY -X utf8 -c "
+import numpy as np, sys, json
+bad = []
+def same(nm):
+    a = np.asarray(np.load('$A/%s.npy' % nm, mmap_mode='r'))
+    b = np.asarray(np.load('$B/%s.npy' % nm, mmap_mode='r'))
+    ok = np.array_equal(a, b)
+    print('    %-14s %s' % (nm, '비트 동일' if ok else '**다르다**'))
+    return ok
+for nm in ('y_power', 'y_on', 'y_state', 'y_plugged'):
+    if not same(nm): bad.append(nm)
+apps = json.load(open('$B/meta.json', encoding='utf-8'))['appliances']
+SM = [apps.index(x) for x in ('minipc', 'laptop_charger', 'beam_projector') if x in apps]
+yon = np.asarray(np.load('$B/y_on.npy', mmap_mode='r'))
+f0 = np.asarray(np.load('$A/fine.npy', mmap_mode='r'))
+f1 = np.asarray(np.load('$B/fine.npy', mmap_mode='r'))
+d  = np.abs(f0 - f1).reshape(len(f0), -1).max(1)
+has = yon[:, SM].any(1)
+print('    창 %d · SMPS 있는 창 %d' % (len(d), int(has.sum())))
+print('    SMPS 있는 창 최대차 **%.3e** · SMPS 없는 창 최대차 **%.3e**'
+      % (d[has].max() if has.any() else 0.0, d[~has].max() if (~has).any() else 0.0))
+if (~has).any() and d[~has].max() != 0.0:
+    bad.append('SMPS 없는 창이 달라졌다')
+if has.any() and d[has].max() == 0.0:
+    bad.append('SMPS 있는 창이 하나도 안 달라졌다 — 손잡이가 안 걸렸다')
+if bad: sys.exit('관문 ④ 실패: %s' % bad)
+print('  관문 ④ 통과 — 라벨 불변 · **SMPS 창만** 달라진다')
+"
+  rm -rf "$A" "$B"
+fi
+
+# ── 굽기 ────────────────────────────────────────────────────────────────────
+time $PY -X utf8 -m src.run_build_traincache \
+    --out "$OUT" --shard "${SLURM_ARRAY_TASK_ID}/${NSHARD}" \
+    $COMMON --workers "${SLURM_CPUS_PER_TASK}" --harmonic-z \
+    --phase-jitter-map measured
+
+du -sh "$OUT"
+$PY -X utf8 -c "
+import json, sys
+d = json.load(open('$OUT/meta.json', encoding='utf-8'))
+print('  창 %d · fine %s · phase_jitter_map=%r'
+      % (d['n_windows'], d['fine_shape'], d.get('phase_jitter_map')))
+if d.get('phase_jitter_map') != 'measured':
+    sys.exit('메타에 phase_jitter_map 이 안 적혔다 — 손잡이가 안 걸렸을 수 있다')
+"
+echo "=== 끝 $(date '+%F %H:%M:%S')"
