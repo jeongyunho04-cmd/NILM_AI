@@ -23,7 +23,7 @@ set -euo pipefail
 cd "$HOME/NILM_AI"
 PY=./env/bin/python
 OUT=processed_data/holdout60_v50
-PAIR=processed_data/holdout60_v32h
+PAIR=processed_data/holdout60_v49
 W=${WORKERS:-24}
 
 echo "노드 $(hostname) · 워커 ${W} · $(date '+%F %H:%M:%S')"
@@ -78,7 +78,7 @@ FLAGS="--windows 8000 --window-cycles 3600 --holdout-frac 0.2 --seed 20260821 \
         --harmonic-z"
 echo "굽기 인자: $FLAGS"
 case "$FLAGS" in *--vtex*) echo "vtex 가 남았다 — 학습 캐시는 seg 끔이다"; exit 1;; esac
-case "$FLAGS" in *--harmonic-z*) ;; *) echo "--harmonic-z 가 없다 — 짝이 v32h 다"; exit 1;; esac
+case "$FLAGS" in *--harmonic-z*) ;; *) echo "--harmonic-z 가 없다"; exit 1;; esac
 
 # ★ 14.390 — **이 판의 유일한 손잡이.** 학습 캐시 v50 과 같은 값이어야 한다.
 $PY -X utf8 -m src.run_build_holdout --help | grep -q -- "--phase-jitter-map" || {
@@ -92,41 +92,56 @@ if d.get('phase_jitter_map') != 'measured':
 print('  phase_jitter_map=%s' % d.get('phase_jitter_map'))
 "
 
-echo "=== 관문: v32h 와 **차수 말고** 다 같은가 ==="
+#: ⚠⚠ 14.390 — **짝을 v32h 에서 v49 로 바꿨다.** 원본(`holdout_v49.sbatch`)은 45채널
+#:   v32h 와 견주는데 그 홀드아웃은 **지웠다**(쿼터). 986487 이 정확히 거기서 죽었다 —
+#:   내가 `cache_v49_par.sbatch` 에 *"사라진 짝"* 경고를 적어 놓고 **같은 함정에 빠졌다**
+#:   ([[find-patch-collisions-by-shape]] — "전제가 바뀐 땜질". 오늘 두 번째다).
+#: ★ 그리고 v49 가 **진짜 짝**이다 — 같은 채널 배치에 손잡이가 위상 지터 하나뿐이다.
+echo "=== 관문: v49 와 **위상 지터 말고** 다 같은가 ==="
 $PY -X utf8 -c "
 import json, sys
 import numpy as np
 a = json.load(open('$PAIR/meta.json', encoding='utf-8'))
 b = json.load(open('$OUT/meta.json', encoding='utf-8'))
-skip = {'volt_orders', 'content_sha256', 'bytes', 'built_at', 'positive_rate',
-        'recipe_counts'}
+skip = {'content_sha256', 'bytes', 'built_at', 'positive_rate', 'recipe_counts',
+        'phase_jitter_map'}
 def nz(v):
     return None if v is None or v == 0 or v == '' or v is False else v
 diff = [k for k in set(a) | set(b) if k not in skip
         and json.dumps(nz(a.get(k)), sort_keys=True, default=str)
         != json.dumps(nz(b.get(k)), sort_keys=True, default=str)]
-if diff: sys.exit('❌ 차수 말고도 다르다: %s — 손잡이가 하나가 아니다' % diff)
+if diff: sys.exit('❌ 위상 지터 말고도 다르다: %s — 손잡이가 하나가 아니다' % diff)
+if a.get('phase_jitter_map'): sys.exit('❌ 짝(v49)에 phase_jitter_map 이 있다')
+if b.get('phase_jitter_map') != 'measured': sys.exit('❌ 새 판에 지터가 안 걸렸다')
 if b.get('volt_orders') != [1, 3, 5, 7, 9, 11, 13, 15]:
-    sys.exit('❌ meta 의 volt_orders 가 %r 다 — 옛 코드로 구웠다' % b.get('volt_orders'))
-if a.get('volt_orders') is not None:
-    sys.exit('❌ 짝($PAIR)에 volt_orders 가 있다 — 짝이 v32h 가 아니다')
+    sys.exit('❌ volt_orders 가 %r 다' % b.get('volt_orders'))
 if not b.get('harmonic_z'):      sys.exit('❌ meta 에 harmonic_z 가 안 적혔다')
-if not b.get('workers_chunked'): sys.exit('❌ 병렬로 안 구웠다 — 워커가 0으로 떨어졌다')
+if not b.get('workers_chunked'): sys.exit('❌ 병렬로 안 구웠다')
 if int(b['target_index']) != int(a['target_index']): sys.exit('❌ target_index 가 다르다')
-# ⚠ meta 에 채널 수가 안 적히므로 **자료를 직접 본다** — 이게 이 판의 핵심 관문이다.
+
 X = np.load('$OUT/X.npy', mmap_mode='r')
 Y = np.load('$PAIR/X.npy', mmap_mode='r')
 print('  X %s  (짝 %s)' % (X.shape, Y.shape))
-if X.shape[1] != 49:   sys.exit('❌ X 의 채널이 %d 다 — 49 여야 한다' % X.shape[1])
-if Y.shape[1] != 45:   sys.exit('❌ 짝의 채널이 %d 다 — 45 여야 한다' % Y.shape[1])
-if X.shape[0] != Y.shape[0] or X.shape[2] != Y.shape[2]:
-    sys.exit('❌ 창 수·길이가 짝과 다르다')
-# 전압 블록 **앞**(0..32 = 고조파 30 + P·Q·V)은 한 바이트도 안 달라져야 한다.
-n = min(200, X.shape[0])
-if not np.array_equal(np.asarray(X[:n, :33]), np.asarray(Y[:n, :33])):
-    sys.exit('❌ 비전압 채널 0..32 가 짝과 다르다 — 손잡이가 하나가 아니다')
-print('  ✅ 차수만 다르다 · 비전압 33채널 비트 동일 (앞 %d창) · volt_orders %s'
-      % (n, b['volt_orders']))
+if X.shape != Y.shape: sys.exit('❌ 모양이 짝과 다르다')
+if X.shape[1] != 49:   sys.exit('❌ X 의 채널이 %d 다' % X.shape[1])
+
+# ★ **SMPS 가 켜진 창만** 달라져야 한다 — 캐시 관문 ④ 와 같은 자다.
+apps = list(b['appliances'])
+SM = [apps.index(x) for x in ('minipc', 'laptop_charger', 'beam_projector') if x in apps]
+yon = np.asarray(np.load('$OUT/y_on.npy', mmap_mode='r'))
+ya  = np.asarray(np.load('$PAIR/y_on.npy', mmap_mode='r'))
+if not np.array_equal(yon, ya): sys.exit('❌ y_on 이 짝과 다르다 — 라벨이 움직였다')
+n = min(400, X.shape[0])
+d = np.abs(np.asarray(X[:n], np.float64) - np.asarray(Y[:n], np.float64)).reshape(n, -1).max(1)
+has = yon[:n][:, SM].any(1)
+print('  앞 %d창 · SMPS 있는 창 %d' % (n, int(has.sum())))
+print('  SMPS 있는 창 최대차 **%.3e** · SMPS 없는 창 최대차 **%.3e**'
+      % (d[has].max() if has.any() else 0.0, d[~has].max() if (~has).any() else 0.0))
+if (~has).any() and d[~has].max() != 0.0:
+    sys.exit('❌ SMPS 없는 창이 달라졌다 — 손잡이가 하나가 아니다')
+if has.any() and d[has].max() == 0.0:
+    sys.exit('❌ SMPS 있는 창이 하나도 안 달라졌다 — 손잡이가 안 걸렸다')
+print('  ✅ 라벨 불변 · **SMPS 창만** 달라진다')
 "
 du -sh "$OUT"
 # ⚠⚠ 끝단에서 mmlsquota 를 부르지 않는다 (HPC_RULES §7-5).
