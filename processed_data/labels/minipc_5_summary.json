@@ -1,0 +1,73 @@
+{
+  "raw_rows": 24240,
+  "cleaned_rows": 24240,
+  "duration_s": 404.0,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 0,
+  "invalid_samples_dropped": 0,
+  "invalid_samples_interpolated": 0,
+  "interpolated_cycles": 0,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "startup_frames_dropped": 0,
+  "noise_floor_registry_w": 1.6,
+  "noise_floor_applied_w": 0.5389,
+  "noise_floor_source": "trailing_unplugged",
+  "trailing_noise": {
+    "n_cycles": 1477,
+    "start_t_rel_s": 379.3833333333333,
+    "p_w": 0.5389,
+    "i1_ma": 2.633,
+    "i1_deg": -19.24689019790385,
+    "vrms": 218.153
+  },
+  "source_file": "minipc_5.csv",
+  "file_role": "device",
+  "appliance_type": "minipc",
+  "load_class": "smps",
+  "classification_reason": "등록된 단일 가전 'minipc'",
+  "output_file": null,
+  "feature_columns_count": 157,
+  "v_ref_v": 218.28,
+  "p_mean": 7.2,
+  "p_max": 18.79,
+  "irms_mean": 0.0655,
+  "korean_name": "미니PC",
+  "total_samples": 24240,
+  "on_percentage": 80.2,
+  "state_distribution": {
+    "OFF_STANDBY": {
+      "state_id": 0,
+      "description": "전원 꺼짐 또는 절전 모드",
+      "count": 4800,
+      "percentage": 19.8,
+      "duration_min": 1.33
+    },
+    "IDLE": {
+      "state_id": 1,
+      "description": "바탕화면 대기 및 경부하 상태",
+      "count": 18466,
+      "percentage": 76.18,
+      "duration_min": 5.13
+    },
+    "ACTIVE_LOAD": {
+      "state_id": 2,
+      "description": "프로그램 실행 및 CPU 연산 부하",
+      "count": 974,
+      "percentage": 4.02,
+      "duration_min": 0.27
+    }
+  },
+  "events_summary": {
+    "total_events": 8,
+    "on_events": 2,
+    "off_events": 2,
+    "mode_change_events": 4,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\minipc_5_annotated.csv",
+  "npz_file": "processed_data\\npz\\minipc_5.npz",
+  "events_json": "processed_data\\labels\\minipc_5_events.json"
+}

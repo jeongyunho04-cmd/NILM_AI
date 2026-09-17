@@ -1,0 +1,73 @@
+{
+  "raw_rows": 24870,
+  "cleaned_rows": 24810,
+  "duration_s": 413.5,
+  "sessions_detected": 1,
+  "duplicates_removed": 0,
+  "invalid_samples_flagged": 30,
+  "invalid_samples_dropped": 30,
+  "invalid_samples_interpolated": 0,
+  "interpolated_cycles": 0,
+  "timeline_segments": 1,
+  "glitch_spikes_fixed": 0,
+  "negative_power_clamped": 0,
+  "startup_frames_dropped": 30,
+  "noise_floor_registry_w": 1.6,
+  "noise_floor_applied_w": 0.51325,
+  "noise_floor_source": "trailing_unplugged",
+  "trailing_noise": {
+    "n_cycles": 1932,
+    "start_t_rel_s": 381.3,
+    "p_w": 0.51325,
+    "i1_ma": 2.5345,
+    "i1_deg": 4.289930471161948,
+    "vrms": 217.374
+  },
+  "source_file": "laptop_charger_7.csv",
+  "file_role": "device",
+  "appliance_type": "laptop_charger",
+  "load_class": "smps",
+  "classification_reason": "등록된 단일 가전 'laptop_charger'",
+  "output_file": null,
+  "feature_columns_count": 157,
+  "v_ref_v": 217.15,
+  "p_mean": 47.38,
+  "p_max": 65.99,
+  "irms_mean": 0.3423,
+  "korean_name": "노트북충전기",
+  "total_samples": 24810,
+  "on_percentage": 85.3,
+  "state_distribution": {
+    "IDLE_UNPLUGGED": {
+      "state_id": 0,
+      "description": "미연결 무부하 또는 완충 대기",
+      "count": 3646,
+      "percentage": 14.7,
+      "duration_min": 1.01
+    },
+    "TRICKLE_IDLE_CHARGE": {
+      "state_id": 1,
+      "description": "저속 트리클 충전 / 유휴 상태 충전",
+      "count": 804,
+      "percentage": 3.24,
+      "duration_min": 0.22
+    },
+    "FAST_ACTIVE_CHARGE": {
+      "state_id": 2,
+      "description": "고속 충전 / CPU 부하 동작 중 충전",
+      "count": 20360,
+      "percentage": 82.06,
+      "duration_min": 5.66
+    }
+  },
+  "events_summary": {
+    "total_events": 4,
+    "on_events": 1,
+    "off_events": 1,
+    "mode_change_events": 2,
+    "seam_suspect_events": 0
+  },
+  "annotated_csv": "processed_data\\clean_devices\\laptop_charger_7_annotated.csv",
+  "npz_file": "processed_data\\npz\\laptop_charger_7.npz",
+  "events_json": "processed_data\\labels\\laptop_charger_7_events.json"
+}

@@ -1155,7 +1155,20 @@ def main() -> int:
     #    절대값이 아니라 **상대 쓸기**로만 읽는다.
     #  ⚠ 2단계(`run_adapt`)에는 이미 있다 — 1단계에만 없어서 **두 단계가 갈려 있었다**.
     ap.add_argument("--harm-deadzone", type=float, default=0.0, metavar="X",
-                    help="L_harm 불감대 배수 (12.122.16 프로파일 x X). 0 = **비트 동일**")
+                    help="L_harm 불감대 배수 (잔차 프로파일 x X). 0 = **비트 동일**")
+    #: ★ 14.411 — 불감대는 기울기를 **끄기만** 하고 다시 나누지 못한다
+    #  (`relu(|e|/s − τ)` 의 기울기가 τ 와 무관하다). 나누는 값을 바꾸는 쪽이다.
+    #: ★ 14.412 — SMPS 쌍 맞바꿈 **여유** 손실. `L_harm` 이 절대적합이라
+    #  순방향 오차를 배분이 흡수하는 것(잔차의 95%)을 피하려는 항이다.
+    ap.add_argument("--w-harm-margin", type=float, default=0.0, metavar="W",
+                    help="SMPS 쌍 맞바꿈 여유 손실의 가중. 0 = **비트 동일** (14.412)")
+    ap.add_argument("--harm-margin-delta", type=float, default=5.0, metavar="W",
+                    help="여유를 재려고 옮기는 와트 (기본 5W)")
+    ap.add_argument("--harm-margin-frac", type=float, default=0.5, metavar="F",
+                    help="달성 가능 간격 대비 요구 여유 (0<F<1, 기본 0.5)")
+    ap.add_argument("--harm-dprime", type=float, default=0.0, metavar="W",
+                    help="L_harm 을 **차수 판별력**으로 다시 나눈다: "
+                         "den = harm_scale · (d_ref/d'_h)^W. 0 = **비트 동일** (14.411)")
     ap.add_argument("--load-rot", action="store_true",
                     help="부하 의존 위상 sig(P) 를 손실에 건다 (14.402)")
     ap.add_argument("--state-signatures", action="store_true",
@@ -1557,6 +1570,9 @@ def main() -> int:
         on_power_praw=a.on_power_praw,
         signatures_state=(torch.from_numpy(sig_state) if a.state_signatures else None),
         harm_deadzone=a.harm_deadzone,
+        harm_dprime=a.harm_dprime,
+        harm_margin=a.w_harm_margin, harm_margin_delta=a.harm_margin_delta,
+        harm_margin_frac=a.harm_margin_frac,
         load_rot_a=(torch.from_numpy(_lr_a) if _lr_a is not None else None),
         load_rot_lpref=(torch.from_numpy(_lr_p) if _lr_a is not None else None),
         load_rot_on=(torch.from_numpy(_lr_on) if _lr_a is not None else None),
@@ -1803,6 +1819,10 @@ def main() -> int:
                     #  없어서 `run_train_seq` 가 전압 앵커를 못 켜고 있었다.
                     #: 14.402 — **굽는 순간 적는다** (§29.5 부류 빚을 안 만든다)
                     "harm_deadzone": float(a.harm_deadzone),
+                    "harm_dprime": float(a.harm_dprime),
+                    "w_harm_margin": float(a.w_harm_margin),
+                    "harm_margin_delta": float(a.harm_margin_delta),
+                    "harm_margin_frac": float(a.harm_margin_frac),
                     "load_rot": bool(a.load_rot),
                     "pow_sig": bool(a.pow_sig),
                     "w_harm_smps": float(a.w_harm_smps),

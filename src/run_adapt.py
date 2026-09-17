@@ -327,6 +327,15 @@ def main() -> int:
                          "판별자가 있는데 SMPS 에는 없어서 배분이 `L_harm` 하나에 걸려 "
                          "있었고, 12.122.2 가 그 항의 최소는 **오답 쪽**이라고 확정했다. "
                          "`Q/P` 는 SMPS 를 고조파보다 2.2~2.5배 잘 가른다. 0 이면 끔")
+    #: ★ 14.411 — 1단계와 **같은 손잡이**. 안 뚫으면 `run_gate_lossparity` 가 막는다:
+    #  2단계가 다른 분모로 미세조정하면 두 단계가 다른 순방향 모형을 쓰는 것이다 (14.171).
+    ap.add_argument("--w-harm-margin", type=float, default=0.0, metavar="W",
+                    help="SMPS 쌍 맞바꿈 여유 손실 (14.412). ⚠ 1단계와 같아야 한다")
+    ap.add_argument("--harm-margin-delta", type=float, default=5.0, metavar="W")
+    ap.add_argument("--harm-margin-frac", type=float, default=0.5, metavar="F")
+    ap.add_argument("--harm-dprime", type=float, default=0.0, metavar="W",
+                    help="L_harm 을 **차수 판별력**으로 다시 나눈다 (14.411). "
+                         "0 = **비트 동일** · ⚠ 1단계 체크포인트의 값과 같아야 한다")
     ap.add_argument("--harm-deadzone", type=float, default=0.0, metavar="X",
                     help="L_harm 불감대 배수 (12.122.16). 정답 배분에서도 남는 "
                          "차수별 잔차의 X배까지는 벌하지 않는다. **줄일 수 없는 "
@@ -776,7 +785,10 @@ def main() -> int:
             dtype=torch.float32) if a.harm_even_by_class else None),
         harm_max_order=a.harm_max_order,
         harm_grad_balance=a.harm_grad_balance,
-        harm_deadzone=a.harm_deadzone, harm_weight=a.harm_weight,
+        harm_deadzone=a.harm_deadzone, harm_dprime=a.harm_dprime,
+        harm_margin=a.w_harm_margin, harm_margin_delta=a.harm_margin_delta,
+        harm_margin_frac=a.harm_margin_frac,
+        harm_weight=a.harm_weight,
         reactive_qp=torch.from_numpy(qp), noise_q=nq,
         smps_group=[apps.index(x) for x in
                     ("beam_projector", "laptop_charger", "minipc") if x in apps],

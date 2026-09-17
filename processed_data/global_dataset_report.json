@@ -1,5 +1,5 @@
 {
-  "processed_files_count": 19,
+  "processed_files_count": 28,
   "sampling_hz": 60.0,
   "devices": {
     "air_conditioner_1": {
@@ -176,6 +176,46 @@
         }
       }
     },
+    "beam_projector_8": {
+      "appliance_type": "beam_projector",
+      "korean_name": "빔프로젝터",
+      "file_role": "device",
+      "load_class": "smps",
+      "rows": 28770,
+      "duration_min": 7.99,
+      "p_mean": 27.61,
+      "p_max": 264.3,
+      "v_ref_v": 217.97,
+      "invalid_samples_flagged": 30,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 2,
+      "on_percentage": 61.52,
+      "events_count": 6,
+      "npz_file": "processed_data\\npz\\beam_projector_8.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "대기 전원 상태",
+          "count": 11070,
+          "percentage": 38.48,
+          "duration_min": 3.08
+        },
+        "WARMUP_COOLDOWN": {
+          "state_id": 1,
+          "description": "부팅 예열 또는 전원 끈 후 팬 냉각",
+          "count": 467,
+          "percentage": 1.62,
+          "duration_min": 0.13
+        },
+        "LAMP_ON": {
+          "state_id": 2,
+          "description": "램프 점등 및 정상 화면 투사",
+          "count": 17233,
+          "percentage": 59.9,
+          "duration_min": 4.79
+        }
+      }
+    },
     "electric_kettle_1": {
       "appliance_type": "electiric_kettle",
       "korean_name": "전기포트",
@@ -206,6 +246,39 @@
           "count": 17010,
           "percentage": 61.36,
           "duration_min": 4.72
+        }
+      }
+    },
+    "electric_kettle_5": {
+      "appliance_type": "electiric_kettle",
+      "korean_name": "전기포트",
+      "file_role": "device",
+      "load_class": "resistive",
+      "rows": 8760,
+      "duration_min": 2.43,
+      "p_mean": 534.26,
+      "p_max": 1307.5,
+      "v_ref_v": 219.46,
+      "invalid_samples_flagged": 0,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 1,
+      "on_percentage": 41.51,
+      "events_count": 28,
+      "npz_file": "processed_data\\npz\\electric_kettle_5.npz",
+      "state_distribution": {
+        "OFF": {
+          "state_id": 0,
+          "description": "전원 꺼짐 / 대기 상태",
+          "count": 5124,
+          "percentage": 58.49,
+          "duration_min": 1.42
+        },
+        "BOILING_HEATING": {
+          "state_id": 1,
+          "description": "히터 발열 및 물 끓임 동작",
+          "count": 3636,
+          "percentage": 41.51,
+          "duration_min": 1.01
         }
       }
     },
@@ -456,6 +529,206 @@
         }
       }
     },
+    "laptop_charger_3": {
+      "appliance_type": "laptop_charger",
+      "korean_name": "노트북충전기",
+      "file_role": "device",
+      "load_class": "smps",
+      "rows": 18690,
+      "duration_min": 5.19,
+      "p_mean": 46.01,
+      "p_max": 67.93,
+      "v_ref_v": 229.4,
+      "invalid_samples_flagged": 0,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 1,
+      "on_percentage": 78.89,
+      "events_count": 10,
+      "npz_file": "processed_data\\npz\\laptop_charger_3.npz",
+      "state_distribution": {
+        "IDLE_UNPLUGGED": {
+          "state_id": 0,
+          "description": "미연결 무부하 또는 완충 대기",
+          "count": 3946,
+          "percentage": 21.11,
+          "duration_min": 1.1
+        },
+        "TRICKLE_IDLE_CHARGE": {
+          "state_id": 1,
+          "description": "저속 트리클 충전 / 유휴 상태 충전",
+          "count": 1807,
+          "percentage": 9.67,
+          "duration_min": 0.5
+        },
+        "FAST_ACTIVE_CHARGE": {
+          "state_id": 2,
+          "description": "고속 충전 / CPU 부하 동작 중 충전",
+          "count": 12937,
+          "percentage": 69.22,
+          "duration_min": 3.59
+        }
+      }
+    },
+    "laptop_charger_4": {
+      "appliance_type": "laptop_charger",
+      "korean_name": "노트북충전기",
+      "file_role": "device",
+      "load_class": "smps",
+      "rows": 10680,
+      "duration_min": 2.97,
+      "p_mean": 39.82,
+      "p_max": 67.66,
+      "v_ref_v": 229.68,
+      "invalid_samples_flagged": 30,
+      "invalid_samples_dropped": 30,
+      "sessions_detected": 1,
+      "on_percentage": 67.43,
+      "events_count": 4,
+      "npz_file": "processed_data\\npz\\laptop_charger_4.npz",
+      "state_distribution": {
+        "IDLE_UNPLUGGED": {
+          "state_id": 0,
+          "description": "미연결 무부하 또는 완충 대기",
+          "count": 3479,
+          "percentage": 32.57,
+          "duration_min": 0.97
+        },
+        "TRICKLE_IDLE_CHARGE": {
+          "state_id": 1,
+          "description": "저속 트리클 충전 / 유휴 상태 충전",
+          "count": 1020,
+          "percentage": 9.55,
+          "duration_min": 0.28
+        },
+        "FAST_ACTIVE_CHARGE": {
+          "state_id": 2,
+          "description": "고속 충전 / CPU 부하 동작 중 충전",
+          "count": 6181,
+          "percentage": 57.87,
+          "duration_min": 1.72
+        }
+      }
+    },
+    "laptop_charger_5": {
+      "appliance_type": "laptop_charger",
+      "korean_name": "노트북충전기",
+      "file_role": "device",
+      "load_class": "smps",
+      "rows": 70320,
+      "duration_min": 19.53,
+      "p_mean": 39.45,
+      "p_max": 68.8,
+      "v_ref_v": 229.55,
+      "invalid_samples_flagged": 0,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 1,
+      "on_percentage": 94.93,
+      "events_count": 57,
+      "npz_file": "processed_data\\npz\\laptop_charger_5.npz",
+      "state_distribution": {
+        "IDLE_UNPLUGGED": {
+          "state_id": 0,
+          "description": "미연결 무부하 또는 완충 대기",
+          "count": 3566,
+          "percentage": 5.07,
+          "duration_min": 0.99
+        },
+        "TRICKLE_IDLE_CHARGE": {
+          "state_id": 1,
+          "description": "저속 트리클 충전 / 유휴 상태 충전",
+          "count": 23414,
+          "percentage": 33.3,
+          "duration_min": 6.5
+        },
+        "FAST_ACTIVE_CHARGE": {
+          "state_id": 2,
+          "description": "고속 충전 / CPU 부하 동작 중 충전",
+          "count": 43340,
+          "percentage": 61.63,
+          "duration_min": 12.04
+        }
+      }
+    },
+    "laptop_charger_6": {
+      "appliance_type": "laptop_charger",
+      "korean_name": "노트북충전기",
+      "file_role": "device",
+      "load_class": "smps",
+      "rows": 38100,
+      "duration_min": 10.58,
+      "p_mean": 22.42,
+      "p_max": 68.21,
+      "v_ref_v": 228.94,
+      "invalid_samples_flagged": 0,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 1,
+      "on_percentage": 92.28,
+      "events_count": 8,
+      "npz_file": "processed_data\\npz\\laptop_charger_6.npz",
+      "state_distribution": {
+        "IDLE_UNPLUGGED": {
+          "state_id": 0,
+          "description": "미연결 무부하 또는 완충 대기",
+          "count": 2943,
+          "percentage": 7.72,
+          "duration_min": 0.82
+        },
+        "TRICKLE_IDLE_CHARGE": {
+          "state_id": 1,
+          "description": "저속 트리클 충전 / 유휴 상태 충전",
+          "count": 34074,
+          "percentage": 89.43,
+          "duration_min": 9.46
+        },
+        "FAST_ACTIVE_CHARGE": {
+          "state_id": 2,
+          "description": "고속 충전 / CPU 부하 동작 중 충전",
+          "count": 1083,
+          "percentage": 2.84,
+          "duration_min": 0.3
+        }
+      }
+    },
+    "laptop_charger_7": {
+      "appliance_type": "laptop_charger",
+      "korean_name": "노트북충전기",
+      "file_role": "device",
+      "load_class": "smps",
+      "rows": 24810,
+      "duration_min": 6.89,
+      "p_mean": 47.38,
+      "p_max": 65.99,
+      "v_ref_v": 217.15,
+      "invalid_samples_flagged": 30,
+      "invalid_samples_dropped": 30,
+      "sessions_detected": 1,
+      "on_percentage": 85.3,
+      "events_count": 4,
+      "npz_file": "processed_data\\npz\\laptop_charger_7.npz",
+      "state_distribution": {
+        "IDLE_UNPLUGGED": {
+          "state_id": 0,
+          "description": "미연결 무부하 또는 완충 대기",
+          "count": 3646,
+          "percentage": 14.7,
+          "duration_min": 1.01
+        },
+        "TRICKLE_IDLE_CHARGE": {
+          "state_id": 1,
+          "description": "저속 트리클 충전 / 유휴 상태 충전",
+          "count": 804,
+          "percentage": 3.24,
+          "duration_min": 0.22
+        },
+        "FAST_ACTIVE_CHARGE": {
+          "state_id": 2,
+          "description": "고속 충전 / CPU 부하 동작 중 충전",
+          "count": 20360,
+          "percentage": 82.06,
+          "duration_min": 5.66
+        }
+      }
+    },
     "minipc_1": {
       "appliance_type": "minipc",
       "korean_name": "미니PC",
@@ -573,6 +846,86 @@
           "count": 14317,
           "percentage": 65.73,
           "duration_min": 3.98
+        }
+      }
+    },
+    "minipc_4": {
+      "appliance_type": "minipc",
+      "korean_name": "미니PC",
+      "file_role": "device",
+      "load_class": "smps",
+      "rows": 30870,
+      "duration_min": 8.57,
+      "p_mean": 8.51,
+      "p_max": 20.34,
+      "v_ref_v": 229.97,
+      "invalid_samples_flagged": 30,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 1,
+      "on_percentage": 87.71,
+      "events_count": 12,
+      "npz_file": "processed_data\\npz\\minipc_4.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "전원 꺼짐 또는 절전 모드",
+          "count": 3794,
+          "percentage": 12.29,
+          "duration_min": 1.05
+        },
+        "IDLE": {
+          "state_id": 1,
+          "description": "바탕화면 대기 및 경부하 상태",
+          "count": 25975,
+          "percentage": 84.14,
+          "duration_min": 7.22
+        },
+        "ACTIVE_LOAD": {
+          "state_id": 2,
+          "description": "프로그램 실행 및 CPU 연산 부하",
+          "count": 1101,
+          "percentage": 3.57,
+          "duration_min": 0.31
+        }
+      }
+    },
+    "minipc_5": {
+      "appliance_type": "minipc",
+      "korean_name": "미니PC",
+      "file_role": "device",
+      "load_class": "smps",
+      "rows": 24240,
+      "duration_min": 6.73,
+      "p_mean": 7.2,
+      "p_max": 18.79,
+      "v_ref_v": 218.28,
+      "invalid_samples_flagged": 0,
+      "invalid_samples_dropped": 0,
+      "sessions_detected": 1,
+      "on_percentage": 80.2,
+      "events_count": 8,
+      "npz_file": "processed_data\\npz\\minipc_5.npz",
+      "state_distribution": {
+        "OFF_STANDBY": {
+          "state_id": 0,
+          "description": "전원 꺼짐 또는 절전 모드",
+          "count": 4800,
+          "percentage": 19.8,
+          "duration_min": 1.33
+        },
+        "IDLE": {
+          "state_id": 1,
+          "description": "바탕화면 대기 및 경부하 상태",
+          "count": 18466,
+          "percentage": 76.18,
+          "duration_min": 5.13
+        },
+        "ACTIVE_LOAD": {
+          "state_id": 2,
+          "description": "프로그램 실행 및 CPU 연산 부하",
+          "count": 974,
+          "percentage": 4.02,
+          "duration_min": 0.27
         }
       }
     },
@@ -736,6 +1089,15 @@
     }
   },
   "composite_eval_files": {
+    "nilm_20260917_205227": {
+      "rows": 8760,
+      "duration_s": 146.0,
+      "p_mean": 534.26,
+      "p_max": 1307.5,
+      "v_ref_v": 219.46,
+      "npz_file": "processed_data\\composite_eval\\nilm_20260917_205227.npz",
+      "excluded_from_segment_pool": true
+    },
     "test_1": {
       "rows": 48000,
       "duration_s": 800.0,
@@ -780,9 +1142,27 @@
       "v_ref_v": 210.68,
       "npz_file": "processed_data\\composite_eval\\test_5.npz",
       "excluded_from_segment_pool": true
+    },
+    "test_6": {
+      "rows": 28170,
+      "duration_s": 469.5,
+      "p_mean": 277.78,
+      "p_max": 1815.09,
+      "v_ref_v": 216.83,
+      "npz_file": "processed_data\\composite_eval\\test_6.npz",
+      "excluded_from_segment_pool": true
+    },
+    "test_7": {
+      "rows": 39000,
+      "duration_s": 650.0,
+      "p_mean": 76.69,
+      "p_max": 127.72,
+      "v_ref_v": 218.25,
+      "npz_file": "processed_data\\composite_eval\\test_7.npz",
+      "excluded_from_segment_pool": true
     }
   },
-  "total_cleaned_samples": 800970,
-  "total_duration_hours": 3.71,
-  "total_events_detected": 1857
+  "total_cleaned_samples": 1056210,
+  "total_duration_hours": 4.89,
+  "total_events_detected": 1994
 }

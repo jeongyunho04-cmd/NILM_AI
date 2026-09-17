@@ -154,15 +154,55 @@ def build_state_scales(appliances: Sequence[str], s_i: Sequence[float],
 #: 흩어진다 — 플러그 방향(0° 또는 180°)이 아니라 **낮은 R 때문에 난수**였던 것이다.
 PHASE_COHERENT_EVEN = ("oven", "electiric_kettle", "hotplate", "hair_dryer")
 
-#: 정답 배분에서도 남는 차수별 잔차의 중앙값 (손실 단위, 2026-09-01 측정).
-#: 사람 라벨 5파일의 60초 창 55개에서 `min_{P>=0} ‖y − A_정답·P‖` 의 잔차다.
+#: 정답 배분에서도 남는 차수별 잔차의 중앙값 (손실 단위).
 #: **이것이 순방향 모델의 오차이고, `L_harm` 이 벌하면 안 되는 양이다.**
-HARM_DEADZONE_PROFILE = [0.191, 0.843, 0.303, 0.851, 0.320, 0.772, 0.270,
-                         0.879, 0.265, 1.138, 0.298, 1.068, 0.378, 1.545, 0.798]
+#:
+#: ⚠⚠ **2026-09-17 (14.411) 에 다시 쟀다. 옛 표는 없는 자료에서 잰 값이었다.**
+#:   옛 값(2026-09-01, 사람 라벨 5파일 · 창 55개):
+#:     [0.191, 0.843, 0.303, 0.851, 0.320, 0.772, 0.270,
+#:      0.879, 0.265, 1.138, 0.298, 1.068, 0.378, 1.545, 0.798]
+#:   그 5파일은 **옛 계측기(~2026-09-05)** 녹화이고 지금은 삭제됐다. 즉 그 표는
+#:   이 저장소에 더는 없는 자료의 성질이다. 그런데 §64 가 그 표로 "86% 가 못 줄이는
+#:   몫" 을 계산했고 14.408 이 그것을 1단계 불감대로 걸었다.
+#:
+#: 새 값: `run_diag_harmresid` · 현재 풀 · test_1/2/4/7 의 **전이 없는** 60초 창
+#:   **185개** · 열을 (기기,상태) 로 놓은 NNLS (손실이 `sig_state` 로 펴므로).
+#: ```
+#:   홀수 평균  0.353 -> **0.696**   (2배)        h1 0.191 -> **0.503** (2.6배)
+#:   짝수 평균  1.014 -> **0.773**
+#:   전 차수    0.661 -> **0.732**   (학습 도달 harm 0.767 의 **95%**)
+#: ```
+#: ⇒ 옛 표는 *"짝수차만 못 줄인다"* 고 말했는데 새 자로는 **둘이 비슷하다**.
+#:   `cnn_dz03`/`cnn_dz06`(§65) 은 홀수차를 2배 **덜** 용서하고 짝수차를 1.3배 **더**
+#:   용서하는 **모양이 틀린** 불감대를 건 셈이다. 그 판정은 이 표로 다시 재야 한다.
+#: ⚠ 이 값은 바닥의 **상계**다 — `harm_sig_vnorm`(창 전압 보정)을 안 걸고 쟀다.
+HARM_DEADZONE_PROFILE = [0.503, 0.376, 0.454, 0.581, 0.459, 0.721, 0.623,
+                         0.759, 0.684, 0.784, 0.708, 1.052, 0.908, 1.136, 1.228]
+
+#: 차수별 **판별력** `d'_h` = (1W 오배분이 그 차수에 내는 신호) / (그 차수의 잔차 바닥).
+#: `run_diag_orderdprime` (14.411) · 현재 풀 · 9종 모든 쌍 · 짝수차는 **크기 공간**
+#: (손실이 `--harm-even-magnitude` 로 그렇게 재므로 차이도 그렇게 잡아야 한다).
+#:
+#: ⚠⚠ **왜 `HARM_DEADZONE_PROFILE` 로 나누면 안 되나.** 14.411 이 처음 그렇게 제안했고
+#:   관문 `run_gate_residscale` [5] 가 반증했다. profile 은 이미 `harm_scale` 로 나눈
+#:   **상대** 단위라 h2 의 상대 바닥이 표에서 제일 작고(0.376), z-점수를 매기면 h2 가
+#:   h1 의 **80배** 가중을 받는다 — 짝수차 기울기 몫이 90.2% -> 90.7% 로 **늘었다**.
+#:   *조용한 차수에 상을 주는데 h2 는 조용한 동시에 쓸모없다* (12.72: 계측 인공물).
+#:   나눠야 할 것은 크기도 조용함도 아니라 **쓸모**다.
+#: ```
+#:   d' 중앙   홀수 0.05 · 짝수 0.01  (5배)
+#:   w=1 분모비   h3 x0.29 h5 x0.34 h7 x0.38 h11 x0.41 h9 x0.44   <- SMPS 판별자가 세진다
+#:                h14 x2.7 h12 x2.5 h1 x2.1 h10 x2.1              <- 눌린다
+#:   h1 이 눌리는 것이 맞다 — h1 은 총전력이고 `L_power`/`L_cons` 가 이미 맡는다.
+#: ```
+HARM_ORDER_DPRIME = [0.0102, 0.0141, 0.0760, 0.0138, 0.0649, 0.0137, 0.0575,
+                     0.0126, 0.0497, 0.0104, 0.0532, 0.0088, 0.0357, 0.0080, 0.0178]
 
 
 @dataclass
 class LossWeights:
+    #: ★ 14.412 — SMPS 쌍 맞바꿈 **여유** 손실. 0 = 끔 (비트 동일).
+    hmargin: float = 0.0
     power: float = 1.0
     state: float = 0.3
     # 상태별 전력 출력을 그 상태의 실제 전력에 직접 묶는다 (12.35).
@@ -245,6 +285,10 @@ class NILMLoss(torch.nn.Module):
         harm_grad_balance: str = "off",             # off | smps | all  (12.120)
         smps_group: Optional[Sequence[int]] = None,  # SMPS 열 인덱스
         harm_deadzone: float = 0.0,                 # L_harm 불감대 배수 (12.122.16)
+        harm_dprime: float = 0.0,                   # ★ L_harm 을 **차수 판별력**으로 다시 나눈다 (14.411)
+        harm_margin: float = 0.0,                   # ★ SMPS 쌍 맞바꿈 **여유** 손실 (14.412)
+        harm_margin_delta: float = 5.0,             # 옮기는 와트
+        harm_margin_frac: float = 0.5,              # 달성 가능 간격 대비 요구 여유
         drift_proj: Optional[torch.Tensor] = None,  # (2H,2H) 고정 표류 사영 I−VᵀV (13.84.60)
         harm_weight: str = "off",                   # 차수별 신뢰도 가중 (12.135)
         reactive_qp: Optional[torch.Tensor] = None,  # (K,) 기기별 Q/P (12.133)
@@ -664,6 +708,7 @@ class NILMLoss(torch.nn.Module):
         self.harm_smps = float(harm_smps)
         self.register_buffer("smps_sel",
                              smps_sel if smps_sel is not None else torch.zeros(0))
+
         self._smps_min_order = int(harm_smps_min_order)
         self.pow_tau = float(power_tau)
         # ── 짝수차는 크기 공간에서 (2026-09-06, 13.11) ─────────────────────
@@ -775,6 +820,43 @@ class NILMLoss(torch.nn.Module):
         self.register_buffer("harm_dz", dz * float(harm_deadzone))
         self.harm_deadzone = float(harm_deadzone)
 
+        # ── ★ L_harm 을 **차수 판별력**으로 다시 나눈다 (14.411) ────────────
+        # [왜] `harm_scale` 은 차수별 **신호 크기**의 중앙값이다. 그것으로 나누면 크기가
+        #   작은 차수가 폭증한다 — §64.3 이 h2 하나로 손실의 60% 를 쟀다 (harm_scale 2.99mA).
+        #   그런데 h2 는 12.72 가 **계측 인공물**로 확정한 차수이고 13.45 가 SMPS 짝수차
+        #   위상을 난수(R 0.12~0.43)로 쟀다. **못 가르는 차수에 제일 큰 무게**가 걸려 있다.
+        #
+        # [왜 불감대로는 안 되나] `relu(|e|/s − τ)` 는 문턱 아래를 **끄기만** 한다.
+        #   그리고 달성값(0.767)이 바닥(0.732)보다 커서 거의 안 문다 — `cnn_dz03`/`dz06`
+        #   이 아무것도 안 움직인 이유다 (§65).
+        #
+        # [왜 잔차로 나누면 안 되나] 14.411 이 먼저 그걸 시도했고 관문이 반증했다.
+        #   `HARM_DEADZONE_PROFILE` 은 **상대** 단위라 h2 의 바닥이 제일 작고(0.376),
+        #   z-점수는 h2 에 h1 의 **80배** 를 준다. 짝수차 몫이 오히려 **늘었다**.
+        #
+        # [식] `den_h = harm_scale_h · (d_ref / d'_h)^w`,  `d_ref` = `d'` 의 기하평균.
+        #   w=0 -> 지수 0 -> `1.0` 이 정확해서 `den == harm_scale` **비트 동일**.
+        #   기하평균으로 정규화해 w=1 에서도 전체 규모가 한쪽으로 안 밀린다.
+        self.harm_dprime = float(harm_dprime)
+        _dp = torch.as_tensor(HARM_ORDER_DPRIME[:h], dtype=torch.float32)
+        if len(_dp) < h:
+            _dp = torch.cat([_dp, _dp.new_full((h - len(_dp),), float(_dp[-1]))])
+        _dp = _dp.clamp(min=1e-6)
+        _ref = _dp.log().mean().exp()
+        _den = self.harm_scale * (_ref / _dp).pow(self.harm_dprime)
+        # ⚠⚠ **규모를 보존한다 — 안 그러면 손잡이가 둘이 된다.** 모양만 바꾸려는데
+        #   그냥 두면 w=1 에서 `L_harm` 값이 **+45%** 오른다 (수렴 지점 모의). 그러면
+        #   `w_harm=0.1` 이 사실상 0.145 가 되어 "모양" 과 "세기" 가 같이 움직인다
+        #   ([[count-how-many-things-differ-before-attributing]]).
+        #   **차수별 가중비의 평균을 1 로** 둔다: `c = mean_h(harm_scale_h / den_h)`.
+        #   w=0 에서는 `den == harm_scale` 이라 비가 전부 1 이고 `c == 1.0` 이 정확하다
+        #   -> **비트 동일**. 네 후보를 재서 이것이 제일 잘 잡았다 (모의 수렴 지점):
+        #     보정 없음 +45.7%  ·  profile 가중 +20.0%  ·  **mean(hs/den) +6.7%**
+        #   ⓘ 완전히 0 은 아니다 — 짝수차가 크기 공간(0.5 계수)이라 해석식이 정확히
+        #     안 맞는다. 남은 **+6.7%** 는 기록해 둔다 (w_harm 0.1 -> 사실상 0.107).
+        _c = (self.harm_scale / _den).mean()
+        self.register_buffer("harm_den", _den * _c)
+
         mask = torch.ones(h)
         if harm_odd_only:
             mask[1::2] = 0.0          # 0-based 라 인덱스 1,3,5.. 가 2,4,6..차다
@@ -830,6 +912,44 @@ class NILMLoss(torch.nn.Module):
                 raise ValueError(f"모르는 harm_weight: {harm_weight}")
             mask = mask * (w_h / w_h.max())
         self.register_buffer("harm_mask", mask)
+
+        # ── ★ SMPS 쌍 맞바꿈 **여유** 손실 (14.412) ────────────────────────
+        # [왜] `L_harm` 은 **절대적합**이라 잔차의 95% 를 차지하는 순방향 오차 `e` 를
+        #   배분이 흡수한다 (14.411). 그리고 §62 가 잰 대로 실제로 맞바꾸는 쌍은
+        #   **충전기/빔 22.6°** — 손실이 거의 평평한 방향이다. 평범한 극소점은 그
+        #   골짜기에 앉아도 되고, test_4 에서 실제로 앉아 있었다 (§63).
+        #
+        # [형태] `pred_ij = pred + δ·(sig_j − sig_i)` 로 **δ 와트를 옮긴** 예측을 짓고
+        #   오차가 여유 `m_ij` 이상 커지길 요구한다. δ 는 **고정 와트**다 — 모델 출력에
+        #   묶으면 `power->0` 으로 여유를 회피하는 길이 열린다.
+        #
+        # [눈금] `pred=obs` 일 때 달성되는 간격 `g_ij = mean_h(δ‖sig_j−sig_i‖_h/den_h)` 의
+        #   `frac` 배를 요구한다. 그러면 **항상 달성 가능**하고(최적점에서 자동 충족),
+        #   눈금이 지문·`den` 과 함께 저절로 맞는다.
+        #
+        # ⚠ 전례: 저항판 `L_swap` 은 14.35 에서 기각됐고 그때 **SMPS 가 −0.043** 나빴다.
+        #   이건 컨덕턴스가 아니라 고조파 축이고 **SMPS 쌍에만** 걸지만, 판정에서 저항
+        #   지표를 반드시 같이 봐라.
+        self.harm_margin = float(harm_margin)
+        self.harm_margin_delta = float(harm_margin_delta)
+        _pi, _pj, _gap = [], [], []
+        if self.harm_margin > 0 and smps_group and len(smps_group) >= 2:
+            _sg = list(smps_group)
+            for _a in range(len(_sg)):
+                for _b in range(len(_sg)):
+                    if _a == _b:
+                        continue
+                    i, j = _sg[_a], _sg[_b]
+                    dv = self.harm_margin_delta * (self.sig[j] - self.sig[i])   # (H,2)
+                    # `pred=obs` 에서의 오차 = |dv|/den 의 성분 평균 (복소 갈래 기준)
+                    g = float(((dv.abs() / self.harm_den[:, None])
+                               * self.harm_mask[:, None]).mean()
+                              / max(float(self.harm_mask.mean()), 1e-9))
+                    _pi.append(i); _pj.append(j); _gap.append(g)
+        self.register_buffer("mg_i", torch.as_tensor(_pi, dtype=torch.long))
+        self.register_buffer("mg_j", torch.as_tensor(_pj, dtype=torch.long))
+        self.register_buffer("mg_m", torch.as_tensor(_gap, dtype=torch.float32)
+                             * float(harm_margin_frac))
         #: * 14.375 — SMPS 항이 쓸 차수 가면. `harm_mask` 뒤라야 크기를 안다.
         _om = torch.zeros(int(mask.numel()))
         _om[max(self._smps_min_order - 1, 0):] = 1.0
@@ -885,14 +1005,14 @@ class NILMLoss(torch.nn.Module):
             H = d.shape[1]
             v = torch.cat([d[..., 0], d[..., 1]], dim=1) @ self.drift_proj
             d = torch.stack([v[:, :H], v[:, H:]], dim=-1)
-        err = d.abs() / self.harm_scale[None, :, None]
+        err = d.abs() / self.harm_den[None, :, None]
         if not self.harm_even_mag:
             return err
         # 짝수차 크기 경로는 `pred`/`obs` 로 직접 재므로 사영이 안 닿는다 (의도한 것이다 —
         # 표류 기저는 홀수차에서만 만들었다).
         pm = pred.pow(2).sum(-1).clamp(min=1e-18).sqrt()
         om = obs.pow(2).sum(-1).clamp(min=1e-18).sqrt()
-        emag = ((pm - om).abs() / self.harm_scale[None, :] * 0.5)[..., None].expand_as(err)
+        emag = ((pm - om).abs() / self.harm_den[None, :] * 0.5)[..., None].expand_as(err)
         if w_coh is not None:
             w = w_coh[:, None, None]
             emag = w * err + (1.0 - w) * emag
@@ -1252,6 +1372,24 @@ class NILMLoss(torch.nn.Module):
             # 그래야 `w_harm=0.1` 이 이전과 같은 뜻을 갖는다.
             parts["harm"] = ((err * self.harm_mask[None, :, None]).mean()
                              / self.harm_mask.mean().clamp(min=1e-6))
+            # ── ★ 14.412 SMPS 쌍 맞바꿈 **여유** ────────────────────────────
+            #   δ 와트를 옮긴 예측의 오차가 `m_ij` 이상 커져야 한다. 평평한 골짜기
+            #   (§62: 충전기/빔 **22.6°**)에 앉는 것을 벌한다.
+            #   ⚠ **불감대와 독립**으로 잰다 — 두 손잡이가 섞이면 무엇이 이겼는지 못 가른다.
+            #   ⚠ `pred=obs` 에서 `e0=0`, `e1=g_ij` 이므로 `m=frac·g_ij (frac<1)` 은
+            #     **항상 달성 가능**하다. 최적점을 옮기지 않는다.
+            if self.harm_margin > 0 and self.mg_i.numel() > 0:
+                _m = self.harm_mask[None, :, None]
+                _d = self.harm_mask.mean().clamp(min=1e-6)
+                _e0 = (self._harm_err(pred, tgt["obs_harm"]) * _m).mean((1, 2)) / _d
+                _pen = []
+                for _t in range(self.mg_i.numel()):
+                    _dv = self.harm_margin_delta * (self.sig[self.mg_j[_t]]
+                                                    - self.sig[self.mg_i[_t]])
+                    _e1 = (self._harm_err(pred + _dv[None], tgt["obs_harm"])
+                           * _m).mean((1, 2)) / _d
+                    _pen.append(F.relu(self.mg_m[_t] - (_e1 - _e0)))
+                parts["hmargin"] = torch.stack(_pen, 0).mean()
         else:
             parts["harm"] = out["power"].sum() * 0.0
 

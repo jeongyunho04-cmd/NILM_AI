@@ -131,6 +131,12 @@ def build_loss(apps: Sequence[str], dev: str, *,
                #: ★ 14.408 — `L_harm` 불감대 배수. 0 = **비트 동일**. 1단계·2단계가
                #: 같은 값을 써야 한다 (14.171 이 남긴 규율).
                harm_deadzone: float = 0.0,
+               #: ★ 14.411 — `L_harm` 을 **차수 판별력**으로 다시 나누는 지수. 0 = **비트 동일**.
+               harm_dprime: float = 0.0,
+               #: ★ 14.412 — SMPS 쌍 맞바꿈 **여유**. 0 = **비트 동일**.
+               harm_margin: float = 0.0,
+               harm_margin_delta: float = 5.0,
+               harm_margin_frac: float = 0.5,
                load_rot: bool = False,
                load_rot_a=None,
                load_rot_lpref=None,
@@ -321,6 +327,9 @@ def build_loss(apps: Sequence[str], dev: str, *,
         harm_vhrel_on=harm_vhrel_on,
         cons_deadzone=cons_deadzone,
         harm_deadzone=harm_deadzone,
+        harm_dprime=harm_dprime,
+        harm_margin=harm_margin, harm_margin_delta=harm_margin_delta,
+        harm_margin_frac=harm_margin_frac,
         res_ohm=res_ohm,
         res_ohm_half=res_ohm_half,
         res_cond_state=res_cond_state,

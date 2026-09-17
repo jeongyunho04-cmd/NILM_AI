@@ -53,6 +53,17 @@ _SPEC = {
     "y_standby":  (np.float16, (0,)),
     "y_state":    (np.int8,    (0,)),
     "obs_harm":   (np.float16, (15, 2)),
+    #: ★ 14.413 (사용자 지적) — **기기별 참 고조파** (k, 15, 2).
+    #  합성기는 `SyntheticLoadSample.gt_harmonics_ri` 로 이것을 **정확히** 알고 있는데
+    #  여태 캐시가 `obs_harm`(총합)만 담고 버렸다. 그래서 손실이 전력->고조파를 갈 때
+    #  **반드시 상수 사전 `sig` 를 거쳐야** 했고, 그 사전 오차가 곧 "못 줄이는 95%" 다
+    #  (14.411). §51 이 잰 대로 **합성에서조차** 사전이 틀려 있다 — 충전기 h11 0.592.
+    #  ⚠ 2단계(실측)에는 이 정답이 없다. 1단계 전용 재료다.
+    #  ⚠ **`batch()` 튜플에는 안 넣는다** — 원소를 끼우면 모든 소비자가 밀린다
+    #    (14.103). `realdata` 가 `human()`·`reactive()` 를 따로 뺀 것과 같은 규약으로
+    #    `harm_truth()` 메서드로 낸다.
+    #  크기: 300,000 x 9 x 15 x 2 x 2B = **162 MB** (24GB 캐시의 0.7%).
+    "y_harm":     (np.float16, (0, 15, 2)),
     "p_noise":    (np.float32, ()),
     "p_observed": (np.float32, ()),
     # 13.55 — 이 창의 **선로 임피던스** [r_grid, x_grid] Ω. 모델 입력이 아니라
@@ -62,7 +73,7 @@ _SPEC = {
 }
 
 #: 옛 캐시에는 없는 배열. 없으면 NaN 으로 채워 내보낸다 (배치 길이는 항상 같다).
-_OPTIONAL = ("z_grid",)
+_OPTIONAL = ("z_grid", "y_harm")
 
 _GEN = None
 _SEED_BASE = 0
@@ -153,13 +164,18 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
     set_default_harmonic_z(_hz)
     _GEN = NILMBatchGenerator(
         segment_pool=pool, window_size_cycles=window_cycles,
-        synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=False,
+        #: ★ 14.413 — **기기별 참 고조파를 켠다** (`y_harm`). 여태 False 였고, 그래서
+        #  `gt_harmonics_ri` 가 **빈 딕셔너리**로 와서 배열이 조용히 전부 0 이 됐다
+        #  (첫 판에서 실제로 그렇게 구웠다 — 작은 판으로 굽고 확인해서 잡았다).
+        #  ⚠ 창당 0.65MB 가 더 든다는 옛 주석은 float32 x 9종 x (N,15,2) 기준이고,
+        #    우리는 **타깃 한 점만** float16 으로 담아 창당 **540B** 다 (30만창 = 162MB).
+        synthesizer=LoadSynthesizer(segment_pool=pool, compute_gt_harmonics=True,
                                     augmentor=aug, background=bool(background),
                                     couple_ext=bool(couple_ext),
                                     # 14.51 — 창 안에서 텍스처 갈아 끼우기. 0 이면 옛 경로.
                                     vtex_seg_s=float(vtex_seg_s or 0.0),
                                     vtex_coarse_s=float(vtex_coarse_s or 0.0)),
-        recipe_mix=mix, compute_gt_harmonics=False,
+        recipe_mix=mix, compute_gt_harmonics=True,
         smps_focus_off_p=smps_focus_off_p)
     # 14.62 ⚠⚠ **굽기 경로가 반쪽이었다.** 위의 `set_default_harmonic_z` 는 텍스처를 **새 Z 로
     #   벗기게** 만드는데, 단자 전압을 **다시 입히는** 쪽(`_terminal_voltage_harmonics` ->
@@ -185,6 +201,7 @@ def _chunk(task: Tuple[int, int]) -> Dict[str, np.ndarray]:
         "y_power": np.empty((n, k), np.float32), "y_on": np.empty((n, k), np.int8),
         "y_plugged": np.empty((n, k), np.int8), "y_standby": np.empty((n, k), np.float16),
         "y_state": np.empty((n, k), np.int8), "obs_harm": np.empty((n, 15, 2), np.float16),
+        "y_harm": np.empty((n, k, 15, 2), np.float16),
         "p_noise": np.empty(n, np.float32), "p_observed": np.empty(n, np.float32),
         "z_grid": np.empty((n, 2), np.float32),
     }
@@ -196,12 +213,24 @@ def _chunk(task: Tuple[int, int]) -> Dict[str, np.ndarray]:
         out["y_plugged"][j] = t["y_plugged"]; out["y_standby"][j] = t["y_standby_power"]
         out["y_state"][j] = t["y_state"]
         out["obs_harm"][j] = smp.harmonics_ri[ti]
+        #: ★ 14.413 — 기기별 참 고조파. `appliance_list` **순서 그대로** 채운다 (y_power 와 같은 축).
+        #  꺼진 기기는 합성기가 이미 0 을 넣어 둔다 (synthesizer.py 머리말: 활성 성분만 담는다).
+        for _kk, _nm in enumerate(g.appliance_list):
+            _gh = smp.gt_harmonics_ri.get(_nm)
+            out["y_harm"][j, _kk] = _gh[ti] if _gh is not None else 0.0
         out["p_noise"][j] = smp.p_noise_w[ti]
         out["p_observed"][j] = smp.power_features[ti, 0]
         # 한 창은 배전 환경 하나 위에 놓인다 (`sample_environment`). metadata 가
         # 이미 담고 있으므로 새로 계산하지 않는다 — 소수 4자리는 0.3~2.0Ω 에서 무해하다.
         out["z_grid"][j] = (smp.metadata.get("r_grid_ohm", np.nan),
                             smp.metadata.get("x_grid_ohm", np.nan))
+    #: ⚠⚠ 14.413 — **조용한 실패를 막는다.** `compute_gt_harmonics` 가 꺼져 있으면
+    #  `gt_harmonics_ri` 가 빈 딕셔너리라 위 줄이 **전부 0** 을 쓴다. 그러면 나중에
+    #  "지도가 걸린 줄 알았는데 안 걸린" 판이 나온다. 켜진 기기가 하나라도 있는데
+    #  `y_harm` 이 통째로 0 이면 여기서 멈춘다.
+    if out["y_on"].any() and not np.any(out["y_harm"]):
+        raise SystemExit("y_harm 이 전부 0 이다 — `compute_gt_harmonics` 가 꺼져 있다 "
+                         "(LoadSynthesizer 와 NILMBatchGenerator **둘 다** 켜야 한다)")
     f, wd = build_inputs(xs)
     out["fine"] = f.astype(np.float16)
     out["wide"] = wd.astype(np.float16)
@@ -319,6 +348,7 @@ def build_cache(
         "y_power": (n_out, k), "y_on": (n_out, k), "y_plugged": (n_out, k),
         "y_standby": (n_out, k), "y_state": (n_out, k),
         "obs_harm": (n_out, 15, 2), "p_noise": (n_out,), "p_observed": (n_out,),
+        "y_harm": (n_out, k, 15, 2),
         "z_grid": (n_out, 2),
     }
     mm = {name: np.lib.format.open_memmap(out / f"{name}.npy", mode="w+",
@@ -518,6 +548,20 @@ class CachedWindows:
                     made += 1
                     if made >= n_batches:
                         return
+
+    def harm_truth(self, idx: np.ndarray):
+        """★ 14.413 — 기기별 **참 고조파** (n, K, 15, 2) 또는 없으면 `None`.
+
+        **`batch()` 의 자리수를 안 바꾼다** — `realdata.human()`·`reactive()` 와 같은
+        규약이다 (14.103: 튜플에 끼우면 모든 소비자가 조용히 밀린다).
+
+        ⚠ 옛 캐시(v52 이하)에는 없다. `None` 이면 부르는 쪽이 **멈춰야 한다** —
+        NaN 으로 흘려보내면 "지도가 걸린 줄 알았는데 안 걸린" 판이 나온다.
+        """
+        a = self.arr.get("y_harm")
+        if a is None:
+            return None
+        return np.asarray(a[np.sort(np.asarray(idx))], np.float32)
 
     def batch(self, idx: np.ndarray) -> Tuple[np.ndarray, ...]:
         i = np.sort(np.asarray(idx))          # memmap 은 정렬 접근이 훨씬 빠르다

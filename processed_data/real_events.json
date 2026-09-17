@@ -1143,6 +1143,126 @@
    "duration_s": 306.0,
    "cycles": 18360,
    "v_mean": 209.6
+  },
+  "test_7": {
+   "appliances_present": [
+    "beam_projector",
+    "laptop_charger",
+    "minipc"
+   ],
+   "intervals": {
+    "laptop_charger": {
+     "on": [
+      [
+       30.77,
+       220.33
+      ],
+      [
+       300.15,
+       580.77
+      ]
+     ],
+     "uncertain": []
+    },
+    "beam_projector": {
+     "on": [
+      [
+       57.15,
+       484.85
+      ]
+     ],
+     "uncertain": []
+    },
+    "minipc": {
+     "on": [
+      [
+       103.23,
+       352.35
+      ],
+      [
+       429.12,
+       617.55
+      ]
+     ],
+     "uncertain": []
+    }
+   },
+   "events": [
+    {
+     "t_s": 30.77,
+     "appliance": "laptop_charger",
+     "kind": "on",
+     "delta_p_w": 14.5,
+     "_note": "사용자 seq 359 (t 31.50) -> 신호 계단, Δt -0.73s, |ΔI3| 63.0mA"
+    },
+    {
+     "t_s": 57.15,
+     "appliance": "beam_projector",
+     "kind": "on",
+     "delta_p_w": 42.6,
+     "_note": "사용자 seq 412 (t 58.00) -> 신호 계단, Δt -0.85s, |ΔI3| 166.0mA"
+    },
+    {
+     "t_s": 103.23,
+     "appliance": "minipc",
+     "kind": "on",
+     "delta_p_w": 11.9,
+     "_note": "사용자 seq 504 (t 104.00) -> 신호 계단, Δt -0.77s, |ΔI3| 42.9mA"
+    },
+    {
+     "t_s": 220.33,
+     "appliance": "laptop_charger",
+     "kind": "off",
+     "delta_p_w": -58.0,
+     "_note": "사용자 seq 736 (t 220.00) -> 신호 계단, Δt +0.33s, |ΔI3| -233.1mA"
+    },
+    {
+     "t_s": 300.15,
+     "appliance": "laptop_charger",
+     "kind": "on",
+     "delta_p_w": 52.5,
+     "_note": "사용자 seq 895 (t 299.50) -> 신호 계단, Δt +0.65s, |ΔI3| 207.9mA"
+    },
+    {
+     "t_s": 352.35,
+     "appliance": "minipc",
+     "kind": "off",
+     "delta_p_w": -6.6,
+     "_note": "사용자 seq 1000 (t 352.00) -> 신호 계단, Δt +0.35s, |ΔI3| -24.8mA"
+    },
+    {
+     "t_s": 429.12,
+     "appliance": "minipc",
+     "kind": "on",
+     "delta_p_w": 15.8,
+     "_note": "사용자 seq 1153 (t 428.50) -> 신호 계단, Δt +0.62s, |ΔI3| 65.6mA"
+    },
+    {
+     "t_s": 484.85,
+     "appliance": "beam_projector",
+     "kind": "off",
+     "delta_p_w": -39.4,
+     "_note": "사용자 seq 1264 (t 484.00) -> 신호 계단, Δt +0.85s, |ΔI3| -157.1mA"
+    },
+    {
+     "t_s": 580.77,
+     "appliance": "laptop_charger",
+     "kind": "off",
+     "delta_p_w": -63.7,
+     "_note": "사용자 seq 1456 (t 580.00) -> 신호 계단, Δt +0.77s, |ΔI3| -247.8mA"
+    },
+    {
+     "t_s": 617.55,
+     "appliance": "minipc",
+     "kind": "off",
+     "delta_p_w": -5.9,
+     "_note": "사용자 seq 1529 (t 616.50) -> 신호 계단, Δt +1.05s, |ΔI3| -25.6mA"
+    }
+   ],
+   "_label_provenance": "human_switching_log_signal_refined",
+   "duration_s": 650.0,
+   "cycles": 39000,
+   "v_mean": 218.3
   }
  }
 }
