@@ -21,16 +21,17 @@ while squeue -j "$JOB" -h -o '%T' 2>/dev/null | grep -q .; do sleep 60; done
 
 ST=$(sacct -j "$JOB" --format=JobID%16,State -n -P | grep -vE 'batch|extern')
 say "굽기 종료"; echo "$ST" | sed 's/^/    /'
-if [ "$(echo "$ST" | grep -c 'COMPLETED')" -ne "$NSHARD" ]; then
-  say "⚠ COMPLETED 가 $NSHARD 개가 아니다 — 멈춘다"; exit 1
-fi
 
-SHARDS=""
+# ⚠ 14.390e — **작업번호가 아니라 토막 디렉터리로 판정한다.** 토막 하나를 따로
+#   다시 돌리면(`--array=0`) 그 작업의 COMPLETED 는 1개라 개수 검사가 틀린다.
+#   완성의 증거는 `meta.json` 이다 (굽기가 끝나야 쓰인다).
+SHARDS=""; MISS=""
 for i in $(seq 0 $((NSHARD - 1))); do
   d="cache/train60_${GEN}_s${i}"
-  test -f "$d/meta.json" || { say "⚠ $d/meta.json 이 없다"; exit 1; }
-  SHARDS="$SHARDS $d"
+  if [ -f "$d/meta.json" ]; then SHARDS="$SHARDS $d"; else MISS="$MISS $i"; fi
 done
+if [ -n "$MISS" ]; then say "⚠ meta.json 이 없는 토막:$MISS — 멈춘다"; exit 1; fi
+say "토막 $NSHARD 개 전부 완성"
 
 # ⚠ **굽기 설정이 실제로 걸렸나** — 토막 전부에서 확인한다
 $PY -X utf8 -c "

@@ -131,17 +131,25 @@ SM = [apps.index(x) for x in ('minipc', 'laptop_charger', 'beam_projector') if x
 yon = np.asarray(np.load('$OUT/y_on.npy', mmap_mode='r'))
 ya  = np.asarray(np.load('$PAIR/y_on.npy', mmap_mode='r'))
 if not np.array_equal(yon, ya): sys.exit('❌ y_on 이 짝과 다르다 — 라벨이 움직였다')
+#: ⚠⚠ 14.390e — **'SMPS 없는 창' 을 y_on(타깃 사이클)으로 정의하면 안 된다.**
+#:   창은 60초인데 타깃은 한 사이클이라, 창 어딘가에 SMPS 가 있는 창이 섞인다.
+#:   캐시 관문 ④ 가 같은 실수로 986473_0 을 죽였고 `y_plugged|y_on` 으로 고치니
+#:   그런 창의 최대차가 **정확히 0.000e+00** 이었다. 여기도 같은 정의를 쓴다.
+try:
+    ypl = np.asarray(np.load('$OUT/y_plugged.npy', mmap_mode='r'))
+except FileNotFoundError:
+    sys.exit('❌ y_plugged.npy 가 없다 — SMPS 유무를 제대로 정의할 수 없다')
 n = min(400, X.shape[0])
 d = np.abs(np.asarray(X[:n], np.float64) - np.asarray(Y[:n], np.float64)).reshape(n, -1).max(1)
-has = yon[:n][:, SM].any(1)
-print('  앞 %d창 · SMPS 있는 창 %d' % (n, int(has.sum())))
-print('  SMPS 있는 창 최대차 **%.3e** · SMPS 없는 창 최대차 **%.3e**'
-      % (d[has].max() if has.any() else 0.0, d[~has].max() if (~has).any() else 0.0))
-if (~has).any() and d[~has].max() != 0.0:
+pres = (ypl[:n][:, SM].any(1)) | (yon[:n][:, SM].any(1))
+print('  앞 %d창 · SMPS 있는 창 %d · 없는 창 %d' % (n, int(pres.sum()), int((~pres).sum())))
+print('  SMPS 있는 창 최대차 **%.3e** · **SMPS 없는 창 최대차 %.3e**'
+      % (d[pres].max() if pres.any() else 0.0, d[~pres].max() if (~pres).any() else 0.0))
+if (~pres).any() and d[~pres].max() != 0.0:
     sys.exit('❌ SMPS 없는 창이 달라졌다 — 손잡이가 하나가 아니다')
-if has.any() and d[has].max() == 0.0:
+if pres.any() and d[pres].max() == 0.0:
     sys.exit('❌ SMPS 있는 창이 하나도 안 달라졌다 — 손잡이가 안 걸렸다')
-print('  ✅ 라벨 불변 · **SMPS 창만** 달라진다')
+print('  ✅ 라벨 불변 · **SMPS 없는 창은 비트 동일** · SMPS 창만 달라진다')
 "
 du -sh "$OUT"
 # ⚠⚠ 끝단에서 mmlsquota 를 부르지 않는다 (HPC_RULES §7-5).

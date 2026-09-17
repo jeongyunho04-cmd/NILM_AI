@@ -29,7 +29,7 @@
 #SBATCH -n 1
 #SBATCH -c 24
 #SBATCH --mem=100G
-#SBATCH -t 00:50:00
+#SBATCH -t 01:20:00     # 14.390e — 토막 0 은 관문 ④(두 번 굽기)에 8분을 더 쓴다
 #SBATCH -a 0-7
 #SBATCH -o %x_%A_%a.out
 #SBATCH -e %x_%A_%a.out
@@ -39,7 +39,11 @@ PY=./env/bin/python
 
 WINDOWS=${WINDOWS:-300000}
 GEN=${GEN:-v50}
-NSHARD=${SLURM_ARRAY_TASK_COUNT:-8}
+#: ⚠⚠ 14.390e — **`--array=0` 으로 한 토막만 다시 돌리면 `SLURM_ARRAY_TASK_COUNT`
+#:   가 1 이 된다.** 그러면 토막 '0/1' = **30만 창 전부**가 되어 `fine.npy` 가
+#:   21.96GB 로 부풀고 타임아웃 + 쿼터 초과로 죽는다 (986491 이 그랬다).
+#:   그래서 **`NSHARD` 를 밖에서 덮어쓸 수 있게** 한다: NSHARD=8 sbatch --array=0 ...
+NSHARD=${NSHARD:-${SLURM_ARRAY_TASK_COUNT:-8}}
 OUT="$HOME/NILM_AI/cache/train60_${GEN}_s${SLURM_ARRAY_TASK_ID}"
 
 echo "노드 $(hostname) · 토막 ${SLURM_ARRAY_TASK_ID}/${NSHARD} · 코어 ${SLURM_CPUS_PER_TASK} · $(date '+%F %H:%M:%S')"
