@@ -112,6 +112,13 @@ def main() -> int:
                          "{가전:{p,state,scale:[lo,hi]}}. test_1 의 충전기는 만충 뒤 ~14W 부동인데 "
                          "풀에는 8~20W 연속 구간이 최장 1초라 그 창을 못 만든다 — 상태 1 을 이어 붙여 "
                          "0.40~0.70 배로 내린다. 비면 옛 경로와 비트 단위로 같다")
+    ap.add_argument("--phase-jitter-map", default="", metavar="measured",
+                    help="★ 14.389 — 차수비례 위상 지터를 **기기별 잰 값**으로 건다. "
+                         "빈 값이면 옛 경로(일괄 4.0도)이고 **비트 동일**이다. "
+                         "'measured' 면 미니PC 0.94 · 충전기 2.13 · 빔 3.66 [도/차수]. "
+                         "왜: 그 회전은 SMPS 에서 **부하의 함수로 실재**하는데(14.386) "
+                         "일괄 4.0 을 무작위로 더하면 캐시가 그 법칙을 덮는다 — "
+                         "잰 법칙 R² 가 미니PC 0.726 -> 0.308 로 떨어진다")
     ap.add_argument("--sp-per-texture", action="store_true",
                     help="s(p) 를 **그 녹화의 텍스처**에서 만든 곡선으로 (13.74). 옛 곡선은 "
                          "깨끗한 정현파에서 만들어 자리 차이가 원리적으로 없었다 — 실측 채점에서 "
@@ -240,6 +247,7 @@ def main() -> int:
                 power_scale_std_map=pss, level_scramble=lvs, state_mix=smx,
                 carrier_apps=car, couple_ext=a.couple_ext,
                 sp_curves=a.sp_curves, sp_per_texture=a.sp_per_texture, vtail=a.vtail, background=a.background,
+                phase_jitter_map=a.phase_jitter_map,
                 dither_min_order=a.dither_min_order,
                 smps_focus_off_p=a.smps_focus_off_p,
                 float_fill=ffl, steady_crop=scr, standby_jitter_cap=a.standby_jitter_cap,

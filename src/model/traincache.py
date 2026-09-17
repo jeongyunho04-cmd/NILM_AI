@@ -88,7 +88,12 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
           float_fill_json: str = "",
           steady_crop_json: str = "",
           standby_jitter_cap: float = 0.0,
-          sibling_rotate_json: str = "") -> None:
+          sibling_rotate_json: str = "",
+          #: ★ 14.389 — 기기별 차수비례 위상 지터. 빈 문자열이면 **옛 경로**
+          #: (일괄 `phase_jitter_max_deg`). "measured" 면 잰 표를 쓴다.
+          #: ⚠ **맨 뒤에 붙였다** — `initargs` 가 위치 인자라 중간에 끼우면
+          #:   뒤엣것이 밀려 **조용히 다른 캐시를 굽는다** (위 14.103 경고).
+          phase_jitter_map: str = "") -> None:
     global _GEN, _SEED_BASE
     from src.synthesis.augmentor import DataAugmentor
     from src.synthesis.dataset import NILMBatchGenerator
@@ -128,7 +133,9 @@ def _init(npz_dir: str, window_cycles: int, time_split: str, seed: int,
                         # 13.83.26 정상 구간 자르기. 빈 문자열이면 옛 경로.
                         steady_crop=(json.loads(steady_crop_json) if steady_crop_json else None),
                         # 13.84.8 ② 형제 전용 차수 비례 회전. 빈 문자열이면 옛 경로.
-                        sibling_rotate=(json.loads(sibling_rotate_json) if sibling_rotate_json else None))
+                        sibling_rotate=(json.loads(sibling_rotate_json) if sibling_rotate_json else None),
+                        # 14.389 — 빈 문자열이면 None 이라 **비트 동일**이다.
+                        phase_jitter_std_map=(phase_jitter_map or None))
     # 13.78: 전압 꼬리(h17~h31)를 켠다. 기본은 꺼짐이라 안 부르면 옛 거동 그대로다.
     from src.synthesis.vtexture import (DEFAULT_VTAIL_NPZ, set_default_harmonic_z,
                                         set_default_step_s, set_default_vtail)
@@ -222,6 +229,8 @@ def build_cache(
     carrier_apps: Optional[Sequence[str]] = None,
     sp_curves: bool = False,
     sp_per_texture: bool = False,
+    #: ★ 14.389 — "measured" 면 기기별 위상 지터를 쓴다. 빈 문자열이면 옛 경로.
+    phase_jitter_map: str = "",
     vtail: bool = False,
     #: 전압 텍스처 표집 간격 (초). 0 이면 `vtexture.DEFAULT_STEP_S`(60) — 옛 경로다.
     #: 14.12 가 **표류의 모자란 몫이 이 상수였다**고 쟀다: 텍스처는 `step_s` 구간의
@@ -343,7 +352,8 @@ def build_cache(
                             json.dumps(float_fill) if float_fill else "",
                             json.dumps(steady_crop) if steady_crop else "",
                             float(standby_jitter_cap or 0.0),
-                            json.dumps(sibling_rotate) if sibling_rotate else "")) as pool:
+                            json.dumps(sibling_rotate) if sibling_rotate else "",
+                            str(phase_jitter_map or ""))) as pool:
         # `imap` — 순서 보장. `imap_unordered` 는 이어붙이는 순서가 실행마다 달라져
         # 같은 시드로도 다른 캐시가 나왔다 (12.11절).
         for i, r in enumerate(pool.imap(_chunk, tasks), 1):
@@ -395,6 +405,9 @@ def build_cache(
             # 이 값을 읽어 짝을 맞춘다.
             "sp_curves": bool(sp_curves),
             "sp_per_texture": bool(sp_per_texture),
+            # 14.389 — 캐시가 어떤 위상 지터로 구워졌는지 **적어 둔다**.
+            # 이게 없으면 나중에 두 캐시를 구별할 길이 없다.
+            "phase_jitter_map": str(phase_jitter_map or ""),
             "vtail": bool(vtail),
             # 14.51 — 텍스처 **한 장이 덮는 시간**. (`vtex_step_s` 는 위에 이미 있다.)
             "vtex_seg_s": float(vtex_seg_s or 0.0),

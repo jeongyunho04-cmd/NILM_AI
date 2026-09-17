@@ -19,7 +19,7 @@
    부수 효과로 오븐처럼 활성화 구간이 2개뿐인 기기도, 32.9분짜리 원본에서
    매번 다른 위상을 잘라 쓰게 되어 실질적인 다양성이 크게 늘어난다.
 """
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
 import numpy as np
 
 from .segment_pool import ApplianceActivation
@@ -70,6 +70,30 @@ POWER_SCALE_STD_MEASURED: Dict[str, float] = {
 POWER_SCALE_STD_RESISTIVE: Dict[str, float] = {
     k: v for k, v in POWER_SCALE_STD_MEASURED.items()
     if k in ("electiric_kettle", "hotplate", "oven", "hair_dryer", "beam_projector")
+}
+
+#: ★★ 14.389 — **차수 비례 위상 지터**의 기기별 크기 [도/차수]. 일괄 4.0 을 대신한다.
+#:
+#: `exp(1j·h·θ)` 는 파형을 시간축에서 미는 것이고, **SMPS 에서는 그것이 실재한다** —
+#: 정류 도통 창이 부하에 따라 움직여서 `k = a·ln(P)` 로 돈다 (14.386, 미니PC a=3.71
+#: R² 0.730 · 충전기 a=9.21 R² 0.755). **그 법칙은 조각에 이미 들어 있다.**
+#: 일괄 ±4.0 도를 무작위로 더하면 **그 법칙을 자기가 덮는다**:
+#: ```
+#:   캐시에서 잰 법칙 R²      지터 끔    **지터 4.0(현행)**   지터 = 잰 잔차
+#:   미니PC                0.726      **0.308**          **0.672**
+#:   충전기                0.759      **0.518**          **0.635**
+#: ```
+#: 그래서 지터를 **법칙을 뺀 실제 잔차**로 맞춘다 (녹화 사이 산포).
+#: ⚠⚠ **저항 넷·선풍기·에어컨은 안 건드린다.** 그 기기들의 h3 이상은 크기가 거의 0 이라
+#:   위상이 난수고, 잰 σ(오븐 4.96 · 핫플 4.66)는 **신호가 아니라 잡음**이다. 그 값을
+#:   넣으면 지금보다 나빠진다 ([[check-conditioning-before-believing-a-fit]]).
+#: ⚠ 빔은 잰 σ 가 3.66 이라 현행 4.0 과 거의 같다 — 넣어도 거의 안 바뀐다.
+#:   통전 전력이 평평해서(폭 0.11W) 법칙을 못 재는 기기라 **잔차만** 남는다.
+#: ⚠ 표에 없는 기기는 `phase_jitter_max_deg` 를 그대로 쓴다 -> **비트 동일**.
+PHASE_JITTER_DEG_MEASURED: Dict[str, float] = {
+    "minipc":          0.94,   # 녹화 4 · 법칙 R² 0.730
+    "laptop_charger":  2.13,   # 녹화 6 · 법칙 R² 0.755
+    "beam_projector":  3.66,   # 녹화 3 · 전력이 평평해 법칙 없음 (잔차뿐)
 }
 
 POWER_SCALE_STD_PRESETS: Dict[str, Dict[str, float]] = {
@@ -303,6 +327,9 @@ class DataAugmentor:
         duration_scale_range: Tuple[float, float] = (0.5, 2.5),
         power_scale_std: float = 0.05,
         phase_jitter_max_deg: float = 4.0,
+        #: 14.389 — 기기별 지터 크기 [도/차수]. `None` 이면 옛 경로(**비트 동일**),
+        #: `"measured"` 면 `PHASE_JITTER_DEG_MEASURED`, dict 면 그대로 쓴다.
+        phase_jitter_std_map: Optional[Union[str, Dict[str, float]]] = None,
         switching_inrush_jitter: bool = True,
         max_stretch: float = 3.0,
         duty_on_scale_range: Tuple[float, float] = (0.5, 2.0),
@@ -349,6 +376,12 @@ class DataAugmentor:
         #: 기기별 폭 (12.118). 없는 기기는 `power_scale_std` 를 쓴다.
         self.power_scale_std_map = dict(power_scale_std_map or {})
         self.phase_jitter_max_deg = phase_jitter_max_deg
+        if isinstance(phase_jitter_std_map, str):
+            if phase_jitter_std_map != "measured":
+                raise ValueError("phase_jitter_std_map 은 'measured' 나 dict 다: %r"
+                                 % (phase_jitter_std_map,))
+            phase_jitter_std_map = dict(PHASE_JITTER_DEG_MEASURED)
+        self.phase_jitter_std_map = dict(phase_jitter_std_map or {})
         self.switching_inrush_jitter = switching_inrush_jitter
         # 주기 부하의 통전/휴지 **길이** 를 흔든다 (`_retime_duty` 주석).
         self.duty_on_scale_range = duty_on_scale_range
@@ -555,7 +588,10 @@ class DataAugmentor:
         # 4. 투입 위상 지터 및 고조파 위상 회전
         #    전체 파형을 시간축에서 조금 밀면 k차 고조파는 k*theta 만큼 회전한다.
         if phase_jitter_deg is None:
-            jitter_deg = float(np.random.uniform(-self.phase_jitter_max_deg, self.phase_jitter_max_deg))
+            #: 14.389 — 표에 있으면 **그 기기의 잰 잔차**, 없으면 일괄값 (비트 동일).
+            _amp = self.phase_jitter_std_map.get(act.appliance_type,
+                                                 self.phase_jitter_max_deg)
+            jitter_deg = float(np.random.uniform(-_amp, _amp))
         else:
             jitter_deg = float(phase_jitter_deg)
 
