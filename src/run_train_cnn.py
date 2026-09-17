@@ -1140,6 +1140,22 @@ def main() -> int:
     #  ⚠ `--pow-sig-instate` 와 **같이 못 쓴다** — 그쪽 `g = sig_대역/sig_state` 의
     #    **분모를 여기서 돌려** 비가 어긋난다 (14.172 꼴). 아래에서 하드 스톱한다.
     #  기본 꺼짐 = **비트 동일**. 관문 `src/run_gate_sigload.py`.
+    #: ★ 14.408 — **`L_harm` 불감대를 1단계에 뚫는다** (사용자 지시).
+    #  왜 — `HARM_DEADZONE_PROFILE` 은 *"정답 배분을 넣어도 남는 차수별 잔차의 중앙값"*
+    #  이다 (12.122.16). 전 차수 평균 **0.661** 인데 학습이 도달하는 harm 은 **0.767** 이다
+    #  -> **86% 가 원리상 못 줄이는 몫**이고, `L_harm` 은 그것도 전액 벌한다.
+    #  줄일 손잡이가 **배분뿐**이라 배분이 밀린다 (12.120.3 의 '가장 싼 기기').
+    #  그것이 오늘 판 다섯이 같은 모양으로 실패한 기전이다:
+    #      harm 0.767 -> 0.746 -> 0.685   ·   pw 0.0029 -> 0.0037 -> 0.0062
+    #  ⇒ 앞의 여덟 손잡이는 전부 *"사전을 더 정확하게"* 였는데 이건 **방향이 반대**다 —
+    #    *"못 맞추는 걸 그만 벌해라"*.
+    #  ⚠⚠ **너무 키우면 `L_harm` 이 죽는다** (12.12.2: `L_cons` 만 남으면 "합만 맞추는
+    #    해" 로 무너진다). 그래서 **배수를 쓴다** — 1.0 이 잰 프로파일 그대로다.
+    #  ⚠ 프로파일이 **12.122.16 = 13절 이전 계측기**다 (§55.5). 그래서 이 판은
+    #    절대값이 아니라 **상대 쓸기**로만 읽는다.
+    #  ⚠ 2단계(`run_adapt`)에는 이미 있다 — 1단계에만 없어서 **두 단계가 갈려 있었다**.
+    ap.add_argument("--harm-deadzone", type=float, default=0.0, metavar="X",
+                    help="L_harm 불감대 배수 (12.122.16 프로파일 x X). 0 = **비트 동일**")
     ap.add_argument("--load-rot", action="store_true",
                     help="부하 의존 위상 sig(P) 를 손실에 건다 (14.402)")
     ap.add_argument("--state-signatures", action="store_true",
@@ -1540,6 +1556,7 @@ def main() -> int:
         on_detach_gate=a.on_detach_gate,
         on_power_praw=a.on_power_praw,
         signatures_state=(torch.from_numpy(sig_state) if a.state_signatures else None),
+        harm_deadzone=a.harm_deadzone,
         load_rot_a=(torch.from_numpy(_lr_a) if _lr_a is not None else None),
         load_rot_lpref=(torch.from_numpy(_lr_p) if _lr_a is not None else None),
         load_rot_on=(torch.from_numpy(_lr_on) if _lr_a is not None else None),
@@ -1785,6 +1802,7 @@ def main() -> int:
                     #: 14.171 — 2단계가 **같은 순방향 모형**을 지으려면 이 둘이 필요하다.
                     #  없어서 `run_train_seq` 가 전압 앵커를 못 켜고 있었다.
                     #: 14.402 — **굽는 순간 적는다** (§29.5 부류 빚을 안 만든다)
+                    "harm_deadzone": float(a.harm_deadzone),
                     "load_rot": bool(a.load_rot),
                     "pow_sig": bool(a.pow_sig),
                     "w_harm_smps": float(a.w_harm_smps),

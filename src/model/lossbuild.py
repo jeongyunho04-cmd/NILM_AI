@@ -128,6 +128,9 @@ def build_loss(apps: Sequence[str], dev: str, *,
                #: 있고(1단계가 이렇게 넘긴다), 셋이 다 `None` 이면 `load_rot=True` 일 때만
                #: 여기서 짓는다.
                #: ⚠ `power_signatures_instate` 와 **같이 켜면 안 된다** (분모 공유, 14.172 꼴).
+               #: ★ 14.408 — `L_harm` 불감대 배수. 0 = **비트 동일**. 1단계·2단계가
+               #: 같은 값을 써야 한다 (14.171 이 남긴 규율).
+               harm_deadzone: float = 0.0,
                load_rot: bool = False,
                load_rot_a=None,
                load_rot_lpref=None,
@@ -317,6 +320,7 @@ def build_loss(apps: Sequence[str], dev: str, *,
         harm_vhrel_frac=harm_vhrel_frac,
         harm_vhrel_on=harm_vhrel_on,
         cons_deadzone=cons_deadzone,
+        harm_deadzone=harm_deadzone,
         res_ohm=res_ohm,
         res_ohm_half=res_ohm_half,
         res_cond_state=res_cond_state,
