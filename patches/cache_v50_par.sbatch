@@ -85,38 +85,51 @@ if [ "${SLURM_ARRAY_TASK_ID}" = "0" ]; then
   A="$HOME/NILM_AI/cache/_pj_off"; B="$HOME/NILM_AI/cache/_pj_on"
   rm -rf "$A" "$B"
   echo "=== 관문 ④ 손잡이 하나 확인 (청크 0/1200 을 두 번) ==="
-  $PY -X utf8 -m src.run_build_traincache --out "$A" --shard "0/1200" \
-      $COMMON --workers "${SLURM_CPUS_PER_TASK}" --harmonic-z > /dev/null
-  $PY -X utf8 -m src.run_build_traincache --out "$B" --shard "0/1200" \
-      $COMMON --workers "${SLURM_CPUS_PER_TASK}" --harmonic-z \
-      --phase-jitter-map measured > /dev/null
+  $PY -X utf8 -m src.run_build_traincache --out "$A" --shard "0/1200"       $COMMON --workers "${SLURM_CPUS_PER_TASK}" --harmonic-z > /dev/null
+  $PY -X utf8 -m src.run_build_traincache --out "$B" --shard "0/1200"       $COMMON --workers "${SLURM_CPUS_PER_TASK}" --harmonic-z       --phase-jitter-map measured > /dev/null
   $PY -X utf8 -c "
 import numpy as np, sys, json
+#: ⚠⚠ 14.390d — **첫 판의 자가 틀렸다.** 986473_0 이 여기서 죽었는데 코드가 아니라
+#:   자가 틀린 것이었다. 잰 것:
+#:     · 'SMPS 없는 창' 을 y_on(**타깃 사이클**)으로 정의했다 -> 창 60초 **어딘가에**
+#:       SMPS 가 있는 창이 거기 섞였다. y_plugged|y_on 으로 고치니 그런 창은
+#:       최대차가 **정확히 0.000e+00** 이다
+#:     · y_power 가 최대 0.0287W 달라졌는데 **상대차 2.3e-05**(중앙 3.1e-06)이고
+#:       달라진 창 155개가 **전부** SMPS 있는 창이다 -> 합성이 float32 라 한 기기의
+#:       위상을 바꾸면 3600사이클 누적에서 그만큼 흔들린다. 허용오차를 **구현
+#:       정밀도**에서 가져온다 (자를 늘리는 것이 아니라 **정의를 고치는** 것이다)
 bad = []
-def same(nm):
+for nm in ('y_on', 'y_state', 'y_plugged'):
     a = np.asarray(np.load('$A/%s.npy' % nm, mmap_mode='r'))
     b = np.asarray(np.load('$B/%s.npy' % nm, mmap_mode='r'))
     ok = np.array_equal(a, b)
-    print('    %-14s %s' % (nm, '비트 동일' if ok else '**다르다**'))
-    return ok
-for nm in ('y_power', 'y_on', 'y_state', 'y_plugged'):
-    if not same(nm): bad.append(nm)
+    print('    %-12s %s' % (nm, '비트 동일' if ok else '**다르다**'))
+    if not ok: bad.append(nm)
 apps = json.load(open('$B/meta.json', encoding='utf-8'))['appliances']
 SM = [apps.index(x) for x in ('minipc', 'laptop_charger', 'beam_projector') if x in apps]
 yon = np.asarray(np.load('$B/y_on.npy', mmap_mode='r'))
+ypl = np.asarray(np.load('$B/y_plugged.npy', mmap_mode='r'))
+pres = ypl[:, SM].any(1) | yon[:, SM].any(1)          # 창 **어디에라도** SMPS 가 있나
+p0 = np.asarray(np.load('$A/y_power.npy', mmap_mode='r'))
+p1 = np.asarray(np.load('$B/y_power.npy', mmap_mode='r'))
+rel = np.abs(p0 - p1) / np.maximum(np.abs(p0), 1e-9)
+chg = np.abs(p0 - p1).max(1) > 0
+print('    y_power      상대차 최대 %.2e · 달라진 창 %d (그중 SMPS 있는 창 %d)'
+      % (rel.max(), int(chg.sum()), int(pres[chg].sum())))
+if rel.max() > 1e-4:             bad.append('y_power 상대차가 float32 한계를 넘는다')
+if chg.sum() != pres[chg].sum(): bad.append('SMPS 없는 창의 y_power 가 달라졌다')
 f0 = np.asarray(np.load('$A/fine.npy', mmap_mode='r'))
 f1 = np.asarray(np.load('$B/fine.npy', mmap_mode='r'))
 d  = np.abs(f0 - f1).reshape(len(f0), -1).max(1)
-has = yon[:, SM].any(1)
-print('    창 %d · SMPS 있는 창 %d' % (len(d), int(has.sum())))
-print('    SMPS 있는 창 최대차 **%.3e** · SMPS 없는 창 최대차 **%.3e**'
-      % (d[has].max() if has.any() else 0.0, d[~has].max() if (~has).any() else 0.0))
-if (~has).any() and d[~has].max() != 0.0:
+print('    창 %d · SMPS 있는 창 %d · 없는 창 %d' % (len(d), int(pres.sum()), int((~pres).sum())))
+print('    fine  SMPS 있는 창 %.3e · **없는 창 %.3e**'
+      % (d[pres].max() if pres.any() else 0.0, d[~pres].max() if (~pres).any() else 0.0))
+if (~pres).any() and d[~pres].max() != 0.0:
     bad.append('SMPS 없는 창이 달라졌다')
-if has.any() and d[has].max() == 0.0:
+if pres.any() and d[pres].max() == 0.0:
     bad.append('SMPS 있는 창이 하나도 안 달라졌다 — 손잡이가 안 걸렸다')
 if bad: sys.exit('관문 ④ 실패: %s' % bad)
-print('  관문 ④ 통과 — 라벨 불변 · **SMPS 창만** 달라진다')
+print('  관문 ④ 통과 — 라벨 불변 · **SMPS 없는 창은 비트 동일** · SMPS 창만 달라진다')
 "
   rm -rf "$A" "$B"
 fi
